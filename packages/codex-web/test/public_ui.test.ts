@@ -216,6 +216,18 @@ test('login form supports optional username for multi-user mode', async () => {
   assert.match(app, /body: \{ username, password \}/u);
 });
 
+test('login page uses the bootstrap global website title before auth', async () => {
+  const { api, context } = await loadAppHarness({
+    bootstrapSiteTitle: 'Team Codex',
+  });
+
+  assert.equal(api.state.siteTitle, 'Team Codex');
+  assert.equal(context.document.title, 'Team Codex');
+  const html = context.document.querySelector('#app').innerHTML;
+  assert.match(html, /<h1>Team Codex<\/h1>/u);
+  assert.doesNotMatch(html, /<h1>Codex Web<\/h1>/u);
+});
+
 test('admin settings page shows the multi-user toggle without nesting the admin console entry', async () => {
   const { api } = await loadAppHarness();
 
@@ -662,6 +674,8 @@ test('admin console renders four-page management layout with RBAC controls', asy
   api.state.admin.editingProjectId = '';
   html = api.renderAdminConsole().innerHTML;
   assert.match(html, /id="admin-role-form"/u);
+  assert.doesNotMatch(html, /name="isAdmin"/u);
+  assert.doesNotMatch(html, /Admin role/u);
   assert.match(html, /name="projectIds" type="checkbox" value="project_a"/u);
   assert.match(html, /<span data-i18n-skip>a<\/span>/u);
   assert.match(html, /data-admin-edit-role="role_user"/u);
@@ -688,6 +702,28 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.match(html, /<option value="project_a" data-i18n-skip>a<\/option>/u);
   assert.match(html, /class="admin-row-main" data-i18n-skip>a<\/span>/u);
   assert.match(html, /Observer Mode/u);
+});
+
+test('admin session audit renders session summaries', async () => {
+  const { api } = await loadAppHarness();
+
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+  api.state.admin.loaded = true;
+  api.state.admin.page = 'sessions';
+  api.state.admin.projects = [{ id: 'project_a', cwd: '/repo/a', displayName: 'Project Alpha' }];
+  api.state.admin.users = [{ id: 'user_1', username: 'alice', enabled: true }];
+  api.state.admin.sessions = [{
+    id: 'session_1',
+    ownerUserId: 'user_1',
+    projectId: 'project_a',
+    projectDisplayName: 'Project Alpha',
+    summary: 'Investigate why the mobile console session list is hard to audit',
+  }];
+
+  const html = api.renderAdminConsole().innerHTML;
+
+  assert.match(html, /Investigate why the mobile console session list is hard to audit/u);
+  assert.match(html, /class="admin-session-summary" data-i18n-skip/u);
 });
 
 test('admin management actions post project, role, and user changes', async () => {
@@ -728,7 +764,6 @@ test('admin management actions post project, role, and user changes', async () =
   await api.saveAdminRole({
     id: 'role_writer',
     name: 'Writer',
-    isAdmin: false,
     projectIds: ['project_a'],
   });
   await api.saveAdminUser({
@@ -750,10 +785,12 @@ test('admin management actions post project, role, and user changes', async () =
     cwd: '/repo/a',
     displayName: '',
     enabled: true,
+    activeSessionLimit: 30,
   });
   assert.deepEqual(JSON.parse(posts[1].options.body).projectGrants, [
     { projectId: 'project_a', canRead: true, canCreate: true, canWrite: true },
   ]);
+  assert.equal(Object.hasOwn(JSON.parse(posts[1].options.body), 'isAdmin'), false);
   assert.deepEqual(JSON.parse(posts[2].options.body), {
     id: 'user_writer',
     username: 'writer',
@@ -761,6 +798,56 @@ test('admin management actions post project, role, and user changes', async () =
     enabled: true,
     roleId: 'role_writer',
     roleIds: ['role_writer'],
+  });
+});
+
+test('admin project form includes active session limit and saveAdminProject posts it', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (options.method === 'POST') {
+        return { ok: true, status: 201, json: async () => ({}) };
+      }
+      if (path === '/api/admin/settings') {
+        return { ok: true, status: 200, json: async () => ({ settings: { multiUserEnabled: true } }) };
+      }
+      if (path === '/api/admin/projects') {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      if (path === '/api/admin/users') {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      if (path === '/api/admin/roles') {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      if (path === '/api/admin/sessions') {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+  api.state.admin.loaded = true;
+
+  const html = api.renderAdminConsole().innerHTML;
+  assert.match(html, /name="activeSessionLimit"/u);
+
+  await api.saveAdminProject({
+    cwd: '/repo/limited',
+    displayName: 'Limited',
+    enabled: true,
+    activeSessionLimit: 12,
+  });
+
+  const post = fetchCalls.find((call) => call.options.method === 'POST' && call.path === '/api/admin/projects');
+  assert.deepEqual(JSON.parse(post.options.body), {
+    id: '/repo/limited',
+    cwd: '/repo/limited',
+    displayName: 'Limited',
+    enabled: true,
+    activeSessionLimit: 12,
   });
 });
 
@@ -2337,6 +2424,123 @@ test('turn completion sends the next queued message without interrupting the run
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.queuedMessagesForCurrentSession().length, 0);
   assert.equal(JSON.parse(fetchCalls[2].options.body).text, 'Queued follow-up');
+});
+
+test('starting a new turn does not reuse the previous turn event sequence in the SSE request', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1/turns') {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ turnId: 'turn_2' }),
+        };
+      }
+      if (path === '/api/turns/turn_2/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => ({ done: true }),
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.prompt = 'Start fresh turn';
+  api.state.lastTurnEventSequence = 99;
+
+  await api.onComposerSubmit({ preventDefault() {} });
+  await flushMicrotasks();
+
+  const eventsCall = fetchCalls.find((call) => call.path.startsWith('/api/turns/turn_2/events'));
+  assert.equal(eventsCall?.path, '/api/turns/turn_2/events');
+});
+
+test('session refresh keeps a just-started turn running when backend detail temporarily omits the active turn marker', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1/turns') {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ turnId: 'turn_2' }),
+        };
+      }
+      if (path === '/api/turns/turn_2/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => ({ done: true }),
+            }),
+          },
+        };
+      }
+      if (path === '/api/sessions/session_1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_1',
+              cwd: '/repo',
+              activeTurnId: null,
+              settings: { metadata: {} },
+              thread: {
+                turns: [
+                  {
+                    id: 'turn_older_completed',
+                    status: 'completed',
+                    items: [
+                      { type: 'message', role: 'user', text: 'Older question' },
+                      { type: 'message', role: 'assistant', text: 'Older answer' },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.prompt = 'Keep running despite stale detail';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+  await flushMicrotasks();
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_2');
+  assert.equal(api.state.status, 'Turn running');
+
+  await api.refreshCurrentSessionMetadata({ hydrateTimeline: true });
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_2');
+  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work"><span>Running</span></div>');
 });
 
 test('stream completion without a terminal event refreshes session state and sends the next queued message', async () => {
@@ -5394,6 +5598,11 @@ test('session list defaults to recents and supports favorites plus session actio
   assert.doesNotMatch(app, /id="session-search-input"/u);
   assert.match(app, /data-sort-mode="favorites"/u);
   assert.match(app, /data-sort-mode="time"/u);
+  assert.match(app, /data-sort-mode="archived"/u);
+  assert.match(app, /class="archive-sort-button"/u);
+  assert.match(app, /aria-label="Archived sessions"/u);
+  assert.match(app, /<span class="visually-hidden">Archived<\/span>/u);
+  assert.doesNotMatch(app, /data-sort-mode="archived"[^>]*>Archived<\/button>/u);
   assert.match(app, /data-sort-mode="time"[^>]*>Recents<\/button>/u);
   assert.doesNotMatch(app, />Time<\/button>/u);
   assert.doesNotMatch(app, /data-sort-mode="project"/u);
@@ -5414,7 +5623,82 @@ test('session list defaults to recents and supports favorites plus session actio
   assert.doesNotMatch(app, /function cancelFavoriteSortMode\(\)/u);
   assert.match(app, /function toggleSessionFavorite\(sessionId\)/u);
   assert.match(app, /async function archiveSession\(sessionId\)/u);
-  assert.match(app, /apiFetch\(`\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}`,\s*\{\s*method:\s*'DELETE'/su);
+  assert.match(app, /apiFetch\(`\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/archive`,\s*\{\s*method:\s*'POST'/su);
+});
+
+test('session sort toggle keeps archive as a compact third icon in one row', async () => {
+  const [styles, { api }] = await Promise.all([
+    readFile(stylesUrl, 'utf8'),
+    loadAppHarness(),
+  ]);
+
+  const html = api.renderSessionList().innerHTML;
+
+  assert.match(html, /class="toggle sort-toggle mobile-session-sort-toggle"/u);
+  assert.match(html, /data-sort-mode="favorites"[\s\S]*data-sort-mode="time"[\s\S]*data-sort-mode="archived"/u);
+  assert.match(html, /class="archive-sort-button"/u);
+  assert.match(html, /aria-label="Archived sessions"/u);
+  assert.match(styles, /\.sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+34px;/su);
+  assert.match(styles, /\.mobile-session-sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+32px;/su);
+  assert.match(styles, /\.toggle \.archive-sort-button\s*\{[^}]*padding:\s*0;/su);
+  assert.match(styles, /\.archive-sort-icon\s*\{[^}]*width:\s*17px;/su);
+});
+
+test('selecting cached archived sessions still rerenders the session list', async () => {
+  const { api } = await loadAppHarness();
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.state.sortMode = 'time';
+  api.state.sessions = [{ id: 'session_active', updatedAt: 2, settings: { metadata: {} } }];
+  api.state.sessionsByScope.archived = [
+    { id: 'session_archived', archived: true, readOnly: true, updatedAt: 1, settings: { metadata: {} } },
+  ];
+  api.state.sessionsLoadedByScope.archived = true;
+  api.render();
+
+  await api.setSessionSortMode('archived');
+
+  const html = api.context.document.querySelector('#app').innerHTML;
+  assert.equal(api.state.sortMode, 'archived');
+  assert.match(html, /data-session-id="session_archived"/u);
+  assert.doesNotMatch(html, /data-session-id="session_active"/u);
+});
+
+test('clicking the compact archived icon switches to archived sessions', async () => {
+  const fetchCalls = [];
+  const { api, context } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions?state=archived') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'session_archived', updatedAt: 1, settings: { metadata: {} } },
+            ],
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.render();
+
+  const archiveButton = context.document.querySelector('[data-sort-mode="archived"]');
+  assert.ok(archiveButton);
+  archiveButton.click();
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls, ['/api/sessions?state=archived']);
+  assert.equal(api.state.sortMode, 'archived');
+  assert.match(context.document.querySelector('#app').innerHTML, /data-session-id="session_archived"/u);
 });
 
 test('layout mode uses desktop workspace on pointer-based computer windows', async () => {
@@ -5552,6 +5836,108 @@ test('desktop project selection filters sessions and opens the newest session fo
   assert.equal(JSON.stringify(api.sortedSessions().map((session) => session.id)), JSON.stringify(['session_newer', 'session_older']));
   assert.match(api.context.document.querySelector('#app').innerHTML, /Newest project session/u);
   assert.doesNotMatch(api.context.document.querySelector('#app').innerHTML, /Beta work/u);
+});
+
+test('desktop project selection prefers a running session over a newer completed session in the same project', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    viewportWidth: 1280,
+    desktopPointer: true,
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_running') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_running',
+              projectId: 'project_a',
+              projectDisplayName: 'Project Alpha',
+              cwd: '/repo/a',
+              activeTurnId: 'turn_active',
+              settings: { metadata: {} },
+              thread: {
+                turns: [{
+                  id: 'turn_active',
+                  status: 'in_progress',
+                  items: [
+                    { type: 'message', role: 'assistant', text: 'Still running in this project' },
+                  ],
+                }],
+              },
+            },
+          }),
+        };
+      }
+      if (path === '/api/turns/turn_active/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => ({ done: true }),
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.projects = [
+    { id: 'project_a', displayName: 'Project Alpha' },
+    { id: 'project_b', displayName: 'Project Beta' },
+  ];
+  api.state.projectsLoaded = true;
+  api.state.sortMode = 'time';
+  api.state.sessions = [
+    {
+      id: 'session_completed_newer',
+      projectId: 'project_a',
+      projectDisplayName: 'Project Alpha',
+      cwd: '/repo/a',
+      firstUserInput: 'Completed newer',
+      lastUserInput: 'Completed newer',
+      updatedAt: 100,
+      settings: { metadata: {} },
+      thread: { turns: [{ id: 'turn_done', status: 'completed' }] },
+    },
+    {
+      id: 'session_running',
+      projectId: 'project_a',
+      projectDisplayName: 'Project Alpha',
+      cwd: '/repo/a',
+      firstUserInput: 'Running older',
+      lastUserInput: 'Running older',
+      updatedAt: 50,
+      activeTurnId: 'turn_active',
+      settings: { metadata: {} },
+      thread: { turns: [{ id: 'turn_active', status: 'in_progress' }] },
+    },
+    {
+      id: 'session_beta',
+      projectId: 'project_b',
+      projectDisplayName: 'Project Beta',
+      cwd: '/repo/b',
+      firstUserInput: 'Beta work',
+      lastUserInput: 'Beta work',
+      updatedAt: 200,
+      settings: { metadata: {} },
+    },
+  ];
+
+  await api.selectProjectScope('project_a');
+
+  assert.deepEqual(fetchCalls.slice(0, 2), [
+    '/api/sessions/session_running',
+    '/api/turns/turn_active/events',
+  ]);
+  assert.equal(api.state.sessionId, 'session_running');
+  assert.equal(api.state.status, 'Turn running');
+  assert.match(api.context.document.querySelector('#app').innerHTML, /Still running in this project/u);
 });
 
 test('desktop project selection opens new when the project has no sessions yet', async () => {
@@ -7228,6 +7614,40 @@ test('session list shows loading state while sessions are still syncing', async 
   assert.match(api.renderSessionCards(), /No sessions yet/u);
 });
 
+test('archived session scope requests the archived sessions endpoint and marks read-only summaries', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions?state=archived') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'session_archived', updatedAt: 10, settings: { metadata: {} } },
+            ],
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'user_1', mode: 'multi' } };
+  api.state.sortMode = 'archived';
+
+  await api.refreshSessionsList({ renderAfter: false, scope: 'archived' });
+
+  assert.deepEqual(fetchCalls, ['/api/sessions?state=archived']);
+  assert.equal(api.state.sessionsScope, 'archived');
+  assert.equal(api.state.sessions[0]?.id, 'session_archived');
+  assert.equal(api.state.sessions[0]?.archived, true);
+  assert.equal(api.state.sessions[0]?.readOnly, true);
+  assert.equal(api.filteredSessions()[0]?.id, 'session_archived');
+});
+
 test('favorite action patches session favorite state without opening the session', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
@@ -7283,6 +7703,135 @@ test('archive action requires a confirmation dialog before deleting a session', 
   assert.match(app, /<button class="danger compact-button" type="button" data-session-archive-confirm-id="\$\{escapeAttribute\(session\.id\)\}">Archive<\/button>/u);
   assert.match(styles, /\.modal-backdrop\s*\{/u);
   assert.match(styles, /\.confirm-dialog\s*\{/u);
+});
+
+test('archive and unarchive actions use explicit archive endpoints', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1/archive' || path === '/api/sessions/session_1/unarchive') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            session: {
+              id: 'session_1',
+              archived: path.endsWith('/unarchive') ? false : true,
+              settings: { metadata: {} },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_1', updatedAt: 1, settings: { metadata: {} } }];
+  api.state.sessionsByScope.all = [{ id: 'session_1', updatedAt: 1, settings: { metadata: {} } }];
+  api.state.sessionsLoadedByScope.all = true;
+
+  await api.archiveSession('session_1');
+  assert.equal(fetchCalls[0]?.path, '/api/sessions/session_1/archive');
+  assert.equal(fetchCalls[0]?.options.method, 'POST');
+
+  api.state.sessions = [{ id: 'session_1', archived: true, readOnly: true, updatedAt: 1, settings: { metadata: {} } }];
+  api.state.sessionsByScope.archived = [{ id: 'session_1', archived: true, readOnly: true, updatedAt: 1, settings: { metadata: {} } }];
+  api.state.sessionsLoadedByScope.archived = true;
+  api.state.sessionsScope = 'archived';
+
+  await api.unarchiveSession('session_1');
+  assert.equal(fetchCalls[1]?.path, '/api/sessions/session_1/unarchive');
+  assert.equal(fetchCalls[1]?.options.method, 'POST');
+});
+
+test('archive action invalidates a previously empty archived session cache', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1/archive') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true }),
+        };
+      }
+      if (path === '/api/sessions?state=archived') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'session_1', archived: true, readOnly: true, updatedAt: 1, settings: { metadata: {} } },
+            ],
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sortMode = 'time';
+  api.state.sessions = [{ id: 'session_1', updatedAt: 1, settings: { metadata: {} } }];
+  api.state.sessionsByScope.all = [{ id: 'session_1', updatedAt: 1, settings: { metadata: {} } }];
+  api.state.sessionsLoadedByScope.all = true;
+  api.state.sessionsByScope.archived = [];
+  api.state.sessionsLoadedByScope.archived = true;
+
+  await api.archiveSession('session_1');
+  await api.setSessionSortMode('archived');
+
+  assert.deepEqual(fetchCalls.map((call) => call.path), [
+    '/api/sessions/session_1/archive',
+    '/api/sessions?state=archived',
+  ]);
+  assert.equal(api.state.sessionsLoadedByScope.archived, true);
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_1']));
+});
+
+test('session creation surfaces active session limit backend messages', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: 'active_session_limit_reached',
+        message: 'Archive an existing session before creating a new one.',
+      }),
+    }),
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: {
+      userId: 'user_1',
+      username: 'alice',
+      roleIds: ['role_user'],
+      isAdmin: false,
+      mode: 'multi',
+    },
+  };
+  api.state.projects = [{ id: 'project_a', displayName: 'Project Alpha' }];
+  api.state.projectsLoaded = true;
+  api.state.newProjectId = 'project_a';
+
+  await assert.rejects(() => api.ensureSession(), /Archive an existing session before creating a new one\./u);
+
+  try {
+    await api.ensureSession();
+  } catch (error) {
+    api.handleApiError(error);
+  }
+
+  assert.equal(api.state.error, 'Archive an existing session before creating a new one.');
+  assert.equal(api.state.status, 'Request failed');
 });
 
 test('PWA standalone mode enables local pull-to-refresh without normal browser refresh hooks', async () => {
@@ -8414,11 +8963,12 @@ async function loadAppHarness(overrides = {}) {
     elements.set(selector, element);
     return element;
   };
-  const createTrackedElement = (selector, patch = {}) => ({
-    innerHTML: '',
-    style: {},
-    className: '',
-    classList: {
+	  const createTrackedElement = (selector, patch = {}) => ({
+	    innerHTML: '',
+	    style: {},
+	    className: '',
+	    __attributes: {},
+	    classList: {
       add(...classNames) {
         if (this.element) {
           addClasses(this.element, classNames);
@@ -8447,12 +8997,17 @@ async function loadAppHarness(overrides = {}) {
     scrollTop: 0,
     scrollHeight: 0,
     clientHeight: 0,
-    __listeners: new Map(),
-    addEventListener(type, listener) {
-      this.__listeners.set(type, listener);
-    },
-    removeEventListener() {},
-    setAttribute() {},
+	    __listeners: new Map(),
+	    addEventListener(type, listener) {
+	      this.__listeners.set(type, listener);
+	    },
+	    removeEventListener() {},
+	    getAttribute(name) {
+	      return this.__attributes?.[name] ?? null;
+	    },
+	    setAttribute(name, value) {
+	      this.__attributes[name] = String(value);
+	    },
     querySelector: () => null,
     getBoundingClientRect: () => ({ height: 0 }),
     click() {
@@ -8462,21 +9017,30 @@ async function loadAppHarness(overrides = {}) {
       activeElement = this;
     },
     ...patch,
-  });
-  const createElementFromHtml = (selector, html, patch = {}) => {
-    const className = html.match(/\sclass="([^"]*)"/u)?.[1] || '';
-    const id = html.match(/\sid="([^"]*)"/u)?.[1] || '';
-    const element = createTrackedElement(selector, { className, id, ...patch });
-    element.classList.element = element;
-    return element;
-  };
-  const materializeAppHtml = (html) => {
+	  });
+	  const createElementFromHtml = (selector, html, patch = {}) => {
+	    const attributes = {};
+	    for (const match of String(html || '').matchAll(/\s([A-Za-z0-9_-]+)="([^"]*)"/gu)) {
+	      attributes[match[1]] = match[2];
+	    }
+	    const className = html.match(/\sclass="([^"]*)"/u)?.[1] || '';
+	    const id = html.match(/\sid="([^"]*)"/u)?.[1] || '';
+	    const element = createTrackedElement(selector, { className, id, __attributes: attributes, ...patch });
+	    element.classList.element = element;
+	    return element;
+	  };
+	  const materializeAppHtml = (html) => {
     elements.delete('#timeline');
     elements.delete('#prompt-input');
     elements.delete('.report-viewer');
-    elements.delete('#mobile-sidebar-toggle-button');
-    elements.delete('#mobile-drawer-backdrop');
-    elements.delete('.mobile-project-drawer');
+	    elements.delete('#mobile-sidebar-toggle-button');
+	    elements.delete('#mobile-drawer-backdrop');
+	    elements.delete('.mobile-project-drawer');
+	    for (const key of [...elements.keys()]) {
+	      if (key.startsWith('[data-sort-mode="')) {
+	        elements.delete(key);
+	      }
+	    }
     if (String(html || '').includes('id="timeline"')) {
       const timelineHtml = String(html).match(/<main\b[^>]*class="timeline"[^>]*id="timeline"[^>]*>([\s\S]*?)<\/main>/u)?.[1] || '';
       trackElement('#timeline', createTrackedElement('#timeline', {
@@ -8509,11 +9073,15 @@ async function loadAppHarness(overrides = {}) {
       const backdropHtml = String(html).match(/<div\b[^>]*id="mobile-drawer-backdrop"[^>]*>/u)?.[0] || '';
       trackElement('#mobile-drawer-backdrop', createElementFromHtml('#mobile-drawer-backdrop', backdropHtml));
     }
-    if (String(html || '').includes('class="mobile-project-drawer')) {
-      const drawerHtml = String(html).match(/<aside\b[^>]*class="[^"]*\bmobile-project-drawer\b[^"]*"[^>]*>/u)?.[0] || '';
-      trackElement('.mobile-project-drawer', createElementFromHtml('.mobile-project-drawer', drawerHtml));
-    }
-  };
+	    if (String(html || '').includes('class="mobile-project-drawer')) {
+	      const drawerHtml = String(html).match(/<aside\b[^>]*class="[^"]*\bmobile-project-drawer\b[^"]*"[^>]*>/u)?.[0] || '';
+	      trackElement('.mobile-project-drawer', createElementFromHtml('.mobile-project-drawer', drawerHtml));
+	    }
+	    for (const match of String(html || '').matchAll(/<button\b[^>]*data-sort-mode="([^"]+)"[^>]*>/gu)) {
+	      const mode = match[1];
+	      trackElement(`[data-sort-mode="${mode}"]`, createElementFromHtml(`[data-sort-mode="${mode}"]`, match[0]));
+	    }
+	  };
   const appElement = {
     _innerHTML: '',
     get innerHTML() {
@@ -8529,6 +9097,11 @@ async function loadAppHarness(overrides = {}) {
     },
   };
   trackElement('#app', appElement);
+  if (overrides.bootstrapSiteTitle) {
+    trackElement('#codex-web-bootstrap', {
+      textContent: JSON.stringify({ siteTitle: overrides.bootstrapSiteTitle }),
+    });
+  }
   const context = {
     console,
     __appRenderCount: 0,
@@ -8556,8 +9129,21 @@ async function loadAppHarness(overrides = {}) {
         },
       },
       addEventListener() {},
-      querySelector: (selector) => elements.get(selector) || null,
-      querySelectorAll: () => [],
+	      querySelector: (selector) => elements.get(selector) || null,
+	      querySelectorAll: (selector) => {
+	        if (selector === '[data-sort-mode]') {
+	          const seen = new Set();
+	          return [...elements.values()].filter((element) => {
+	            const mode = element?.getAttribute?.('data-sort-mode');
+	            if (!mode || seen.has(mode)) {
+	              return false;
+	            }
+	            seen.add(mode);
+	            return true;
+	          });
+	        }
+	        return [];
+	      },
       createElement: () => ({
         className: '',
         innerHTML: '',
@@ -8678,6 +9264,8 @@ globalThis.__codexWebTest = {
   currentProjectScopeTitle: typeof currentProjectScopeTitle === 'function' ? currentProjectScopeTitle : null,
   toggleProjectFavorite: typeof toggleProjectFavorite === 'function' ? toggleProjectFavorite : null,
   toggleSessionFavorite: typeof toggleSessionFavorite === 'function' ? toggleSessionFavorite : null,
+  archiveSession: typeof archiveSession === 'function' ? archiveSession : null,
+  unarchiveSession: typeof unarchiveSession === 'function' ? unarchiveSession : null,
 	  reloadRuntime: typeof reloadRuntime === 'function' ? reloadRuntime : null,
 	  refreshGlobalSettings: typeof refreshGlobalSettings === 'function' ? refreshGlobalSettings : null,
 	  saveSiteTitle: typeof saveSiteTitle === 'function' ? saveSiteTitle : null,

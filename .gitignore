@@ -6,4 +6,5 @@ packages/*/dist/
 *.log
 .DS_Store
 
+.worktrees/
 .codex-web/

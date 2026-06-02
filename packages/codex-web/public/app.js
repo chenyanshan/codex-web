@@ -32,6 +32,7 @@ const DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT = 220;
 const PROMPT_EXPAND_LINE_THRESHOLD = 4;
 const STREAM_STALE_MS = 30_000;
 const FIRST_TURN_RECOVERY_DELAY_MS = 10_000;
+const LOCAL_TURN_SYNC_GRACE_MS = 10_000;
 const DESKTOP_WORKSPACE_MIN_WIDTH = 820;
 const EDGE_SWIPE_START_PX = 24;
 const EDGE_SWIPE_TRIGGER_PX = 72;
@@ -181,7 +182,6 @@ const UI_TRANSLATIONS = {
     'Role ID': '角色 ID',
     Name: '名称',
     Writer: '写作者',
-    'Admin role': '管理员角色',
     'Save Role': '保存角色',
     'User ID': '用户 ID',
     'At least 8 chars': '至少 8 个字符',
@@ -258,10 +258,15 @@ const UI_TRANSLATIONS = {
     Unfavorite: '取消收藏',
     Favorite: '收藏',
     Archive: '归档',
+    Unarchive: '取消归档',
     'Archive session?': '归档会话？',
     'No prompt preview': '无提示预览',
     'No cwd': '无 CWD',
     'All Sessions': '所有会话',
+    Archived: '归档',
+    'No archived sessions yet.': '暂无已归档会话。',
+    'Active sessions': '活动会话',
+    'Archived sessions': '已归档会话',
     'Untitled Project': '未命名项目',
     'Unknown project': '未知项目',
     unknown: '未知',
@@ -295,6 +300,8 @@ const UI_TRANSLATIONS = {
   },
 };
 
+const INITIAL_SITE_TITLE = normalizeSiteTitle(readBootstrapSiteTitle() || localStorage.getItem(SITE_TITLE_KEY));
+
 const state = {
   token: localStorage.getItem(TOKEN_KEY) || '',
   authSession: null,
@@ -313,6 +320,7 @@ const state = {
     page: 'projects',
     filterUserId: '',
     filterProjectId: '',
+    filterState: 'all',
     editingProjectId: '',
     editingRoleId: '',
   },
@@ -320,10 +328,12 @@ const state = {
   sessionsByScope: {
     favorites: [],
     all: [],
+    archived: [],
   },
   sessionsLoadedByScope: {
     favorites: false,
     all: false,
+    archived: false,
   },
   sessionsLoading: false,
   sessionsLoadingScope: null,
@@ -349,9 +359,9 @@ const state = {
   desktopSettingsOpen: false,
   desktopOverlay: null,
   theme: normalizeTheme(localStorage.getItem(THEME_KEY)),
-  siteTitle: normalizeSiteTitle(localStorage.getItem(SITE_TITLE_KEY)),
+  siteTitle: INITIAL_SITE_TITLE,
   globalSettings: {
-    siteTitle: normalizeSiteTitle(localStorage.getItem(SITE_TITLE_KEY)),
+    siteTitle: INITIAL_SITE_TITLE,
     canSetSiteTitle: false,
     loaded: false,
   },
@@ -395,6 +405,8 @@ const state = {
   batches: new Map(),
   approvals: new Map(),
   streamAbortController: null,
+  locallyStartedTurnId: null,
+  locallyStartedTurnAt: 0,
   lastTurnEventSequence: null,
   lastTurnEventAt: 0,
   streamWasBackgrounded: false,
@@ -566,10 +578,12 @@ function setLoggedOut(message = '') {
   state.sessionsByScope = {
     favorites: [],
     all: [],
+    archived: [],
   };
   state.sessionsLoadedByScope = {
     favorites: false,
     all: false,
+    archived: false,
   };
   state.sessionsLoading = false;
   state.sessionsLoadingScope = null;
@@ -588,7 +602,12 @@ function setLoggedOut(message = '') {
     users: [],
     roles: [],
     sessions: [],
+    page: 'projects',
     filterUserId: '',
+    filterProjectId: '',
+    filterState: 'all',
+    editingProjectId: '',
+    editingRoleId: '',
   };
   state.reportsLoading = false;
   state.reportsLoaded = false;
@@ -821,7 +840,7 @@ function renderLogin() {
     <div class="center-screen">
       <form class="panel stack" id="login-form">
         <div>
-          <h1>Codex Web</h1>
+          <h1>${escapeHtml(state.siteTitle)}</h1>
           <p class="meta">${escapeHtml(t('Password login for this device.'))}</p>
         </div>
         <div class="field">
@@ -1057,6 +1076,13 @@ function renderSessionSortToggle({ mobile = false } = {}) {
           <div class="toggle sort-toggle${mobile ? ' mobile-session-sort-toggle' : ''}">
             <button type="button" data-sort-mode="favorites" aria-pressed="${String(state.sortMode === 'favorites')}">Favorites</button>
             <button type="button" data-sort-mode="time" aria-pressed="${String(state.sortMode === 'time')}">Recents</button>
+            <button class="archive-sort-button" type="button" data-sort-mode="archived" aria-pressed="${String(state.sortMode === 'archived')}" aria-label="Archived sessions" title="Archived sessions">
+              <svg class="archive-sort-icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+                <path d="M224 322.6h576c16.6 0 30-13.4 30-30s-13.4-30-30-30H224c-16.6 0-30 13.4-30 30 0 16.5 13.5 30 30 30zM290.1 178.4h443.8c16.6 0 30-13.4 30-30s-13.4-30-30-30H290.1c-16.6 0-30 13.4-30 30s13.4 30 30 30zM629.6 613.9H394.4c-16.6 0-30 13.4-30 30s13.4 30 30 30h235.2c16.6 0 30-13.4 30-30s-13.4-30-30-30z"></path>
+                <path d="M850.3 403.9H173.7c-33 0-60 27-60 60v360c0 33 27 60 60 60h676.6c33 0 60-27 60-60v-360c0-33-27-60-60-60z m-0.1 419.8l-0.1 0.1H173.9l-0.1-0.1V464l0.1-0.1h676.2l0.1 0.1v359.7z"></path>
+              </svg>
+              <span class="visually-hidden">Archived</span>
+            </button>
           </div>
         `;
 }
@@ -1422,6 +1448,14 @@ function renderAdminSessionAuditPage() {
                 `).join('')}
               </select>
             </label>
+            <label class="field" for="admin-session-state-filter">
+              <span>${escapeHtml(t('Session'))}</span>
+              <select id="admin-session-state-filter" name="adminSessionStateFilter" data-i18n-skip>
+                <option value="all"${state.admin.filterState === 'all' ? ' selected' : ''}>${escapeHtml(t('All Sessions'))}</option>
+                <option value="active"${state.admin.filterState === 'active' ? ' selected' : ''}>${escapeHtml(t('Active sessions'))}</option>
+                <option value="archived"${state.admin.filterState === 'archived' ? ' selected' : ''}>${escapeHtml(t('Archived sessions'))}</option>
+              </select>
+            </label>
           </div>
           <div class="admin-list" data-i18n-skip>${renderAdminSessions()}</div>
         </section>
@@ -1459,6 +1493,10 @@ function renderAdminProjectForm() {
           <span>CWD</span>
           <input name="cwd" autocomplete="off" placeholder="/Users/name/repo" value="${escapeAttribute(project?.cwd || '')}">
         </label>
+        <label class="field">
+          <span>Active sessions</span>
+          <input name="activeSessionLimit" type="number" min="1" inputmode="numeric" placeholder="30" value="${escapeAttribute(project?.activeSessionLimit == null ? '' : String(project.activeSessionLimit))}">
+        </label>
       </div>
       <label class="admin-check-row">
         <input name="enabled" type="checkbox"${project?.enabled === false ? '' : ' checked'}>
@@ -1486,10 +1524,6 @@ function renderAdminRoleForm() {
           <input name="name" autocomplete="off" placeholder="Writer" value="${escapeAttribute(role?.name || '')}">
         </label>
       </div>
-      <label class="admin-check-row">
-        <input name="isAdmin" type="checkbox"${role?.isAdmin === true ? ' checked' : ''}>
-        <span>Admin role</span>
-      </label>
       ${renderAdminProjectCheckboxes(adminRoleProjectIds(role))}
       <div class="admin-form-actions">
         <button class="primary compact-button" type="submit">Save Role</button>
@@ -1636,11 +1670,14 @@ function renderAdminSessions() {
   }
   return state.admin.sessions.map((session) => {
     const owner = adminUserName(session.ownerUserId || session.userId);
+    const modeLabel = session.archived === true ? t('Read only') : t('Observer Mode');
+    const summary = String(session.summary || '').trim();
     return `
       <article class="admin-row admin-session-row">
         <button class="admin-session-open" type="button" data-admin-session-id="${escapeAttribute(session.id)}">
           <span class="admin-row-main" data-i18n-skip>${escapeHtml(adminProjectNameById(session.projectId, session.projectDisplayName))}</span>
-          <span class="admin-row-meta"><span data-i18n-skip>${escapeHtml(`${owner} · ${session.id}`)}</span> · ${escapeHtml(t('Observer Mode'))}</span>
+          ${summary ? `<span class="admin-session-summary" data-i18n-skip>${escapeHtml(summary)}</span>` : ''}
+          <span class="admin-row-meta"><span data-i18n-skip>${escapeHtml(`${owner} · ${session.id}`)}</span> · ${escapeHtml(modeLabel)}</span>
         </button>
       </article>
     `;
@@ -2201,7 +2238,11 @@ function renderSessionCards() {
     if (state.sessionsLoading) {
       return `<div class="empty-state">${escapeHtml(t('Loading sessions...'))}</div>`;
     }
-    const message = state.sortMode === 'favorites' ? 'No favorites yet.' : 'No sessions yet.';
+    const message = state.sortMode === 'favorites'
+      ? 'No favorites yet.'
+      : state.sortMode === 'archived'
+        ? 'No archived sessions yet.'
+        : 'No sessions yet.';
     return `<div class="empty-state">${escapeHtml(t(message))}</div>`;
   }
   return sessions.map((session) => `
@@ -2217,7 +2258,9 @@ function renderSessionCards() {
       </button>
       <div class="session-card-actions">
         <button class="ghost compact-button session-favorite" type="button" data-session-favorite-id="${escapeAttribute(session.id)}" aria-pressed="${String(isFavoriteSession(session))}">${escapeHtml(t(isFavoriteSession(session) ? 'Unfavorite' : 'Favorite'))}</button>
-        <button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}">${escapeHtml(t('Archive'))}</button>
+        ${session.archived === true
+          ? `<button class="ghost compact-button session-archive" type="button" data-session-unarchive-id="${escapeAttribute(session.id)}">${escapeHtml(t('Unarchive'))}</button>`
+          : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}">${escapeHtml(t('Archive'))}</button>`}
       </div>
     </article>
   `).join('');
@@ -2980,6 +3023,12 @@ function bindGlobalEvents() {
     });
   }
 
+  for (const button of document.querySelectorAll('[data-session-unarchive-id]')) {
+    button.addEventListener('click', () => {
+      void unarchiveSession(button.getAttribute('data-session-unarchive-id') || '');
+    });
+  }
+
   const archiveCancelButton = document.querySelector('#archive-cancel-button');
   if (archiveCancelButton) {
     archiveCancelButton.addEventListener('click', () => {
@@ -3024,6 +3073,13 @@ function bindGlobalEvents() {
   if (adminSessionProjectFilter) {
     adminSessionProjectFilter.addEventListener('change', (event) => {
       void refreshAdminSessions({ projectId: event.target.value, renderAfter: true });
+    });
+  }
+
+  const adminSessionStateFilter = document.querySelector('#admin-session-state-filter');
+  if (adminSessionStateFilter) {
+    adminSessionStateFilter.addEventListener('change', (event) => {
+      void refreshAdminSessions({ state: event.target.value, renderAfter: true });
     });
   }
 
@@ -4327,6 +4383,7 @@ async function sendComposerMessage(text, { queuedMessageId = '', sessionId: pref
       optimisticallyUpdateSessionInput(promptToSend);
     }
     state.turnId = turn.turnId;
+    markLocallyStartedTurn(turn.turnId);
     state.status = 'Turn running';
     state.statusTone = 'warn';
     renderChatAtLatest(() => {});
@@ -4386,6 +4443,9 @@ function handleTurnConflict(error, {
   }
   state.pendingTurn = Boolean(activeTurnId);
   state.turnId = activeTurnId || state.turnId;
+  if (!activeTurnId) {
+    clearLocallyStartedTurn();
+  }
   state.status = activeTurnId ? 'Turn running' : 'Request blocked';
   state.statusTone = 'warn';
   state.error = '';
@@ -4517,8 +4577,9 @@ async function archiveSession(sessionId) {
   }
   state.archiveConfirmSessionId = null;
   try {
-    await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: 'POST' });
     removeSession(sessionId);
+    state.sessionsLoadedByScope.archived = false;
     state.timelineCache.delete(sessionId);
     persistTimelineCache();
     if (state.sessionId === sessionId) {
@@ -4537,6 +4598,31 @@ async function archiveSession(sessionId) {
     if (isMissingSessionError(error)) {
       removeSession(sessionId);
       state.error = 'Selected session was unavailable and was removed from the list.';
+      render();
+      return;
+    }
+    handleApiError(error);
+  }
+}
+
+async function unarchiveSession(sessionId) {
+  if (!sessionId || state.pendingTurn) {
+    render();
+    return;
+  }
+  try {
+    const payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/unarchive`, { method: 'POST' });
+    removeSession(sessionId);
+    if (payload?.session) {
+      upsertSession(payload.session);
+    }
+    state.status = 'Ready';
+    state.statusTone = 'success';
+    state.error = '';
+    render();
+  } catch (error) {
+    if (isMissingSessionError(error)) {
+      removeSession(sessionId);
       render();
       return;
     }
@@ -5101,6 +5187,7 @@ function setWorkStatus(turnId, status) {
 }
 
 function resetTurnState() {
+  clearLocallyStartedTurn();
   state.turnId = null;
   state.pendingTurn = false;
   state.lastTurnEventSequence = null;
@@ -5284,10 +5371,11 @@ async function refreshSessionsList({
   scope = state.sortMode === 'favorites' ? 'favorites' : 'all',
   background = false,
 } = {}) {
-  const normalizedScope = scope === 'favorites' ? 'favorites' : 'all';
+  const normalizedScope = normalizeSessionScope(scope);
+  const path = sessionListPath(normalizedScope);
   if (background) {
-    const payload = await apiFetch(normalizedScope === 'favorites' ? '/api/sessions?favorite=true' : '/api/sessions');
-    const sessions = normalizeSessions(payload);
+    const payload = await apiFetch(path);
+    const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
     return sessions;
@@ -5304,8 +5392,8 @@ async function refreshSessionsList({
     render();
   }
   try {
-    const payload = await apiFetch(normalizedScope === 'favorites' ? '/api/sessions?favorite=true' : '/api/sessions');
-    const sessions = normalizeSessions(payload);
+    const payload = await apiFetch(path);
+    const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
     if (requestId !== state.sessionsRequestId || normalizedScope !== currentSessionScope()) {
@@ -5462,7 +5550,7 @@ async function refreshAdminConsole({ renderAfter = true } = {}) {
       apiFetch('/api/admin/projects'),
       apiFetch('/api/admin/users'),
       apiFetch('/api/admin/roles'),
-      apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId)),
+      apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId, state.admin.filterState)),
     ]);
     state.admin.settings = settingsPayload?.settings || null;
     state.admin.projects = normalizeAdminItems(projectsPayload);
@@ -5505,6 +5593,7 @@ async function refreshAdminSettings({ renderAfter = true } = {}) {
 async function refreshAdminSessions({
   userId = state.admin.filterUserId,
   projectId = state.admin.filterProjectId,
+  state: sessionState = state.admin.filterState,
   renderAfter = true,
 } = {}) {
   if (!isAdminPrincipal()) {
@@ -5512,12 +5601,13 @@ async function refreshAdminSessions({
   }
   state.admin.filterUserId = String(userId || '');
   state.admin.filterProjectId = String(projectId || '');
+  state.admin.filterState = normalizeAdminSessionState(sessionState);
   state.admin.loading = true;
   if (renderAfter) {
     render();
   }
   try {
-    const payload = await apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId));
+    const payload = await apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId, state.admin.filterState));
     state.admin.sessions = normalizeAdminItems(payload);
     state.error = '';
     return state.admin.sessions;
@@ -5560,6 +5650,7 @@ async function onAdminProjectSubmit(event) {
     cwd: String(form.get('cwd') || '').trim(),
     displayName: String(form.get('displayName') || '').trim(),
     enabled: form.get('enabled') === 'on',
+    activeSessionLimit: normalizeActiveSessionLimitInput(form.get('activeSessionLimit')),
   });
 }
 
@@ -5569,7 +5660,6 @@ async function onAdminRoleSubmit(event) {
   await saveAdminRole({
     id: String(form.get('id') || '').trim(),
     name: String(form.get('name') || '').trim(),
-    isAdmin: form.get('isAdmin') === 'on',
     projectIds: form.getAll('projectIds').map((value) => String(value || '').trim()).filter(Boolean),
   });
 }
@@ -5611,6 +5701,7 @@ async function saveAdminProject(project) {
         cwd,
         displayName: String(project.displayName || '').trim(),
         enabled: project.enabled !== false,
+        activeSessionLimit: project.activeSessionLimit == null ? 30 : project.activeSessionLimit,
       },
     });
     state.error = '';
@@ -5633,7 +5724,6 @@ async function saveAdminRole(role) {
       body: {
         id: String(role.id || '').trim(),
         name: String(role.name || '').trim(),
-        isAdmin: role.isAdmin === true,
         projectIds: Array.isArray(role.projectIds) ? role.projectIds : [],
         projectGrants: projectGrantsFromProjectIds(role.projectIds),
       },
@@ -5938,7 +6028,7 @@ function closeReportViewer() {
 }
 
 async function setSessionSortMode(mode) {
-  const nextMode = mode === 'time' ? 'time' : 'favorites';
+  const nextMode = normalizeSortMode(mode);
   state.sortMode = nextMode;
   const scope = currentSessionScope();
   const cached = state.sessionsByScope[scope] || [];
@@ -5951,6 +6041,10 @@ async function setSessionSortMode(mode) {
   }
   if (nextMode === 'favorites' && !isLoaded) {
     await refreshSessionsList({ renderAfter: true, scope: 'favorites' });
+    return;
+  }
+  if (nextMode === 'archived' && !isLoaded) {
+    await refreshSessionsList({ renderAfter: true, scope: 'archived' });
     return;
   }
   render();
@@ -6103,6 +6197,12 @@ function syncRuntimeStatusFromSession(session, { source = 'detail' } = {}) {
   const turns = sessionTurns(session);
   const activeTurn = findActiveTurn(session);
   if (!activeTurn?.id) {
+    if (shouldPreserveLocallyStartedTurn(session, { source, turns })) {
+      return setRuntimeStatus('Turn running', 'warn', {
+        activeTurnId: state.turnId,
+        terminalTurnId: null,
+      });
+    }
     const latestTurn = latestRuntimeTurn(turns);
     if (!latestTurn) {
       if (source === 'detail') {
@@ -6128,6 +6228,7 @@ function syncRuntimeStatusFromSession(session, { source = 'detail' } = {}) {
     clearRuntimeTurnState();
     return setRuntimeStatus('Ready', 'success', { activeTurnId: null, terminalTurnId: latestTurn.id || null });
   }
+  clearLocallyStartedTurn();
   state.pendingTurn = true;
   state.turnId = activeTurn.id;
   state.streamWasBackgrounded = true;
@@ -6139,10 +6240,43 @@ function clearRuntimeTurnState() {
   if (state.pendingTurn || state.turnId) {
     stopStream();
   }
+  clearLocallyStartedTurn();
   state.pendingTurn = false;
   state.turnId = null;
   state.streamWasBackgrounded = false;
   state.lastTurnEventAt = 0;
+}
+
+function markLocallyStartedTurn(turnId) {
+  const normalizedTurnId = String(turnId || '').trim();
+  state.locallyStartedTurnId = normalizedTurnId || null;
+  state.locallyStartedTurnAt = normalizedTurnId ? Date.now() : 0;
+}
+
+function clearLocallyStartedTurn() {
+  state.locallyStartedTurnId = null;
+  state.locallyStartedTurnAt = 0;
+}
+
+function shouldPreserveLocallyStartedTurn(session, { source = 'detail', turns = sessionTurns(session) } = {}) {
+  if (source !== 'detail') {
+    return false;
+  }
+  const localTurnId = String(state.locallyStartedTurnId || '').trim();
+  if (!localTurnId || state.turnId !== localTurnId || !state.pendingTurn) {
+    return false;
+  }
+  if (String(session?.activeTurnId || '').trim()) {
+    return false;
+  }
+  if (!state.locallyStartedTurnAt || Date.now() - state.locallyStartedTurnAt > LOCAL_TURN_SYNC_GRACE_MS) {
+    return false;
+  }
+  const matchingTurn = (Array.isArray(turns) ? turns : []).find((turn) => turn?.id === localTurnId) || null;
+  if (matchingTurn && isTerminalTurnStatus(matchingTurn.status)) {
+    return false;
+  }
+  return true;
 }
 
 function setRuntimeStatus(status, tone, result) {
@@ -6376,11 +6510,35 @@ function normalizeSessions(payload) {
       if (session.readOnly === true) {
         normalized.readOnly = true;
       }
+      if (session.archived === true) {
+        normalized.archived = true;
+      }
+      if (typeof session.archivedAt === 'string') {
+        normalized.archivedAt = session.archivedAt;
+      }
+      if (typeof session.archivedByUserId === 'string') {
+        normalized.archivedByUserId = session.archivedByUserId;
+      }
+      if (typeof session.archiveSource === 'string') {
+        normalized.archiveSource = session.archiveSource;
+      }
       if (Object.prototype.hasOwnProperty.call(session, 'goal')) {
         normalized.goal = session.goal && typeof session.goal === 'object' ? session.goal : null;
       }
       return normalized;
     });
+}
+
+function normalizeSessionsForScope(payload, scope) {
+  const sessions = normalizeSessions(payload);
+  if (scope !== 'archived') {
+    return sessions;
+  }
+  return sessions.map((session) => ({
+    ...session,
+    archived: true,
+    readOnly: true,
+  }));
 }
 
 function normalizeProjects(payload) {
@@ -6450,7 +6608,13 @@ function upsertSession(session) {
 }
 
 function currentSessionScope() {
-  return state.sortMode === 'favorites' ? 'favorites' : 'all';
+  if (state.sortMode === 'favorites') {
+    return 'favorites';
+  }
+  if (state.sortMode === 'archived') {
+    return 'archived';
+  }
+  return 'all';
 }
 
 function upsertSessionInScope(scope, session) {
@@ -6965,7 +7129,7 @@ function sortedSessions() {
   if (state.sortMode === 'favorites') {
     return sortedFavoriteSessions();
   }
-  return sessions.sort((left, right) => lastInputAtForSession(right) - lastInputAtForSession(left));
+  return sessions.sort(compareSessionsForSelection);
 }
 
 function filteredSessions() {
@@ -6973,13 +7137,16 @@ function filteredSessions() {
   if (state.sortMode === 'favorites') {
     return sessions.filter(isFavoriteSession);
   }
+  if (state.sortMode === 'archived') {
+    return sessions.filter((session) => session?.archived === true);
+  }
   return sessions;
 }
 
 function sortedFavoriteSessions() {
   return projectScopedSessions()
     .filter(isFavoriteSession)
-    .sort((left, right) => lastInputAtForSession(right) - lastInputAtForSession(left));
+    .sort(compareSessionsForSelection);
 }
 
 function projectScopedSessions() {
@@ -7282,7 +7449,7 @@ async function selectProjectScope(projectKey) {
     return null;
   }
   const [latestSession] = projectScopedSessions()
-    .sort((left, right) => lastInputAtForSession(right) - lastInputAtForSession(left));
+    .sort(compareSessionsForSelection);
   if (latestSession) {
     await selectSession(latestSession.id);
     return latestSession;
@@ -7295,7 +7462,7 @@ async function selectProjectScope(projectKey) {
 function uniqueSessionPaths() {
   const paths = [];
   const seen = new Set();
-  const sessions = [...state.sessions].sort((left, right) => lastInputAtForSession(right) - lastInputAtForSession(left));
+  const sessions = [...state.sessions].sort(compareSessionsForSelection);
   for (const session of sessions) {
     const cwd = session.cwd || '';
     if (!cwd || seen.has(cwd)) {
@@ -7348,13 +7515,15 @@ function resetAdminState() {
   state.admin.page = 'projects';
   state.admin.filterUserId = '';
   state.admin.filterProjectId = '';
+  state.admin.filterState = 'all';
   state.admin.editingProjectId = '';
   state.admin.editingRoleId = '';
 }
 
-function adminSessionsPath(userId = '', projectId = '') {
+function adminSessionsPath(userId = '', projectId = '', filterState = 'all') {
   const normalizedUserId = String(userId || '').trim();
   const normalizedProjectId = String(projectId || '').trim();
+  const normalizedState = normalizeAdminSessionState(filterState);
   const params = [];
   if (normalizedUserId) {
     params.push(`userId=${encodeURIComponent(normalizedUserId)}`);
@@ -7362,8 +7531,48 @@ function adminSessionsPath(userId = '', projectId = '') {
   if (normalizedProjectId) {
     params.push(`projectId=${encodeURIComponent(normalizedProjectId)}`);
   }
+  if (normalizedState !== 'all') {
+    params.push(`state=${encodeURIComponent(normalizedState)}`);
+  }
   const query = params.join('&');
   return query ? `/api/admin/sessions?${query}` : '/api/admin/sessions';
+}
+
+function normalizeAdminSessionState(value) {
+  return value === 'active' || value === 'archived' ? value : 'all';
+}
+
+function normalizeSortMode(mode) {
+  if (mode === 'favorites' || mode === 'archived') {
+    return mode;
+  }
+  return 'time';
+}
+
+function normalizeSessionScope(scope) {
+  if (scope === 'favorites' || scope === 'archived') {
+    return scope;
+  }
+  return 'all';
+}
+
+function sessionListPath(scope) {
+  if (scope === 'favorites') {
+    return '/api/sessions?favorite=true';
+  }
+  if (scope === 'archived') {
+    return '/api/sessions?state=archived';
+  }
+  return '/api/sessions';
+}
+
+function normalizeActiveSessionLimitInput(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) {
+    return 30;
+  }
+  const parsed = Number(normalized);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 30;
 }
 
 function adminUserName(userId) {
@@ -7701,6 +7910,15 @@ function lastInputAtForSession(session) {
   return Math.max(session?.lastInputAt || 0, session?.updatedAt || 0);
 }
 
+function compareSessionsForSelection(left, right) {
+  const leftRunning = findActiveTurn(left) ? 1 : 0;
+  const rightRunning = findActiveTurn(right) ? 1 : 0;
+  if (leftRunning !== rightRunning) {
+    return rightRunning - leftRunning;
+  }
+  return lastInputAtForSession(right) - lastInputAtForSession(left);
+}
+
 function applyPermissionPreset(preset) {
   state.permissionPreset = preset;
   if (preset === 'read-only') {
@@ -7850,6 +8068,19 @@ function applySiteTitle(title, options = {}) {
 function normalizeSiteTitle(title) {
   const value = String(title || '').trim();
   return value || DEFAULT_SITE_TITLE;
+}
+
+function readBootstrapSiteTitle() {
+  const element = document.querySelector('#codex-web-bootstrap');
+  if (!element) {
+    return '';
+  }
+  try {
+    const payload = JSON.parse(element.textContent || '{}');
+    return typeof payload?.siteTitle === 'string' ? payload.siteTitle : '';
+  } catch (_error) {
+    return '';
+  }
 }
 
 function normalizeTheme(theme) {

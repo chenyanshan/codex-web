@@ -40,6 +40,7 @@ export interface CodexWebProject {
   cwd: string;
   displayName: string;
   enabled: boolean;
+  activeSessionLimit: number | null;
 }
 
 export interface CodexWebAppSession {
@@ -49,6 +50,10 @@ export interface CodexWebAppSession {
   ownerUserId: string;
   createdAt: string;
   updatedAt: string;
+  archived: boolean;
+  archivedAt: string | null;
+  archivedByUserId: string | null;
+  archiveSource: 'codex' | 'web-only' | null;
 }
 
 export interface CodexWebShare {
@@ -511,6 +516,7 @@ function normalizeProject(project: CodexWebProject): CodexWebProject {
     cwd,
     displayName: cwdLeafName(String(project.displayName ?? '').trim()) || cwdLeafName(cwd) || id,
     enabled: project.enabled !== false,
+    activeSessionLimit: normalizeProjectActiveSessionLimit((project as CodexWebProject & { activeSessionLimit?: unknown }).activeSessionLimit),
   };
 }
 
@@ -535,6 +541,10 @@ function normalizeAppSession(session: CodexWebAppSession): CodexWebAppSession {
     ownerUserId: normalizeRequiredId(session.ownerUserId, 'owner user id'),
     createdAt: String(session.createdAt ?? '').trim() || now,
     updatedAt: String(session.updatedAt ?? '').trim() || now,
+    archived: session.archived === true,
+    archivedAt: normalizeOptionalIsoString((session as CodexWebAppSession & { archivedAt?: unknown }).archivedAt),
+    archivedByUserId: normalizeOptionalId((session as CodexWebAppSession & { archivedByUserId?: unknown }).archivedByUserId),
+    archiveSource: normalizeArchiveSource((session as CodexWebAppSession & { archiveSource?: unknown }).archiveSource),
   };
 }
 
@@ -620,6 +630,31 @@ function normalizePassword(password: string): string {
 function normalizeSiteTitle(siteTitle: unknown): string {
   const normalized = typeof siteTitle === 'string' ? siteTitle.trim() : '';
   return normalized || DEFAULT_SITE_TITLE;
+}
+
+function normalizeProjectActiveSessionLimit(value: unknown): number | null {
+  if (value === null) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return 30;
+  }
+  return parsed;
+}
+
+function normalizeOptionalIsoString(value: unknown): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized || null;
+}
+
+function normalizeOptionalId(value: unknown): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized || null;
+}
+
+function normalizeArchiveSource(value: unknown): 'codex' | 'web-only' | null {
+  return value === 'codex' || value === 'web-only' ? value : null;
 }
 
 function normalizeRequiredId(value: string, label: string): string {

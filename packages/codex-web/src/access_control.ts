@@ -79,6 +79,20 @@ export function canReadAppSession(
   return effectiveProjectGrant(state, principal, session.projectId)?.canRead === true;
 }
 
+export function canReadArchivedAppSession(
+  state: CodexWebIdentityState,
+  principal: CodexWebPrincipal,
+  session: CodexWebAppSession,
+): boolean {
+  if (canReadAppSession(state, principal, session)) {
+    return true;
+  }
+  if (session.archived !== true) {
+    return false;
+  }
+  return effectiveProjectGrant(state, principal, session.projectId)?.canRead === true;
+}
+
 export function canWriteAppSession(
   state: CodexWebIdentityState,
   principal: CodexWebPrincipal,

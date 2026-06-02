@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   CodexAppClient,
   createStderrLogger,
   type CodexTurnInput,
-  formatConfigKeyPath,
   type ProviderApprovalRequest,
   type ProviderModelInfo,
   type ProviderThreadGoal,
@@ -17,6 +18,7 @@ import {
   type ProviderTurnSessionSettings,
   type ProviderTurnWorkEvent,
   type ProviderUsageReport,
+  resolveCodexHome,
 } from '@codex-mobile-web-app/codex-native-api';
 import { CodexWebEventBus } from './event_bus.js';
 import {
@@ -97,6 +99,7 @@ export interface CodexWebRuntimeClient {
   }): Promise<ProviderThreadGoal | null>;
   clearThreadGoal?(threadId: string): Promise<boolean>;
   archiveThread?(threadId: string): Promise<void>;
+  unarchiveThread?(threadId: string): Promise<void>;
   writeConfigValue(args: {
     keyPath: string;
     value: unknown;
@@ -195,6 +198,7 @@ interface CodexWebTurnConflictError extends Error {
 
 export interface ListSessionsOptions {
   favorite?: boolean;
+  archived?: boolean;
 }
 
 export class CodexWebRuntime {
@@ -258,7 +262,7 @@ export class CodexWebRuntime {
     if (options.favorite === true) {
       return this.listFavoriteSessions();
     }
-    const result = await this.client.listThreads({ limit: 100, archived: false });
+    const result = await this.client.listThreads({ limit: 100, archived: options.archived === true });
     return result.items
       .filter((thread) => typeof thread.threadId === 'string' && thread.threadId)
       .map((thread) => this.toSession(thread));
@@ -332,7 +336,8 @@ export class CodexWebRuntime {
   async readSession(sessionId: string): Promise<CodexWebSession | null> {
     const thread = await this.readThreadSummary(sessionId);
     if (!thread) {
-      return null;
+      const archivedThread = this.readArchivedThreadSummary(sessionId);
+      return archivedThread ? this.toSession(archivedThread) : null;
     }
     return this.withThreadGoal(this.toSession(thread));
   }
@@ -347,21 +352,6 @@ export class CodexWebRuntime {
     }
     const nextSettings = this.mergeSettings(sessionId, patch);
     this.persistSessionSettings(sessionId, nextSettings);
-    await this.client.writeConfigValue({
-      keyPath: formatConfigKeyPath(['profiles', sessionId]),
-      value: omitNullTomlValues({
-        model: nextSettings.model,
-        reasoningEffort: nextSettings.reasoningEffort,
-        serviceTier: nextSettings.serviceTier,
-        collaborationMode: nextSettings.collaborationMode,
-        personality: nextSettings.personality,
-        accessPreset: nextSettings.accessPreset,
-        approvalPolicy: nextSettings.approvalPolicy,
-        sandboxMode: nextSettings.sandboxMode,
-        locale: nextSettings.locale,
-        metadata: nextSettings.metadata ?? {},
-      }),
-    });
     return this.toSession(thread);
   }
 
@@ -382,11 +372,18 @@ export class CodexWebRuntime {
       await this.client.archiveThread(sessionId);
     } else if (!current?.favorite) {
       return false;
+    } else {
+      this.deleteLocalSessionState(sessionId, { deleteTimeline: true });
     }
-    this.sessionSettings.delete(sessionId);
-    this.settingsStore?.delete(sessionId);
-    this.timelineStore?.delete(sessionId);
     return true;
+  }
+
+  async unarchiveSession(sessionId: string): Promise<CodexWebSession | null> {
+    if (typeof this.client.unarchiveThread !== 'function') {
+      throw new Error('Thread unarchive is not supported by this Codex runtime');
+    }
+    await this.client.unarchiveThread(sessionId);
+    return this.readSession(sessionId);
   }
 
   appendSessionTimelineEntry(
@@ -892,6 +889,28 @@ export class CodexWebRuntime {
     return this.client.readThread(threadId, false);
   }
 
+  private readArchivedThreadSummary(threadId: string): ProviderThreadSummary | null {
+    const archivedDir = path.join(resolveCodexHome(), 'archived_sessions');
+    let fileNames: string[] = [];
+    try {
+      fileNames = fs.readdirSync(archivedDir)
+        .filter((name) => name.endsWith('.jsonl'));
+    } catch {
+      return null;
+    }
+    const prioritized = [
+      ...fileNames.filter((name) => name.includes(threadId)),
+      ...fileNames.filter((name) => !name.includes(threadId)),
+    ];
+    for (const fileName of prioritized) {
+      const thread = readArchivedThreadFromFile(path.join(archivedDir, fileName), threadId);
+      if (thread) {
+        return thread;
+      }
+    }
+    return null;
+  }
+
   private async ensureThreadReadyForTurn(threadId: string): Promise<void> {
     if (typeof this.client.resumeThread !== 'function') {
       return;
@@ -984,9 +1003,17 @@ export class CodexWebRuntime {
     if (typeof this.client.getThreadGoal !== 'function') {
       return session;
     }
+    let goal: ProviderThreadGoal | null = null;
+    try {
+      goal = await this.client.getThreadGoal(session.id);
+    } catch (error) {
+      if (!isUnavailableThreadError(error)) {
+        throw error;
+      }
+    }
     return {
       ...session,
-      goal: await this.client.getThreadGoal(session.id),
+      goal,
     };
   }
 
@@ -1046,6 +1073,17 @@ export class CodexWebRuntime {
     };
     this.sessionSettings.set(sessionId, normalized);
     this.settingsStore?.set(sessionId, normalized);
+  }
+
+  private deleteLocalSessionState(
+    sessionId: string,
+    options: { deleteTimeline: boolean } = { deleteTimeline: false },
+  ): void {
+    this.sessionSettings.delete(sessionId);
+    this.settingsStore?.delete(sessionId);
+    if (options.deleteTimeline) {
+      this.timelineStore?.delete(sessionId);
+    }
   }
 
   private favoriteSessionIds(): string[] {
@@ -1744,25 +1782,6 @@ function createDefaultSettings(sessionId: string): CodexWebStoredSessionSettings
   };
 }
 
-function omitNullTomlValues(value: unknown): unknown {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((entry) => omitNullTomlValues(entry))
-      .filter((entry) => entry !== undefined);
-  }
-  if (typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .map(([key, entry]) => [key, omitNullTomlValues(entry)] as const)
-        .filter(([, entry]) => entry !== undefined),
-    );
-  }
-  return value;
-}
-
 function mapApprovalDecision(decision: 'accept' | 'accept_for_session' | 'deny'): 1 | 2 | 3 {
   switch (decision) {
     case 'accept':
@@ -1812,4 +1831,182 @@ function isMissingRolloutError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /no rollout found for thread id/i.test(message)
     || /rollout .* is empty/i.test(message);
+}
+
+function readArchivedThreadFromFile(filePath: string, threadId: string): ProviderThreadSummary | null {
+  let lines: string[] = [];
+  try {
+    lines = fs.readFileSync(filePath, 'utf8').split('\n');
+  } catch {
+    return null;
+  }
+  const turns: ProviderThreadTurn[] = [];
+  let cwd: string | null = null;
+  let title: string | null = null;
+  let updatedAt: number | null = null;
+  let preview: string | null = null;
+  let matchedThread = false;
+  let currentTurn: ProviderThreadTurn | null = null;
+  let currentTurnId: string | null = null;
+
+  for (const line of lines) {
+    const entry = parseArchivedSessionLine(line);
+    if (!entry) {
+      continue;
+    }
+    const payload = isArchivedRecord(entry.payload) ? entry.payload : null;
+    if (entry.type === 'session_meta' && payload) {
+      const payloadId = normalizeString(payload.id);
+      if (payloadId && payloadId !== threadId) {
+        return null;
+      }
+      matchedThread = payloadId === threadId || matchedThread;
+      cwd = normalizeString(payload.cwd) || cwd;
+      title = normalizeString(payload.title) || title;
+      updatedAt = parseArchivedTimestamp(payload.timestamp) ?? updatedAt;
+      continue;
+    }
+    if (entry.type === 'turn_context' && payload) {
+      const turnId = normalizeString(payload.turn_id);
+      if (!turnId) {
+        continue;
+      }
+      currentTurnId = turnId;
+      currentTurn = {
+        id: turnId,
+        status: null,
+        error: null,
+        items: [],
+      };
+      turns.push(currentTurn);
+      continue;
+    }
+    if (entry.type === 'event_msg' && payload) {
+      if (payload.type === 'task_started') {
+        const turnId = normalizeString(payload.turn_id);
+        if (turnId && turnId !== currentTurnId) {
+          currentTurnId = turnId;
+          currentTurn = {
+            id: turnId,
+            status: 'running',
+            error: null,
+            items: [],
+          };
+          turns.push(currentTurn);
+        }
+        continue;
+      }
+      if (payload.type === 'task_complete') {
+        if (currentTurn) {
+          currentTurn.status = 'completed';
+        }
+        updatedAt = parseArchivedTimestamp(entry.timestamp) ?? updatedAt;
+        continue;
+      }
+      continue;
+    }
+    if (entry.type !== 'response_item' || !payload) {
+      continue;
+    }
+    if (payload.type !== 'message') {
+      continue;
+    }
+    const role = normalizeArchivedMessageRole(payload.role);
+    const text = extractArchivedMessageText(payload.content);
+    if (!role || !text) {
+      continue;
+    }
+    if (!currentTurn) {
+      currentTurn = {
+        id: `archived_${turns.length + 1}`,
+        status: 'completed',
+        error: null,
+        items: [],
+      };
+      currentTurnId = currentTurn.id;
+      turns.push(currentTurn);
+    }
+    currentTurn.items.push({
+      type: 'message',
+      role,
+      phase: null,
+      text,
+    });
+    preview ||= text;
+    updatedAt = parseArchivedTimestamp(entry.timestamp) ?? updatedAt;
+  }
+
+  if (!matchedThread && !path.basename(filePath).includes(threadId)) {
+    return null;
+  }
+  if (!turns.length && !preview) {
+    return null;
+  }
+  for (const turn of turns) {
+    turn.status ||= 'completed';
+  }
+  return {
+    threadId,
+    cwd,
+    title,
+    updatedAt,
+    preview,
+    turns,
+    path: filePath,
+  };
+}
+
+function parseArchivedSessionLine(line: string): { type?: unknown; payload?: unknown; timestamp?: unknown } | null {
+  const text = line.trim();
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as { type?: unknown; payload?: unknown; timestamp?: unknown };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeArchivedMessageRole(role: unknown): 'user' | 'assistant' | null {
+  const normalized = normalizeString(role).toLowerCase();
+  if (normalized === 'user' || normalized === 'assistant') {
+    return normalized;
+  }
+  return null;
+}
+
+function extractArchivedMessageText(content: unknown): string | null {
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts = content
+    .map((item) => {
+      if (!isArchivedRecord(item)) {
+        return '';
+      }
+      const type = normalizeString(item.type).toLowerCase();
+      if (type !== 'input_text' && type !== 'output_text' && type !== 'text') {
+        return '';
+      }
+      return normalizeString(item.text);
+    })
+    .filter(Boolean);
+  if (!parts.length) {
+    return null;
+  }
+  return parts.join('\n\n');
+}
+
+function parseArchivedTimestamp(value: unknown): number | null {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date.getTime();
+}
+
+function isArchivedRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

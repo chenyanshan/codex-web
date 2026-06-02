@@ -74,6 +74,10 @@ function runtimeStub() {
       calls.push(`archive:${threadId}`);
       return true;
     },
+    unarchiveSession: async (threadId: string) => {
+      calls.push(`unarchive:${threadId}`);
+      return { id: threadId, cwd: '/secret/path', projectName: 'secret/path', settings: {}, thread: { turns: [] }, timeline: [] };
+    },
     updateSessionFavorite: async (threadId: string) => {
       calls.push(`favorite:${threadId}`);
       return { id: threadId, cwd: '/secret/path', settings: {}, thread: { turns: [] } };
@@ -262,7 +266,7 @@ test('multi-user favorite session list uses the runtime favorite filter before h
   };
   const server = createCodexWebServer({
     auth: authFor({
-      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
     }),
     identityStore,
     runtime: runtime as any,
@@ -271,7 +275,7 @@ test('multi-user favorite session list uses the runtime favorite filter before h
   await server.start();
   try {
     const response = await fetch(`${server.baseUrl}/api/sessions?favorite=true`, {
-      headers: { Authorization: 'Bearer admin' },
+      headers: { Authorization: 'Bearer alice' },
     });
     assert.equal(response.status, 200);
     const payload = await response.json();
@@ -338,6 +342,412 @@ test('multi-user session create uses project cwd and stores app session mapping'
     assert.deepEqual(runtime.calls, ['create:/Users/alice/secret-repo']);
     const state = await identityStore.readState();
     assert.equal(state.sessions.some((session) => session.codexThreadId === 'thread_new'), true);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin project APIs persist active session limits', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const create = await fetch(`${server.baseUrl}/api/admin/projects`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'project_limited',
+        cwd: '/Users/admin/limited',
+        displayName: 'Limited',
+        activeSessionLimit: 5,
+      }),
+    });
+    assert.equal(create.status, 201);
+    const createPayload = await create.json();
+    assert.equal(createPayload.project.activeSessionLimit, 5);
+
+    const list = await fetch(`${server.baseUrl}/api/admin/projects`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(list.status, 200);
+    const listPayload = await list.json();
+    assert.equal(listPayload.items.find((item: any) => item.id === 'project_limited')?.activeSessionLimit, 5);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin project patch updates active session limits', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const patch = await fetch(`${server.baseUrl}/api/admin/projects/project_allowed`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        displayName: 'Allowed Updated',
+        activeSessionLimit: 7,
+      }),
+    });
+    assert.equal(patch.status, 200);
+    const patchPayload = await patch.json();
+    assert.equal(patchPayload.project.id, 'project_allowed');
+    assert.equal(patchPayload.project.displayName, 'Allowed Updated');
+    assert.equal(patchPayload.project.cwd, '/Users/alice/secret-repo');
+    assert.equal(patchPayload.project.activeSessionLimit, 7);
+
+    const state = await identityStore.readState();
+    assert.equal(state.projects.find((project) => project.id === 'project_allowed')?.activeSessionLimit, 7);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('multi-user session create rejects non-admins at the active session limit', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertProject({
+    id: 'project_allowed',
+    internalName: 'secret-repo',
+    cwd: '/Users/alice/secret-repo',
+    displayName: 'Allowed Project',
+    enabled: true,
+    activeSessionLimit: 1,
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: 'project_allowed' }),
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      error: 'active_session_limit_reached',
+      message: 'Archive an existing session before creating a new one.',
+      projectId: 'project_allowed',
+      activeSessionLimit: 1,
+    });
+    assert.deepEqual(runtime.calls, []);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('owners can list and read their archived sessions as read-only', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_archived',
+    codexThreadId: 'thread_archived',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: true,
+    archivedAt: '2026-05-28T00:00:00.000Z',
+    archivedByUserId: 'user_alice',
+    archiveSource: 'codex',
+  });
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async (options?: { favorite?: boolean; archived?: boolean }) => {
+      runtime.calls.push(`list:${options?.archived === true ? 'archived' : options?.favorite === true ? 'favorites' : 'all'}`);
+      return options?.archived === true
+        ? [{ id: 'thread_archived', cwd: '/secret/path', projectName: 'secret/path', settings: {}, thread: { turns: [] }, timeline: [] }]
+        : [{ id: 'thread_alice', cwd: '/secret/path', projectName: 'secret/path', settings: {}, thread: { turns: [] }, timeline: [] }];
+    },
+    readSession: async (threadId: string) => {
+      runtime.calls.push(`read:${threadId}`);
+      return { id: threadId, cwd: '/secret/path', projectName: 'secret/path', settings: {}, thread: { turns: [] }, timeline: [] };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const list = await fetch(`${server.baseUrl}/api/sessions?state=archived`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(list.status, 200);
+    const listPayload = await list.json();
+    assert.deepEqual(listPayload.items.map((item: any) => item.id), ['app_archived']);
+    assert.equal(listPayload.items[0].archived, true);
+
+    const read = await fetch(`${server.baseUrl}/api/sessions/app_archived`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(read.status, 200);
+    const readPayload = await read.json();
+    assert.equal(readPayload.session.id, 'app_archived');
+    assert.equal(readPayload.session.archived, true);
+    assert.equal(readPayload.session.readOnly, true);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('owners can list archived sessions recorded in identity when runtime archived scan is empty', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_archived',
+    codexThreadId: 'thread_archived',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: true,
+    archivedAt: '2026-05-28T00:00:00.000Z',
+    archivedByUserId: 'user_alice',
+    archiveSource: 'codex',
+  });
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async (options?: { favorite?: boolean; archived?: boolean }) => {
+      runtime.calls.push(`list:${options?.archived === true ? 'archived' : options?.favorite === true ? 'favorites' : 'all'}`);
+      return [];
+    },
+    readSession: async (threadId: string) => {
+      runtime.calls.push(`read:${threadId}`);
+      return { id: threadId, cwd: '/secret/path', projectName: 'secret/path', settings: {}, thread: { turns: [] }, timeline: [] };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const list = await fetch(`${server.baseUrl}/api/sessions?state=archived`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(list.status, 200);
+    const listPayload = await list.json();
+    assert.deepEqual(listPayload.items.map((item: any) => item.id), ['app_archived']);
+    assert.equal(listPayload.items[0].archived, true);
+    assert.equal(listPayload.items[0].readOnly, true);
+    assert.deepEqual(runtime.calls, ['read:thread_archived']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('project readers cannot list or read archived sessions owned by another user', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_archived',
+    codexThreadId: 'thread_archived',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_admin',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: true,
+    archivedAt: '2026-05-28T00:00:00.000Z',
+    archivedByUserId: 'user_admin',
+    archiveSource: 'codex',
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const list = await fetch(`${server.baseUrl}/api/sessions?state=archived`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(list.status, 200);
+    const listPayload = await list.json();
+    assert.deepEqual(listPayload.items, []);
+
+    const read = await fetch(`${server.baseUrl}/api/sessions/app_archived`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(read.status, 404);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('archived sessions reject write APIs until they are unarchived', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_archived',
+    codexThreadId: 'thread_archived',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: true,
+    archivedAt: '2026-05-28T00:00:00.000Z',
+    archivedByUserId: 'user_alice',
+    archiveSource: 'codex',
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const turn = await fetch(`${server.baseUrl}/api/sessions/app_archived/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'continue' }),
+    });
+    assert.equal(turn.status, 409);
+    assert.deepEqual(await turn.json(), {
+      error: 'session_archived',
+      message: 'Unarchive this session before making changes.',
+    });
+
+    const settings = await fetch(`${server.baseUrl}/api/sessions/app_archived/settings`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-5.4' }),
+    });
+    assert.equal(settings.status, 409);
+
+    assert.deepEqual(runtime.calls, []);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('archiving a session updates app metadata and delete remains an alias', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const archive = await fetch(`${server.baseUrl}/api/sessions/app_alice/archive`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(archive.status, 200);
+    let state = await identityStore.readState();
+    let archived = state.sessions.find((session) => session.id === 'app_alice');
+    assert.equal(archived?.archived, true);
+    assert.equal(archived?.archivedByUserId, 'user_alice');
+    assert.equal(archived?.archiveSource, 'codex');
+
+    const unarchive = await fetch(`${server.baseUrl}/api/sessions/app_alice/unarchive`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(unarchive.status, 200);
+    state = await identityStore.readState();
+    archived = state.sessions.find((session) => session.id === 'app_alice');
+    assert.equal(archived?.archived, false);
+    assert.equal(archived?.archivedAt, null);
+    assert.equal(archived?.archivedByUserId, null);
+    assert.equal(archived?.archiveSource, null);
+
+    const legacyArchive = await fetch(`${server.baseUrl}/api/sessions/app_alice`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(legacyArchive.status, 200);
+    assert.deepEqual(runtime.calls, ['archive:thread_alice', 'unarchive:thread_alice', 'archive:thread_alice']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('unarchiving checks the active session limit for non-admins', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertProject({
+    id: 'project_allowed',
+    internalName: 'secret-repo',
+    cwd: '/Users/alice/secret-repo',
+    displayName: 'Allowed Project',
+    enabled: true,
+    activeSessionLimit: 1,
+  });
+  await identityStore.upsertSession({
+    id: 'app_archived',
+    codexThreadId: 'thread_archived',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: true,
+    archivedAt: '2026-05-28T00:00:00.000Z',
+    archivedByUserId: 'user_alice',
+    archiveSource: 'codex',
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions/app_archived/unarchive`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      error: 'active_session_limit_reached',
+      message: 'Archive an existing session before creating a new one.',
+      projectId: 'project_allowed',
+      activeSessionLimit: 1,
+    });
+    assert.deepEqual(runtime.calls, []);
   } finally {
     await server.stop();
   }
@@ -481,8 +891,260 @@ test('admin can audit all sessions and read any session with observer mode', asy
     const readPayload = await read.json();
     assert.equal(readPayload.mode, 'observer');
     assert.equal(readPayload.session.id, 'app_bob');
+    assert.equal(readPayload.session.mode, 'observer');
+    assert.equal(readPayload.session.readOnly, true);
     assert.equal(readPayload.session.cwd, '/secret/path');
     assert.deepEqual(runtime.calls, ['read:thread_bob']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin normal access to another owner session is hidden and cannot start turns', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const read = await fetch(`${server.baseUrl}/api/sessions/app_bob`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(read.status, 404);
+
+    const write = await fetch(`${server.baseUrl}/api/sessions/app_bob/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'not allowed' }),
+    });
+    assert.equal(write.status, 404);
+    assert.deepEqual(runtime.calls, []);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin normal event stream access to another owner session is hidden', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = {
+    ...runtimeStub(),
+    threadIdForTurn: (turnId: string) => turnId === 'turn_bob' ? 'thread_bob' : null,
+    getTurnEvents: () => [],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/turns/turn_bob/events`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(response.status, 404);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin normal session list returns only their own sessions', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_admin',
+    codexThreadId: 'thread_admin',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_admin',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+  });
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async () => [
+      { id: 'thread_admin', cwd: '/admin/path', projectName: 'admin/path', settings: {}, thread: { turns: [] }, timeline: [] },
+      { id: 'thread_alice', cwd: '/secret/path', projectName: 'secret/path', settings: {}, thread: { turns: [] }, timeline: [] },
+      { id: 'thread_bob', cwd: '/other/path', projectName: 'other/path', settings: {}, thread: { turns: [] }, timeline: [] },
+    ],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.items.map((item: any) => item.id), ['app_admin']);
+    assert.equal(payload.items[0].mode, undefined);
+    assert.equal(payload.items[0].readOnly, undefined);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin normal workspace includes admin-owned legacy sessions adopted from runtime', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async () => [
+      {
+        id: 'thread_legacy',
+        cwd: '/Users/admin/legacy-repo',
+        projectName: 'legacy-repo',
+        updatedAt: 1_779_811_200_000,
+        firstUserInput: 'Legacy prompt',
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      },
+    ],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const audit = await fetch(`${server.baseUrl}/api/admin/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(audit.status, 200);
+    const state = await identityStore.readState();
+    const legacySession = state.sessions.find((session) => session.codexThreadId === 'thread_legacy');
+    assert.equal(legacySession?.ownerUserId, 'user_admin');
+
+    const normalList = await fetch(`${server.baseUrl}/api/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(normalList.status, 200);
+    const normalPayload = await normalList.json();
+    assert.deepEqual(normalPayload.items.map((item: any) => item.id), [legacySession?.id]);
+    assert.equal(normalPayload.items[0].mode, undefined);
+    assert.equal(normalPayload.items[0].readOnly, undefined);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin session audit includes a summary from runtime session previews', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async () => [
+      {
+        id: 'thread_alice',
+        cwd: '/secret/path',
+        projectName: 'secret/path',
+        firstUserInput: 'Set up the mobile console login flow',
+        preview: 'Fallback preview should not be used',
+        lastUserInput: 'Latest prompt should not be used',
+        title: 'Title should not be used',
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      },
+      {
+        id: 'thread_bob',
+        cwd: '/other/path',
+        projectName: 'other/path',
+        preview: 'Review the RBAC session audit screen',
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      },
+    ],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/admin/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    const summariesById = new Map(payload.items.map((item: any) => [item.id, item.summary]));
+    assert.equal(summariesById.get('app_alice'), 'Set up the mobile console login flow');
+    assert.equal(summariesById.get('app_bob'), 'Review the RBAC session audit screen');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin audit filters archived and active sessions and can read archived detail', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_archived',
+    codexThreadId: 'thread_archived',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: true,
+    archivedAt: '2026-05-28T00:00:00.000Z',
+    archivedByUserId: 'user_alice',
+    archiveSource: 'codex',
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const archivedOnly = await fetch(`${server.baseUrl}/api/admin/sessions?state=archived`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(archivedOnly.status, 200);
+    const archivedPayload = await archivedOnly.json();
+    assert.deepEqual(archivedPayload.items.map((item: any) => item.id), ['app_archived']);
+    assert.equal(archivedPayload.items[0].archived, true);
+
+    const activeOnly = await fetch(`${server.baseUrl}/api/admin/sessions?state=active`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(activeOnly.status, 200);
+    const activePayload = await activeOnly.json();
+    assert.equal(activePayload.items.some((item: any) => item.id === 'app_archived'), false);
+
+    const detail = await fetch(`${server.baseUrl}/api/admin/sessions/app_archived`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(detail.status, 200);
+    const detailPayload = await detail.json();
+    assert.equal(detailPayload.mode, 'observer');
+    assert.equal(detailPayload.session.id, 'app_archived');
+    assert.equal(detailPayload.session.archived, true);
+    assert.equal(detailPayload.session.readOnly, true);
   } finally {
     await server.stop();
   }
@@ -627,7 +1289,7 @@ test('admin audit re-enables previously imported legacy projects', async () => {
   }
 });
 
-test('admin can start turns from an unmapped legacy runtime session id', async () => {
+test('admin can start turns from an unmapped legacy runtime session id after adoption', async () => {
   const identityStore = await createIdentityStore();
   const runtime = {
     ...runtimeStub(),
@@ -775,6 +1437,32 @@ test('authorized owners can create read-only share links for their sessions', as
   }
 });
 
+test('admin cannot create share links for another owner session from the normal workspace', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions/app_bob/share`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(response.status, 404);
+
+    const state = await identityStore.readState();
+    assert.deepEqual(state.shares, []);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('admin settings and project management APIs require admin principal', async () => {
   const identityStore = await createIdentityStore();
   const runtime = runtimeStub();
@@ -817,6 +1505,7 @@ test('admin settings and project management APIs require admin principal', async
       cwd: '/Users/admin/new-secret',
       displayName: 'new-secret',
       enabled: true,
+      activeSessionLimit: 30,
     });
   } finally {
     await server.stop();
@@ -935,6 +1624,42 @@ test('admin can create roles and users with project assignments', async () => {
     });
     assert.equal(users.status, 200);
     assert.equal((await users.json()).items.some((item: any) => item.username === 'writer'), true);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin role creation ignores admin flag for non-bootstrap roles', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const role = await fetch(`${server.baseUrl}/api/admin/roles`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'role_writer_admin',
+        name: 'Writer Admin',
+        isAdmin: true,
+        projectIds: ['project_allowed'],
+      }),
+    });
+    assert.equal(role.status, 201);
+    const rolePayload = await role.json();
+    assert.equal(rolePayload.role.id, 'role_writer_admin');
+    assert.equal(rolePayload.role.isAdmin, false);
+
+    const state = await identityStore.readState();
+    assert.equal(state.roles.find((item) => item.id === 'role_writer_admin')?.isAdmin, false);
+    assert.equal(state.roles.find((item) => item.id === 'role_admin')?.isAdmin, true);
   } finally {
     await server.stop();
   }

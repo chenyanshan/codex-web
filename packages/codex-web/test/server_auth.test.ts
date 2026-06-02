@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { FileIdentityStore } from '../src/identity_store.js';
 import { createCodexWebServer } from '../src/server.js';
 
 interface TestConfig {
@@ -635,6 +636,31 @@ test('static root is public', async () => {
   }
 });
 
+test('static app shell exposes configured global title before login', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-title-state-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  await identityStore.setSiteTitle('Team Codex');
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    identityStore,
+    runtime: createRuntimeStub() as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /<title>Team Codex<\/title>/u);
+    assert.ok(html.includes('<script type="application/json" id="codex-web-bootstrap">{"siteTitle":"Team Codex"}</script>'));
+
+    const indexResponse = await fetch(`${server.baseUrl}/index.html`);
+    assert.equal(await indexResponse.text(), html);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('static asset resolvers are evaluated per request', async () => {
   let version = 'v1';
   const server = createCodexWebServer({
@@ -1240,6 +1266,66 @@ test('DELETE /api/sessions/:id archives a session', async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
     assert.deepEqual(calls, ['thread_1']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('POST /api/sessions/:id/archive archives a session', async () => {
+  const calls: string[] = [];
+  const server = createCodexWebServer({
+    auth: {
+      isConfigured: async () => true,
+      login: async () => ({ token: 'cw_token', session: { id: 's1', deviceName: 'phone', createdAt: '', lastSeenAt: '' }, configuredNow: false }),
+      verifyToken: async (token) => token === 'cw_token'
+        ? { id: 's1', deviceName: 'phone', createdAt: '', lastSeenAt: '' }
+        : null,
+      logout: async () => {},
+    },
+    runtime: {
+      ...createRuntimeStub(),
+      archiveSession: async (sessionId: string) => {
+        calls.push(sessionId);
+        return sessionId === 'thread_1';
+      },
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions/thread_1/archive`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.deepEqual(calls, ['thread_1']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('GET /api/sessions?state=archived lists archived sessions in single-user mode', async () => {
+  const calls: Array<{ favorite?: boolean; archived?: boolean }> = [];
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      listSessions: async (options?: { favorite?: boolean; archived?: boolean }) => {
+        calls.push(options ?? {});
+        return options?.archived === true ? [{ id: 'thread_archived' }] : [{ id: 'thread_active' }];
+      },
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions?state=archived`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { items: [{ id: 'thread_archived' }] });
+    assert.deepEqual(calls, [{ archived: true }]);
   } finally {
     await server.stop();
   }

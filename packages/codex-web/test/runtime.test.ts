@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import type {
   ProviderApprovalRequest,
@@ -172,6 +175,145 @@ test('runtime lists sessions from thread summaries without hydrating every threa
   assert.equal(sessions[0]?.firstUserInput, 'Fast preview one');
 });
 
+test('runtime lists archived sessions from archived thread summaries', async () => {
+  const listArgs: Array<{ archived?: boolean | null }> = [];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async (args) => {
+      listArgs.push(args ?? {});
+      return {
+        items: [{
+          ...createThread('thread_archived_list'),
+          cwd: '/workspace/archived',
+          updatedAt: 90,
+          preview: 'Archived preview',
+          path: '/Users/test/.codex/archived_sessions/rollout-thread_archived_list.jsonl',
+        }],
+        nextCursor: null,
+      };
+    },
+    startThread: async () => ({ threadId: 'thread_archived_list', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread('thread_archived_list'),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_1',
+      threadId: 'thread_archived_list',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  const sessions = await runtime.listSessions({ archived: true });
+
+  assert.equal(listArgs.length, 1);
+  assert.equal(listArgs[0]?.archived, true);
+  assert.deepEqual(sessions.map((session) => session.id), ['thread_archived_list']);
+  assert.equal(sessions[0]?.firstUserInput, 'Archived preview');
+});
+
+test('runtime reads archived sessions from Codex archived jsonl when live thread is unavailable', async () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-runtime-archived-'));
+  const archivedDir = path.join(codexHome, 'archived_sessions');
+  fs.mkdirSync(archivedDir, { recursive: true });
+  const threadId = 'thread_archived_read';
+  const archivedPath = path.join(archivedDir, `rollout-${threadId}.jsonl`);
+  fs.writeFileSync(archivedPath, [
+    JSON.stringify({
+      timestamp: '2026-06-01T00:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: threadId,
+        timestamp: '2026-06-01T00:00:00.000Z',
+        cwd: '/Users/alice/archived-project',
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-01T00:00:01.000Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_archived_1' },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-01T00:00:02.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Archived question' }],
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-01T00:00:03.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'Archived answer' }],
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-01T00:00:04.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete' },
+    }),
+  ].join('\n'));
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId, cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => null,
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'unused',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId,
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+
+  try {
+    const runtime = new CodexWebRuntime({
+      codexBin: 'codex',
+      defaultCwd: '/workspace',
+      client,
+      eventBus: new CodexWebEventBus(),
+    });
+
+    const session = await runtime.readSession(threadId);
+
+    assert.equal(session?.id, threadId);
+    assert.equal(session?.cwd, '/Users/alice/archived-project');
+    assert.equal(session?.projectName, 'alice/archived-project');
+    assert.equal(session?.firstUserInput, 'Archived question');
+    assert.equal(session?.thread.path, archivedPath);
+    assert.deepEqual(session?.thread.turns?.[0]?.items.map((item) => item.type === 'message' ? item.text : null), [
+      'Archived question',
+      'Archived answer',
+    ]);
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+  }
+});
+
 test('runtime reloads MCP servers through the Codex app client', async () => {
   let reloadCalls = 0;
   const client: CodexWebRuntimeClient = {
@@ -237,7 +379,7 @@ test('runtime marks thread settings that only come from defaults', async () => {
   assert.equal(session?.settings.metadata?.codexWebDefaultsOnly, true);
 });
 
-test('runtime falls back from includeTurns reads and escapes hyphenated profile config paths', async () => {
+test('runtime falls back from includeTurns reads and updates settings without legacy profile writes', async () => {
   const writes: Array<{ keyPath: string; value: unknown }> = [];
   const readCalls: boolean[] = [];
   const client: CodexWebRuntimeClient = {
@@ -301,12 +443,12 @@ test('runtime falls back from includeTurns reads and escapes hyphenated profile 
   assert.equal(updated?.settings.model, 'gpt-5');
   assert.equal(updated?.settings.reasoningEffort, 'high');
   assert.deepEqual(readCalls, [true, false, true, false, true, false]);
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0]?.keyPath, 'profiles."thread-native-tools-1"');
+  assert.equal(writes.length, 0);
 });
 
-test('runtime omits null session settings when writing Codex profile config', async () => {
+test('runtime persists updated session settings locally without touching legacy profile config', async () => {
   const writes: Array<{ keyPath: string; value: Record<string, unknown> }> = [];
+  const storedSettings: Array<{ sessionId: string; settings: any }> = [];
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
     readUsage: async () => null,
@@ -331,25 +473,81 @@ test('runtime omits null session settings when writing Codex profile config', as
     defaultCwd: '/workspace',
     client,
     eventBus: new CodexWebEventBus(),
+    settingsStore: {
+      get: () => null,
+      set: (sessionId, settings) => {
+        storedSettings.push({ sessionId, settings });
+      },
+      delete: () => {},
+    },
   });
 
-  await runtime.updateSessionSettings('thread_profile_config', {
+  const updated = await runtime.updateSessionSettings('thread_profile_config', {
     model: 'gpt-5',
     reasoningEffort: 'high',
   });
 
-  assert.equal(writes[0]?.keyPath, 'profiles.thread_profile_config');
-  assert.deepEqual(writes[0]?.value, {
-    model: 'gpt-5',
-    reasoningEffort: 'high',
-    collaborationMode: 'default',
-    personality: 'pragmatic',
-    accessPreset: 'full-access',
-    approvalPolicy: 'never',
-    sandboxMode: 'danger-full-access',
-    metadata: {},
+  assert.equal(updated?.settings.model, 'gpt-5');
+  assert.equal(updated?.settings.reasoningEffort, 'high');
+  assert.equal(writes.length, 0);
+  assert.equal(storedSettings.length, 1);
+  assert.equal(storedSettings[0]?.sessionId, 'thread_profile_config');
+  assert.equal(storedSettings[0]?.settings.model, 'gpt-5');
+  assert.equal(storedSettings[0]?.settings.reasoningEffort, 'high');
+  assert.deepEqual(storedSettings[0]?.settings.metadata, {});
+});
+
+test('runtime switches session models without writing legacy Codex profiles config', async () => {
+  const writes: Array<{ keyPath: string; value: unknown }> = [];
+  const startTurnCalls: Array<{ model?: string | null; effort?: string | null }> = [];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [createThread('thread_model_switch')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_model_switch', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread('thread_model_switch'),
+    writeConfigValue: async ({ keyPath, value }) => {
+      writes.push({ keyPath, value });
+      throw new Error('`profiles` contains legacy config profile tables and can no longer be written; use `--profile <…>`');
+    },
+    startTurn: async (args) => {
+      startTurnCalls.push({ model: args.model, effort: args.effort });
+      await args.onTurnStarted?.({ turnId: 'turn_model_switch', threadId: 'thread_model_switch' });
+      return {
+        outputText: 'done',
+        status: 'completed',
+        turnId: 'turn_model_switch',
+        threadId: 'thread_model_switch',
+      };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
   });
-  assert.equal(Object.values(writes[0]?.value ?? {}).includes(null), false);
+
+  const updated = await runtime.updateSessionSettings('thread_model_switch', {
+    model: 'gpt-5-mini',
+    reasoningEffort: 'low',
+  });
+
+  assert.equal(updated?.settings.model, 'gpt-5-mini');
+  assert.equal(updated?.settings.reasoningEffort, 'low');
+  assert.equal(writes.length, 0);
+
+  await runtime.startTurn('thread_model_switch', {
+    text: 'hello',
+  });
+
+  assert.deepEqual(startTurnCalls, [{
+    model: 'gpt-5-mini',
+    effort: 'low',
+  }]);
 });
 
 test('runtime passes requested cwd and settings when creating a session', async () => {
@@ -1449,6 +1647,39 @@ test('runtime readSession exposes the current thread goal as session state', asy
   });
 });
 
+test('runtime readSession keeps archived sessions readable when goal metadata is unavailable', async () => {
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async (): Promise<ProviderUsageReport | null> => null,
+    listThreads: async () => ({ items: [createThread('thread_archived_goal_missing')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_archived_goal_missing', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread('thread_archived_goal_missing'),
+    getThreadGoal: async () => {
+      throw new Error('thread not found: thread_archived_goal_missing');
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_1',
+      threadId: 'thread_archived_goal_missing',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  const session = await runtime.readSession('thread_archived_goal_missing');
+
+  assert.equal(session?.id, 'thread_archived_goal_missing');
+  assert.equal(session?.goal, null);
+});
+
 test('runtime readSession exposes only process-active turn state', async () => {
   let resolveTurn: ((result: ProviderTurnResult) => void) | null = null;
   const client: CodexWebRuntimeClient = {
@@ -1912,7 +2143,7 @@ test('runtime readSession deduplicates backend failure timeline entries already 
   ]);
 });
 
-test('runtime archiveSession removes backend-managed session timeline entries', async () => {
+test('runtime archiveSession preserves backend-managed session timeline entries', async () => {
   const timelinePath = `/tmp/codex-web-runtime-timeline-${process.pid}-${Date.now()}-archive.json`;
   const timelineStore = new FileSessionTimelineStore({ timelinePath });
   timelineStore.append('thread_archived', {
@@ -1954,7 +2185,48 @@ test('runtime archiveSession removes backend-managed session timeline entries', 
     'Goal (active): ship slash goal support',
   ]);
   assert.equal(await runtime.archiveSession('thread_archived'), true);
-  assert.deepEqual(timelineStore.list('thread_archived'), []);
+  assert.deepEqual(timelineStore.list('thread_archived').map((item) => item.text), [
+    'Goal (active): ship slash goal support',
+  ]);
+});
+
+test('runtime unarchives an archived session through the native client', async () => {
+  const calls: string[] = [];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async (): Promise<ProviderUsageReport | null> => null,
+    listThreads: async () => ({ items: [createThread('thread_archived')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_archived', cwd: '/workspace', title: 'Thread' }),
+    readThread: async (threadId: string) => {
+      calls.push(`read:${threadId}`);
+      return createThread(threadId);
+    },
+    archiveThread: async () => {},
+    unarchiveThread: async (threadId: string) => {
+      calls.push(`unarchive:${threadId}`);
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'unused',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_archived',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  const session = await runtime.unarchiveSession('thread_archived');
+
+  assert.equal(session?.id, 'thread_archived');
+  assert.deepEqual(calls, ['unarchive:thread_archived', 'read:thread_archived']);
 });
 
 test('runtime emits normalized turn and approval events and maps approval decisions', async () => {

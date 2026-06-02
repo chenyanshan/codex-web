@@ -873,6 +873,15 @@ button:disabled {
   background: transparent;
 }
 
+.admin-session-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .admin-row-main,
 .admin-row-meta {
   min-width: 0;
@@ -1864,11 +1873,13 @@ button:disabled {
 
 .sort-toggle {
   width: 100%;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px;
 }
 
 .mobile-session-sort-toggle {
   width: auto;
   flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
   border-radius: 10px;
 }
 
@@ -1888,6 +1899,18 @@ button:disabled {
   border: 0;
   background: transparent;
   color: var(--muted);
+}
+
+.toggle .archive-sort-button {
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.archive-sort-icon {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
 }
 
 .toggle button[aria-pressed="true"] {

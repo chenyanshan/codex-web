@@ -128,6 +128,72 @@ test('identity store collapses path-like project display names to the final segm
   assert.equal(project.displayName, 'codex-mobile-web-app');
 });
 
+test('identity store defaults project active session limit to 30 and persists explicit overrides', async () => {
+  const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
+
+  const defaultProject = await store.upsertProject({
+    id: 'project_default_limit',
+    internalName: 'default-limit',
+    cwd: '/Users/alice/default-limit',
+    displayName: 'Default Limit',
+    enabled: true,
+  } as any);
+  const unlimitedProject = await store.upsertProject({
+    id: 'project_unlimited',
+    internalName: 'unlimited',
+    cwd: '/Users/alice/unlimited',
+    displayName: 'Unlimited',
+    enabled: true,
+    activeSessionLimit: null,
+  } as any);
+  const customProject = await store.upsertProject({
+    id: 'project_custom_limit',
+    internalName: 'custom-limit',
+    cwd: '/Users/alice/custom-limit',
+    displayName: 'Custom Limit',
+    enabled: true,
+    activeSessionLimit: 12,
+  } as any);
+
+  assert.equal((defaultProject as any).activeSessionLimit, 30);
+  assert.equal((unlimitedProject as any).activeSessionLimit, null);
+  assert.equal((customProject as any).activeSessionLimit, 12);
+
+  const state = await store.readState();
+  assert.equal((state.projects.find((project) => project.id === 'project_default_limit') as any)?.activeSessionLimit, 30);
+  assert.equal((state.projects.find((project) => project.id === 'project_unlimited') as any)?.activeSessionLimit, null);
+  assert.equal((state.projects.find((project) => project.id === 'project_custom_limit') as any)?.activeSessionLimit, 12);
+});
+
+test('identity store persists archive metadata on app sessions', async () => {
+  const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
+
+  const archivedSession = await store.upsertSession({
+    id: 'app_archived',
+    codexThreadId: 'thread_archived',
+    projectId: 'project_one',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    updatedAt: '2026-06-01T00:00:00.000Z',
+    archived: true,
+    archivedAt: '2026-06-01T01:00:00.000Z',
+    archivedByUserId: 'user_alice',
+    archiveSource: 'codex',
+  } as any);
+
+  assert.equal((archivedSession as any).archived, true);
+  assert.equal((archivedSession as any).archivedAt, '2026-06-01T01:00:00.000Z');
+  assert.equal((archivedSession as any).archivedByUserId, 'user_alice');
+  assert.equal((archivedSession as any).archiveSource, 'codex');
+
+  const state = await store.readState();
+  const persisted = state.sessions.find((session) => session.id === 'app_archived') as any;
+  assert.equal(persisted?.archived, true);
+  assert.equal(persisted?.archivedAt, '2026-06-01T01:00:00.000Z');
+  assert.equal(persisted?.archivedByUserId, 'user_alice');
+  assert.equal(persisted?.archiveSource, 'codex');
+});
+
 test('identity store deletes a user and cleans related sessions, shares, and auth sessions', async () => {
   const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
   await store.upsertUserWithPassword({

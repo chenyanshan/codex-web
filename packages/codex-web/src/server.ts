@@ -98,6 +98,10 @@ interface CodexWebIdentityStoreLike {
   findShareByToken?(token: string): Promise<string | null>;
 }
 
+type ArchiveCapableRuntime = CodexWebRuntime & {
+  unarchiveSession?: (sessionId: string) => Promise<CodexWebSession | null>;
+};
+
 const SETUP_REQUIRED_MESSAGE = 'Password not configured. Run codex-web auth set-password.';
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_UPLOAD_BODY_BYTES = 32 * 1024 * 1024;
@@ -106,6 +110,7 @@ const LOGIN_RATE_LIMIT_WINDOW_MS = 60_000;
 const LOGIN_RATE_LIMIT_PER_CLIENT = 10;
 const LOGIN_RATE_LIMIT_GLOBAL = 100;
 const BUILD_ID_PLACEHOLDER = '__CODEX_WEB_BUILD_ID__';
+const DEFAULT_SITE_TITLE = 'Codex Web';
 type StaticFileAsset = { body: string | Buffer; contentType: string };
 type StaticFileEntry = StaticFileAsset | (() => StaticFileAsset);
 type StaticFilesRecord = Record<string, StaticFileEntry>;
@@ -294,10 +299,14 @@ async function handleRequest({
       writeSetupRequiredPage(response);
       return;
     }
-    const asset = resolveStaticFile(staticFiles[pathname] ?? (isShareAppRoute(pathname) ? staticFiles['/'] : undefined));
+    let asset = resolveStaticFile(staticFiles[pathname] ?? (isShareAppRoute(pathname) ? staticFiles['/'] : undefined));
     if (!asset) {
       writeJson(response, 404, { error: 'Not found' });
       return;
+    }
+    if (isAppShellHtml(pathname, asset)) {
+      const identityState = identityStore ? await identityStore.readState() : null;
+      asset = injectAppShellBootstrap(asset, siteTitleFromIdentityState(identityState));
     }
     response.writeHead(200, {
       'Content-Type': asset.contentType,
@@ -475,7 +484,11 @@ async function handleRequest({
   }
 
   if (pathname === '/api/sessions' && method === 'GET') {
-    const options = url.searchParams.get('favorite') === 'true' ? { favorite: true } : {};
+    const options = url.searchParams.get('favorite') === 'true'
+      ? { favorite: true }
+      : normalizeSessionStateFilter(url.searchParams.get('state')) === 'archived'
+        ? { archived: true }
+        : {};
     writeJson(response, 200, { items: await runtime.listSessions(options) });
     return;
   }
@@ -529,6 +542,17 @@ async function handleRequest({
 
   if (sessionMatch && method === 'DELETE') {
     const archived = await runtime.archiveSession(decodeURIComponent(sessionMatch[1]!));
+    if (!archived) {
+      writeSessionNotFound(response);
+      return;
+    }
+    writeJson(response, 200, { ok: true });
+    return;
+  }
+
+  const sessionArchiveMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/archive$/u);
+  if (sessionArchiveMatch && method === 'POST') {
+    const archived = await runtime.archiveSession(decodeURIComponent(sessionArchiveMatch[1]!));
     if (!archived) {
       writeSessionNotFound(response);
       return;
@@ -707,6 +731,53 @@ function resolveStaticFile(entry: StaticFileEntry | undefined): StaticFileAsset 
     return null;
   }
   return typeof entry === 'function' ? entry() : entry;
+}
+
+function isAppShellHtml(pathname: string, asset: StaticFileAsset): boolean {
+  return (pathname === '/' || pathname === '/index.html' || isShareAppRoute(pathname))
+    && typeof asset.body === 'string'
+    && /^text\/html\b/iu.test(asset.contentType);
+}
+
+function injectAppShellBootstrap(asset: StaticFileAsset, siteTitle: string): StaticFileAsset {
+  const title = normalizePublicSiteTitle(siteTitle);
+  const bootstrap = `<script type="application/json" id="codex-web-bootstrap">${escapeJsonForHtmlScript({ siteTitle: title })}</script>`;
+  let body = String(asset.body).replace(/<title>[^<]*<\/title>/iu, `<title>${escapeHtml(title)}</title>`);
+  if (!body.includes('id="codex-web-bootstrap"')) {
+    body = body.replace(
+      /(\s*<script type="module" src="\/app\.js"><\/script>)/u,
+      `\n  ${bootstrap}$1`,
+    );
+  }
+  return { ...asset, body };
+}
+
+function siteTitleFromIdentityState(identityState: CodexWebIdentityState | null): string {
+  return normalizePublicSiteTitle(identityState?.settings.siteTitle);
+}
+
+function normalizePublicSiteTitle(siteTitle: unknown): string {
+  const normalized = typeof siteTitle === 'string' ? siteTitle.trim() : '';
+  return normalized || DEFAULT_SITE_TITLE;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/gu, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[character] ?? character));
+}
+
+function escapeJsonForHtmlScript(payload: unknown): string {
+  return JSON.stringify(payload)
+    .replace(/</gu, '\\u003C')
+    .replace(/>/gu, '\\u003E')
+    .replace(/&/gu, '\\u0026')
+    .replace(/\u2028/gu, '\\u2028')
+    .replace(/\u2029/gu, '\\u2029');
 }
 
 interface RateLimitResult {
@@ -951,9 +1022,20 @@ async function handleMultiUserRequest({
   }
 
   if (pathname === '/api/sessions' && method === 'GET') {
+    const stateFilter = normalizeSessionStateFilter(url.searchParams.get('state'));
+    const archivedOnly = stateFilter === 'archived';
+    const workspaceState = principal.isAdmin
+      ? await ensureAdminLegacySessionMappings({
+        identityStore,
+        identityState,
+        runtime,
+        principal,
+      })
+      : identityState;
     const readableSessionsByThreadId = new Map(
-      identityState.sessions
-        .filter((appSession) => canReadAppSession(identityState, principal, appSession))
+      workspaceState.sessions
+        .filter((appSession) => canReadWorkspaceAppSession(workspaceState, principal, appSession))
+        .filter((appSession) => archivedOnly ? appSession.archived === true : appSession.archived !== true)
         .map((appSession) => [appSession.codexThreadId, appSession]),
     );
     if (url.searchParams.get('favorite') === 'true') {
@@ -966,8 +1048,27 @@ async function handleMultiUserRequest({
         items.push(presentSessionForUser({
           runtimeSession,
           appSession,
-          project: findProject(identityState, appSession.projectId),
+          project: findProject(workspaceState, appSession.projectId),
           includeCwd: false,
+          observer: isObserverSessionForPrincipal(identityState, principal, appSession),
+        }));
+      }
+      writeJson(response, 200, { items });
+      return true;
+    }
+    if (archivedOnly) {
+      const items = [];
+      for (const appSession of readableSessionsByThreadId.values()) {
+        const runtimeSession = await runtime.readSession(appSession.codexThreadId);
+        if (!runtimeSession) {
+          continue;
+        }
+        items.push(presentSessionForUser({
+          runtimeSession,
+          appSession,
+          project: findProject(workspaceState, appSession.projectId),
+          includeCwd: false,
+          observer: isObserverSessionForPrincipal(identityState, principal, appSession),
         }));
       }
       writeJson(response, 200, { items });
@@ -982,8 +1083,9 @@ async function handleMultiUserRequest({
       items.push(presentSessionForUser({
         runtimeSession,
         appSession,
-        project: findProject(identityState, appSession.projectId),
+        project: findProject(workspaceState, appSession.projectId),
         includeCwd: false,
+        observer: isObserverSessionForPrincipal(identityState, principal, appSession),
       }));
     }
     writeJson(response, 200, { items });
@@ -1001,6 +1103,13 @@ async function handleMultiUserRequest({
       writeSessionNotFound(response);
       return true;
     }
+    if (!principal.isAdmin) {
+      const activeSessionLimit = activeSessionLimitForProject(project);
+      if (activeSessionLimit !== null && countActiveSessions(identityState, principal.userId, project.id) >= activeSessionLimit) {
+        writeJson(response, 409, activeSessionLimitReachedPayload(project.id, activeSessionLimit));
+        return true;
+      }
+    }
     const runtimeSession = await runtime.createSession({
       ...(body as CreateSessionInput),
       cwd: project.cwd,
@@ -1013,6 +1122,10 @@ async function handleMultiUserRequest({
       ownerUserId: principal.userId,
       createdAt: now,
       updatedAt: now,
+      archived: false,
+      archivedAt: null,
+      archivedByUserId: null,
+      archiveSource: null,
     });
     writeJson(response, 201, {
       session: presentSessionForUser({
@@ -1060,10 +1173,21 @@ async function handleMultiUserRequest({
     if (!sessionId && method === 'GET') {
       const userId = url.searchParams.get('userId');
       const projectId = url.searchParams.get('projectId');
+      const stateFilter = normalizeSessionStateFilter(url.searchParams.get('state'));
+      const summariesByThreadId = await adminSessionAuditSummaries(runtime, stateFilter);
       const items = adminIdentityState.sessions
         .filter((session) => !userId || session.ownerUserId === userId)
         .filter((session) => !projectId || session.projectId === projectId)
-        .map((session) => presentAppSessionAudit(adminIdentityState, session));
+        .filter((session) => stateFilter === 'archived'
+          ? session.archived === true
+          : stateFilter === 'active'
+            ? session.archived !== true
+            : true)
+        .map((session) => presentAppSessionAudit(
+          adminIdentityState,
+          session,
+          summariesByThreadId.get(session.codexThreadId) ?? null,
+        ));
       writeJson(response, 200, { items });
       return true;
     }
@@ -1085,6 +1209,7 @@ async function handleMultiUserRequest({
           appSession,
           project: findProject(adminIdentityState, appSession.projectId),
           includeCwd: true,
+          observer: true,
         }),
       });
       return true;
@@ -1093,14 +1218,7 @@ async function handleMultiUserRequest({
 
   const shareCreateMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/share$/u);
   if (shareCreateMatch && method === 'POST') {
-    const stateForSession = await stateForSessionAccess({
-      identityStore,
-      identityState,
-      runtime,
-      principal,
-      sessionId: decodeURIComponent(shareCreateMatch[1]!),
-    });
-    const resolved = resolveReadableAppSession(stateForSession, principal, decodeURIComponent(shareCreateMatch[1]!));
+    const resolved = resolveReadableWorkspaceAppSession(identityState, principal, decodeURIComponent(shareCreateMatch[1]!));
     if (!resolved || !identityStore.createShare) {
       writeSessionNotFound(response);
       return true;
@@ -1118,14 +1236,7 @@ async function handleMultiUserRequest({
 
   const sessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/u);
   if (sessionMatch && method === 'GET') {
-    const stateForSession = await stateForSessionAccess({
-      identityStore,
-      identityState,
-      runtime,
-      principal,
-      sessionId: decodeURIComponent(sessionMatch[1]!),
-    });
-    const resolved = resolveReadableAppSession(stateForSession, principal, decodeURIComponent(sessionMatch[1]!));
+    const resolved = resolveReadableWorkspaceAppSession(identityState, principal, decodeURIComponent(sessionMatch[1]!));
     if (!resolved) {
       writeSessionNotFound(response);
       return true;
@@ -1146,18 +1257,128 @@ async function handleMultiUserRequest({
     return true;
   }
 
-  const startTurnMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/turns$/u);
-  if (startTurnMatch && method === 'POST') {
+  if (sessionMatch && method === 'DELETE') {
+    const sessionId = decodeURIComponent(sessionMatch[1]!);
     const stateForSession = await stateForSessionAccess({
       identityStore,
       identityState,
       runtime,
       principal,
-      sessionId: decodeURIComponent(startTurnMatch[1]!),
+      sessionId,
     });
-    const resolved = resolveWritableAppSession(stateForSession, principal, decodeURIComponent(startTurnMatch[1]!));
+    const resolved = resolveWritableAppSession(stateForSession, principal, sessionId);
     if (!resolved) {
       writeSessionNotFound(response);
+      return true;
+    }
+    const archived = await runtime.archiveSession(resolved.appSession.codexThreadId);
+    if (!archived) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const now = new Date().toISOString();
+    await identityStore.upsertSession({
+      ...resolved.appSession,
+      updatedAt: now,
+      archived: true,
+      archivedAt: now,
+      archivedByUserId: principal.userId,
+      archiveSource: 'codex',
+    });
+    writeJson(response, 200, { ok: true });
+    return true;
+  }
+
+  const sessionArchiveMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/(archive|unarchive)$/u);
+  if (sessionArchiveMatch && method === 'POST') {
+    const sessionId = decodeURIComponent(sessionArchiveMatch[1]!);
+    const action = sessionArchiveMatch[2]!;
+    const stateForSession = await stateForSessionAccess({
+      identityStore,
+      identityState,
+      runtime,
+      principal,
+      sessionId,
+    });
+    const resolved = resolveWritableAppSession(stateForSession, principal, sessionId);
+    if (!resolved) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    if (action === 'archive') {
+      const archived = await runtime.archiveSession(resolved.appSession.codexThreadId);
+      if (!archived) {
+        writeSessionNotFound(response);
+        return true;
+      }
+      const now = new Date().toISOString();
+      await identityStore.upsertSession({
+        ...resolved.appSession,
+        updatedAt: now,
+        archived: true,
+        archivedAt: now,
+        archivedByUserId: principal.userId,
+        archiveSource: 'codex',
+      });
+      writeJson(response, 200, { ok: true });
+      return true;
+    }
+    const project = resolved.project;
+    if (!principal.isAdmin && project) {
+      const activeSessionLimit = activeSessionLimitForProject(project);
+      if (activeSessionLimit !== null && countActiveSessions(stateForSession, principal.userId, project.id) >= activeSessionLimit) {
+        writeJson(response, 409, activeSessionLimitReachedPayload(project.id, activeSessionLimit));
+        return true;
+      }
+    }
+    const unarchived = await (runtime as ArchiveCapableRuntime).unarchiveSession?.(resolved.appSession.codexThreadId);
+    if (!unarchived) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const now = new Date().toISOString();
+    await identityStore.upsertSession({
+      ...resolved.appSession,
+      updatedAt: now,
+      archived: false,
+      archivedAt: null,
+      archivedByUserId: null,
+      archiveSource: null,
+    });
+    writeJson(response, 200, {
+      session: presentSessionForUser({
+        runtimeSession: unarchived,
+        appSession: {
+          ...resolved.appSession,
+          updatedAt: now,
+          archived: false,
+          archivedAt: null,
+          archivedByUserId: null,
+          archiveSource: null,
+        },
+        project,
+        includeCwd: false,
+      }),
+    });
+    return true;
+  }
+
+  const startTurnMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/turns$/u);
+  if (startTurnMatch && method === 'POST') {
+    const sessionId = decodeURIComponent(startTurnMatch[1]!);
+    const stateForSession = await stateForSessionAccess({
+      identityStore,
+      identityState,
+      runtime,
+      principal,
+      sessionId,
+    });
+    const resolved = resolveWritableAppSession(stateForSession, principal, sessionId);
+    if (!resolved) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    if (rejectArchivedSessionWrite(response, resolved.appSession)) {
       return true;
     }
     const body = await readJsonBody(request);
@@ -1197,16 +1418,20 @@ async function handleMultiUserRequest({
 
   const sessionAttachmentsMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/attachments$/u);
   if (sessionAttachmentsMatch && method === 'POST') {
+    const sessionId = decodeURIComponent(sessionAttachmentsMatch[1]!);
     const stateForSession = await stateForSessionAccess({
       identityStore,
       identityState,
       runtime,
       principal,
-      sessionId: decodeURIComponent(sessionAttachmentsMatch[1]!),
+      sessionId,
     });
-    const resolved = resolveWritableAppSession(stateForSession, principal, decodeURIComponent(sessionAttachmentsMatch[1]!));
+    const resolved = resolveWritableAppSession(stateForSession, principal, sessionId);
     if (!resolved) {
       writeSessionNotFound(response);
+      return true;
+    }
+    if (rejectArchivedSessionWrite(response, resolved.appSession)) {
       return true;
     }
     const runtimeSession = await runtime.readSession(resolved.appSession.codexThreadId);
@@ -1224,16 +1449,20 @@ async function handleMultiUserRequest({
 
   const sessionSettingsMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/settings$/u);
   if (sessionSettingsMatch && method === 'PATCH') {
+    const sessionId = decodeURIComponent(sessionSettingsMatch[1]!);
     const stateForSession = await stateForSessionAccess({
       identityStore,
       identityState,
       runtime,
       principal,
-      sessionId: decodeURIComponent(sessionSettingsMatch[1]!),
+      sessionId,
     });
-    const resolved = resolveWritableAppSession(stateForSession, principal, decodeURIComponent(sessionSettingsMatch[1]!));
+    const resolved = resolveWritableAppSession(stateForSession, principal, sessionId);
     if (!resolved) {
       writeSessionNotFound(response);
+      return true;
+    }
+    if (rejectArchivedSessionWrite(response, resolved.appSession)) {
       return true;
     }
     const body = await readJsonBody(request);
@@ -1258,8 +1487,11 @@ async function handleMultiUserRequest({
     const turnId = decodeURIComponent(interruptMatch[1]!);
     const threadId = runtime.threadIdForTurn?.(turnId);
     const appSession = threadId ? identityState.sessions.find((session) => session.codexThreadId === threadId) : null;
-    if (!appSession || !canWriteAppSession(identityState, principal, appSession)) {
+    if (!appSession || !canWriteResolvedAppSession(identityState, principal, appSession)) {
       writeSessionNotFound(response);
+      return true;
+    }
+    if (rejectArchivedSessionWrite(response, appSession)) {
       return true;
     }
     if (typeof runtime.interruptTurnForThread === 'function') {
@@ -1276,8 +1508,11 @@ async function handleMultiUserRequest({
     const approvalId = decodeURIComponent(approvalMatch[1]!);
     const threadId = runtime.threadIdForApproval?.(approvalId);
     const appSession = threadId ? identityState.sessions.find((session) => session.codexThreadId === threadId) : null;
-    if (!appSession || !canWriteAppSession(identityState, principal, appSession)) {
+    if (!appSession || !canWriteResolvedAppSession(identityState, principal, appSession)) {
       writeSessionNotFound(response);
+      return true;
+    }
+    if (rejectArchivedSessionWrite(response, appSession)) {
       return true;
     }
     const action = approvalMatch[2]!;
@@ -1300,7 +1535,7 @@ async function handleMultiUserRequest({
     const turnId = decodeURIComponent(eventsMatch[1]!);
     const threadId = runtime.threadIdForTurn?.(turnId);
     const appSession = threadId ? identityState.sessions.find((session) => session.codexThreadId === threadId) : null;
-    if (!appSession || !canReadAppSession(identityState, principal, appSession)) {
+    if (!appSession || !canReadWorkspaceAppSession(identityState, principal, appSession)) {
       writeSessionNotFound(response);
       return true;
     }
@@ -1368,8 +1603,35 @@ async function handleAdminManagementRequest({
       cwd: String(body.cwd ?? ''),
       displayName: String(body.displayName ?? ''),
       enabled: body.enabled !== false,
+      activeSessionLimit: body.activeSessionLimit === null ? null : Number(body.activeSessionLimit),
     });
     writeJson(response, 201, { project });
+    return true;
+  }
+  const adminProjectMatch = pathname.match(/^\/api\/admin\/projects\/([^/]+)$/u);
+  if (adminProjectMatch && method === 'PATCH') {
+    if (typeof identityStore.upsertProject !== 'function') {
+      writeJson(response, 501, { error: 'not_supported' });
+      return true;
+    }
+    const projectId = decodeURIComponent(adminProjectMatch[1]!);
+    const existing = identityState.projects.find((project) => project.id === projectId);
+    if (!existing) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const body = await readJsonBody(request);
+    const project = await identityStore.upsertProject({
+      ...existing,
+      internalName: typeof body.internalName === 'string' ? body.internalName : existing.internalName,
+      cwd: typeof body.cwd === 'string' ? body.cwd : existing.cwd,
+      displayName: typeof body.displayName === 'string' ? body.displayName : existing.displayName,
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : existing.enabled,
+      activeSessionLimit: Object.prototype.hasOwnProperty.call(body, 'activeSessionLimit')
+        ? body.activeSessionLimit === null ? null : Number(body.activeSessionLimit)
+        : existing.activeSessionLimit,
+    });
+    writeJson(response, 200, { project });
     return true;
   }
   if (pathname === '/api/admin/roles' && method === 'GET') {
@@ -1388,7 +1650,7 @@ async function handleAdminManagementRequest({
     const role = await identityStore.upsertRole({
       id: String(body.id ?? ''),
       name: String(body.name ?? ''),
-      isAdmin: body.isAdmin === true,
+      isAdmin: String(body.id ?? '').trim() === 'role_admin' && existingAdminRole(identityState) === true,
       projectGrants: projectIds.length
         ? projectIds.map((projectId) => ({ projectId, canRead: true, canCreate: true, canWrite: true }))
         : normalizeRoleProjectGrants(body.projectGrants),
@@ -1464,6 +1726,10 @@ async function handleAdminManagementRequest({
     return true;
   }
   return false;
+}
+
+function existingAdminRole(state: CodexWebIdentityState): boolean {
+  return state.roles.some((role) => role.id === 'role_admin' && role.isAdmin === true);
 }
 
 function presentAdminUser(user: CodexWebUser): Record<string, unknown> {
@@ -1557,13 +1823,13 @@ function canReadProjectGrant(
   return grants.some((grant) => grant.canRead === true || grant.canCreate === true || grant.canWrite === true);
 }
 
-function resolveReadableAppSession(
+function resolveReadableWorkspaceAppSession(
   state: CodexWebIdentityState,
   principal: CodexWebPrincipal,
   sessionId: string,
 ): { appSession: CodexWebAppSession; project: CodexWebProject | null } | null {
   const appSession = findAppSessionByExternalId(state, sessionId);
-  if (!appSession || !canReadAppSession(state, principal, appSession)) {
+  if (!appSession || !canReadWorkspaceAppSession(state, principal, appSession)) {
     return null;
   }
   return {
@@ -1572,19 +1838,46 @@ function resolveReadableAppSession(
   };
 }
 
+function canReadWorkspaceAppSession(
+  state: CodexWebIdentityState,
+  principal: CodexWebPrincipal,
+  session: CodexWebAppSession,
+): boolean {
+  if (session.ownerUserId !== principal.userId) {
+    return false;
+  }
+  return canReadAppSession(state, principal, session);
+}
+
 function resolveWritableAppSession(
   state: CodexWebIdentityState,
   principal: CodexWebPrincipal,
   sessionId: string,
 ): { appSession: CodexWebAppSession; project: CodexWebProject | null } | null {
   const appSession = findAppSessionByExternalId(state, sessionId);
-  if (!appSession || !canWriteAppSession(state, principal, appSession)) {
+  if (!appSession || !canWriteResolvedAppSession(state, principal, appSession)) {
     return null;
   }
   return {
     appSession,
     project: findProject(state, appSession.projectId),
   };
+}
+
+function canWriteResolvedAppSession(
+  state: CodexWebIdentityState,
+  principal: CodexWebPrincipal,
+  appSession: CodexWebAppSession,
+): boolean {
+  return canWriteAppSession(state, principal, appSession);
+}
+
+function isObserverSessionForPrincipal(
+  state: CodexWebIdentityState,
+  principal: CodexWebPrincipal,
+  appSession: CodexWebAppSession,
+): boolean {
+  return principal.isAdmin && !canWriteResolvedAppSession(state, principal, appSession);
 }
 
 function findAppSessionByExternalId(state: CodexWebIdentityState, sessionId: string): CodexWebAppSession | null {
@@ -1677,6 +1970,10 @@ async function ensureAdminLegacySessionMappings({
       ownerUserId,
       createdAt: timestamp,
       updatedAt: timestamp,
+      archived: false,
+      archivedAt: null,
+      archivedByUserId: null,
+      archiveSource: null,
     });
     mappedThreadIds.add(threadId);
     changed = true;
@@ -1701,6 +1998,7 @@ function legacyProjectForRuntimeSession(runtimeSession: CodexWebSession): CodexW
     cwd,
     displayName,
     enabled: true,
+    activeSessionLimit: null,
   };
 }
 
@@ -1727,6 +2025,7 @@ function isoFromRuntimeTimestamp(value: unknown, fallback: string): string {
 function presentAppSessionAudit(
   state: CodexWebIdentityState,
   appSession: CodexWebAppSession,
+  summary: string | null = null,
 ): Record<string, unknown> {
   const project = findProject(state, appSession.projectId);
   return {
@@ -1737,7 +2036,51 @@ function presentAppSessionAudit(
     codexThreadId: appSession.codexThreadId,
     createdAt: appSession.createdAt,
     updatedAt: appSession.updatedAt,
+    archived: appSession.archived === true,
+    archivedAt: appSession.archivedAt,
+    archivedByUserId: appSession.archivedByUserId,
+    archiveSource: appSession.archiveSource,
+    ...(summary ? { summary } : {}),
   };
+}
+
+async function adminSessionAuditSummaries(
+  runtime: CodexWebRuntime,
+  stateFilter: 'active' | 'archived' | 'all',
+): Promise<Map<string, string>> {
+  const summariesByThreadId = new Map<string, string>();
+  const collect = async (options: { archived?: boolean } = {}) => {
+    for (const runtimeSession of await runtime.listSessions(options)) {
+      const threadId = normalizeOptionalString(runtimeSession.id);
+      const summary = sessionAuditSummary(runtimeSession);
+      if (threadId && summary && !summariesByThreadId.has(threadId)) {
+        summariesByThreadId.set(threadId, summary);
+      }
+    }
+  };
+
+  if (stateFilter !== 'archived') {
+    await collect();
+  }
+  if (stateFilter !== 'active') {
+    await collect({ archived: true });
+  }
+  return summariesByThreadId;
+}
+
+function sessionAuditSummary(runtimeSession: unknown): string {
+  if (!runtimeSession || typeof runtimeSession !== 'object') {
+    return '';
+  }
+  const session = runtimeSession as Record<string, unknown>;
+  return [
+    session.firstUserInput,
+    session.preview,
+    session.lastUserInput,
+    session.title,
+  ]
+    .map(normalizeOptionalString)
+    .find(Boolean) ?? '';
 }
 
 function presentSessionForUser({
@@ -1745,20 +2088,79 @@ function presentSessionForUser({
   appSession,
   project,
   includeCwd,
+  observer = false,
 }: {
   runtimeSession: any;
   appSession: CodexWebAppSession;
   project: CodexWebProject | null;
   includeCwd: boolean;
+  observer?: boolean;
 }): Record<string, unknown> {
   const { cwd, projectName, ...rest } = runtimeSession ?? {};
+  const readOnly = observer || appSession.archived === true;
   return {
     ...rest,
     id: appSession.id,
     projectId: appSession.projectId,
     projectDisplayName: projectDisplayName(project, appSession.projectId),
     ownerUserId: appSession.ownerUserId,
+    archived: appSession.archived === true,
+    archivedAt: appSession.archivedAt,
+    archivedByUserId: appSession.archivedByUserId,
+    archiveSource: appSession.archiveSource,
+    ...(observer ? { mode: 'observer' } : {}),
+    ...(readOnly ? { readOnly: true } : {}),
     ...(includeCwd ? { cwd, projectName } : {}),
+  };
+}
+
+function normalizeSessionStateFilter(value: string | null): 'active' | 'archived' | 'all' {
+  if (value === 'archived' || value === 'all') {
+    return value;
+  }
+  return 'active';
+}
+
+function activeSessionLimitForProject(project: CodexWebProject | null): number | null {
+  if (!project) {
+    return null;
+  }
+  return typeof project.activeSessionLimit === 'number' && Number.isInteger(project.activeSessionLimit) && project.activeSessionLimit > 0
+    ? project.activeSessionLimit
+    : project.activeSessionLimit === null
+      ? null
+      : 30;
+}
+
+function countActiveSessions(state: CodexWebIdentityState, ownerUserId: string, projectId: string): number {
+  return state.sessions.filter((session) => (
+    session.ownerUserId === ownerUserId
+    && session.projectId === projectId
+    && session.archived !== true
+  )).length;
+}
+
+function activeSessionLimitReachedPayload(projectId: string, activeSessionLimit: number): Record<string, unknown> {
+  return {
+    error: 'active_session_limit_reached',
+    message: 'Archive an existing session before creating a new one.',
+    projectId,
+    activeSessionLimit,
+  };
+}
+
+function rejectArchivedSessionWrite(response: ServerResponse, appSession: CodexWebAppSession): boolean {
+  if (appSession.archived !== true) {
+    return false;
+  }
+  writeJson(response, 409, archivedSessionWritePayload());
+  return true;
+}
+
+function archivedSessionWritePayload(): Record<string, unknown> {
+  return {
+    error: 'session_archived',
+    message: 'Unarchive this session before making changes.',
   };
 }
 
