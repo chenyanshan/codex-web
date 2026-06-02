@@ -11,7 +11,7 @@ commands, and stores app state. Tunnel and reverse-proxy setup are intentionally
 outside this repository.
 
 > Ask Codex to install it:
-> `帮我安装 https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
+> `Help me install https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
 
 ## Core Highlights
 
