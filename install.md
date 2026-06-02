@@ -1,6 +1,6 @@
 ---
 ai_entrypoint: true
-title: Codex Mobile Web App AI Install Guide
+title: Codex Web AI Install Guide
 supported_platforms:
   automated:
     - macOS
@@ -14,7 +14,7 @@ required_questions:
   - autostart
 ---
 
-# Codex Mobile Web App Install
+# Codex Web Install
 
 This file is the AI install entrypoint for this repository.
 

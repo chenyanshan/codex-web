@@ -1,4 +1,4 @@
-# Codex Mobile Web App
+# Codex Web
 
 [English](README.md) | 中文
 
@@ -10,7 +10,7 @@ runtime、读写本地项目文件、执行 shell 命令，以及保存应用状
 tunnel、反向代理不属于本仓库范围。
 
 > 让 Codex 直接安装：
-> `帮我安装 https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
+> `帮我安装 https://github.com/chenyanshan/codex-web/blob/main/README.md`
 
 ## 核心亮点
 
@@ -164,7 +164,7 @@ CODEX_WEB_PASSWORD='choose-a-strong-password' npm run serve
 ```env
 CODEX_WEB_HOST=0.0.0.0
 CODEX_WEB_PORT=43210
-CODEX_WEB_DEFAULT_CWD=/Users/you/path/to/codex-mobile-web-app
+CODEX_WEB_DEFAULT_CWD=/Users/you/path/to/codex-web
 CODEX_REAL_BIN=codex
 CODEX_WEB_DEBUG=0
 ```
@@ -330,7 +330,7 @@ Android：用 Chrome 打开，打开浏览器菜单，再点 `Install app` 或
 当前设计和实现记录：
 
 ```text
-docs/superpowers/specs/2026-05-17-codex-mobile-web-app-design.md
+docs/superpowers/specs/2026-05-17-codex-web-design.md
 docs/superpowers/specs/2026-05-19-codex-mobile-reports-design.md
 docs/superpowers/specs/2026-05-23-codex-web-desktop-workspace-design.md
 docs/superpowers/specs/2026-05-27-codex-web-multi-user-rbac-design.md

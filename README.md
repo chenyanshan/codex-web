@@ -1,4 +1,4 @@
-# Codex Mobile Web App
+# Codex Web
 
 English | [中文](README.zh-CN.md)
 
@@ -11,7 +11,7 @@ commands, and stores app state. Tunnel and reverse-proxy setup are intentionally
 outside this repository.
 
 > Ask Codex to install it:
-> `Help me install https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
+> `Help me install https://github.com/chenyanshan/codex-web/blob/main/README.md`
 
 ## Core Highlights
 
@@ -129,7 +129,7 @@ to install this project from a GitHub blob link or local checkout.
 Example Codex request:
 
 ```text
-Help me install https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md
+Help me install https://github.com/chenyanshan/codex-web/blob/main/README.md
 ```
 
 Expected agent behavior:
@@ -183,7 +183,7 @@ The generated service env defaults to:
 ```env
 CODEX_WEB_HOST=0.0.0.0
 CODEX_WEB_PORT=43210
-CODEX_WEB_DEFAULT_CWD=/Users/you/path/to/codex-mobile-web-app
+CODEX_WEB_DEFAULT_CWD=/Users/you/path/to/codex-web
 CODEX_REAL_BIN=codex
 CODEX_WEB_DEBUG=0
 ```
@@ -353,7 +353,7 @@ More notes: [docs/pwa-setup.md](docs/pwa-setup.md).
 Current design and implementation notes:
 
 ```text
-docs/superpowers/specs/2026-05-17-codex-mobile-web-app-design.md
+docs/superpowers/specs/2026-05-17-codex-web-design.md
 docs/superpowers/specs/2026-05-19-codex-mobile-reports-design.md
 docs/superpowers/specs/2026-05-23-codex-web-desktop-workspace-design.md
 docs/superpowers/specs/2026-05-27-codex-web-multi-user-rbac-design.md

@@ -1,4 +1,4 @@
-# Codex Mobile Web App Design
+# Codex Web Design
 
 ## Goal
 
