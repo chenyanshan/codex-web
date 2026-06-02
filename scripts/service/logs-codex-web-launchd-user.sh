@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LABEL="com.ganxing.codex-web"
+LABEL="com.chenyanshan.codex-web"
 LOG_DIR="${HOME}/.codex-web/logs"
 STDOUT_LOG="${LOG_DIR}/codex-web.stdout.log"
 STDERR_LOG="${LOG_DIR}/codex-web.stderr.log"

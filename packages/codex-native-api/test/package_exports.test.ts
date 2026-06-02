@@ -582,12 +582,12 @@ test('daemon layout resolves platform-specific service paths', () => {
   assert.equal(linux.systemdUnitPath, '/tmp/linux-home/.config/systemd/user/codex-native-api.service');
 
   const win32 = resolveDaemonLayout({
-    USERPROFILE: 'C:\\Users\\GanXing',
-    APPDATA: 'C:\\Users\\GanXing\\AppData\\Roaming',
+    USERPROFILE: 'C:\\Users\\ChenYanShan',
+    APPDATA: 'C:\\Users\\ChenYanShan\\AppData\\Roaming',
   }, {
     platform: 'win32',
   });
-  assert.equal(win32.envFile, 'C:\\Users\\GanXing\\AppData\\Roaming\\codex-native-api\\service.env');
+  assert.equal(win32.envFile, 'C:\\Users\\ChenYanShan\\AppData\\Roaming\\codex-native-api\\service.env');
   assert.equal(win32.windowsTaskName, 'CodexNativeApi');
 });
 
@@ -648,8 +648,8 @@ test('daemon install plans render launchd, systemd, and windows service artifact
     platform: 'linux',
     env: {
       HOME: path.join(tempRoot, 'linux-home'),
-      USER: 'ganxing',
-      LOGNAME: 'ganxing',
+      USER: 'chenyanshan',
+      LOGNAME: 'chenyanshan',
       PATH: '/usr/local/bin:/usr/bin:/bin',
     },
     currentWorkingDirectory: '/srv/codex',
@@ -675,15 +675,15 @@ test('daemon install plans render launchd, systemd, and windows service artifact
       publicBind: false,
     },
     restartSec: 2,
-    codexHome: 'C:\\Users\\GanXing\\.codex',
+    codexHome: 'C:\\Users\\ChenYanShan\\.codex',
     codexRealBin: 'C:\\Program Files\\nodejs\\codex.cmd',
     launchCommand: null,
     autolaunch: false,
   }, {
     platform: 'win32',
     env: {
-      USERPROFILE: 'C:\\Users\\GanXing',
-      APPDATA: 'C:\\Users\\GanXing\\AppData\\Roaming',
+      USERPROFILE: 'C:\\Users\\ChenYanShan',
+      APPDATA: 'C:\\Users\\ChenYanShan\\AppData\\Roaming',
       PATH: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
     },
     currentWorkingDirectory: 'C:\\Work',

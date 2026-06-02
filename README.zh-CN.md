@@ -12,6 +12,36 @@ tunnel、反向代理不属于本仓库范围。
 > 让 Codex 直接安装：
 > `帮我安装 https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
 
+## 核心亮点
+
+### 1. 配合内网穿透，可远程随时操控 Codex
+
+Codex Web 把 Codex 凭据、shell 执行能力和本地文件访问能力保留在宿主机上，
+手机或浏览器只作为远程控制台使用。配合你自己的 tunnel、内网穿透或反向代理之
+后，就可以在不把执行环境搬进浏览器的前提下，随时远程连回自己的 Codex。
+
+| 手机远程控制台 | 桌面工作区 |
+| --- | --- |
+| ![手机最近会话视图](docs/assets/readme/mobile-recents.png) | ![桌面工作区视图](docs/assets/readme/desktop-workspace.png) |
+
+- 面向手机、平板和桌面浏览器的远程 UI。
+- project-first workspace，实时展示会话列表、聊天和 turn 状态。
+- 既适合局域网内访问，也适合接在你自己的远程访问入口之后使用。
+
+### 2. 支持多人模式，可作为企业级 Agent 基座
+
+Codex Web 也支持多用户 facade，可以作为基于 Codex 搭建企业内部 Agents 的基础
+平台。团队可以把受控工作区提供给公司内部成员使用，管理能力保留在宿主机端，
+通过 RBAC 管理访问权限，而不是让所有人共用同一个 Codex 登录态。
+
+| 手机管理审计 | 桌面用户管理 |
+| --- | --- |
+| ![手机管理控制台与会话审计](docs/assets/readme/mobile-admin-audit.png) | ![桌面管理控制台与用户角色管理](docs/assets/readme/admin-user-management.png) |
+
+- 支持多用户模式、项目管理、角色管理和用户管理。
+- 支持基于 RBAC 的项目授权、admin 操作、observer mode 和分享链接。
+- 支持会话审计视图，按用户、项目、session 查看活动记录。
+
 ## 功能概览
 
 - 密码保护的单主机 Codex Web 控制台。

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LABEL="com.ganxing.codex-web"
-HELPER_LABEL="com.ganxing.codex-web.restart"
+LABEL="com.chenyanshan.codex-web"
+HELPER_LABEL="com.chenyanshan.codex-web.restart"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 HELPER_PLIST_PATH="${HOME}/Library/LaunchAgents/${HELPER_LABEL}.plist"
 LAUNCHD_DOMAIN="gui/${UID}"

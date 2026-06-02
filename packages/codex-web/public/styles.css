@@ -166,8 +166,9 @@ button:disabled {
 .page-back-button {
   min-height: 38px;
   padding: 0;
-  font-size: 20px;
-  line-height: 1;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .page-nav .page-title {
@@ -194,8 +195,9 @@ button:disabled {
 .chat-back-button {
   min-height: 38px;
   padding: 0;
-  font-size: 20px;
-  line-height: 1;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .chat-title-stack {
@@ -271,9 +273,40 @@ button:disabled {
   width: 38px;
   min-width: 38px;
   padding: 0;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.button-icon {
+  width: 1em;
+  height: 1em;
+  display: block;
+  fill: currentColor;
+  flex: 0 0 auto;
+}
+
+.page-back-button,
+.chat-back-button,
+.settings-toggle-button,
+.mobile-sidebar-toggle-button {
+  color: var(--text);
+}
+
+.page-back-button .button-icon,
+.chat-back-button .button-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.settings-toggle-button .button-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.mobile-sidebar-toggle-button .button-icon {
+  width: 18px;
+  height: 18px;
 }
 
 .topbar-main,

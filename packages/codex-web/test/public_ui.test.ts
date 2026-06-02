@@ -726,6 +726,37 @@ test('admin session audit renders session summaries', async () => {
   assert.match(html, /class="admin-session-summary" data-i18n-skip/u);
 });
 
+test('admin session audit renders newest sessions first', async () => {
+  const { api } = await loadAppHarness();
+
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+  api.state.admin.loaded = true;
+  api.state.admin.page = 'sessions';
+  api.state.admin.users = [{ id: 'user_1', username: 'alice', enabled: true }];
+  api.state.admin.sessions = [
+    {
+      id: 'session_old',
+      ownerUserId: 'user_1',
+      projectId: 'project_a',
+      projectDisplayName: 'Old Project',
+      summary: 'zzz-old-session-summary',
+      updatedAt: '2026-05-19T08:00:00.000Z',
+    },
+    {
+      id: 'session_new',
+      ownerUserId: 'user_1',
+      projectId: 'project_b',
+      projectDisplayName: 'New Project',
+      summary: 'aaa-new-session-summary',
+      updatedAt: '2026-05-19T10:00:00.000Z',
+    },
+  ];
+
+  const html = api.renderAdminConsole().innerHTML;
+
+  assert.ok(html.indexOf('aaa-new-session-summary') < html.indexOf('zzz-old-session-summary'));
+});
+
 test('admin management actions post project, role, and user changes', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
@@ -1040,6 +1071,47 @@ test('admin session audit project filter includes projects discovered from sessi
   assert.match(html, /<option value="project_legacy" data-i18n-skip>Legacy Repo<\/option>/u);
 });
 
+test('admin observed sessions open read-only history from the earliest message', async () => {
+  const { api, context } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/admin/sessions/session_observed') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'observer',
+            session: {
+              id: 'session_observed',
+              projectDisplayName: 'Project Alpha',
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'First observed question' },
+                { id: 'm2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'First observed answer' },
+                { id: 'm3', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Second observed question' },
+                { id: 'm4', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Second observed answer' },
+                { id: 'm5', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Latest observed question' },
+                { id: 'm6', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Latest observed answer' },
+              ],
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+
+  await api.openAdminObservedSession('session_observed');
+
+  const timeline = context.document.querySelector('#timeline');
+  assert.equal(timeline.scrollTop, 0);
+  assert.equal(api.state.currentSession.readOnly, true);
+  assert.equal(api.state.sessionHistoryStartIndex, 0);
+  assert.match(api.renderChat().innerHTML, /First observed question/u);
+});
+
 test('observer sessions and share sessions render read-only chat without composer actions', async () => {
   const [styles, { api }] = await Promise.all([
     readFile(stylesUrl, 'utf8'),
@@ -1101,7 +1173,7 @@ test('settings drawer creates and copies share links for writable sessions', asy
 
   const closedHtml = api.renderChat().innerHTML;
   assert.doesNotMatch(closedHtml, /id="share-session-button"/u);
-  assert.match(closedHtml, /id="settings-toggle"[^>]*aria-label="Session menu"[^>]*>\.\.\.<\/button>/u);
+  assert.match(closedHtml, /id="settings-toggle"[^>]*aria-label="Session menu"[^>]*>[\s\S]*class="button-icon button-icon-more"[\s\S]*<\/button>/u);
 
   api.state.settingsOpen = true;
   const openHtml = api.renderChat().innerHTML;
@@ -1203,6 +1275,39 @@ test('share routes load public session history without auth and render read-only
   assert.match(html, /Shared answer/u);
   assert.match(html, /Shared link/u);
   assert.doesNotMatch(html, /id="prompt-input"/u);
+});
+
+test('share routes open read-only history from the earliest message', async () => {
+  const { api, context } = await loadAppHarness({
+    pathname: '/share/cws_public_token',
+    fetch: async (path) => {
+      if (path === '/api/share/cws_public_token/session') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'share',
+            session: {
+              id: 'session_shared',
+              projectDisplayName: 'Project Alpha',
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'First shared question' },
+                { id: 'm2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Latest shared answer' },
+              ],
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  await api.loadSharedSessionFromLocation();
+
+  const timeline = context.document.querySelector('#timeline');
+  assert.equal(timeline.scrollTop, 0);
+  assert.match(api.renderChat().innerHTML, /First shared question/u);
 });
 
 test('share routes render only the shared conversation without workspace navigation', async () => {
@@ -1318,6 +1423,18 @@ test('session home opens a settings page and keeps logout inside settings', asyn
   assert.match(app, /id="open-app-settings-button"/u);
   assert.match(app, /id="settings-logout-button"/u);
   assert.doesNotMatch(app, /renderSessionList\(\)[\s\S]{0,900}id="logout-button"/u);
+});
+
+test('mobile settings page title is centered with back on the left', async () => {
+  const { api } = await loadAppHarness({ viewportWidth: 390 });
+
+  const html = api.renderAppSettings().innerHTML;
+  const pageNav = html.match(/<div class="page-nav">[\s\S]*?<\/div>\s*<\/div>/u)?.[0] || '';
+
+  assert.match(pageNav, /class="ghost page-back-button" type="button" id="back-to-list-button" aria-label="Back">[\s\S]*class="button-icon button-icon-back"[\s\S]*<\/button>/u);
+  assert.match(pageNav, /<div class="page-title">Settings<\/div>/u);
+  assert.match(pageNav, /<div class="page-nav-spacer" aria-hidden="true"><\/div>/u);
+  assert.doesNotMatch(pageNav, />Sessions<\/button>/u);
 });
 
 test('app settings persist theme and default thread settings', async () => {
@@ -2012,7 +2129,7 @@ test('chat composer renders attachment control and keeps the session menu in the
   const html = api.renderChat().innerHTML;
   assert.match(html, /id="attach-button"/u);
   assert.match(html, /id="attachment-input"/u);
-  assert.match(html, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*aria-label="Session menu"[^>]*>\.\.\.<\/button>/u);
+  assert.match(html, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*aria-label="Session menu"[^>]*>[\s\S]*class="button-icon button-icon-more"[\s\S]*<\/button>/u);
   assert.doesNotMatch(html, /id="settings-toggle"[^>]*>Set<\/button>/u);
   const composerHtml = html.match(/<form class="composer[\s\S]*?<\/form>/u)?.[0] || '';
   assert.doesNotMatch(composerHtml, /id="settings-toggle"/u);
@@ -2139,10 +2256,10 @@ test('composer shows external expand above Attach and keeps session menu in the 
   api.state.composerExpanded = false;
 
   const shortHtml = api.renderChat().innerHTML;
-  assert.match(shortHtml, /id="settings-toggle"[^>]*aria-label="Session menu"[^>]*>\.\.\.<\/button>/u);
+  assert.match(shortHtml, /id="settings-toggle"[^>]*aria-label="Session menu"[^>]*>[\s\S]*class="button-icon button-icon-more"[\s\S]*<\/button>/u);
   assert.doesNotMatch(shortHtml, /id="settings-toggle"[^>]*hidden/u);
   assert.match(shortHtml, /id="composer-expand-button"[^>]*hidden/u);
-  assert.match(shortHtml, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*>\.\.\.<\/button>/u);
+  assert.match(shortHtml, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*>[\s\S]*class="button-icon button-icon-more"[\s\S]*<\/button>/u);
   assert.match(shortHtml, /id="attach-button"[^>]*>\+<\/button>/u);
   assert.match(shortHtml, /class="message-editor-shell [^"]*"/u);
   assert.match(shortHtml, /<textarea id="prompt-input"[\s\S]*<button class="primary compact-send" type="submit" id="send-button"[^>]*aria-label="Send"[^>]*>Send<\/button>/u);
@@ -2164,7 +2281,7 @@ test('composer shows external expand above Attach and keeps session menu in the 
   api.state.error = 'Failure stays available after collapsing';
   const expandedHtml = api.renderChat().innerHTML;
 
-  assert.match(expandedHtml, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*>\.\.\.<\/button>/u);
+  assert.match(expandedHtml, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*>[\s\S]*class="button-icon button-icon-more"[\s\S]*<\/button>/u);
   assert.doesNotMatch(expandedHtml, /id="settings-toggle"[^>]*hidden/u);
   assert.doesNotMatch(expandedHtml, /settings-drawer/u);
   assert.doesNotMatch(expandedHtml, /composer-status/u);
@@ -3372,7 +3489,8 @@ test('opening a session jumps straight to the latest timeline content', async ()
 
   assert.match(app, /function scrollTimelineToBottom\(\)[\s\S]*timeline\.scrollTop = timeline\.scrollHeight;/u);
   assert.doesNotMatch(app, /window\.scrollTo\(/u);
-  assert.match(app, /async function selectSession\(sessionId\)[\s\S]*render\(\);\s*scrollTimelineToBottom\(\);/u);
+  assert.match(app, /async function selectSession\(sessionId\)[\s\S]*render\(\);\s*scrollTimelineToOpenPositionForSession\(nextSession\);/u);
+  assert.match(app, /function scrollTimelineToOpenPositionForSession\(session\)[\s\S]*scrollTimelineToBottom\(\);/u);
 });
 
 test('opening a session renders from the list summary before the detail request finishes', async () => {
@@ -3439,7 +3557,8 @@ test('chat page uses app-style back header and left-edge swipe navigation', asyn
     readFile(stylesUrl, 'utf8'),
   ]);
 
-  assert.match(app, /<div class="chat-nav">[\s\S]*id="back-to-list-button"[\s\S]*aria-label="Sessions"[\s\S]*>[\s\S]*&lt;[\s\S]*<\/button>[\s\S]*<div class="project-title"/u);
+  assert.match(app, /renderBackButtonIcon\(\)/u);
+  assert.match(app, /class="ghost chat-back-button" type="button" id="back-to-list-button" aria-label="Sessions">\$\{renderBackButtonIcon\(\)\}<\/button>/u);
   assert.match(app, /setupEdgeSwipeBackNavigation\(\)/u);
   assert.match(app, /const EDGE_SWIPE_START_PX = 24;/u);
   assert.match(app, /const EDGE_SWIPE_TRIGGER_PX = 72;/u);
@@ -3449,7 +3568,20 @@ test('chat page uses app-style back header and left-edge swipe navigation', asyn
   assert.match(app, /showSessionList\(\);/u);
   assert.match(styles, /\.chat-nav\s*\{/u);
   assert.match(styles, /\.chat-back-button\s*\{/u);
+  assert.match(styles, /\.chat-back-button\s*\{[^}]*border:\s*0;/su);
+  assert.match(styles, /\.chat-back-button\s*\{[^}]*background:\s*transparent;/su);
   assert.match(styles, /\.chat-nav \.project-title\s*\{/u);
+});
+
+test('back and session menu icon buttons render without visible frames', async () => {
+  const styles = await readFile(stylesUrl, 'utf8');
+
+  assert.match(styles, /\.page-back-button\s*\{[^}]*border:\s*0;/su);
+  assert.match(styles, /\.page-back-button\s*\{[^}]*background:\s*transparent;/su);
+  assert.match(styles, /\.chat-back-button\s*\{[^}]*border:\s*0;/su);
+  assert.match(styles, /\.chat-back-button\s*\{[^}]*background:\s*transparent;/su);
+  assert.match(styles, /\.settings-toggle-button\s*\{[^}]*border:\s*0;/su);
+  assert.match(styles, /\.settings-toggle-button\s*\{[^}]*background:\s*transparent;/su);
 });
 
 test('mobile UI uses session list, compact composer, settings drawer, and history restore', async () => {
@@ -5701,6 +5833,47 @@ test('clicking the compact archived icon switches to archived sessions', async (
   assert.match(context.document.querySelector('#app').innerHTML, /data-session-id="session_archived"/u);
 });
 
+test('opening a read-only session from the session list starts at the earliest message', async () => {
+  const { api, context } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_archived') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_archived',
+              archived: true,
+              readOnly: true,
+              settings: { metadata: {} },
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'First archived question' },
+                { id: 'm2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'First archived answer' },
+                { id: 'm3', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Latest archived question' },
+                { id: 'm4', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Latest archived answer' },
+              ],
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.state.sessions = [{ id: 'session_archived', archived: true, readOnly: true, updatedAt: 1, settings: { metadata: {} } }];
+
+  await api.selectSession('session_archived');
+
+  const timeline = context.document.querySelector('#timeline');
+  assert.equal(timeline.scrollTop, 0);
+  assert.equal(api.state.sessionHistoryStartIndex, 0);
+  assert.match(api.renderChat().innerHTML, /First archived question/u);
+});
+
 test('layout mode uses desktop workspace on pointer-based computer windows', async () => {
   const { api, context } = await loadAppHarness({ viewportWidth: 900, desktopPointer: true });
 
@@ -6403,9 +6576,16 @@ test('mobile new session still uses the full-screen new page', async () => {
   api.state.view = 'sessions';
   api.openNewSessionPage();
 
+  const html = api.context.document.querySelector('#app').innerHTML;
+  const pageNav = html.match(/<div class="page-nav">[\s\S]*?<\/div>\s*<\/div>/u)?.[0] || '';
+
   assert.equal(api.state.view, 'new');
-  assert.match(api.context.document.querySelector('#app').innerHTML, /class="new-session-page"/u);
-  assert.match(api.context.document.querySelector('#app').innerHTML, /mobile-sidebar-toggle-button/u);
+  assert.match(html, /class="new-session-page"/u);
+  assert.match(pageNav, /class="ghost page-back-button" type="button" id="back-to-list-button" aria-label="Back">[\s\S]*class="button-icon button-icon-back"[\s\S]*<\/button>/u);
+  assert.match(pageNav, /<div class="page-title">New Session<\/div>/u);
+  assert.match(pageNav, /<div class="page-nav-spacer" aria-hidden="true"><\/div>/u);
+  assert.doesNotMatch(pageNav, /mobile-sidebar-toggle-button/u);
+  assert.doesNotMatch(pageNav, />Sessions<\/button>/u);
 });
 
 test('mobile sessions render drawer actions and keep favorites toggle beside the sidebar button', async () => {
@@ -6480,6 +6660,17 @@ test('mobile sidebar toggle uses a real touch target instead of a flat text butt
   assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*min-height:\s*32px;/su);
   assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*padding:\s*0 8px;/su);
   assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*font-size:\s*11px;/su);
+});
+
+test('mobile sidebar toggle renders the sidebar svg icon', async () => {
+  const { api } = await loadAppHarness();
+
+  api.state.view = 'sessions';
+  api.state.projectsLoaded = true;
+
+  const html = api.renderSessionList().innerHTML;
+
+  assert.match(html, /id="mobile-sidebar-toggle-button"[^>]*>[\s\S]*class="button-icon button-icon-sidebar"[\s\S]*<\/button>/u);
 });
 
 test('admin console remains a full-screen page instead of rendering inside the workspace shell', async () => {
@@ -6889,7 +7080,7 @@ test('reports page renders report projects before project report cards', async (
 
   assert.match(html, /Reports/u);
   assert.match(html, /class="page-nav"/u);
-  assert.match(html, /class="ghost page-back-button" type="button" id="back-to-list-button" aria-label="Back">&lt;<\/button>/u);
+  assert.match(html, /class="ghost page-back-button" type="button" id="back-to-list-button" aria-label="Back">[\s\S]*class="button-icon button-icon-back"[\s\S]*<\/button>/u);
   assert.match(html, /data-report-project="project-a"/u);
   assert.match(html, /data-report-project="project-b"/u);
   assert.doesNotMatch(html, /data-report-id="project-a\/2026-05-19\/summary\.md"/u);
@@ -9238,8 +9429,9 @@ globalThis.__codexWebTest = {
 	  handleReportsBackNavigation: typeof handleReportsBackNavigation === 'function' ? handleReportsBackNavigation : null,
 	  toggleReportFavorite: typeof toggleReportFavorite === 'function' ? toggleReportFavorite : null,
 	  showSessionList: typeof showSessionList === 'function' ? showSessionList : null,
-	  openAppSettingsPage: typeof openAppSettingsPage === 'function' ? openAppSettingsPage : null,
+  openAppSettingsPage: typeof openAppSettingsPage === 'function' ? openAppSettingsPage : null,
   openAdminConsole: typeof openAdminConsole === 'function' ? openAdminConsole : null,
+  openAdminObservedSession: typeof openAdminObservedSession === 'function' ? openAdminObservedSession : null,
   openNewSessionPage: typeof openNewSessionPage === 'function' ? openNewSessionPage : null,
   shareCurrentSession: typeof shareCurrentSession === 'function' ? shareCurrentSession : null,
   copyShareLink: typeof copyShareLink === 'function' ? copyShareLink : null,

@@ -900,6 +900,94 @@ test('admin can audit all sessions and read any session with observer mode', asy
   }
 });
 
+test('admin session audit returns newest sessions first', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_alice',
+    codexThreadId: 'thread_alice',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T08:00:00.000Z',
+  });
+  await identityStore.upsertSession({
+    id: 'app_bob',
+    codexThreadId: 'thread_bob',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_bob',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T10:00:00.000Z',
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/admin/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.items.map((item: any) => item.id), ['app_bob', 'app_alice']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('starting a turn refreshes admin audit session recency', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertSession({
+    id: 'app_alice',
+    codexThreadId: 'thread_alice',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T08:00:00.000Z',
+  });
+  await identityStore.upsertSession({
+    id: 'app_bob',
+    codexThreadId: 'thread_bob',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_bob',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T10:00:00.000Z',
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const turn = await fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'refresh this session recency' }),
+    });
+    assert.equal(turn.status, 202);
+
+    const audit = await fetch(`${server.baseUrl}/api/admin/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(audit.status, 200);
+    const payload = await audit.json();
+    assert.deepEqual(payload.items.map((item: any) => item.id), ['app_alice', 'app_bob']);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('admin normal access to another owner session is hidden and cannot start turns', async () => {
   const identityStore = await createIdentityStore();
   const runtime = runtimeStub();

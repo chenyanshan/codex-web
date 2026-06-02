@@ -522,11 +522,12 @@ async function loadSharedSessionFromLocationOnce() {
     applySessionSettings(session);
     restoreTimelineForSession(session, { fullHistory: true });
     syncRuntimeStatusFromSession(session);
+    state.timelineShouldFollowLatest = false;
     state.status = 'Ready';
     state.statusTone = 'success';
     state.error = '';
     render();
-    scrollTimelineToBottom();
+    scrollTimelineToTop();
     return session;
   } catch (error) {
     state.authSession = null;
@@ -677,7 +678,12 @@ function render() {
   if (timeline) {
     syncComposerOffset();
     timelineScrollTrackingAttached = false;
-    attachTimelineScrollTracking({ updateInitial: !shouldRestoreLatestTimeline });
+    const shouldStartAtEarliest = shouldOpenTimelineAtEarliest();
+    attachTimelineScrollTracking({ updateInitial: !shouldRestoreLatestTimeline && !shouldStartAtEarliest });
+    if (shouldStartAtEarliest) {
+      scrollTimelineToTop();
+      return;
+    }
     if (shouldRestoreLatestTimeline) {
       scrollTimelineToBottom();
     }
@@ -1049,7 +1055,7 @@ function renderSessionListHeader({ desktop = false } = {}) {
     return `
       <header class="topbar page-topbar mobile-session-topbar">
         <div class="topbar-main">
-          <button class="ghost page-back-button mobile-sidebar-toggle-button" type="button" id="mobile-sidebar-toggle-button" aria-label="Projects">≡</button>
+          <button class="ghost page-back-button mobile-sidebar-toggle-button" type="button" id="mobile-sidebar-toggle-button" aria-label="Projects">${renderSidebarButtonIcon()}</button>
           ${sortToggle}
         </div>
       </header>
@@ -1210,12 +1216,7 @@ function renderAppSettings() {
   shell.className = 'shell';
   shell.innerHTML = `
     <div class="screen page-screen">
-      <header class="topbar page-topbar">
-        <div class="topbar-main">
-          <div class="page-title">Settings</div>
-          <button class="ghost compact-button" type="button" id="back-to-list-button">Sessions</button>
-        </div>
-      </header>
+      ${renderPageNav('Settings')}
       <main class="app-settings-page">
         ${renderAppSettingsSections()}
       </main>
@@ -1422,6 +1423,32 @@ function renderAdminUserPage() {
           ${renderAdminUserForm()}
           <div class="admin-list" data-i18n-skip>${renderAdminUsers()}</div>
         </section>
+        `;
+}
+
+function renderBackButtonIcon() {
+  return `
+    <svg class="button-icon button-icon-back" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+      <path d="M631.04 161.941333a42.666667 42.666667 0 0 1 63.061333 57.386667l-2.474666 2.730667-289.962667 292.245333 289.706667 287.402667a42.666667 42.666667 0 0 1 2.730666 57.6l-2.474666 2.752a42.666667 42.666667 0 0 1-57.6 2.709333l-2.752-2.474667-320-317.44a42.666667 42.666667 0 0 1-2.709334-57.6l2.474667-2.752 320-322.56z"></path>
+    </svg>
+  `;
+}
+
+function renderMoreButtonIcon() {
+  return `
+    <svg class="button-icon button-icon-more" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+      <path d="M288 512m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z"></path>
+      <path d="M512 512m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z"></path>
+      <path d="M736 512m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z"></path>
+    </svg>
+  `;
+}
+
+function renderSidebarButtonIcon() {
+  return `
+    <svg class="button-icon button-icon-sidebar" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+      <path d="M66.488889 211.781818h891.022222c28.198788 0 50.980202-22.238384 50.980202-49.648485 0-27.397172-22.768485-49.648485-50.980202-49.648485H66.488889C38.341818 112.484848 15.508687 134.723232 15.508687 162.133333s22.833131 49.648485 50.980202 49.648485z m891.009293 248.242424H66.488889C38.277172 460.024242 15.508687 482.262626 15.508687 509.672727s22.768485 49.648485 50.980202 49.648485h891.022222c28.198788 0 50.980202-22.238384 50.980202-49.648485-0.012929-27.410101-22.923636-49.648485-50.993131-49.648485z m0 351.63798H66.488889c-28.134141 0-50.980202 22.238384-50.980202 49.648485s22.833131 49.648485 50.980202 49.648485h891.022222c28.198788 0 50.980202-22.238384 50.980202-49.648485-0.012929-27.397172-22.781414-49.648485-50.993131-49.648485z m0 0"></path>
+    </svg>
   `;
 }
 
@@ -1668,7 +1695,7 @@ function renderAdminSessions() {
   if (!state.admin.sessions.length) {
     return `<div class="meta">${escapeHtml(t('No sessions found.'))}</div>`;
   }
-  return state.admin.sessions.map((session) => {
+  return sortedAdminSessions().map((session) => {
     const owner = adminUserName(session.ownerUserId || session.userId);
     const modeLabel = session.archived === true ? t('Read only') : t('Observer Mode');
     const summary = String(session.summary || '').trim();
@@ -1714,13 +1741,7 @@ function renderNewSessionContent({ desktop = false } = {}) {
         </header>
       `
       : `
-        <header class="topbar page-topbar">
-          <div class="topbar-main">
-            <button class="ghost page-back-button mobile-sidebar-toggle-button" type="button" id="mobile-sidebar-toggle-button" aria-label="Projects">≡</button>
-            <div class="page-title">New Session</div>
-            <button class="ghost compact-button" type="button" id="back-to-list-button">Sessions</button>
-          </div>
-        </header>
+        ${renderPageNav('New Session')}
       `}
     <main class="new-session-page${desktop ? ' desktop-new-session-page' : ''}">
       <form class="panel stack" id="new-session-form">
@@ -1803,7 +1824,7 @@ function renderChatContent({ desktop = false } = {}) {
   return localizeFragment(`
       <header class="topbar chat-topbar${desktop ? ' desktop-chat-topbar' : ''}">
         <div class="chat-nav">
-          ${desktop ? '<div class="chat-nav-spacer" aria-hidden="true"></div>' : '<button class="ghost chat-back-button" type="button" id="back-to-list-button" aria-label="Sessions">&lt;</button>'}
+          ${desktop ? '<div class="chat-nav-spacer" aria-hidden="true"></div>' : `<button class="ghost chat-back-button" type="button" id="back-to-list-button" aria-label="Sessions">${renderBackButtonIcon()}</button>`}
           <div class="chat-title-stack">
             <div class="project-title" data-i18n-skip>${escapeHtml(projectNameForSession(state.currentSession, state.cwd))}</div>
             ${renderGoalStatus()}
@@ -1824,7 +1845,7 @@ function renderChatHeaderActions({ readOnly, sessionReportsProject }) {
   }
   return `
           <div class="chat-header-actions">
-            ${canOpenSettings ? `<button class="ghost icon-button settings-toggle-button" type="button" id="settings-toggle" aria-label="Session menu" title="Session menu" aria-expanded="${String(state.settingsOpen)}">...</button>` : ''}
+            ${canOpenSettings ? `<button class="ghost icon-button settings-toggle-button" type="button" id="settings-toggle" aria-label="Session menu" title="Session menu" aria-expanded="${String(state.settingsOpen)}">${renderMoreButtonIcon()}</button>` : ''}
             ${sessionReportsProject ? `<button class="ghost compact-button session-report-button" type="button" data-session-reports-project="${escapeAttribute(sessionReportsProject)}">Reports</button>` : ''}
           </div>
   `;
@@ -1980,7 +2001,7 @@ function renderPageNav(title, options = {}) {
   return `
     <header class="topbar page-topbar">
       <div class="page-nav">
-        <button class="ghost page-back-button" type="button" id="${escapeAttribute(backId)}" aria-label="Back">&lt;</button>
+        <button class="ghost page-back-button" type="button" id="${escapeAttribute(backId)}" aria-label="Back">${renderBackButtonIcon()}</button>
         <div class="page-title"${skipTitleI18n ? ' data-i18n-skip' : ''}>${escapeHtml(title)}</div>
         <div class="page-nav-spacer" aria-hidden="true"></div>
       </div>
@@ -4216,7 +4237,7 @@ async function selectSession(sessionId) {
   state.cwd = nextSession.cwd || '';
   restorePromptDraftForSession(nextSession.id);
   applySessionSettings(nextSession);
-  restoreTimelineForSession(nextSession);
+  restoreTimelineForSession(nextSession, readOnlyTimelineRestoreOptions(nextSession));
   const restoredRuntimeStatus = syncRuntimeStatusFromSession(nextSession, { source: 'stale' });
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
   state.mobileSidebarOpen = false;
@@ -4228,9 +4249,9 @@ async function selectSession(sessionId) {
   state.error = '';
   state.status = restoredRuntimeStatus.changed && restoredRuntimeStatus.activeTurnId ? 'Turn running' : 'Loading session';
   state.statusTone = 'warn';
-  state.timelineShouldFollowLatest = true;
+  setTimelineOpenPositionForSession(nextSession);
   render();
-  scrollTimelineToBottom();
+  scrollTimelineToOpenPositionForSession(nextSession);
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(nextSession.id)}`);
     upsertSession(payload.session);
@@ -4250,7 +4271,7 @@ async function selectSession(sessionId) {
   state.cwd = refreshedSession.cwd || '';
   restorePromptDraftForSession(refreshedSession.id);
   applySessionSettings(refreshedSession);
-  restoreTimelineForSession(refreshedSession);
+  restoreTimelineForSession(refreshedSession, readOnlyTimelineRestoreOptions(refreshedSession));
   const refreshedRuntimeStatus = syncRuntimeStatusFromSession(refreshedSession);
   state.error = '';
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
@@ -4258,9 +4279,9 @@ async function selectSession(sessionId) {
     state.status = 'Ready';
     state.statusTone = 'success';
   }
-  state.timelineShouldFollowLatest = true;
+  setTimelineOpenPositionForSession(refreshedSession);
   render();
-  scrollTimelineToBottom();
+  scrollTimelineToOpenPositionForSession(refreshedSession);
   if (refreshedRuntimeStatus.activeTurnId && state.turnId) {
     streamTurnEvents(state.turnId, { forceReconnect: true });
   }
@@ -5861,13 +5882,14 @@ async function openAdminObservedSession(sessionId) {
     state.currentSession = session;
     state.cwd = session.cwd || '';
     applySessionSettings(session);
-    restoreTimelineForSession(session);
+    restoreTimelineForSession(session, { fullHistory: true });
     syncRuntimeStatusFromSession(session);
     state.view = 'chat';
+    state.timelineShouldFollowLatest = false;
     state.status = 'Ready';
     state.statusTone = 'success';
     render();
-    scrollTimelineToBottom();
+    scrollTimelineToTop();
   } catch (error) {
     handleApiError(error);
   }
@@ -7504,6 +7526,28 @@ function isReadOnlySession(session) {
   return session?.readOnly === true || session?.mode === 'observer' || session?.mode === 'share';
 }
 
+function readOnlyTimelineRestoreOptions(session) {
+  return isReadOnlySession(session) ? { fullHistory: true } : {};
+}
+
+function setTimelineOpenPositionForSession(session) {
+  state.timelineShouldFollowLatest = !isReadOnlySession(session);
+}
+
+function scrollTimelineToOpenPositionForSession(session) {
+  if (isReadOnlySession(session)) {
+    scrollTimelineToTop();
+    return;
+  }
+  scrollTimelineToBottom();
+}
+
+function shouldOpenTimelineAtEarliest() {
+  return state.view === 'chat'
+    && isReadOnlySession(state.currentSession)
+    && state.timelineShouldFollowLatest === false;
+}
+
 function resetAdminState() {
   state.admin.loading = false;
   state.admin.loaded = false;
@@ -7662,6 +7706,26 @@ function adminAuditProjects() {
     });
   }
   return [...byId.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function sortedAdminSessions() {
+  return [...state.admin.sessions].sort(compareAdminSessions);
+}
+
+function compareAdminSessions(left, right) {
+  return adminSessionSortTime(right) - adminSessionSortTime(left)
+    || String(right?.updatedAt || '').localeCompare(String(left?.updatedAt || ''))
+    || String(right?.createdAt || '').localeCompare(String(left?.createdAt || ''))
+    || String(left?.id || '').localeCompare(String(right?.id || ''));
+}
+
+function adminSessionSortTime(session) {
+  const updated = Date.parse(String(session?.updatedAt || ''));
+  if (Number.isFinite(updated)) {
+    return updated;
+  }
+  const created = Date.parse(String(session?.createdAt || ''));
+  return Number.isFinite(created) ? created : 0;
 }
 
 function adminEditingProject() {
@@ -8811,6 +8875,17 @@ function scrollTimelineToBottom() {
     if (timeline) {
       timeline.scrollTop = timeline.scrollHeight;
       state.timelineShouldFollowLatest = true;
+      rememberCurrentTimelineViewport();
+    }
+  });
+}
+
+function scrollTimelineToTop() {
+  requestAnimationFrame(() => {
+    const timeline = document.querySelector('#timeline');
+    if (timeline) {
+      timeline.scrollTop = 0;
+      state.timelineShouldFollowLatest = false;
       rememberCurrentTimelineViewport();
     }
   });

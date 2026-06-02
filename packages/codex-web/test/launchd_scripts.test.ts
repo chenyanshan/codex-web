@@ -10,6 +10,21 @@ async function readScript(relativePath: string): Promise<string> {
   return readFile(path.join(repoRoot, relativePath), 'utf8');
 }
 
+test('launchd service scripts use the chenyanshan service label', async () => {
+  const scriptPaths = [
+    'scripts/service/install-codex-web-launchd-user.sh',
+    'scripts/service/status-codex-web-launchd-user.sh',
+    'scripts/service/restart-codex-web-launchd-user.sh',
+    'scripts/service/logs-codex-web-launchd-user.sh',
+    'scripts/service/restart-codex-web-launchd-user-detached.sh',
+  ];
+
+  for (const scriptPath of scriptPaths) {
+    const script = await readScript(scriptPath);
+    assert.match(script, /com\.chenyanshan\.codex-web/u);
+  }
+});
+
 test('launchd restart keeps the job loaded so KeepAlive can recover it', async () => {
   const script = await readScript('scripts/service/restart-codex-web-launchd-user.sh');
 
@@ -22,7 +37,7 @@ test('launchd restart keeps the job loaded so KeepAlive can recover it', async (
 test('launchd detached restart schedules a one-shot helper before killing the service', async () => {
   const script = await readScript('scripts/service/restart-codex-web-launchd-user-detached.sh');
 
-  assert.match(script, /HELPER_LABEL="com\.ganxing\.codex-web\.restart"/u);
+  assert.match(script, /HELPER_LABEL="com\.chenyanshan\.codex-web\.restart"/u);
   assert.match(script, /StartInterval/u);
   assert.match(script, /launchctl bootstrap "\$\{LAUNCHD_DOMAIN\}" "\$\{HELPER_PLIST_PATH\}"/u);
   assert.match(script, /launchctl kickstart -k "\$\{LAUNCHD_DOMAIN\}\/\$\{HELPER_LABEL\}"/u);

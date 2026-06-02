@@ -168,7 +168,7 @@ scripts/service/logs-codex-web-launchd-user.sh
 The generated plist should live at:
 
 ```text
-~/Library/LaunchAgents/com.ganxing.codex-web.plist
+~/Library/LaunchAgents/com.chenyanshan.codex-web.plist
 ```
 
 It should use:
@@ -320,7 +320,7 @@ Operational verification:
 - run focused backend tests
 - run frontend build
 - install launchd service
-- verify `launchctl print gui/$UID/com.ganxing.codex-web` reports `state = running`
+- verify `launchctl print gui/$UID/com.chenyanshan.codex-web` reports `state = running`
 - verify mobile or browser can open the app through the configured host/port
 
 ## Open Questions

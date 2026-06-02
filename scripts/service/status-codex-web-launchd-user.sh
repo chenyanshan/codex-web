@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LABEL="com.ganxing.codex-web"
+LABEL="com.chenyanshan.codex-web"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 LAUNCHD_TARGET="gui/${UID}/${LABEL}"
 

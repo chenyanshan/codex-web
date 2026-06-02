@@ -13,6 +13,41 @@ outside this repository.
 > Ask Codex to install it:
 > `帮我安装 https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
 
+## Core Highlights
+
+### 1. Remote Codex control from anywhere
+
+Codex Web keeps Codex credentials, shell execution, and local file access on the
+host machine, while your phone or browser becomes a remote console. When
+combined with your own tunnel or reverse proxy, it becomes a practical way to
+reconnect and operate Codex remotely at any time without moving execution into
+the browser.
+
+| Mobile remote console | Desktop workspace |
+| --- | --- |
+| ![Mobile recent sessions view](docs/assets/readme/mobile-recents.png) | ![Desktop workspace view](docs/assets/readme/desktop-workspace.png) |
+
+- Remote UI for phone, tablet, and desktop browsers.
+- Project-first workspace with live sessions, chat, and turn status.
+- Fits LAN-only installs and remote-access setups built with your own network
+  edge.
+
+### 2. Multi-user foundation for internal agents
+
+Codex Web also supports a multi-user facade that can be used as the base for
+internal enterprise agents built on top of Codex. Teams can expose controlled
+workspaces to employees, keep administration on the host, and manage access with
+RBAC instead of sharing one Codex login.
+
+| Mobile admin audit | Desktop user management |
+| --- | --- |
+| ![Mobile admin console with session audit](docs/assets/readme/mobile-admin-audit.png) | ![Desktop admin console with user and role management](docs/assets/readme/admin-user-management.png) |
+
+- Multi-user mode, project management, role management, and user management.
+- RBAC for project access, admin operations, observer mode, and share links.
+- Session audit views for reviewing activity across users, projects, and
+  sessions.
+
 ## What It Does
 
 - Password-protected single-host Codex web console.

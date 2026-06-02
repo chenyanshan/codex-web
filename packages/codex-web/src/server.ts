@@ -1187,7 +1187,8 @@ async function handleMultiUserRequest({
           adminIdentityState,
           session,
           summariesByThreadId.get(session.codexThreadId) ?? null,
-        ));
+        ))
+        .sort(comparePresentedSessionAudit);
       writeJson(response, 200, { items });
       return true;
     }
@@ -1412,6 +1413,10 @@ async function handleMultiUserRequest({
     if (!turn) {
       return true;
     }
+    await identityStore.upsertSession({
+      ...resolved.appSession,
+      updatedAt: new Date().toISOString(),
+    });
     writeJson(response, 202, turn);
     return true;
   }
@@ -2042,6 +2047,22 @@ function presentAppSessionAudit(
     archiveSource: appSession.archiveSource,
     ...(summary ? { summary } : {}),
   };
+}
+
+function comparePresentedSessionAudit(left: Record<string, unknown>, right: Record<string, unknown>): number {
+  return auditSortTime(right) - auditSortTime(left)
+    || String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''))
+    || String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
+    || String(left.id || '').localeCompare(String(right.id || ''));
+}
+
+function auditSortTime(session: Record<string, unknown>): number {
+  const updated = Date.parse(String(session.updatedAt || ''));
+  if (Number.isFinite(updated)) {
+    return updated;
+  }
+  const created = Date.parse(String(session.createdAt || ''));
+  return Number.isFinite(created) ? created : 0;
 }
 
 async function adminSessionAuditSummaries(

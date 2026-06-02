@@ -217,7 +217,7 @@ Support:
 
 - [ ] **Step 2: Implement launchd scripts**
 
-`install` writes `~/Library/LaunchAgents/com.ganxing.codex-web.plist` with:
+`install` writes `~/Library/LaunchAgents/com.chenyanshan.codex-web.plist` with:
 - `RunAtLoad=true`
 - `KeepAlive=true`
 - repo root working directory
