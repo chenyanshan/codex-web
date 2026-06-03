@@ -504,7 +504,7 @@ test('admin console opens from settings and loads management overview', async ()
         return { ok: true, status: 200, json: async () => ({ items: [{ id: 'project_a', displayName: 'Project Alpha' }] }) };
       }
       if (path === '/api/admin/users') {
-        return { ok: true, status: 200, json: async () => ({ items: [{ id: 'user_1', username: 'alice', enabled: true }] }) };
+        return { ok: true, status: 200, json: async () => ({ items: [{ id: 'user_1', username: 'alice', email: 'alice@example.com', enabled: true }] }) };
       }
       if (path === '/api/admin/roles') {
         return { ok: true, status: 200, json: async () => ({ items: [{ id: 'role_user', name: 'User' }] }) };
@@ -642,6 +642,7 @@ test('admin console renders four-page management layout with RBAC controls', asy
   api.state.admin.users = [{
     id: 'user_1',
     username: 'alice',
+    email: 'alice@example.com',
     enabled: true,
     roleId: 'role_user',
     roleIds: ['role_user'],
@@ -688,12 +689,23 @@ test('admin console renders four-page management layout with RBAC controls', asy
   api.state.admin.page = 'users';
   html = api.renderAdminConsole().innerHTML;
   assert.match(html, /id="admin-user-form"/u);
+  assert.doesNotMatch(html, /<span>User ID<\/span>/u);
+  assert.match(html, /name="email"/u);
   assert.match(html, /<select id="admin-user-role-select" name="roleId" data-i18n-skip>/u);
   assert.doesNotMatch(html, /name="userProjectIds" type="checkbox"/u);
   assert.doesNotMatch(html, /name="canNewSession" type="checkbox"/u);
-  assert.match(html, /class="admin-user-access-form"/u);
-  assert.match(html, /data-admin-user-id="user_1"/u);
+  assert.doesNotMatch(html, /class="admin-user-access-form"/u);
+  assert.match(html, /data-admin-edit-user="user_1"/u);
+  assert.match(html, /alice@example\.com/u);
+  assert.doesNotMatch(html, /name="userEmail"/u);
   assert.doesNotMatch(html, /name="userCanNewSession" type="checkbox"/u);
+
+  api.state.admin.editingUserId = 'user_1';
+  html = api.renderAdminConsole().innerHTML;
+  assert.match(html, /value="alice"/u);
+  assert.match(html, /value="alice@example\.com"/u);
+  assert.match(html, /id="admin-user-edit-cancel"/u);
+  assert.doesNotMatch(html, /name="password"/u);
 
   api.state.admin.page = 'sessions';
   html = api.renderAdminConsole().innerHTML;
@@ -798,8 +810,8 @@ test('admin management actions post project, role, and user changes', async () =
     projectIds: ['project_a'],
   });
   await api.saveAdminUser({
-    id: 'user_writer',
     username: 'writer',
+    email: 'writer@example.com',
     password: 'writer-password',
     enabled: true,
     roleId: 'role_writer',
@@ -823,8 +835,8 @@ test('admin management actions post project, role, and user changes', async () =
   ]);
   assert.equal(Object.hasOwn(JSON.parse(posts[1].options.body), 'isAdmin'), false);
   assert.deepEqual(JSON.parse(posts[2].options.body), {
-    id: 'user_writer',
     username: 'writer',
+    email: 'writer@example.com',
     password: 'writer-password',
     enabled: true,
     roleId: 'role_writer',
@@ -882,7 +894,7 @@ test('admin project form includes active session limit and saveAdminProject post
   });
 });
 
-test('admin inline user access updates patch role and enabled state without per-user project grants', async () => {
+test('admin user edit saves email role and enabled state without per-user project grants', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
@@ -892,7 +904,7 @@ test('admin inline user access updates patch role and enabled state without per-
           ok: true,
           status: 200,
           json: async () => ({
-            user: { id: 'user_1', username: 'alice', roleId: 'role_viewer', roleIds: ['role_viewer'] },
+            user: { id: 'user_1', username: 'alice', email: 'alice+updated@example.com', roleId: 'role_viewer', roleIds: ['role_viewer'] },
           }),
         };
       }
@@ -920,6 +932,7 @@ test('admin inline user access updates patch role and enabled state without per-
   api.state.admin.users = [{
     id: 'user_1',
     username: 'alice',
+    email: 'alice@example.com',
     enabled: true,
     roleId: 'role_viewer',
     roleIds: ['role_viewer'],
@@ -928,6 +941,7 @@ test('admin inline user access updates patch role and enabled state without per-
 
   await api.saveAdminUserAccess({
     id: 'user_1',
+    email: 'alice+updated@example.com',
     roleId: 'role_viewer',
     enabled: false,
   });
@@ -935,13 +949,14 @@ test('admin inline user access updates patch role and enabled state without per-
   const patch = fetchCalls.find((call) => call.options.method === 'PATCH');
   assert.equal(patch?.path, '/api/admin/users/user_1');
   assert.deepEqual(JSON.parse(patch.options.body), {
+    email: 'alice+updated@example.com',
     enabled: false,
     roleId: 'role_viewer',
     roleIds: ['role_viewer'],
   });
 });
 
-test('admin user rows render explicit disable and delete actions', async () => {
+test('admin user rows render explicit edit disable and delete actions', async () => {
   const { api } = await loadAppHarness();
 
   api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
@@ -952,6 +967,7 @@ test('admin user rows render explicit disable and delete actions', async () => {
   api.state.admin.users = [{
     id: 'user_1',
     username: 'alice',
+    email: 'alice@example.com',
     enabled: true,
     roleId: 'role_user',
     roleIds: ['role_user'],
@@ -959,6 +975,7 @@ test('admin user rows render explicit disable and delete actions', async () => {
   }];
 
   const html = api.renderAdminConsole().innerHTML;
+  assert.match(html, /data-admin-edit-user="user_1"/u);
   assert.match(html, /data-admin-toggle-user-id="user_1"/u);
   assert.match(html, />Disable<\/button>/u);
   assert.match(html, /data-admin-delete-user-id="user_1"/u);
@@ -974,7 +991,7 @@ test('admin explicit user disable and delete actions call the patch and delete e
           ok: true,
           status: 200,
           json: async () => ({
-            user: { id: 'user_1', username: 'alice', enabled: false, roleId: 'role_viewer', roleIds: ['role_viewer'] },
+            user: { id: 'user_1', username: 'alice', email: 'alice@example.com', enabled: false, roleId: 'role_viewer', roleIds: ['role_viewer'] },
           }),
         };
       }
@@ -1008,6 +1025,7 @@ test('admin explicit user disable and delete actions call the patch and delete e
   api.state.admin.users = [{
     id: 'user_1',
     username: 'alice',
+    email: 'alice@example.com',
     enabled: true,
     roleId: 'role_viewer',
     roleIds: ['role_viewer'],
@@ -1021,6 +1039,7 @@ test('admin explicit user disable and delete actions call the patch and delete e
   const remove = fetchCalls.find((call) => call.options.method === 'DELETE');
   assert.equal(patch?.path, '/api/admin/users/user_1');
   assert.deepEqual(JSON.parse(patch.options.body), {
+    email: 'alice@example.com',
     enabled: false,
     roleId: 'role_viewer',
     roleIds: ['role_viewer'],
@@ -1921,7 +1940,7 @@ test('Chinese admin lists skip bulk localization for many management rows', asyn
 
   assert.match(html, /<div class="admin-list" data-i18n-skip>/u);
   assert.match(html, /<span class="admin-row-main" data-i18n-skip>Send user 0<\/span>/u);
-  assert.match(html, /<button class="ghost compact-button" type="submit">保存<\/button>/u);
+  assert.match(html, /<button class="ghost compact-button" type="button" data-admin-edit-user="user_0">编辑<\/button>/u);
   assert.match(html, /data-admin-toggle-user-enabled="false">停用<\/button>/u);
   assert.match(html, /data-admin-delete-user-id="user_0">删除<\/button>/u);
   assert.doesNotMatch(html, /<span class="admin-row-main" data-i18n-skip>发送 user 0<\/span>/u);

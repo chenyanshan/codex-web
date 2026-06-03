@@ -98,6 +98,31 @@ mkdir -p ~/.codex/skills
 ln -s "$(pwd)/skills/codex-mobile-report" ~/.codex/skills/codex-mobile-report
 ```
 
+## Install The User Context Skill
+
+When this repository is used with Codex Web multi-user turns, the agent should
+also install the bundled user-context skill from:
+
+```text
+skills/codex-web-user-context
+```
+
+Run:
+
+```bash
+mkdir -p ~/.codex/skills
+mkdir -p ~/.codex/skills/codex-web-user-context
+cp -R skills/codex-web-user-context/. ~/.codex/skills/codex-web-user-context/
+```
+
+If the user plans to keep editing this repository locally, the agent may use a
+symlink instead:
+
+```bash
+mkdir -p ~/.codex/skills
+ln -s "$(pwd)/skills/codex-web-user-context" ~/.codex/skills/codex-web-user-context
+```
+
 ## How To Use After Install
 
 After installation, the agent should explain the basic usage flow:
@@ -120,3 +145,4 @@ After the installer succeeds, point the user to:
 - `README.zh-CN.md` for Chinese instructions
 - `docs/pwa-setup.md` for mobile PWA installation on iPhone or Android
 - `skills/codex-mobile-report` for phone-readable report generation
+- `skills/codex-web-user-context` for current Codex Web user/project context discovery

@@ -609,6 +609,7 @@ function setLoggedOut(message = '') {
     filterState: 'all',
     editingProjectId: '',
     editingRoleId: '',
+    editingUserId: '',
   };
   state.reportsLoading = false;
   state.reportsLoaded = false;
@@ -1561,31 +1562,38 @@ function renderAdminRoleForm() {
 }
 
 function renderAdminUserForm() {
+  const user = adminEditingUser();
+  const isEditing = Boolean(user);
   return `
     <form class="admin-form" id="admin-user-form">
       <div class="admin-form-grid">
         <label class="field">
-          <span>User ID</span>
-          <input name="id" autocomplete="off" placeholder="user_writer">
+          <span>Username</span>
+          <input name="username" autocomplete="username" placeholder="writer" value="${escapeAttribute(user?.username || '')}"${isEditing ? ' readonly' : ''}>
         </label>
         <label class="field">
-          <span>Username</span>
-          <input name="username" autocomplete="username" placeholder="writer">
+          <span>Email</span>
+          <input name="email" type="email" autocomplete="email" placeholder="writer@example.com" value="${escapeAttribute(user?.email || '')}">
         </label>
+        ${isEditing ? '' : `
         <label class="field">
           <span>Password</span>
           <input name="password" type="password" autocomplete="new-password" placeholder="At least 8 chars">
         </label>
+        `}
       </div>
       <label class="admin-check-row">
-        <input name="enabled" type="checkbox" checked>
+        <input name="enabled" type="checkbox"${user?.enabled === false ? '' : ' checked'}>
         <span>Enabled</span>
       </label>
       <label class="field">
         <span>Role</span>
-        ${renderAdminRoleSelect({ id: 'admin-user-role-select', name: 'roleId' })}
+        ${renderAdminRoleSelect({ id: 'admin-user-role-select', name: 'roleId', value: adminUserRoleId(user) })}
       </label>
-      <button class="primary compact-button full-width-button" type="submit">Save User</button>
+      <div class="admin-form-actions">
+        <button class="primary compact-button" type="submit">${escapeHtml(t(isEditing ? 'Save' : 'Save User'))}</button>
+        ${isEditing ? '<button class="ghost compact-button" type="button" id="admin-user-edit-cancel">Cancel</button>' : ''}
+      </div>
     </form>
   `;
 }
@@ -1654,25 +1662,17 @@ function renderAdminUsers() {
     return `<div class="meta">${escapeHtml(t('No users configured.'))}</div>`;
   }
   return state.admin.users.map((user) => {
-    const roleId = adminUserRoleId(user);
     return `
       <article class="admin-row admin-user-row">
         <div>
           <span class="admin-row-main" data-i18n-skip>${escapeHtml(user.username || user.id)}</span>
           <span class="admin-row-meta" data-i18n-skip>${escapeHtml(adminUserMeta(user))}</span>
         </div>
-        <form class="admin-user-access-form" data-admin-user-id="${escapeAttribute(user.id || '')}">
-          ${renderAdminRoleSelect({ id: `admin-user-role-${user.id || 'unknown'}`, name: 'userRoleId', value: roleId })}
-          <label class="admin-check-row">
-            <input name="enabled" type="checkbox"${user?.enabled === false ? '' : ' checked'}>
-            <span>${escapeHtml(t('Enabled'))}</span>
-          </label>
-          <div class="admin-user-action-row">
-            <button class="ghost compact-button" type="submit">${escapeHtml(t('Save'))}</button>
-            <button class="ghost compact-button" type="button" data-admin-toggle-user-id="${escapeAttribute(user.id || '')}" data-admin-toggle-user-enabled="${user?.enabled === false ? 'true' : 'false'}">${escapeHtml(t(user?.enabled === false ? 'Enable' : 'Disable'))}</button>
-            <button class="danger compact-button" type="button" data-admin-delete-user-id="${escapeAttribute(user.id || '')}">${escapeHtml(t('Delete'))}</button>
-          </div>
-        </form>
+        <div class="admin-user-action-row">
+          <button class="ghost compact-button" type="button" data-admin-edit-user="${escapeAttribute(user.id || '')}">${escapeHtml(t('Edit'))}</button>
+          <button class="ghost compact-button" type="button" data-admin-toggle-user-id="${escapeAttribute(user.id || '')}" data-admin-toggle-user-enabled="${user?.enabled === false ? 'true' : 'false'}">${escapeHtml(t(user?.enabled === false ? 'Enable' : 'Disable'))}</button>
+          <button class="danger compact-button" type="button" data-admin-delete-user-id="${escapeAttribute(user.id || '')}">${escapeHtml(t('Delete'))}</button>
+        </div>
       </article>
     `;
   }).join('');
@@ -3125,6 +3125,13 @@ function bindGlobalEvents() {
     });
   }
 
+  for (const button of document.querySelectorAll('[data-admin-edit-user]')) {
+    button.addEventListener('click', () => {
+      state.admin.editingUserId = button.getAttribute('data-admin-edit-user') || '';
+      render();
+    });
+  }
+
   const adminProjectEditCancel = document.querySelector('#admin-project-edit-cancel');
   if (adminProjectEditCancel) {
     adminProjectEditCancel.addEventListener('click', () => {
@@ -3137,6 +3144,14 @@ function bindGlobalEvents() {
   if (adminRoleEditCancel) {
     adminRoleEditCancel.addEventListener('click', () => {
       state.admin.editingRoleId = '';
+      render();
+    });
+  }
+
+  const adminUserEditCancel = document.querySelector('#admin-user-edit-cancel');
+  if (adminUserEditCancel) {
+    adminUserEditCancel.addEventListener('click', () => {
+      state.admin.editingUserId = '';
       render();
     });
   }
@@ -3159,12 +3174,6 @@ function bindGlobalEvents() {
   if (adminUserForm) {
     adminUserForm.addEventListener('submit', (event) => {
       void onAdminUserSubmit(event);
-    });
-  }
-
-  for (const form of document.querySelectorAll('.admin-user-access-form')) {
-    form.addEventListener('submit', (event) => {
-      void onAdminUserAccessSubmit(event);
     });
   }
 
@@ -5688,23 +5697,21 @@ async function onAdminRoleSubmit(event) {
 async function onAdminUserSubmit(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  await saveAdminUser({
-    id: String(form.get('id') || '').trim(),
+  const editingUserId = String(state.admin.editingUserId || '').trim();
+  const baseUser = {
+    id: editingUserId,
     username: String(form.get('username') || '').trim(),
-    password: String(form.get('password') || ''),
+    email: String(form.get('email') || '').trim(),
     enabled: form.get('enabled') === 'on',
     roleId: String(form.get('roleId') || '').trim(),
-  });
-}
-
-async function onAdminUserAccessSubmit(event) {
-  event.preventDefault();
-  const formElement = event.currentTarget;
-  const form = new FormData(formElement);
-  await saveAdminUserAccess({
-    id: formElement.getAttribute('data-admin-user-id') || '',
-    enabled: form.get('enabled') === 'on',
-    roleId: String(form.get('userRoleId') || '').trim(),
+  };
+  if (editingUserId) {
+    await saveAdminUserAccess(baseUser);
+    return;
+  }
+  await saveAdminUser({
+    ...baseUser,
+    password: String(form.get('password') || ''),
   });
 }
 
@@ -5766,8 +5773,8 @@ async function saveAdminUser(user) {
   try {
     const roleId = String(user.roleId || '').trim();
     const body = {
-      id: String(user.id || '').trim(),
       username: String(user.username || '').trim(),
+      email: String(user.email || '').trim(),
       password: String(user.password || ''),
       enabled: user.enabled !== false,
       roleId,
@@ -5780,6 +5787,7 @@ async function saveAdminUser(user) {
       body,
     });
     state.error = '';
+    state.admin.editingUserId = '';
     await refreshAdminConsole({ renderAfter: true });
     return payload?.user || null;
   } catch (error) {
@@ -5799,6 +5807,7 @@ async function saveAdminUserAccess(user) {
   const roleId = String(user.roleId || '').trim();
   try {
     const body = {
+      email: String(user.email || '').trim(),
       enabled: user.enabled !== false,
       roleId,
       roleIds: roleId ? [roleId] : [],
@@ -5808,6 +5817,7 @@ async function saveAdminUserAccess(user) {
       body,
     });
     state.error = '';
+    state.admin.editingUserId = '';
     await refreshAdminConsole({ renderAfter: true });
     return payload?.user || null;
   } catch (error) {
@@ -5823,6 +5833,7 @@ async function toggleAdminUserEnabled(userId, enabled) {
   }
   return saveAdminUserAccess({
     id: user.id,
+    email: String(user.email || '').trim(),
     enabled: enabled === true,
     roleId: adminUserRoleId(user),
   });
@@ -7562,6 +7573,7 @@ function resetAdminState() {
   state.admin.filterState = 'all';
   state.admin.editingProjectId = '';
   state.admin.editingRoleId = '';
+  state.admin.editingUserId = '';
 }
 
 function adminSessionsPath(userId = '', projectId = '', filterState = 'all') {
@@ -7632,7 +7644,7 @@ function adminUserById(userId) {
 function adminUserMeta(user) {
   const status = user?.enabled === false ? 'disabled' : user?.id || '';
   const roleId = adminUserRoleId(user);
-  return [status, roleId].filter(Boolean).join(' · ');
+  return [status, user?.email || '', roleId].filter(Boolean).join(' · ');
 }
 
 function adminUserRoleId(user) {
@@ -7736,6 +7748,11 @@ function adminEditingProject() {
 function adminEditingRole() {
   const id = String(state.admin.editingRoleId || '');
   return state.admin.roles.find((role) => role.id === id) || null;
+}
+
+function adminEditingUser() {
+  const id = String(state.admin.editingUserId || '');
+  return state.admin.users.find((user) => user.id === id) || null;
 }
 
 function adminRoleProjectIds(role) {

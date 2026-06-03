@@ -166,6 +166,7 @@ export interface StartTurnInput {
   attachments?: ProviderTurnAttachment[];
   attachmentIds?: string[];
   settings?: Partial<ProviderTurnSessionSettings>;
+  developerInstructions?: string;
 }
 
 export interface AppendSessionTimelineEntryInput {
@@ -543,6 +544,7 @@ export class CodexWebRuntime {
       sandboxMode: settings.sandboxMode ?? 'danger-full-access',
       approvalPolicy: settings.approvalPolicy ?? 'never',
       collaborationMode: settings.collaborationMode ?? 'default',
+      developerInstructions: input.developerInstructions ?? '',
       onTurnStarted: async (meta) => {
         const turnId = String(meta.turnId ?? '');
         markTurnStarted(turnId, meta);

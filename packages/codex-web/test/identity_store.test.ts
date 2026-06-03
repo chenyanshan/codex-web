@@ -22,6 +22,7 @@ test('identity store hashes user passwords and verifies credentials', async () =
   await store.upsertUserWithPassword({
     id: 'user_alice',
     username: 'alice',
+    email: '  alice@example.com  ',
     password: 'secret-password',
     roleIds: [],
     directProjectGrants: [],
@@ -30,6 +31,7 @@ test('identity store hashes user passwords and verifies credentials', async () =
   const state = await store.readState();
   const [user] = state.users;
   assert.equal(user?.username, 'alice');
+  assert.equal((user as any)?.email, 'alice@example.com');
   assert.notEqual(user?.passwordHash, 'secret-password');
   assert.equal(typeof user?.passwordSalt, 'string');
   assert.equal(await store.verifyUserPassword('alice', 'secret-password'), 'user_alice');
@@ -56,6 +58,7 @@ test('identity store updates user access without changing password hash', async 
   await store.upsertUserWithPassword({
     id: 'user_alice',
     username: 'alice',
+    email: 'alice@example.com',
     password: 'secret-password',
     canNewSession: true,
     roleIds: ['role_reader'],
@@ -67,10 +70,12 @@ test('identity store updates user access without changing password hash', async 
     id: 'user_alice',
     enabled: true,
     canNewSession: false,
+    email: '  alice+updated@example.com ',
     roleIds: ['role_viewer'],
   });
 
   assert.equal(updated.passwordHash, originalHash);
+  assert.equal((updated as any).email, 'alice+updated@example.com');
   assert.deepEqual(updated.roleIds, ['role_viewer']);
   assert.equal(updated.canNewSession, false);
   assert.equal(await store.verifyUserPassword('alice', 'secret-password'), 'user_alice');

@@ -75,8 +75,9 @@ interface CodexWebIdentityStoreLike {
   upsertProject?(project: CodexWebProject): Promise<CodexWebProject>;
   upsertRole?(role: CodexWebRole): Promise<CodexWebRole>;
   upsertUserWithPassword?(input: {
-    id: string;
+    id?: string;
     username: string;
+    email?: string;
     password: string;
     enabled?: boolean;
     canNewSession?: boolean;
@@ -85,6 +86,7 @@ interface CodexWebIdentityStoreLike {
   }): Promise<CodexWebUser>;
   updateUserAccess?(input: {
     id: string;
+    email?: string;
     enabled?: boolean;
     canNewSession?: boolean;
     roleIds?: string[];
@@ -1404,6 +1406,12 @@ async function handleMultiUserRequest({
       writeSessionNotFound(response);
       return true;
     }
+    input.developerInstructions = await projectCodexWebRuntimeContext({
+      config,
+      appSession: resolved.appSession,
+      user: identityState.users.find((item) => item.id === resolved.appSession.ownerUserId) ?? null,
+      project: resolved.project,
+    });
     const turn = await startSessionTurn({
       runtime,
       sessionId: resolved.appSession.codexThreadId,
@@ -1679,15 +1687,27 @@ async function handleAdminManagementRequest({
       : Array.isArray(body.roleIds)
         ? body.roleIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 1)
         : [];
-    const user = await identityStore.upsertUserWithPassword({
-      id: String(body.id ?? ''),
-      username: String(body.username ?? ''),
-      password: String(body.password ?? ''),
-      enabled: body.enabled !== false,
-      roleIds,
-      directProjectGrants: Array.isArray(body.directProjectGrants) ? body.directProjectGrants as any[] : [],
-    });
-    writeJson(response, 201, { user: presentAdminUser(user) });
+    try {
+      const user = await identityStore.upsertUserWithPassword({
+        id: typeof body.id === 'string' ? body.id : undefined,
+        username: String(body.username ?? ''),
+        email: typeof body.email === 'string' ? body.email : undefined,
+        password: String(body.password ?? ''),
+        enabled: body.enabled !== false,
+        roleIds,
+        directProjectGrants: Array.isArray(body.directProjectGrants) ? body.directProjectGrants as any[] : [],
+      });
+      writeJson(response, 201, { user: presentAdminUser(user) });
+    } catch (error) {
+      if (isUsernameConflictError(error)) {
+        writeJson(response, 409, {
+          error: 'username_conflict',
+          message: 'A user with this username already exists.',
+        });
+        return true;
+      }
+      throw error;
+    }
     return true;
   }
   const adminUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/u);
@@ -1706,6 +1726,7 @@ async function handleAdminManagementRequest({
     try {
       const user = await identityStore.updateUserAccess({
         id: decodeURIComponent(adminUserMatch[1]!),
+        email: typeof body.email === 'string' ? body.email : undefined,
         enabled: body.enabled !== false,
         roleIds,
         directProjectGrants: Array.isArray(body.directProjectGrants) ? body.directProjectGrants as any[] : undefined,
@@ -1742,6 +1763,7 @@ function presentAdminUser(user: CodexWebUser): Record<string, unknown> {
   return {
     id: user.id,
     username: user.username,
+    email: user.email ?? null,
     enabled: user.enabled,
     roleId,
     roleIds: user.roleIds,
@@ -2276,6 +2298,43 @@ async function startSessionTurn({
   }
 }
 
+async function projectCodexWebRuntimeContext({
+  config,
+  appSession,
+  user,
+  project,
+}: {
+  config: CodexWebConfig;
+  appSession: CodexWebAppSession;
+  user: CodexWebUser | null;
+  project: CodexWebProject | null;
+}): Promise<string> {
+  const runtimeContextDir = path.join(config.stateDir, 'runtime-context', 'sessions');
+  await fs.mkdir(runtimeContextDir, { recursive: true, mode: 0o700 });
+  const contextPath = path.join(runtimeContextDir, `${safePathSegment(appSession.id)}.json`);
+  const payload = {
+    schemaVersion: 1,
+    appSessionId: appSession.id,
+    codexThreadId: appSession.codexThreadId,
+    owner: {
+      userId: user?.id ?? appSession.ownerUserId,
+      username: user?.username ?? appSession.ownerUserId,
+      email: user?.email ?? null,
+    },
+    project: {
+      id: project?.id ?? appSession.projectId,
+      displayName: projectDisplayName(project, appSession.projectId),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await fs.writeFile(contextPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+  return [
+    'This turn is running under Codex Web.',
+    `Codex Web context file: ${contextPath}`,
+    'Use the codex-web-user-context skill if the current web user context is needed.',
+  ].join('\n');
+}
+
 async function storeSessionAttachments({
   request,
   config,
@@ -2754,6 +2813,11 @@ function isSessionNotFoundError(error: unknown): boolean {
 function isTurnConflictError(error: unknown): boolean {
   return error instanceof Error
     && (error as Error & { code?: string }).code === 'turn_conflict';
+}
+
+function isUsernameConflictError(error: unknown): boolean {
+  return error instanceof Error
+    && (error as Error & { code?: string }).code === 'username_conflict';
 }
 
 function extractActiveTurnId(error: unknown): string | null {

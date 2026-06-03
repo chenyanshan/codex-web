@@ -17,6 +17,7 @@ export interface CodexWebProjectGrant {
 export interface CodexWebUser {
   id: string;
   username: string;
+  email?: string;
   enabled: boolean;
   canNewSession: boolean;
   passwordHash?: string;
@@ -88,8 +89,9 @@ export interface CodexWebIdentityState {
 }
 
 export interface UpsertUserWithPasswordInput {
-  id: string;
+  id?: string;
   username: string;
+  email?: string;
   password: string;
   enabled?: boolean;
   canNewSession?: boolean;
@@ -99,6 +101,7 @@ export interface UpsertUserWithPasswordInput {
 
 export interface UpdateUserAccessInput {
   id: string;
+  email?: string;
   enabled?: boolean;
   canNewSession?: boolean;
   roleIds?: string[];
@@ -171,6 +174,7 @@ export class FileIdentityStore {
         ...(existingAdmin ?? {
           id: 'user_admin',
           username: 'admin',
+          email: undefined,
           enabled: true,
           canNewSession: true,
           roleIds: [],
@@ -179,6 +183,7 @@ export class FileIdentityStore {
         }),
         id: existingAdmin?.id ?? 'user_admin',
         username: existingAdmin?.username ?? 'admin',
+        email: normalizeOptionalEmail(existingAdmin?.email),
         enabled: existingAdmin?.enabled !== false,
         canNewSession: true,
         passwordHash: normalizeRequiredId(input.passwordHash, 'password hash'),
@@ -200,10 +205,19 @@ export class FileIdentityStore {
     return this.withMutationLock(async () => {
       const state = await this.readState();
       const normalized = normalizePassword(input.password);
+      const username = normalizeUsername(input.username);
+      const userId = deriveUserId(username, input.id, state.users);
+      const existingWithUsername = state.users.find((user) => user.username === username);
+      if (existingWithUsername && existingWithUsername.id !== userId) {
+        const error = new Error(`Username already exists: ${username}`);
+        (error as Error & { code?: string }).code = 'username_conflict';
+        throw error;
+      }
       const salt = crypto.randomBytes(32).toString('base64url');
       const user: CodexWebUser = {
-        id: normalizeRequiredId(input.id, 'user id'),
-        username: normalizeUsername(input.username),
+        id: userId,
+        username,
+        email: normalizeOptionalEmail(input.email),
         enabled: input.enabled !== false,
         canNewSession: input.canNewSession !== false,
         passwordHash: await hashPassword(normalized, salt, PASSWORD_ITERATIONS),
@@ -229,6 +243,9 @@ export class FileIdentityStore {
       }
       const user: CodexWebUser = {
         ...existing,
+        email: Object.prototype.hasOwnProperty.call(input, 'email')
+          ? normalizeOptionalEmail(input.email)
+          : existing.email,
         enabled: typeof input.enabled === 'boolean' ? input.enabled : existing.enabled,
         canNewSession: typeof input.canNewSession === 'boolean' ? input.canNewSession : existing.canNewSession,
         roleIds: Array.isArray(input.roleIds) ? normalizeStringArray(input.roleIds) : existing.roleIds,
@@ -473,6 +490,7 @@ function normalizeUserOrNull(value: unknown): CodexWebUser | null {
   return {
     id: value.id,
     username: value.username,
+    email: normalizeOptionalEmail(value.email),
     enabled: value.enabled !== false,
     canNewSession: value.canNewSession !== false,
     passwordHash: typeof value.passwordHash === 'string' ? value.passwordHash : undefined,
@@ -619,12 +637,40 @@ function normalizeUsername(username: string): string {
   return normalized;
 }
 
+function normalizeOptionalEmail(email: unknown): string | undefined {
+  const normalized = typeof email === 'string' ? email.trim() : '';
+  return normalized || undefined;
+}
+
 function normalizePassword(password: string): string {
   const normalized = String(password ?? '');
   if (normalized.length < 8) {
     throw new Error('Password must be at least 8 characters.');
   }
   return normalized;
+}
+
+function deriveUserId(username: string, rawId: string | undefined, users: CodexWebUser[]): string {
+  const explicitId = String(rawId ?? '').trim();
+  if (explicitId) {
+    return normalizeRequiredId(explicitId, 'user id');
+  }
+  const base = `user_${slugifyUserSegment(username) || 'user'}`;
+  let candidate = base;
+  let suffix = 2;
+  while (users.some((user) => user.id === candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function slugifyUserSegment(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '_')
+    .replace(/^_+|_+$/gu, '');
 }
 
 function normalizeSiteTitle(siteTitle: unknown): string {

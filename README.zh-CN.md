@@ -10,7 +10,7 @@ runtime、读写本地项目文件、执行 shell 命令，以及保存应用状
 tunnel、反向代理不属于本仓库范围。
 
 > 让 Codex 直接安装：
-> `帮我安装 https://github.com/chenyanshan/codex-web/blob/main/README.md`
+> `帮我安装 https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
 
 ## 核心亮点
 
@@ -56,6 +56,8 @@ Codex Web 也支持多用户 facade，可以作为基于 Codex 搭建企业内�
 - turn 文件和图片附件。后端在本机保存文件，并把安全 local path 交给 Codex。
 - 已鉴权 reports 列表和报告查看器，以及仓库自带的 `codex-mobile-report`
   skill。
+- 仓库自带 `codex-web-user-context` skill，可在需要时读取当前 Codex Web
+  登录用户和项目上下文。
 - macOS launchd 和 Linux systemd 服务脚本。
 - English / 简体中文 UI 语言设置，以及 admin/单用户可管理的站点标题。
 
@@ -67,6 +69,7 @@ packages/codex-web          HTTP API、auth、runtime bridge 和 Web UI
 scripts/install             面向 AI 的安装脚本
 scripts/service             launchd 服务脚本
 skills/codex-mobile-report  配套报告 skill
+skills/codex-web-user-context  当前 Codex Web 用户/项目上下文 skill
 docs/superpowers/specs      设计文档
 docs/superpowers/plans      实现计划
 docs/rendering              本地 Markdown/report 渲染验证材料

@@ -1693,8 +1693,8 @@ test('admin can create roles and users with project assignments', async () => {
       method: 'POST',
       headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: 'user_writer',
         username: 'writer',
+        email: ' writer@example.com ',
         password: 'writer-password',
         roleId: 'role_writer',
       }),
@@ -1702,6 +1702,7 @@ test('admin can create roles and users with project assignments', async () => {
     assert.equal(user.status, 201);
     const payload = await user.json();
     assert.equal(payload.user.id, 'user_writer');
+    assert.equal(payload.user.email, 'writer@example.com');
     assert.equal(payload.user.passwordHash, undefined);
     assert.deepEqual(payload.user.roleIds, ['role_writer']);
     assert.equal(payload.user.roleId, 'role_writer');
@@ -1711,7 +1712,9 @@ test('admin can create roles and users with project assignments', async () => {
       headers: { Authorization: 'Bearer admin' },
     });
     assert.equal(users.status, 200);
-    assert.equal((await users.json()).items.some((item: any) => item.username === 'writer'), true);
+    const usersPayload = await users.json() as any;
+    assert.equal(usersPayload.items.some((item: any) => item.username === 'writer'), true);
+    assert.equal(usersPayload.items.find((item: any) => item.id === 'user_writer')?.email, 'writer@example.com');
   } finally {
     await server.stop();
   }
@@ -1771,7 +1774,6 @@ test('admin can create users with direct project assignments that unlock project
       method: 'POST',
       headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: 'user_writer',
         username: 'writer',
         password: 'writer-password',
         directProjectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: true, canWrite: true }],
@@ -1794,6 +1796,37 @@ test('admin can create users with direct project assignments that unlock project
     });
     assert.equal(create.status, 201);
     assert.deepEqual(runtime.calls, ['create:/Users/alice/secret-repo']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin create user rejects duplicate usernames when ids are server generated', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/admin/users`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'alice',
+        password: 'another-password',
+      }),
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      error: 'username_conflict',
+      message: 'A user with this username already exists.',
+    });
   } finally {
     await server.stop();
   }
@@ -2091,5 +2124,77 @@ test('legacy admin tokens continue writing admin-owned sessions after multi-user
     assert.equal(runtime.calls.includes('turn:thread_admin'), true);
   } finally {
     await server.stop();
+  }
+});
+
+test('starting a writable app session turn projects codex web runtime context and passes developer instructions', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-runtime-context-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  await identityStore.setMultiUserEnabled(true);
+  await identityStore.upsertProject({
+    id: 'project_allowed',
+    internalName: 'secret-repo',
+    cwd: '/Users/alice/secret-repo',
+    displayName: 'Allowed Project',
+    enabled: true,
+  });
+  await identityStore.upsertRole({
+    id: 'role_user',
+    name: 'User',
+    isAdmin: false,
+    projectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: true, canWrite: true }],
+  });
+  await identityStore.upsertUserWithPassword({
+    id: 'user_alice',
+    username: 'alice',
+    email: 'alice@example.com',
+    password: 'alice-secret',
+    roleIds: ['role_user'],
+    directProjectGrants: [],
+  });
+  await identityStore.upsertSession({
+    id: 'app_alice',
+    codexThreadId: 'thread_alice',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-06-03T00:00:00.000Z',
+    updatedAt: '2026-06-03T00:00:00.000Z',
+  });
+
+  const startTurnInputs: any[] = [];
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: {
+      ...runtimeStub(),
+      startTurn: async (_threadId: string, input: any) => {
+        startTurnInputs.push(input);
+        return { turnId: 'turn_1' };
+      },
+    } as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'continue' }),
+    });
+    assert.equal(response.status, 202);
+
+    const contextPath = path.join(stateDir, 'runtime-context', 'sessions', 'app_alice.json');
+    const raw = await fs.readFile(contextPath, 'utf8');
+    const projected = JSON.parse(raw);
+    assert.equal(projected.owner.username, 'alice');
+    assert.equal(projected.owner.email, 'alice@example.com');
+    assert.equal(projected.project.displayName, 'Allowed Project');
+    assert.match(String(startTurnInputs[0]?.developerInstructions || ''), /codex-web-user-context/u);
+    assert.match(String(startTurnInputs[0]?.developerInstructions || ''), /app_alice\.json/u);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });

@@ -1,0 +1,3 @@
+display_name: Codex Web User Context
+short_description: Read the current Codex Web user and project context from a projected runtime file.
+default_prompt: Use $codex-web-user-context when you need to discover the current authenticated Codex Web user or project context for this turn.

@@ -11,7 +11,7 @@ commands, and stores app state. Tunnel and reverse-proxy setup are intentionally
 outside this repository.
 
 > Ask Codex to install it:
-> `Help me install https://github.com/chenyanshan/codex-web/blob/main/README.md`
+> `Help me install https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
 
 ## Core Highlights
 
@@ -64,6 +64,8 @@ RBAC instead of sharing one Codex login.
   passes safe local paths to Codex.
 - Authenticated report index and report viewer, plus the bundled
   `codex-mobile-report` skill.
+- A bundled `codex-web-user-context` skill for discovering the current Codex
+  Web user/project context from a server-projected runtime file.
 - macOS launchd and Linux systemd service helpers.
 - English and Simplified Chinese UI language setting, plus a backend-managed
   site title for admins/single-user installs.
@@ -76,6 +78,7 @@ packages/codex-web          HTTP API, auth, runtime bridge, and web UI
 scripts/install             AI-guided installer scripts
 scripts/service             launchd service helpers
 skills/codex-mobile-report  companion report skill
+skills/codex-web-user-context current Codex Web user/project context skill
 docs/superpowers/specs      design docs
 docs/superpowers/plans      implementation plans
 docs/rendering              local markdown/report rendering fixtures
@@ -129,7 +132,7 @@ to install this project from a GitHub blob link or local checkout.
 Example Codex request:
 
 ```text
-Help me install https://github.com/chenyanshan/codex-web/blob/main/README.md
+Help me install https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md
 ```
 
 Expected agent behavior:
@@ -229,6 +232,12 @@ The companion skill lives at:
 
 ```text
 skills/codex-mobile-report
+```
+
+The Codex Web user-context skill lives at:
+
+```text
+skills/codex-web-user-context
 ```
 
 Install it into local Codex skills:

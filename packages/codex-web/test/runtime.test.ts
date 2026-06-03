@@ -765,6 +765,44 @@ test('runtime passes uploaded files as local paths and images as localImage inpu
   });
 });
 
+test('runtime forwards developer instructions to the native turn client', async () => {
+  const startTurnCalls: any[] = [];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [createThread('thread_instructions')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_instructions', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread('thread_instructions'),
+    writeConfigValue: async () => {},
+    startTurn: async (args) => {
+      startTurnCalls.push(args);
+      await args.onTurnStarted?.({ turnId: 'turn_instructions', threadId: 'thread_instructions' });
+      return {
+        outputText: 'done',
+        status: 'completed',
+        turnId: 'turn_instructions',
+        threadId: 'thread_instructions',
+      };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  await runtime.startTurn('thread_instructions', {
+    text: 'hello',
+    developerInstructions: 'Use the codex-web-user-context skill when needed.',
+  } as any);
+
+  assert.equal(startTurnCalls[0]?.developerInstructions, 'Use the codex-web-user-context skill when needed.');
+});
+
 test('runtime persists session favorite state and exposes it on session summaries', async () => {
   let storedSettings: any = null;
   const client: CodexWebRuntimeClient = {
