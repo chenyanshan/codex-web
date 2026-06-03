@@ -234,12 +234,6 @@ The companion skill lives at:
 skills/codex-mobile-report
 ```
 
-The Codex Web user-context skill lives at:
-
-```text
-skills/codex-web-user-context
-```
-
 Install it into local Codex skills:
 
 ```bash
@@ -258,6 +252,35 @@ ln -s "$(pwd)/skills/codex-mobile-report" ~/.codex/skills/codex-mobile-report
 The skill writes phone-readable Markdown or self-contained HTML reports under
 `~/.codex-web/reports/`. Codex Web exposes those reports through authenticated
 APIs and renders report links in the app.
+
+## User Context Skill
+
+The Codex Web user-context skill lives at:
+
+```text
+skills/codex-web-user-context
+```
+
+Install it into local Codex skills:
+
+```bash
+mkdir -p ~/.codex/skills
+mkdir -p ~/.codex/skills/codex-web-user-context
+cp -R skills/codex-web-user-context/. ~/.codex/skills/codex-web-user-context/
+```
+
+For active development, symlink it instead:
+
+```bash
+mkdir -p ~/.codex/skills
+ln -s "$(pwd)/skills/codex-web-user-context" ~/.codex/skills/codex-web-user-context
+```
+
+This skill is bundled in the repository and should be installed into the local
+system Codex skills directory at `~/.codex/skills/` like the other shipped
+skills. During Codex Web turns, the server projects a small runtime context
+file and injects its absolute path into the turn instructions so the skill can
+discover the current authenticated Codex Web user, email, and project context.
 
 ## Runtime Status
 

@@ -21,6 +21,8 @@ test('install.md is the AI install entrypoint for GitHub blob links and local pr
   assert.match(installDoc, /--password/u);
   assert.match(installDoc, /--autostart/u);
   assert.match(installDoc, /skills\/codex-mobile-report/u);
+  assert.match(installDoc, /skills\/codex-web-user-context/u);
+  assert.match(installDoc, /~\/\.codex\/skills\/codex-web-user-context/u);
   assert.match(installDoc, /~\/\.codex-web\/reports\//u);
   assert.match(installDoc, /phone-readable report/u);
 });
@@ -33,6 +35,8 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readme, /AI install/i);
   assert.match(readme, /Help me install https:\/\/github\.com\/chenyanshan\/codex-mobile-web-app\/blob\/main\/README\.md/u);
   assert.match(readme, /codex-mobile-report/u);
+  assert.match(readme, /codex-web-user-context/u);
+  assert.match(readme, /~\/\.codex\/skills\//u);
   assert.match(readme, /Add to Home Screen/u);
   assert.match(readme, /Android/u);
 
@@ -40,6 +44,8 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readmeZh, /AI 安装/u);
   assert.match(readmeZh, /帮我安装 https:\/\/github\.com\/chenyanshan\/codex-mobile-web-app\/blob\/main\/README\.md/u);
   assert.match(readmeZh, /codex-mobile-report/u);
+  assert.match(readmeZh, /codex-web-user-context/u);
+  assert.match(readmeZh, /~\/\.codex\/skills\//u);
   assert.match(readmeZh, /添加到主屏幕/u);
   assert.match(readmeZh, /Android/u);
 });

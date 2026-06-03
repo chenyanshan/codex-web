@@ -233,6 +233,34 @@ ln -s "$(pwd)/skills/codex-mobile-report" ~/.codex/skills/codex-mobile-report
 `~/.codex-web/reports/`。Codex Web 会通过已鉴权 API 暴露这些报告，并在应用内
 打开报告链接。
 
+## 用户上下文 Skill
+
+Codex Web 用户上下文 skill 位于：
+
+```text
+skills/codex-web-user-context
+```
+
+安装到本机 Codex skills：
+
+```bash
+mkdir -p ~/.codex/skills
+mkdir -p ~/.codex/skills/codex-web-user-context
+cp -R skills/codex-web-user-context/. ~/.codex/skills/codex-web-user-context/
+```
+
+开发时建议使用软链接：
+
+```bash
+mkdir -p ~/.codex/skills
+ln -s "$(pwd)/skills/codex-web-user-context" ~/.codex/skills/codex-web-user-context
+```
+
+这个 skill 和前面的配套 skill 一样，仓库内自带，安装目标也是本机系统 Codex
+skills 目录 `~/.codex/skills/`。在 Codex Web turn 里，服务端会把当前会话的
+runtime context 文件路径注入到 turn 指令中，skill 再通过这个文件读取当前登录
+用户、邮箱和项目上下文。
+
 ## Runtime 状态
 
 输入框上方的状态表示 runtime 状态，不只是请求 spinner。它会根据实时 turn 事件
