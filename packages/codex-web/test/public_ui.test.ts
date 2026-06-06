@@ -1131,6 +1131,92 @@ test('admin observed sessions open read-only history from the earliest message',
   assert.match(api.renderChat().innerHTML, /First observed question/u);
 });
 
+test('returning from an admin observed session restores the session audit page', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/admin/sessions/session_observed') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'observer',
+            session: {
+              id: 'session_observed',
+              projectDisplayName: 'Project Alpha',
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'First observed question' },
+              ],
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+  api.state.view = 'admin';
+  api.state.admin.loaded = true;
+  api.state.admin.page = 'sessions';
+  api.state.admin.sessions = [{ id: 'session_observed', ownerUserId: 'user_1', projectDisplayName: 'Project Alpha' }];
+
+  await api.openAdminObservedSession('session_observed');
+  api.showSessionList();
+
+  assert.equal(api.state.view, 'admin');
+  assert.equal(api.state.admin.page, 'sessions');
+  assert.equal(api.state.sessionId, null);
+  assert.match(api.renderAdminConsole().innerHTML, /session_observed/u);
+});
+
+test('desktop admin observed sessions do not open inside the normal workspace session panes', async () => {
+  const { api, context } = await loadAppHarness({
+    viewportWidth: 1280,
+    desktopPointer: true,
+    fetch: async (path) => {
+      if (path === '/api/admin/sessions/session_observed') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'observer',
+            session: {
+              id: 'session_observed',
+              projectDisplayName: 'Project Alpha',
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'First observed question' },
+              ],
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+  api.state.view = 'admin';
+  api.state.admin.loaded = true;
+  api.state.admin.page = 'sessions';
+  api.state.admin.sessions = [{ id: 'session_observed', ownerUserId: 'user_1', projectDisplayName: 'Project Alpha' }];
+
+  await api.openAdminObservedSession('session_observed');
+
+  const html = context.document.querySelector('#app').innerHTML;
+  assert.doesNotMatch(html, /desktop-shell/u);
+  assert.doesNotMatch(html, /desktop-session-pane/u);
+  assert.match(html, /First observed question/u);
+
+  api.showSessionList();
+
+  assert.equal(api.state.view, 'admin');
+  assert.match(api.renderAdminConsole().innerHTML, /session_observed/u);
+});
+
 test('observer sessions and share sessions render read-only chat without composer actions', async () => {
   const [styles, { api }] = await Promise.all([
     readFile(stylesUrl, 'utf8'),
@@ -1257,8 +1343,9 @@ test('share dialog copy falls back when Clipboard API is unavailable', async () 
 
 test('share routes load public session history without auth and render read-only', async () => {
   const fetchCalls = [];
-  const { api } = await loadAppHarness({
+  const { api, storage } = await loadAppHarness({
     pathname: '/share/cws_public_token',
+    storage: { codexWebToken: 'existing_device_token' },
     fetch: async (path) => {
       fetchCalls.push(path);
       if (path === '/api/share/cws_public_token/session') {
@@ -1288,12 +1375,59 @@ test('share routes load public session history without auth and render read-only
   assert.deepEqual(fetchCalls, ['/api/share/cws_public_token/session']);
   assert.equal(api.state.authSession?.principal?.mode, 'share');
   assert.equal(api.state.token, '');
+  assert.equal(storage.get('codexWebToken'), 'existing_device_token');
   assert.equal(api.state.view, 'chat');
   assert.equal(api.state.currentSession.readOnly, true);
   const html = api.renderChat().innerHTML;
   assert.match(html, /Shared answer/u);
   assert.match(html, /Shared link/u);
   assert.doesNotMatch(html, /id="prompt-input"/u);
+});
+
+test('share routes do not refresh private session metadata after loading', async () => {
+  const fetchCalls = [];
+  const { api, context } = await loadAppHarness({
+    pathname: '/share/cws_public_token',
+    storage: { codexWebToken: 'existing_device_token' },
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/share/cws_public_token/session') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'share',
+            session: {
+              id: 'session_shared',
+              projectDisplayName: 'Project Alpha',
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Shared question' },
+                { id: 'm2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Shared answer' },
+              ],
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_shared') {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: 'unauthorized', message: 'Login required' }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  await api.loadSharedSessionFromLocation();
+  await context.recoverActiveTurnAfterForeground();
+  await api.refreshCurrentView();
+
+  assert.deepEqual(fetchCalls, ['/api/share/cws_public_token/session']);
+  assert.equal(api.state.authSession?.principal?.mode, 'share');
+  assert.equal(api.state.view, 'chat');
+  assert.equal(context.localStorage.getItem('codexWebToken'), 'existing_device_token');
 });
 
 test('share routes open read-only history from the earliest message', async () => {
@@ -7822,6 +7956,105 @@ test('session list shows loading state while sessions are still syncing', async 
 
   api.state.sessionsLoading = false;
   assert.match(api.renderSessionCards(), /No sessions yet/u);
+});
+
+test('session refresh keeps visible cached sessions while a slow network request is pending', async () => {
+  let resolveFetch: ((value: unknown) => void) | null = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions') {
+        return await new Promise((resolve) => {
+          resolveFetch = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sortMode = 'time';
+  api.state.sessions = [
+    { id: 'session_cached', cwd: '/repo', firstUserInput: 'Cached prompt', updatedAt: 10, settings: { metadata: {} } },
+  ];
+  api.state.sessionsByScope.all = [...api.state.sessions];
+  api.state.sessionsLoadedByScope.all = true;
+
+  const refresh = api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+
+  assert.equal(api.state.sessionsLoading, true);
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_cached']));
+  assert.match(api.renderSessionCards(), /Cached prompt/u);
+
+  resolveFetch?.({
+    ok: true,
+    status: 200,
+    json: async () => ({ items: [{ id: 'session_fresh', cwd: '/repo', firstUserInput: 'Fresh prompt', updatedAt: 20, settings: { metadata: {} } }] }),
+  });
+  await refresh;
+
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_fresh']));
+});
+
+test('session list restores cached summaries from local storage before network sync completes', async () => {
+  let resolveFetch: ((value: unknown) => void) | null = null;
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions') {
+        return await new Promise((resolve) => {
+          resolveFetch = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  storage.set('codexWebSessionsCache', JSON.stringify({
+    scopes: {
+      all: [
+        { id: 'session_cached', cwd: '/repo', firstUserInput: 'Cached prompt', updatedAt: 10, settings: { metadata: {} } },
+      ],
+    },
+  }));
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sortMode = 'time';
+
+  const refresh = api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+
+  assert.equal(api.state.sessionsLoading, true);
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_cached']));
+  assert.match(api.renderSessionCards(), /Cached prompt/u);
+
+  resolveFetch?.({
+    ok: true,
+    status: 200,
+    json: async () => ({ items: [{ id: 'session_fresh', cwd: '/repo', firstUserInput: 'Fresh prompt', updatedAt: 20, settings: { metadata: {} } }] }),
+  });
+  await refresh;
+
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_fresh']));
+  assert.match(storage.get('codexWebSessionsCache') || '', /session_fresh/u);
+});
+
+test('auth expiration clears cached session summaries from local storage', async () => {
+  const { api, storage } = await loadAppHarness();
+
+  storage.set('codexWebToken', 'token');
+  storage.set('codexWebSessionsCache', JSON.stringify({
+    scopes: {
+      all: [{ id: 'session_cached', cwd: '/repo', firstUserInput: 'Cached prompt' }],
+    },
+  }));
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+
+  api.handleApiError({ status: 401, payload: { message: 'Session expired' } });
+
+  assert.equal(storage.get('codexWebToken'), undefined);
+  assert.equal(storage.get('codexWebSessionsCache'), undefined);
+  assert.equal(api.state.authSession, null);
 });
 
 test('archived session scope requests the archived sessions endpoint and marks read-only summaries', async () => {

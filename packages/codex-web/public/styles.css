@@ -766,6 +766,30 @@ button:disabled {
   gap: 10px;
 }
 
+.admin-observed-panel {
+  min-width: 0;
+  min-height: 0;
+  height: min(760px, calc(100dvh - 136px));
+  position: sticky;
+  top: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.admin-observed-panel .chat-topbar {
+  position: static;
+}
+
+.admin-observed-panel .timeline {
+  min-height: 0;
+  padding-top: 14px;
+  padding-bottom: 18px;
+}
+
 .admin-filter-row {
   min-width: 0;
   display: grid;
@@ -2362,6 +2386,10 @@ pre.command {
 }
 
 @media (min-width: 820px) and (hover: hover) and (pointer: fine) {
+  .admin-layout:has(.admin-observed-panel) {
+    grid-template-columns: 172px minmax(280px, 0.8fr) minmax(360px, 1.2fr);
+  }
+
   .desktop-shell {
     background:
       radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34rem),

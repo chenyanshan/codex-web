@@ -1,5 +1,6 @@
 const APP_BUILD_ID = '__CODEX_WEB_BUILD_ID__';
 const TOKEN_KEY = 'codexWebToken';
+const SESSIONS_CACHE_KEY = 'codexWebSessionsCache';
 const TIMELINE_CACHE_KEY = 'codexWebTimelineCache';
 const QUEUED_MESSAGES_KEY = 'codexWebQueuedMessages';
 const THEME_KEY = 'codexWebTheme';
@@ -323,6 +324,8 @@ const state = {
     filterState: 'all',
     editingProjectId: '',
     editingRoleId: '',
+    observedSession: null,
+    observedSessionLoading: false,
   },
   sessions: [],
   sessionsByScope: {
@@ -350,6 +353,7 @@ const state = {
   reportsReturnView: 'sessions',
   currentSession: null,
   sessionId: null,
+  chatReturnView: 'sessions',
   draftSessionActive: false,
   view: 'sessions',
   selectedProjectKey: '',
@@ -494,7 +498,6 @@ async function loadSharedSessionFromLocationOnce() {
     return null;
   }
   state.token = '';
-  localStorage.removeItem(TOKEN_KEY);
   state.authSession = {
     id: 'share',
     createdAt: '',
@@ -507,6 +510,7 @@ async function loadSharedSessionFromLocationOnce() {
   state.status = 'Loading session';
   state.statusTone = 'warn';
   state.view = 'chat';
+  state.chatReturnView = 'sessions';
   render();
   try {
     const payload = await apiFetch(`/api/share/${encodeURIComponent(token)}/session`, { skipAuth: true });
@@ -530,8 +534,12 @@ async function loadSharedSessionFromLocationOnce() {
     scrollTimelineToTop();
     return session;
   } catch (error) {
-    state.authSession = null;
-    handleApiError(error, { auth: true });
+    state.currentSession = null;
+    state.sessionId = null;
+    state.error = error?.payload?.message || error?.message || 'Shared session not found';
+    state.status = 'Shared session not found';
+    state.statusTone = 'danger';
+    render();
     return null;
   }
 }
@@ -574,6 +582,7 @@ function createCachedAuthSession() {
 }
 
 function setLoggedOut(message = '') {
+  localStorage.removeItem(SESSIONS_CACHE_KEY);
   state.authSession = null;
   state.sessions = [];
   state.sessionsByScope = {
@@ -610,6 +619,8 @@ function setLoggedOut(message = '') {
     editingProjectId: '',
     editingRoleId: '',
     editingUserId: '',
+    observedSession: null,
+    observedSessionLoading: false,
   };
   state.reportsLoading = false;
   state.reportsLoaded = false;
@@ -900,6 +911,10 @@ function isShareView() {
   return state.authSession?.principal?.mode === 'share'
     || state.currentSession?.mode === 'share'
     || isShareRoute();
+}
+
+function isShareContext() {
+  return isShareView();
 }
 
 function renderSharedSessionPage() {
@@ -1362,6 +1377,7 @@ function renderAdminSections() {
           <section class="admin-content">
             ${renderAdminContent()}
           </section>
+          ${renderAdminObservedSessionPanel()}
         </div>
   `;
 }
@@ -1487,6 +1503,27 @@ function renderAdminSessionAuditPage() {
           </div>
           <div class="admin-list" data-i18n-skip>${renderAdminSessions()}</div>
         </section>
+  `;
+}
+
+function renderAdminObservedSessionPanel() {
+  if (currentAdminPage() !== 'sessions' || !isDesktopLayout()) {
+    return '';
+  }
+  if (state.admin.observedSessionLoading && !state.admin.observedSession) {
+    return `
+      <section class="admin-observed-panel">
+        <div class="empty-state">${escapeHtml(t('Loading session'))}</div>
+      </section>
+    `;
+  }
+  if (!state.admin.observedSession) {
+    return '';
+  }
+  return `
+      <section class="admin-observed-panel" data-i18n-skip>
+        ${renderChatContent({ desktop: true })}
+      </section>
   `;
 }
 
@@ -3976,6 +4013,7 @@ async function onLogout() {
   } catch (_error) {
   }
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(SESSIONS_CACHE_KEY);
   localStorage.removeItem(TIMELINE_CACHE_KEY);
   state.token = '';
   setLoggedOut();
@@ -3985,7 +4023,30 @@ function showSessionList() {
   savePromptDraftForCurrentSession();
   saveCurrentTimeline();
   stopStream();
+  const returnView = state.chatReturnView;
   rememberSessionListScroll();
+  if (returnView === 'admin' && isAdminPrincipal()) {
+    state.view = 'admin';
+    state.chatReturnView = 'sessions';
+    state.sessionId = null;
+    state.currentSession = null;
+    state.admin.observedSession = null;
+    state.admin.observedSessionLoading = false;
+    state.cwd = '';
+    state.draftSessionActive = false;
+    state.turnId = null;
+    state.pendingTurn = false;
+    state.composerExpanded = false;
+    state.composerAttachments = [];
+    state.mobileSidebarOpen = false;
+    state.desktopSettingsOpen = false;
+    state.desktopOverlay = null;
+    state.error = '';
+    resetTurnState();
+    resetSessionHistoryWindow();
+    render();
+    return;
+  }
   state.view = 'sessions';
   state.currentReport = null;
   state.currentReportContent = '';
@@ -4007,6 +4068,7 @@ function showSessionList() {
     resetSessionHistoryWindow();
   }
   state.error = '';
+  state.chatReturnView = 'sessions';
   render();
 }
 
@@ -4204,6 +4266,7 @@ function onNewSessionSubmit(event) {
   stopStream();
   applyDefaultSettings();
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
+  state.chatReturnView = 'sessions';
   state.desktopSettingsOpen = false;
   state.desktopOverlay = null;
   state.archiveConfirmSessionId = null;
@@ -4249,6 +4312,7 @@ async function selectSession(sessionId) {
   restoreTimelineForSession(nextSession, readOnlyTimelineRestoreOptions(nextSession));
   const restoredRuntimeStatus = syncRuntimeStatusFromSession(nextSession, { source: 'stale' });
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
+  state.chatReturnView = 'sessions';
   state.mobileSidebarOpen = false;
   state.desktopSettingsOpen = false;
   state.desktopOverlay = null;
@@ -4284,6 +4348,7 @@ async function selectSession(sessionId) {
   const refreshedRuntimeStatus = syncRuntimeStatusFromSession(refreshedSession);
   state.error = '';
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
+  state.chatReturnView = 'sessions';
   if (!refreshedRuntimeStatus.changed) {
     state.status = 'Ready';
     state.statusTone = 'success';
@@ -5342,7 +5407,7 @@ function hasRecoveredFirstTurn(session, promptText) {
 }
 
 async function refreshCurrentSessionMetadata({ hydrateTimeline = false, viewportSnapshot = null } = {}) {
-  if (!state.sessionId) {
+  if (!state.sessionId || isShareContext()) {
     return null;
   }
   const sessionId = state.sessionId;
@@ -5408,12 +5473,14 @@ async function refreshSessionsList({
     const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
+    persistSessionsCache();
     return sessions;
   }
   const requestId = state.sessionsRequestId + 1;
   state.sessionsRequestId = requestId;
   state.sessionsLoading = true;
   state.sessionsLoadingScope = normalizedScope;
+  restoreSessionsFromCacheForScope(normalizedScope);
   state.sessionsScope = normalizedScope;
   state.sessions = normalizedScope === currentSessionScope()
     ? [...(state.sessionsByScope[normalizedScope] || [])]
@@ -5426,6 +5493,7 @@ async function refreshSessionsList({
     const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
+    persistSessionsCache();
     if (requestId !== state.sessionsRequestId || normalizedScope !== currentSessionScope()) {
       return sessions;
     }
@@ -5880,6 +5948,7 @@ async function openAdminObservedSession(sessionId) {
   stopStream();
   state.status = 'Loading session';
   state.statusTone = 'warn';
+  state.admin.observedSessionLoading = true;
   state.error = '';
   render();
   try {
@@ -5889,20 +5958,27 @@ async function openAdminObservedSession(sessionId) {
       mode: payload?.mode || payload?.session?.mode || 'observer',
       readOnly: true,
     };
+    state.admin.observedSession = session;
     state.sessionId = session.id;
     state.currentSession = session;
     state.cwd = session.cwd || '';
     applySessionSettings(session);
     restoreTimelineForSession(session, { fullHistory: true });
     syncRuntimeStatusFromSession(session);
-    state.view = 'chat';
+    state.chatReturnView = 'admin';
+    state.view = isDesktopLayout() ? 'admin' : 'chat';
+    state.admin.page = 'sessions';
     state.timelineShouldFollowLatest = false;
     state.status = 'Ready';
     state.statusTone = 'success';
+    state.error = '';
     render();
     scrollTimelineToTop();
   } catch (error) {
     handleApiError(error);
+  } finally {
+    state.admin.observedSessionLoading = false;
+    render();
   }
 }
 
@@ -6099,6 +6175,9 @@ function preloadAllSessionsInBackground() {
 }
 
 async function refreshCurrentView() {
+  if (isShareContext()) {
+    return;
+  }
   if (!state.token) {
     return;
   }
@@ -6488,6 +6567,7 @@ function removeSession(sessionId) {
   if (state.currentSession?.id === sessionId) {
     state.currentSession = null;
   }
+  persistSessionsCache();
 }
 
 function optimisticallyUpdateSessionInput(text) {
@@ -6574,6 +6654,90 @@ function normalizeSessionsForScope(payload, scope) {
   }));
 }
 
+function restoreSessionsFromCacheForScope(scope) {
+  const normalizedScope = normalizeSessionScope(scope);
+  if (state.sessionsByScope[normalizedScope]?.length) {
+    return;
+  }
+  const cachedScopes = loadSessionsCacheScopes();
+  const cached = cachedScopes[normalizedScope] || [];
+  if (!cached.length) {
+    return;
+  }
+  state.sessionsByScope[normalizedScope] = cached;
+  if (normalizedScope === currentSessionScope()) {
+    state.sessions = [...cached];
+  }
+}
+
+function loadSessionsCacheScopes() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSIONS_CACHE_KEY) || '{"scopes":{}}');
+    const scopes = parsed && typeof parsed === 'object' && parsed.scopes && typeof parsed.scopes === 'object'
+      ? parsed.scopes
+      : {};
+    return {
+      all: normalizeSessions({ items: scopes.all }),
+      favorites: normalizeSessions({ items: scopes.favorites }),
+      archived: normalizeSessionsForScope({ items: scopes.archived }, 'archived'),
+    };
+  } catch (_error) {
+    localStorage.removeItem(SESSIONS_CACHE_KEY);
+    return {
+      all: [],
+      favorites: [],
+      archived: [],
+    };
+  }
+}
+
+function persistSessionsCache() {
+  const scopes = {
+    all: (state.sessionsByScope.all || []).map(serializeSessionSummaryForCache).filter(Boolean),
+    favorites: (state.sessionsByScope.favorites || []).map(serializeSessionSummaryForCache).filter(Boolean),
+    archived: (state.sessionsByScope.archived || []).map(serializeSessionSummaryForCache).filter(Boolean),
+  };
+  try {
+    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify({ scopes, savedAt: Date.now() }));
+  } catch (error) {
+    console.warn('[codex-web] sessions cache persist failed', error);
+  }
+}
+
+function serializeSessionSummaryForCache(session) {
+  const [normalized] = normalizeSessions({ items: [session] });
+  if (!normalized) {
+    return null;
+  }
+  const summary = {
+    id: normalized.id,
+    cwd: normalized.cwd,
+    projectName: normalized.projectName,
+    title: normalized.title,
+    preview: normalized.preview,
+    firstUserInput: normalized.firstUserInput,
+    lastUserInput: normalized.lastUserInput,
+    lastInputAt: normalized.lastInputAt,
+    updatedAt: normalized.updatedAt,
+    settings: normalized.settings,
+  };
+  for (const key of ['projectId', 'projectDisplayName', 'ownerUserId', 'mode', 'archivedAt', 'archivedByUserId', 'archiveSource']) {
+    if (Object.prototype.hasOwnProperty.call(normalized, key)) {
+      summary[key] = normalized[key];
+    }
+  }
+  if (normalized.readOnly === true) {
+    summary.readOnly = true;
+  }
+  if (normalized.archived === true) {
+    summary.archived = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(normalized, 'goal')) {
+    summary.goal = normalized.goal;
+  }
+  return summary;
+}
+
 function normalizeProjects(payload) {
   return (Array.isArray(payload?.items) ? payload.items : [])
     .map((project) => {
@@ -6638,6 +6802,7 @@ function upsertSession(session) {
   if (state.sessionId === next.id) {
     state.currentSession = next;
   }
+  persistSessionsCache();
 }
 
 function currentSessionScope() {
@@ -7574,6 +7739,8 @@ function resetAdminState() {
   state.admin.editingProjectId = '';
   state.admin.editingRoleId = '';
   state.admin.editingUserId = '';
+  state.admin.observedSession = null;
+  state.admin.observedSessionLoading = false;
 }
 
 function adminSessionsPath(userId = '', projectId = '', filterState = 'all') {
@@ -8776,7 +8943,7 @@ function isTurnStreamHealthy() {
 }
 
 async function recoverActiveTurnAfterForeground() {
-  if (!state.authSession || !state.sessionId) {
+  if (!state.authSession || !state.sessionId || isShareContext()) {
     return;
   }
   const viewportSnapshot = isDesktopWorkspaceView()
