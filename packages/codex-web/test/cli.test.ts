@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   parseCliArgs,
   runAuthSetPasswordCommand,
+  runTaskCommand,
   startServeCommand,
 } from '../src/cli.js';
 
@@ -39,6 +40,26 @@ test('cli parses serve and auth set-password commands', () => {
   });
   assert.deepEqual(parseCliArgs(['auth', 'set-password']), {
     command: 'auth-set-password',
+  });
+  assert.deepEqual(parseCliArgs(['task', 'run', 'morning-report']), {
+    command: 'task',
+    action: 'run',
+    taskId: 'morning-report',
+  });
+  assert.deepEqual(parseCliArgs(['task', 'install', 'morning-report']), {
+    command: 'task',
+    action: 'install',
+    taskId: 'morning-report',
+  });
+  assert.deepEqual(parseCliArgs(['task', 'uninstall', 'morning-report']), {
+    command: 'task',
+    action: 'uninstall',
+    taskId: 'morning-report',
+  });
+  assert.deepEqual(parseCliArgs(['task', 'status', 'morning-report']), {
+    command: 'task',
+    action: 'status',
+    taskId: 'morning-report',
   });
 });
 
@@ -286,6 +307,163 @@ test('serve command creates state and log directories before server start', asyn
   assert.match(helpReport, /\| 命令 \| 作用 \| 会启动 Codex turn \|/u);
   assert.match(helpReport, /`\/help`/u);
   assert.match(helpReport, /`\/goal resume`/u);
+});
+
+test('task run reads the configured task and invokes the scheduled task runner', async () => {
+  const calls: unknown[] = [];
+  const stdoutLines: string[] = [];
+
+  const parsed = parseCliArgs(['task', 'run', 'morning-report']);
+  assert.equal(parsed.command, 'task');
+
+  await runTaskCommand(parsed, {
+    env: {},
+    loadConfig: () => createConfig(),
+    createTaskStore: ({ stateDir }) => ({
+      readTask: async (taskId: string) => {
+        calls.push({ readTask: taskId, stateDir });
+        return {
+          id: taskId,
+          title: 'Morning report',
+          cwd: '/workspace',
+          projectId: null,
+          runAsUserId: null,
+          schedule: { kind: 'daily', time: '09:00' },
+          settings: {},
+          archive: { onCompletion: true },
+          prompt: 'Run task\n',
+          taskDir: '/tmp/task',
+        };
+      },
+    }),
+    createRuntime: ({ config }) => {
+      calls.push({ runtimeStateDir: config.stateDir });
+      return {} as any;
+    },
+    createIdentityStore: ({ identityPath }) => {
+      calls.push({ identityPath });
+      return {} as any;
+    },
+    runTask: async ({ task, stateDir, identityStore }) => {
+      calls.push({ runTask: task.id, stateDir, hasIdentityStore: Boolean(identityStore) });
+      return {
+        taskId: task.id,
+        sessionId: 'thread_task',
+        turnId: 'turn_task',
+        archived: true,
+      };
+    },
+    stdout: { write: (chunk) => {
+      stdoutLines.push(chunk);
+      return true;
+    } },
+  });
+
+  assert.deepEqual(calls, [
+    { readTask: 'morning-report', stateDir: '/tmp/codex-web-state' },
+    { runtimeStateDir: '/tmp/codex-web-state' },
+    { identityPath: '/tmp/codex-web-state/identity.json' },
+    { runTask: 'morning-report', stateDir: '/tmp/codex-web-state', hasIdentityStore: true },
+  ]);
+  assert.deepEqual(stdoutLines, [
+    'task_started: morning-report\n',
+    'session_id: thread_task\n',
+    'turn_id: turn_task\n',
+    'archived: true\n',
+  ]);
+});
+
+test('task install writes scheduler files and runs platform commands', async () => {
+  const writes: Array<{ filePath: string; content: string; mode?: number }> = [];
+  const commands: Array<{ argv: string[]; allowFailure?: boolean }> = [];
+
+  const parsed = parseCliArgs(['task', 'install', 'morning-report']);
+  assert.equal(parsed.command, 'task');
+
+  await runTaskCommand(parsed, {
+    env: {},
+    platform: 'linux',
+    homeDir: '/home/alice',
+    codexWebBin: '/home/alice/.local/bin/codex-web',
+    loadConfig: () => createConfig(),
+    createTaskStore: () => ({
+      readTask: async (taskId: string) => ({
+        id: taskId,
+        title: 'Morning report',
+        cwd: null,
+        projectId: null,
+        runAsUserId: null,
+        schedule: { kind: 'daily', time: '09:30' },
+        settings: {},
+        archive: { onCompletion: true },
+        prompt: 'Run task\n',
+        taskDir: '/tmp/task',
+      }),
+    }),
+    writeSchedulerFile: async (filePath, content, mode) => {
+      writes.push({ filePath, content, mode });
+    },
+    runCommand: async (command) => {
+      commands.push(command);
+    },
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(writes.map((write) => write.filePath), [
+    '/home/alice/.config/systemd/user/codex-web-task@morning-report.service',
+    '/home/alice/.config/systemd/user/codex-web-task@morning-report.timer',
+  ]);
+  assert.match(writes[1]?.content ?? '', /OnCalendar=\*-\*-\* 09:30:00/u);
+  assert.deepEqual(commands, [
+    { argv: ['systemctl', '--user', 'daemon-reload'] },
+    { argv: ['systemctl', '--user', 'enable', '--now', 'codex-web-task@morning-report.timer'] },
+  ]);
+});
+
+test('task install continues past allowed scheduler command failures', async () => {
+  const commands: Array<{ argv: string[]; allowFailure?: boolean }> = [];
+  const parsed = parseCliArgs(['task', 'install', 'daily']);
+  assert.equal(parsed.command, 'task');
+
+  await runTaskCommand(parsed, {
+    env: {},
+    platform: 'darwin',
+    homeDir: '/Users/alice',
+    codexWebBin: '/opt/codex-web/bin/codex-web',
+    loadConfig: () => createConfig(),
+    createTaskStore: () => ({
+      readTask: async (taskId: string) => ({
+        id: taskId,
+        title: 'Daily',
+        cwd: null,
+        projectId: null,
+        runAsUserId: null,
+        schedule: { kind: 'daily', time: '09:00' },
+        settings: {},
+        archive: { onCompletion: true },
+        prompt: 'Run task\n',
+        taskDir: '/tmp/task',
+      }),
+    }),
+    writeSchedulerFile: async () => {},
+    runCommand: async (command) => {
+      commands.push(command);
+      if (command.allowFailure) {
+        throw new Error('simulated unload failure');
+      }
+    },
+    stdout: { write: () => true },
+  });
+
+  assert.deepEqual(commands, [
+    {
+      argv: ['launchctl', 'unload', '/Users/alice/Library/LaunchAgents/com.chenyanshan.codex-web.task.daily.plist'],
+      allowFailure: true,
+    },
+    {
+      argv: ['launchctl', 'load', '/Users/alice/Library/LaunchAgents/com.chenyanshan.codex-web.task.daily.plist'],
+    },
+  ]);
 });
 
 function spawnProcess(

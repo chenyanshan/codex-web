@@ -1,0 +1,248 @@
+import path from 'node:path';
+import type { ScheduledTaskDefinition } from './task_store.js';
+
+export type TaskSchedulerPlatform = 'darwin' | 'linux';
+export type TaskSchedulerAction = 'install' | 'uninstall' | 'status';
+export type TaskSchedulerKind = 'launchd' | 'systemd';
+
+export interface SchedulerFile {
+  path: string;
+  content: string;
+  mode?: number;
+}
+
+export interface SchedulerCommand {
+  argv: string[];
+  allowFailure?: boolean;
+}
+
+export interface TaskSchedulerPlan {
+  kind: TaskSchedulerKind;
+  files: SchedulerFile[];
+  commands: SchedulerCommand[];
+}
+
+export interface SchedulerRenderInput {
+  task: ScheduledTaskDefinition;
+  codexWebBin: string;
+  envPath: string;
+}
+
+export interface CreateTaskSchedulerPlanInput extends SchedulerRenderInput {
+  platform: NodeJS.Platform | TaskSchedulerPlatform;
+  action: TaskSchedulerAction;
+  homeDir: string;
+}
+
+export function createTaskSchedulerPlan(input: CreateTaskSchedulerPlanInput): TaskSchedulerPlan {
+  if (input.platform === 'darwin') {
+    return createLaunchdPlan(input);
+  }
+  if (input.platform === 'linux') {
+    return createSystemdPlan(input);
+  }
+  throw new Error(`Scheduled task install is not supported on ${input.platform}`);
+}
+
+export function renderLaunchdTaskPlist({ task, codexWebBin, envPath }: SchedulerRenderInput): string {
+  const { hour, minute } = parseDailyTime(task.schedule.time);
+  const label = launchdTaskLabel(task.id);
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    '<dict>',
+    '  <key>Label</key>',
+    `  <string>${escapeXml(label)}</string>`,
+    '  <key>ProgramArguments</key>',
+    '  <array>',
+    `    <string>${escapeXml(codexWebBin)}</string>`,
+    '    <string>task</string>',
+    '    <string>run</string>',
+    `    <string>${escapeXml(task.id)}</string>`,
+    '  </array>',
+    '  <key>EnvironmentVariables</key>',
+    '  <dict>',
+    '    <key>CODEX_WEB_ENV_PATH</key>',
+    `    <string>${escapeXml(envPath)}</string>`,
+    '  </dict>',
+    '  <key>StartCalendarInterval</key>',
+    '  <dict>',
+    '    <key>Hour</key>',
+    `    <integer>${hour}</integer>`,
+    '    <key>Minute</key>',
+    `    <integer>${minute}</integer>`,
+    '  </dict>',
+    '  <key>StandardOutPath</key>',
+    `  <string>${escapeXml(path.join(path.dirname(envPath), '..', '..', '.codex-web', 'logs', `${label}.out.log`))}</string>`,
+    '  <key>StandardErrorPath</key>',
+    `  <string>${escapeXml(path.join(path.dirname(envPath), '..', '..', '.codex-web', 'logs', `${label}.err.log`))}</string>`,
+    '</dict>',
+    '</plist>',
+    '',
+  ].join('\n');
+}
+
+export function renderSystemdTaskService({ task, codexWebBin, envPath }: SchedulerRenderInput): string {
+  return [
+    '[Unit]',
+    `Description=Codex Web scheduled task ${task.id}`,
+    '',
+    '[Service]',
+    'Type=oneshot',
+    `EnvironmentFile=-${envPath}`,
+    `ExecStart=${codexWebBin} task run ${systemdEscapeArg(task.id)}`,
+    '',
+  ].join('\n');
+}
+
+export function renderSystemdTaskTimer({ task }: { task: ScheduledTaskDefinition }): string {
+  return [
+    '[Unit]',
+    `Description=Codex Web scheduled task timer ${task.id}`,
+    '',
+    '[Timer]',
+    `OnCalendar=*-*-* ${task.schedule.time}:00`,
+    'Persistent=true',
+    `Unit=codex-web-task@${systemdUnitInstance(task.id)}.service`,
+    '',
+    '[Install]',
+    'WantedBy=timers.target',
+    '',
+  ].join('\n');
+}
+
+export function launchdTaskLabel(taskId: string): string {
+  return `com.chenyanshan.codex-web.task.${taskId}`;
+}
+
+function createLaunchdPlan(input: CreateTaskSchedulerPlanInput): TaskSchedulerPlan {
+  const plistPath = path.join(input.homeDir, 'Library', 'LaunchAgents', `${launchdTaskLabel(input.task.id)}.plist`);
+  if (input.action === 'install') {
+    return {
+      kind: 'launchd',
+      files: [{
+        path: plistPath,
+        content: renderLaunchdTaskPlist(input),
+        mode: 0o644,
+      }],
+      commands: [
+        {
+          argv: ['launchctl', 'unload', plistPath],
+          allowFailure: true,
+        },
+        {
+          argv: ['launchctl', 'load', plistPath],
+        },
+      ],
+    };
+  }
+  if (input.action === 'uninstall') {
+    return {
+      kind: 'launchd',
+      files: [],
+      commands: [
+        {
+          argv: ['launchctl', 'unload', plistPath],
+          allowFailure: true,
+        },
+        {
+          argv: ['rm', '-f', plistPath],
+        },
+      ],
+    };
+  }
+  return {
+    kind: 'launchd',
+    files: [],
+    commands: [
+      {
+        argv: ['launchctl', 'list', launchdTaskLabel(input.task.id)],
+      },
+    ],
+  };
+}
+
+function createSystemdPlan(input: CreateTaskSchedulerPlanInput): TaskSchedulerPlan {
+  const userDir = path.join(input.homeDir, '.config', 'systemd', 'user');
+  const servicePath = path.join(userDir, `codex-web-task@${input.task.id}.service`);
+  const timerPath = path.join(userDir, `codex-web-task@${input.task.id}.timer`);
+  const timerName = `codex-web-task@${systemdUnitInstance(input.task.id)}.timer`;
+  if (input.action === 'install') {
+    return {
+      kind: 'systemd',
+      files: [
+        {
+          path: servicePath,
+          content: renderSystemdTaskService(input),
+          mode: 0o644,
+        },
+        {
+          path: timerPath,
+          content: renderSystemdTaskTimer({ task: input.task }),
+          mode: 0o644,
+        },
+      ],
+      commands: [
+        {
+          argv: ['systemctl', '--user', 'daemon-reload'],
+        },
+        {
+          argv: ['systemctl', '--user', 'enable', '--now', timerName],
+        },
+      ],
+    };
+  }
+  if (input.action === 'uninstall') {
+    return {
+      kind: 'systemd',
+      files: [],
+      commands: [
+        {
+          argv: ['systemctl', '--user', 'disable', '--now', timerName],
+          allowFailure: true,
+        },
+        {
+          argv: ['rm', '-f', servicePath, timerPath],
+        },
+        {
+          argv: ['systemctl', '--user', 'daemon-reload'],
+        },
+      ],
+    };
+  }
+  return {
+    kind: 'systemd',
+    files: [],
+    commands: [
+      {
+        argv: ['systemctl', '--user', 'status', timerName],
+      },
+    ],
+  };
+}
+
+function parseDailyTime(time: string): { hour: number; minute: number } {
+  const [hour, minute] = time.split(':').map((part) => Number(part));
+  return {
+    hour: Number.isFinite(hour) ? hour : 0,
+    minute: Number.isFinite(minute) ? minute : 0,
+  };
+}
+
+function systemdUnitInstance(taskId: string): string {
+  return taskId.replace(/%/gu, '%%');
+}
+
+function systemdEscapeArg(value: string): string {
+  return value.replace(/%/gu, '%%');
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
+    .replace(/'/gu, '&apos;');
+}

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { stdin as defaultStdin, stdout as defaultStdout, stderr as defaultStderr } from 'node:process';
@@ -9,10 +11,14 @@ import { AuthStore, type PublicAuthSession } from './auth_store.js';
 import { loadServiceConfig, type CodexWebConfig } from './config.js';
 import { HybridAuthStore } from './hybrid_auth_store.js';
 import { FileIdentityStore } from './identity_store.js';
+import type { ScheduledTaskIdentityStoreLike } from './task_runner.js';
 import { CodexWebRuntime } from './runtime.js';
 import { createCodexWebServer, type CodexWebAuthLike, type CodexWebServerHandle } from './server.js';
 import { FileSessionSettingsStore } from './session_settings_store.js';
 import { FileSessionTimelineStore } from './session_timeline_store.js';
+import { createTaskSchedulerPlan, type SchedulerCommand, type TaskSchedulerAction } from './task_scheduler.js';
+import { FileScheduledTaskStore, type FileScheduledTaskStore as FileScheduledTaskStoreType } from './task_store.js';
+import { runScheduledTask, type RunScheduledTaskInput, type RunScheduledTaskResult } from './task_runner.js';
 
 const HELP_REPORT_PROJECT = 'codex-mobile-web-app';
 const HELP_REPORT_DATE = '2026-05-22';
@@ -64,6 +70,11 @@ export type ParsedCliArgs =
     command: 'auth-set-password';
   }
   | {
+    command: 'task';
+    action: TaskSchedulerAction | 'run';
+    taskId: string;
+  }
+  | {
     command: 'serve';
     host: string | null;
     port: number | null;
@@ -103,10 +114,29 @@ interface AuthSetPasswordDependencies {
   stdout: WritableLike;
 }
 
+interface TaskCommandDependencies {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  homeDir: string;
+  codexWebBin: string;
+  loadConfig: (options?: { env?: NodeJS.ProcessEnv }) => CodexWebConfig;
+  createTaskStore: (args: { stateDir: string }) => Pick<FileScheduledTaskStoreType, 'readTask'>;
+  createIdentityStore: (args: { identityPath: string }) => ScheduledTaskIdentityStoreLike;
+  createRuntime: (args: { config: CodexWebConfig }) => CodexWebRuntime;
+  runTask: (input: RunScheduledTaskInput) => Promise<RunScheduledTaskResult>;
+  writeSchedulerFile: (filePath: string, content: string, mode?: number) => Promise<void>;
+  runCommand: (command: SchedulerCommand) => Promise<void>;
+  stdout: WritableLike;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const command = parseCliArgs(argv);
   if (command.command === 'auth-set-password') {
     await runAuthSetPasswordCommand();
+    return;
+  }
+  if (command.command === 'task') {
+    await runTaskCommand(command);
     return;
   }
 
@@ -141,11 +171,75 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     return { command: 'auth-set-password' };
   }
 
+  if (first === 'task') {
+    return parseTaskArgs(second, rest);
+  }
+
   const serveArgs = first === 'serve' ? [second, ...rest] : argv;
   return {
     command: 'serve',
     ...parseServeOptions(serveArgs),
   };
+}
+
+export async function runTaskCommand(
+  parsed: Extract<ParsedCliArgs, { command: 'task' }>,
+  dependencies: Partial<TaskCommandDependencies> = {},
+): Promise<void> {
+  const env = dependencies.env ?? process.env;
+  const loadConfigFn = dependencies.loadConfig ?? ((options?: { env?: NodeJS.ProcessEnv }) => loadServiceConfig(options));
+  const config = loadConfigFn({ env });
+  const createTaskStoreFn = dependencies.createTaskStore ?? (({ stateDir }) => new FileScheduledTaskStore({ stateDir }));
+  const task = await createTaskStoreFn({ stateDir: config.stateDir }).readTask(parsed.taskId);
+  const stdout = dependencies.stdout ?? defaultStdout;
+
+  if (parsed.action === 'run') {
+    const createRuntimeFn = dependencies.createRuntime ?? createDefaultRuntime;
+    const createIdentityStoreFn = dependencies.createIdentityStore
+      ?? (({ identityPath }) => new FileIdentityStore({ identityPath }));
+    const runTaskFn = dependencies.runTask ?? runScheduledTask;
+    stdout.write(`task_started: ${task.id}\n`);
+    const result = await runTaskFn({
+      task,
+      runtime: createRuntimeFn({ config }),
+      identityStore: createIdentityStoreFn({ identityPath: path.join(config.stateDir, 'identity.json') }),
+      stateDir: config.stateDir,
+    });
+    stdout.write(`session_id: ${result.sessionId}\n`);
+    if (result.turnId) {
+      stdout.write(`turn_id: ${result.turnId}\n`);
+    }
+    stdout.write(`archived: ${result.archived ? 'true' : 'false'}\n`);
+    return;
+  }
+
+  const plan = createTaskSchedulerPlan({
+    platform: dependencies.platform ?? process.platform,
+    action: parsed.action,
+    task,
+    codexWebBin: dependencies.codexWebBin ?? process.argv[1] ?? 'codex-web',
+    envPath: config.envPath,
+    homeDir: dependencies.homeDir ?? process.env.HOME ?? process.cwd(),
+  });
+  const writeSchedulerFile = dependencies.writeSchedulerFile ?? writeFileWithMode;
+  const runCommand = dependencies.runCommand ?? runCommandInherit;
+
+  for (const file of plan.files) {
+    await writeSchedulerFile(file.path, file.content, file.mode);
+    stdout.write(`wrote: ${file.path}\n`);
+  }
+  for (const command of plan.commands) {
+    stdout.write(`run: ${command.argv.join(' ')}\n`);
+    try {
+      await runCommand(command);
+    } catch (error) {
+      if (command.allowFailure === true) {
+        stdout.write(`allowed_failure: ${command.argv.join(' ')}\n`);
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 export async function runAuthSetPasswordCommand(
@@ -203,25 +297,7 @@ export async function startServeCommand(
     }
   }
 
-  const createRuntimeFn = dependencies.createRuntime ?? (({ config: runtimeConfig }) => new CodexWebRuntime({
-    codexBin: runtimeConfig.codexBin,
-    defaultCwd: runtimeConfig.defaultCwd,
-    helpReportPath: helpReportPath(runtimeConfig),
-    logger: runtimeConfig.debug
-      ? {
-        debug: writeDebugStderrLine,
-        info: writeDebugStderrLine,
-        warn: writeDebugStderrLine,
-        error: writeDebugStderrLine,
-      }
-      : undefined,
-    settingsStore: new FileSessionSettingsStore({
-      settingsPath: path.join(runtimeConfig.stateDir, 'session-settings.json'),
-    }),
-    timelineStore: new FileSessionTimelineStore({
-      timelinePath: path.join(runtimeConfig.stateDir, 'session-timeline.json'),
-    }),
-  }));
+  const createRuntimeFn = dependencies.createRuntime ?? createDefaultRuntime;
   const runtime = createRuntimeFn({ config });
   const createServerFn = dependencies.createServer ?? ((args) => createCodexWebServer({
     ...args,
@@ -303,6 +379,71 @@ function parseServeOptions(argv: string[]): { host: string | null; port: number 
   }
 
   return { host, port };
+}
+
+function parseTaskArgs(action: string, rest: string[]): Extract<ParsedCliArgs, { command: 'task' }> {
+  if (action !== 'run' && action !== 'install' && action !== 'uninstall' && action !== 'status') {
+    throw new Error('Unknown task command. Expected: codex-web task run|install|uninstall|status <taskId>');
+  }
+  if (rest.length !== 1) {
+    throw new Error(`codex-web task ${action} requires exactly one task id`);
+  }
+  const taskId = String(rest[0] ?? '').trim();
+  if (!taskId) {
+    throw new Error(`codex-web task ${action} requires exactly one task id`);
+  }
+  return {
+    command: 'task',
+    action,
+    taskId,
+  };
+}
+
+function createDefaultRuntime({ config: runtimeConfig }: { config: CodexWebConfig }): CodexWebRuntime {
+  return new CodexWebRuntime({
+    codexBin: runtimeConfig.codexBin,
+    defaultCwd: runtimeConfig.defaultCwd,
+    helpReportPath: helpReportPath(runtimeConfig),
+    logger: runtimeConfig.debug
+      ? {
+        debug: writeDebugStderrLine,
+        info: writeDebugStderrLine,
+        warn: writeDebugStderrLine,
+        error: writeDebugStderrLine,
+      }
+      : undefined,
+    settingsStore: new FileSessionSettingsStore({
+      settingsPath: path.join(runtimeConfig.stateDir, 'session-settings.json'),
+    }),
+    timelineStore: new FileSessionTimelineStore({
+      timelinePath: path.join(runtimeConfig.stateDir, 'session-timeline.json'),
+    }),
+  });
+}
+
+async function writeFileWithMode(filePath: string, content: string, mode = 0o644): Promise<void> {
+  await fsPromises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fsPromises.writeFile(filePath, content, { mode });
+}
+
+async function runCommandInherit(command: SchedulerCommand): Promise<void> {
+  const [bin, ...args] = command.argv;
+  if (!bin) {
+    throw new Error('Cannot run an empty command');
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(bin, args, {
+      stdio: 'inherit',
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`Command failed with exit code ${code}: ${command.argv.join(' ')}`));
+    });
+  });
 }
 
 function requireOptionValue(argv: string[], index: number, flag: string): string {
