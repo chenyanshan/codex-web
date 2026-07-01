@@ -32,6 +32,7 @@ const PROMPT_TEXTAREA_MAX_HEIGHT = 116;
 const DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT = 220;
 const PROMPT_EXPAND_LINE_THRESHOLD = 4;
 const STREAM_STALE_MS = 30_000;
+const STREAM_RECOVERY_CHECK_MS = 10_000;
 const FIRST_TURN_RECOVERY_DELAY_MS = 10_000;
 const LOCAL_TURN_SYNC_GRACE_MS = 10_000;
 const DESKTOP_WORKSPACE_MIN_WIDTH = 820;
@@ -425,6 +426,7 @@ let edgeSwipeStart = null;
 let allSessionsPreloadPromise = null;
 let promptFocusRestoreTimer = null;
 let promptFocusLayoutTimer = null;
+let promptRestoreRun = 0;
 let sessionListRestoreScrollTop = null;
 let timelineScrollTrackingAttached = false;
 let chatTimelineReturnSnapshot = null;
@@ -432,6 +434,10 @@ let chatTimelineForegroundSnapshot = null;
 let chatTimelineViewportSnapshot = null;
 let nextTimelineRestoreSnapshot = null;
 let sharedSessionLoadPromise = null;
+let streamRecoveryTimer = null;
+let streamRecoveryPromise = null;
+let lastViewportWidth = typeof window?.innerWidth === 'number' ? window.innerWidth : 0;
+let lastViewportHeight = typeof window?.innerHeight === 'number' ? window.innerHeight : 0;
 
 bootstrap();
 applyTheme(state.theme, { persist: false });
@@ -443,12 +449,10 @@ setupPwaPullToRefresh();
 setupEdgeSwipeBackNavigation();
 setupAppVersionRefresh();
 setupMobileOrientationLock();
+setupStreamRecoveryWatchdog();
 document.addEventListener('visibilitychange', onVisibilityChange);
 document.addEventListener('click', handleSessionSettingsOutsideClick);
-window.addEventListener('resize', () => {
-  handleLayoutResize();
-  render();
-});
+window.addEventListener('resize', handleWindowResize);
 window.addEventListener('pageshow', onPageResume);
 window.addEventListener('focus', onPageResume);
 
@@ -671,6 +675,7 @@ function setLoggedOut(message = '') {
 
 function render() {
   const shouldRestoreLatestTimeline = state.timelineShouldFollowLatest;
+  const promptRestoreSnapshot = capturePromptRestoreState();
   app.innerHTML = '';
   if (state.setupRequired) {
     app.appendChild(renderSetup());
@@ -706,6 +711,7 @@ function render() {
   if (state.view === 'sessions') {
     restoreSessionListScroll();
   }
+  schedulePromptRestore(promptRestoreSnapshot);
 }
 
 function resetSessionHistoryWindow() {
@@ -817,6 +823,30 @@ function setQueuedMessageSending(sessionId, messageId, sending, { renderAfter = 
   if (renderAfter) {
     render();
   }
+  return true;
+}
+
+function restoreStaleQueuedMessagesForSession(sessionId) {
+  if (!sessionId || state.pendingTurn || state.queuedMessageSending) {
+    return false;
+  }
+  const messages = queuedMessagesForSession(sessionId);
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    if (message?.sending !== true) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      sending: false,
+    };
+  });
+  if (!changed) {
+    return false;
+  }
+  state.queuedMessages.set(sessionId, nextMessages);
+  persistQueuedMessages();
   return true;
 }
 
@@ -1035,6 +1065,37 @@ function isDesktopLayout() {
 
 function isDesktopWorkspaceView() {
   return isDesktopLayout() && ['sessions', 'chat', 'new'].includes(state.view);
+}
+
+function handleWindowResize() {
+  const previousWidth = lastViewportWidth;
+  const previousHeight = lastViewportHeight;
+  const nextWidth = typeof window?.innerWidth === 'number' ? window.innerWidth : previousWidth;
+  const nextHeight = typeof window?.innerHeight === 'number' ? window.innerHeight : previousHeight;
+  lastViewportWidth = nextWidth;
+  lastViewportHeight = nextHeight;
+  if (isMobileKeyboardResize(previousWidth, previousHeight, nextWidth, nextHeight)) {
+    return;
+  }
+  handleLayoutResize();
+  render();
+}
+
+function isMobileKeyboardResize(previousWidth, previousHeight, nextWidth, nextHeight) {
+  if (isDesktopLayout() || previousWidth <= 0 || previousHeight <= 0) {
+    return false;
+  }
+  if (previousWidth !== nextWidth || previousHeight === nextHeight) {
+    return false;
+  }
+  return isTextEntryElement(document.activeElement);
+}
+
+function isTextEntryElement(element) {
+  const tagName = String(element?.tagName || '').toLowerCase();
+  return tagName === 'textarea'
+    || tagName === 'select'
+    || (tagName === 'input' && !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(String(element?.type || '').toLowerCase()));
 }
 
 function handleLayoutResize() {
@@ -2062,10 +2123,13 @@ function renderComposerLeadingControls() {
     expandButton = `<button class="ghost icon-button" type="button" id="composer-expand-button" aria-label="${state.composerExpanded ? 'Collapse message editor' : 'Expand message editor'}" aria-expanded="${String(state.composerExpanded)}"${state.composerCanExpand || state.composerExpanded ? '' : ' hidden'}>${state.composerExpanded ? 'v' : '^'}</button>`;
   }
   const attachDisabled = state.pendingTurn || hasUploadingComposerAttachments() ? ' disabled' : '';
+  const attachButton = state.composerExpanded
+    ? ''
+    : `<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled}>+</button>`;
   return `
     <div class="composer-leading-controls">
       ${expandButton}
-      <button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled}>+</button>
+      ${attachButton}
     </div>
   `;
 }
@@ -3488,6 +3552,29 @@ function syncComposerPresentation() {
     composerExpandButton.setAttribute('aria-label', state.composerExpanded ? 'Collapse message editor' : 'Expand message editor');
     composerExpandButton.textContent = state.composerExpanded ? 'v' : '^';
   }
+  syncComposerAttachButton();
+}
+
+function syncComposerAttachButton() {
+  const attachButton = document.querySelector('#attach-button');
+  if (state.composerExpanded) {
+    attachButton?.remove?.();
+    return;
+  }
+  const leadingControls = document.querySelector('.composer-leading-controls');
+  if (!leadingControls) {
+    return;
+  }
+  const attachDisabled = state.pendingTurn || hasUploadingComposerAttachments();
+  if (attachButton) {
+    attachButton.disabled = attachDisabled;
+    return;
+  }
+  const button = htmlToElement(`<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled ? ' disabled' : ''}>+</button>`);
+  button.addEventListener('click', () => {
+    document.querySelector('#attachment-input')?.click?.();
+  });
+  leadingControls.appendChild(button);
 }
 
 function refreshChatDynamicUi() {
@@ -3731,11 +3818,15 @@ function restoreSessionListScroll() {
 
 function captureTimelineViewport() {
   const timeline = document.querySelector('#timeline');
+  const promptRestoreSnapshot = capturePromptRestoreState();
   if (!timeline) {
     return {
       bottomOffset: 0,
       shouldFollowLatest: state.timelineShouldFollowLatest,
-      hadPromptFocus: false,
+      hadPromptFocus: promptRestoreSnapshot?.hadFocus === true,
+      promptSelectionStart: promptRestoreSnapshot?.selectionStart ?? null,
+      promptSelectionEnd: promptRestoreSnapshot?.selectionEnd ?? null,
+      promptSelectionDirection: promptRestoreSnapshot?.selectionDirection || 'none',
     };
   }
   const bottomOffset = Math.max(0, timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop);
@@ -3744,7 +3835,10 @@ function captureTimelineViewport() {
   return {
     bottomOffset,
     shouldFollowLatest,
-    hadPromptFocus: document.activeElement === document.querySelector('#prompt-input'),
+    hadPromptFocus: promptRestoreSnapshot?.hadFocus === true,
+    promptSelectionStart: promptRestoreSnapshot?.selectionStart ?? null,
+    promptSelectionEnd: promptRestoreSnapshot?.selectionEnd ?? null,
+    promptSelectionDirection: promptRestoreSnapshot?.selectionDirection || 'none',
   };
 }
 
@@ -3764,9 +3858,12 @@ function restoreTimelineViewport(snapshot) {
     }
     state.timelineShouldFollowLatest = snapshot.shouldFollowLatest !== false;
     rememberCurrentTimelineViewport();
-    if (snapshot.hadPromptFocus) {
-      document.querySelector('#prompt-input')?.focus?.();
-    }
+    restorePromptRestoreState({
+      hadFocus: snapshot.hadPromptFocus === true,
+      selectionStart: snapshot.promptSelectionStart,
+      selectionEnd: snapshot.promptSelectionEnd,
+      selectionDirection: snapshot.promptSelectionDirection,
+    });
   });
 }
 
@@ -3779,10 +3876,14 @@ function renderChatWithTimelineRestored(callback) {
 }
 
 function latestTimelineViewportSnapshot() {
+  const promptRestoreSnapshot = capturePromptRestoreState();
   return {
     bottomOffset: 0,
     shouldFollowLatest: true,
-    hadPromptFocus: document.activeElement === document.querySelector('#prompt-input'),
+    hadPromptFocus: promptRestoreSnapshot?.hadFocus === true,
+    promptSelectionStart: promptRestoreSnapshot?.selectionStart ?? null,
+    promptSelectionEnd: promptRestoreSnapshot?.selectionEnd ?? null,
+    promptSelectionDirection: promptRestoreSnapshot?.selectionDirection || 'none',
   };
 }
 
@@ -3796,7 +3897,7 @@ function renderChatAtLatest(callback) {
 
 function renderChatAtLatestIfFollowing(callback) {
   const snapshot = captureTimelineViewport();
-  const shouldFollowLatest = isDesktopWorkspaceView() || snapshot.shouldFollowLatest;
+  const shouldFollowLatest = snapshot.shouldFollowLatest;
   callback();
   render();
   restoreTimelineViewport({
@@ -3932,6 +4033,62 @@ function autoGrowPromptInput(textarea) {
   const maxHeight = isDesktopLayout() ? DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT : PROMPT_TEXTAREA_MAX_HEIGHT;
   const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
   textarea.style.height = `${Math.max(38, nextHeight)}px`;
+}
+
+function capturePromptRestoreState() {
+  const promptInput = document.querySelector('#prompt-input');
+  if (!promptInput) {
+    return null;
+  }
+  const hadFocus = document.activeElement === promptInput;
+  const selectionStart = Number.isFinite(promptInput.selectionStart) ? Number(promptInput.selectionStart) : null;
+  const selectionEnd = Number.isFinite(promptInput.selectionEnd) ? Number(promptInput.selectionEnd) : null;
+  return {
+    hadFocus,
+    selectionStart,
+    selectionEnd,
+    selectionDirection: typeof promptInput.selectionDirection === 'string' ? promptInput.selectionDirection : 'none',
+  };
+}
+
+function schedulePromptRestore(snapshot) {
+  promptRestoreRun += 1;
+  const run = promptRestoreRun;
+  if (!snapshot?.hadFocus) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    if (run !== promptRestoreRun) {
+      return;
+    }
+    restorePromptRestoreState(snapshot);
+  });
+}
+
+function restorePromptRestoreState(snapshot) {
+  if (!snapshot?.hadFocus) {
+    return;
+  }
+  const promptInput = document.querySelector('#prompt-input');
+  if (!promptInput) {
+    return;
+  }
+  promptInput.focus?.();
+  if (typeof promptInput.setSelectionRange !== 'function') {
+    return;
+  }
+  const valueLength = String(promptInput.value || '').length;
+  const selectionStart = clampPromptSelectionIndex(snapshot.selectionStart, valueLength);
+  const selectionEnd = clampPromptSelectionIndex(snapshot.selectionEnd, valueLength);
+  promptInput.setSelectionRange(selectionStart, selectionEnd, snapshot.selectionDirection || 'none');
+}
+
+function clampPromptSelectionIndex(value, max) {
+  const normalizedMax = Math.max(0, Number(max) || 0);
+  if (!Number.isFinite(value)) {
+    return normalizedMax;
+  }
+  return Math.max(0, Math.min(normalizedMax, Number(value)));
 }
 
 function attachTimelineScrollTracking({ updateInitial = true } = {}) {
@@ -4301,6 +4458,7 @@ async function selectSession(sessionId) {
   savePromptDraftForCurrentSession();
   saveCurrentTimeline();
   stopStream();
+  resetTurnState();
   resetSessionHistoryWindow();
   state.sessionId = nextSession.id;
   state.currentSession = nextSession;
@@ -4862,6 +5020,7 @@ async function streamTurnEvents(turnId, options = {}) {
   stopStream();
   const controller = new AbortController();
   state.streamAbortController = controller;
+  const activeStreamController = controller;
   state.lastTurnEventAt = Date.now();
   if (options.forceReconnect) {
     state.streamWasBackgrounded = false;
@@ -4898,30 +5057,41 @@ async function streamTurnEvents(turnId, options = {}) {
       if (done) {
         break;
       }
+      if (controller.signal.aborted || state.streamAbortController !== activeStreamController) {
+        return;
+      }
       buffer += decoder.decode(value, { stream: true });
       let boundary = buffer.indexOf('\n\n');
       while (boundary >= 0) {
         const rawFrame = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
+        if (controller.signal.aborted || state.streamAbortController !== activeStreamController) {
+          return;
+        }
         processSseFrame(rawFrame);
         boundary = buffer.indexOf('\n\n');
       }
     }
 
-    if (buffer.trim()) {
+    if (buffer.trim() && !controller.signal.aborted && state.streamAbortController === activeStreamController) {
       processSseFrame(buffer);
     }
     shouldReconcileQueuedCompletion = !sawTerminalEvent
       && !controller.signal.aborted
       && pendingQueuedMessagesForCurrentSession().length > 0;
+    if (!sawTerminalEvent
+      && !controller.signal.aborted
+      && state.pendingTurn
+      && state.turnId === turnId
+      && !isLocallyStartedTurnInSyncGrace(turnId)) {
+      markStreamPaused();
+    }
   } catch (error) {
     if (controller.signal.aborted) {
       return;
     }
     if (isRecoverableBackgroundStreamError(turnId, error)) {
-      state.streamWasBackgrounded = true;
-      state.status = 'Stream paused';
-      state.statusTone = 'warn';
+      markStreamPaused();
       return;
     }
     state.pendingTurn = false;
@@ -4941,6 +5111,10 @@ async function streamTurnEvents(turnId, options = {}) {
   }
 
   function processSseFrame(frame) {
+    if (controller.signal.aborted || state.streamAbortController !== activeStreamController) {
+      resetFrame();
+      return;
+    }
     if (!frame.trim()) {
       return;
     }
@@ -5007,6 +5181,12 @@ function isRecoverableBackgroundStreamError(turnId, error) {
   return state.pendingTurn
     && state.turnId === turnId
     && (state.streamWasBackgrounded || document.visibilityState === 'hidden' || isNetworkStreamError(error));
+}
+
+function markStreamPaused() {
+  state.streamWasBackgrounded = true;
+  state.status = 'Stream paused';
+  state.statusTone = 'warn';
 }
 
 async function onStopTurn() {
@@ -5154,6 +5334,7 @@ function applyTurnEvent(event, assistantEntry) {
       state.queuedInterruptEligibleTurnId = null;
       {
         const completedSessionId = state.sessionId;
+        restoreStaleQueuedMessagesForSession(completedSessionId);
         const hasQueuedMessage = pendingQueuedMessagesForSession(completedSessionId).length > 0;
         if (hasQueuedMessage) {
           state.status = 'Starting turn';
@@ -5185,6 +5366,9 @@ function applyTurnEvent(event, assistantEntry) {
       stopStream();
       surfaceTimelineError(event.turnId, event.details || event.message || 'Turn failed');
       break;
+  }
+  if (!state.pendingTurn && state.sessionId) {
+    restoreStaleQueuedMessagesForSession(state.sessionId);
   }
   saveCurrentTimeline();
   if (!state.pendingTurn && state.sessionId && pendingQueuedMessagesForCurrentSession().length && event.type !== 'turn.completed') {
@@ -5412,7 +5596,7 @@ async function refreshCurrentSessionMetadata({ hydrateTimeline = false, viewport
   }
   const sessionId = state.sessionId;
   const wasPendingTurn = state.pendingTurn;
-  const hadQueuedMessages = pendingQueuedMessagesForSession(sessionId).length > 0;
+  const hadQueuedMessages = queuedMessagesForSession(sessionId).length > 0;
   const snapshot = viewportSnapshot || (isDesktopWorkspaceView() ? latestTimelineViewportSnapshot() : captureTimelineViewport());
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
@@ -5425,6 +5609,9 @@ async function refreshCurrentSessionMetadata({ hydrateTimeline = false, viewport
         if (hydrateTimeline && session) {
           hydrateCurrentTimelineFromSession(session);
           syncRuntimeStatusFromSession(session);
+        }
+        if (!state.pendingTurn) {
+          restoreStaleQueuedMessagesForSession(sessionId);
         }
       }
       if (state.sessionId === sessionId) {
@@ -6309,7 +6496,7 @@ function syncRuntimeStatusFromSession(session, { source = 'detail' } = {}) {
   const turns = sessionTurns(session);
   const activeTurn = findActiveTurn(session);
   if (!activeTurn?.id) {
-    if (shouldPreserveLocallyStartedTurn(session, { source, turns })) {
+    if (shouldPreserveLocallyStartedTurn(session, { source, turns }) || shouldPreserveHealthyActiveStream(session, { source })) {
       return setRuntimeStatus('Turn running', 'warn', {
         activeTurnId: state.turnId,
         terminalTurnId: null,
@@ -6370,6 +6557,14 @@ function clearLocallyStartedTurn() {
   state.locallyStartedTurnAt = 0;
 }
 
+function isLocallyStartedTurnInSyncGrace(turnId) {
+  const localTurnId = String(state.locallyStartedTurnId || '').trim();
+  if (!localTurnId || localTurnId !== String(turnId || '').trim() || !state.locallyStartedTurnAt) {
+    return false;
+  }
+  return Date.now() - state.locallyStartedTurnAt <= LOCAL_TURN_SYNC_GRACE_MS;
+}
+
 function shouldPreserveLocallyStartedTurn(session, { source = 'detail', turns = sessionTurns(session) } = {}) {
   if (source !== 'detail') {
     return false;
@@ -6381,11 +6576,27 @@ function shouldPreserveLocallyStartedTurn(session, { source = 'detail', turns = 
   if (String(session?.activeTurnId || '').trim()) {
     return false;
   }
-  if (!state.locallyStartedTurnAt || Date.now() - state.locallyStartedTurnAt > LOCAL_TURN_SYNC_GRACE_MS) {
+  if (!isLocallyStartedTurnInSyncGrace(localTurnId)) {
     return false;
   }
   const matchingTurn = (Array.isArray(turns) ? turns : []).find((turn) => turn?.id === localTurnId) || null;
   if (matchingTurn && isTerminalTurnStatus(matchingTurn.status)) {
+    return false;
+  }
+  return true;
+}
+
+function shouldPreserveHealthyActiveStream(session, { source = 'detail' } = {}) {
+  if (source !== 'detail') {
+    return false;
+  }
+  if (!state.pendingTurn || !state.turnId || !isTurnStreamHealthy()) {
+    return false;
+  }
+  if (String(session?.id || '') !== String(state.sessionId || '')) {
+    return false;
+  }
+  if (String(session?.activeTurnId || '').trim()) {
     return false;
   }
   return true;
@@ -8953,6 +9164,46 @@ async function recoverActiveTurnAfterForeground() {
       || latestTimelineViewportSnapshot();
   await refreshCurrentSessionMetadata({ hydrateTimeline: true, viewportSnapshot });
   chatTimelineForegroundSnapshot = null;
+  if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) {
+    streamTurnEvents(state.turnId, { forceReconnect: true });
+  }
+}
+
+function setupStreamRecoveryWatchdog() {
+  if (streamRecoveryTimer || typeof setInterval !== 'function') {
+    return;
+  }
+  streamRecoveryTimer = setInterval(() => {
+    void recoverActiveTurnIfStreamUnhealthy();
+  }, STREAM_RECOVERY_CHECK_MS);
+}
+
+async function recoverActiveTurnIfStreamUnhealthy({ viewportSnapshot = null } = {}) {
+  if (streamRecoveryPromise) {
+    return streamRecoveryPromise;
+  }
+  streamRecoveryPromise = recoverActiveTurnIfStreamUnhealthyOnce({ viewportSnapshot })
+    .finally(() => {
+      streamRecoveryPromise = null;
+    });
+  return streamRecoveryPromise;
+}
+
+async function recoverActiveTurnIfStreamUnhealthyOnce({ viewportSnapshot = null } = {}) {
+  if (!state.authSession || !state.sessionId || isShareContext()) {
+    return;
+  }
+  if (document.visibilityState === 'hidden') {
+    return;
+  }
+  if (!state.pendingTurn || !state.turnId || isTurnStreamHealthy()) {
+    return;
+  }
+  const snapshot = viewportSnapshot || (isDesktopWorkspaceView()
+    ? latestTimelineViewportSnapshot()
+    : rememberedTimelineViewport()
+      || latestTimelineViewportSnapshot());
+  await refreshCurrentSessionMetadata({ hydrateTimeline: true, viewportSnapshot: snapshot });
   if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) {
     streamTurnEvents(state.turnId, { forceReconnect: true });
   }

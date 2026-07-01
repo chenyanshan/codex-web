@@ -2441,7 +2441,8 @@ test('composer shows external expand above Attach and keeps session menu in the 
   assert.doesNotMatch(expandedHtml, /composer-error/u);
   assert.match(expandedHtml, /class="composer-wrap is-expanded"/u);
   assert.match(expandedHtml, /class="composer is-expanded"/u);
-  assert.match(expandedHtml, /<div class="composer-leading-controls">[\s\S]*id="composer-expand-button"[\s\S]*v<\/button>[\s\S]*id="attach-button"[^>]*>\+<\/button>/u);
+  assert.match(expandedHtml, /<div class="composer-leading-controls">[\s\S]*id="composer-expand-button"[\s\S]*v<\/button>[\s\S]*<\/div>/u);
+  assert.doesNotMatch(expandedHtml, /id="attach-button"/u);
   assert.match(expandedHtml, /<div class="message-editor-shell is-expanded"[\s\S]*<textarea id="prompt-input"[\s\S]*<button class="primary compact-send" type="submit" id="send-button"[^>]*aria-label="Send"[^>]*>Send<\/button>[\s\S]*<\/div>/u);
   assert.doesNotMatch(expandedHtml, /id="composer-refresh-button"/u);
   assert.match(expandedHtml, /<textarea id="prompt-input"[\s\S]*id="send-button"/u);
@@ -2809,6 +2810,86 @@ test('session refresh keeps a just-started turn running when backend detail temp
 
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_2');
+  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work"><span>Running</span></div>');
+});
+
+test('session refresh keeps a healthy active stream running when backend detail temporarily regresses to a completed view', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_1',
+              cwd: '/repo',
+              activeTurnId: null,
+              settings: { metadata: {} },
+              thread: {
+                turns: [
+                  {
+                    id: 'turn_previous_completed',
+                    status: 'completed',
+                    items: [
+                      { type: 'message', role: 'user', text: 'Previous request' },
+                      { type: 'message', role: 'assistant', text: 'Previous answer' },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = {
+    id: 'session_1',
+    cwd: '/repo',
+    activeTurnId: 'turn_live',
+    settings: { metadata: {} },
+    thread: {
+      turns: [
+        {
+          id: 'turn_live',
+          status: 'in_progress',
+          items: [
+            { type: 'message', role: 'user', text: 'Build the PPT deck' },
+          ],
+        },
+      ],
+    },
+  };
+  api.state.turnId = 'turn_live';
+  api.state.pendingTurn = true;
+  api.state.status = 'Turn running';
+  api.state.statusTone = 'warn';
+  api.state.streamWasBackgrounded = false;
+  api.state.streamAbortController = new AbortController();
+  api.state.lastTurnEventAt = Date.now();
+  api.state.timeline = [
+    {
+      id: 'assistant_turn_live',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'commentary',
+      text: 'Writing the next slide...',
+    },
+  ];
+
+  await api.refreshCurrentSessionMetadata({ hydrateTimeline: true });
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_live');
   assert.equal(api.state.status, 'Turn running');
   assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work"><span>Running</span></div>');
 });
@@ -3582,6 +3663,26 @@ test('composer expansion threshold ignores textarea padding when counting lines'
   assert.equal(api.state.composerCanExpand, true);
 });
 
+test('composer expansion toggle removes the live attach button without a full rerender', async () => {
+  const { api, context } = await loadAppHarness();
+
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.composerExpanded = false;
+  api.render();
+  api.state.composerCanExpand = true;
+
+  const renderCountBeforeExpand = context.__appRenderCount;
+  assert.ok(context.document.querySelector('#attach-button'));
+
+  api.toggleComposerExpanded();
+
+  assert.equal(api.state.composerExpanded, true);
+  assert.equal(context.__appRenderCount, renderCountBeforeExpand);
+  assert.equal(context.document.querySelector('#attach-button'), null);
+});
+
 test('composer expansion state changes do not re-render the whole chat while typing', async () => {
   const app = await readFile(appUrl, 'utf8');
   const updateComposerExpansionState = app.match(/function updateComposerExpansionState\(textarea\)\s*\{[\s\S]*?\n\}/u)?.[0] || '';
@@ -3702,6 +3803,95 @@ test('opening a session renders from the list summary before the detail request 
   await opened;
 
   assert.match(api.state.timeline.map((item) => item.text || '').join('\n'), /Detail answer/u);
+});
+
+test('switching sessions ignores stale SSE chunks from the previous session turn', async () => {
+  let releaseStaleRead;
+  let resolveSessionTwoDetail;
+  let staleReadCount = 0;
+  const sessionTwoDetailReady = new Promise((resolve) => {
+    resolveSessionTwoDetail = resolve;
+  });
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/turns/turn_1/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => {
+                staleReadCount += 1;
+                if (staleReadCount === 1) {
+                  await new Promise((resolve) => {
+                    releaseStaleRead = resolve;
+                  });
+                  return {
+                    done: false,
+                    value: new TextEncoder().encode(
+                      'data: {"type":"assistant.delta","turnId":"turn_1","text":"Leaked from session 1","phase":"commentary","sequence":1}\n\n',
+                    ),
+                  };
+                }
+                return { done: true };
+              },
+            }),
+          },
+        };
+      }
+      if (path === '/api/sessions/session_2') {
+        await sessionTwoDetailReady;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_2',
+              cwd: '/repo/two',
+              settings: { metadata: {} },
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessions = [
+    { id: 'session_1', cwd: '/repo/one', firstUserInput: 'Session one summary', settings: { metadata: {} } },
+    { id: 'session_2', cwd: '/repo/two', firstUserInput: 'Session two summary', settings: { metadata: {} } },
+  ];
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = api.state.sessions[0];
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_1';
+  api.state.timeline = [
+    { id: 'user_turn_1', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Prompt from session 1' },
+  ];
+
+  const staleStreamPromise = api.streamTurnEvents('turn_1');
+  await flushMicrotasks();
+  assert.equal(typeof releaseStaleRead, 'function');
+
+  const switchPromise = api.selectSession('session_2');
+  await Promise.resolve();
+
+  assert.equal(api.state.sessionId, 'session_2');
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.turnId, null);
+  assert.match(api.state.timeline.map((item) => item.text || '').join('\n'), /Session two summary/u);
+
+  releaseStaleRead();
+  await staleStreamPromise;
+
+  assert.doesNotMatch(api.state.timeline.map((item) => item.text || '').join('\n'), /Leaked from session 1/u);
+
+  resolveSessionTwoDetail();
+  await switchPromise;
 });
 
 test('chat page uses app-style back header and left-edge swipe navigation', async () => {
@@ -4096,6 +4286,86 @@ test('chat metadata refresh keeps the focused composer input', async () => {
 
   const nextPromptInput = context.document.querySelector('#prompt-input');
   assert.equal(context.document.activeElement, nextPromptInput);
+});
+
+test('chat metadata refresh preserves composer selection', async () => {
+  const { api, context } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_1');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: 'session_1',
+            cwd: '/repo',
+            settings: { metadata: {} },
+          },
+        }),
+      };
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.sessions = [api.state.currentSession];
+  api.state.prompt = 'draft in progress';
+  api.render();
+
+  const promptInput = context.document.querySelector('#prompt-input');
+  promptInput.focus();
+  promptInput.setSelectionRange(17, 17);
+
+  await api.refreshCurrentSessionMetadata();
+
+  const nextPromptInput = context.document.querySelector('#prompt-input');
+  assert.equal(context.document.activeElement, nextPromptInput);
+  assert.equal(nextPromptInput.value, 'draft in progress');
+  assert.equal(nextPromptInput.selectionStart, 17);
+  assert.equal(nextPromptInput.selectionEnd, 17);
+});
+
+test('chat refresh preserves the focused composer selection through status rerenders', async () => {
+  const { api, context } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_1');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: 'session_1',
+            cwd: '/repo',
+            settings: { metadata: {} },
+            thread: { turns: [] },
+          },
+        }),
+      };
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.prompt = 'keep my caret';
+  api.render();
+
+  const promptInput = context.document.querySelector('#prompt-input');
+  promptInput.focus();
+  promptInput.setSelectionRange(12, 12);
+
+  await api.refreshCurrentView();
+
+  const nextPromptInput = context.document.querySelector('#prompt-input');
+  assert.equal(context.document.activeElement, nextPromptInput);
+  assert.equal(nextPromptInput.value, 'keep my caret');
+  assert.equal(nextPromptInput.selectionStart, 12);
+  assert.equal(nextPromptInput.selectionEnd, 12);
 });
 
 test('sending a message keeps a following chat timeline at the latest content', async () => {
@@ -6061,6 +6331,26 @@ test('desktop resize preserves active session while mobile resize maps back to c
   assert.equal(api.state.currentSession?.id, 'session_1');
 });
 
+test('mobile keyboard resize keeps the focused login input', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 390, viewportHeight: 844 });
+
+  api.state.authSession = null;
+  api.render();
+
+  const usernameInput = context.document.querySelector('#username');
+  usernameInput.focus();
+  usernameInput.value = 'admin';
+  const originalAppRenderCount = context.__appRenderCount;
+
+  context.window.innerHeight = 520;
+  context.__dispatchWindowEvent('resize');
+
+  assert.equal(context.__appRenderCount, originalAppRenderCount);
+  assert.equal(context.document.querySelector('#username'), usernameInput);
+  assert.equal(context.document.activeElement, usernameInput);
+  assert.equal(usernameInput.value, 'admin');
+});
+
 test('desktop renders a project rail, session pane, and chat pane', async () => {
   const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
@@ -6639,6 +6929,35 @@ test('desktop composer refresh button refreshes the current session without rely
 
   assert.deepEqual(fetchCalls, ['/api/sessions/session_1']);
   assert.equal(api.state.timeline.some((item) => item.text === 'Refreshed answer'), true);
+});
+
+test('desktop queued-message rerenders keep the current scroll position when not following latest', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_1';
+  api.state.prompt = 'queue this next';
+  api.state.timeline = [
+    { id: 'm1', kind: 'message', role: 'assistant', label: 'Assistant', text: 'Older message' },
+    { id: 'm2', kind: 'message', role: 'assistant', label: 'Assistant', text: 'Newest message' },
+  ];
+  api.render();
+
+  const timeline = context.document.querySelector('#timeline');
+  timeline.scrollHeight = 1400;
+  timeline.clientHeight = 400;
+  timeline.scrollTop = 640;
+  api.updateTimelineFollowState();
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  const restoredTimeline = context.document.querySelector('#timeline');
+  assert.equal(api.state.timelineShouldFollowLatest, false);
+  assert.ok(restoredTimeline.scrollTop < restoredTimeline.scrollHeight);
 });
 
 test('desktop timeline wheel at the top expands older session history', async () => {
@@ -8620,6 +8939,110 @@ test('PWA stream network failures keep the active turn recoverable when visibili
   assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn"><span>Paused</span></div>');
 });
 
+test('PWA stream ending without a terminal event keeps the active turn recoverable', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/turns/turn_1/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => ({ done: true }),
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.turnId = 'turn_1';
+  api.state.pendingTurn = true;
+  api.state.streamWasBackgrounded = false;
+  api.state.status = 'Turn running';
+  api.state.statusTone = 'warn';
+
+  await api.streamTurnEvents('turn_1');
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_1');
+  assert.equal(api.state.streamWasBackgrounded, true);
+  assert.equal(api.state.status, 'Stream paused');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn"><span>Paused</span></div>');
+});
+
+test('PWA stream recovery reconnects a paused active turn while the page stays visible', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_1',
+              cwd: '/repo',
+              activeTurnId: 'turn_1',
+              settings: { metadata: {} },
+              thread: {
+                turns: [
+                  {
+                    id: 'turn_1',
+                    status: 'in_progress',
+                    items: [
+                      { type: 'message', role: 'user', text: 'Keep working' },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        };
+      }
+      if (path === '/api/turns/turn_1/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => new Promise(() => {}),
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.turnId = 'turn_1';
+  api.state.pendingTurn = true;
+  api.state.streamWasBackgrounded = true;
+  api.state.status = 'Stream paused';
+  api.state.statusTone = 'warn';
+
+  await api.recoverActiveTurnIfStreamUnhealthy();
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls, ['/api/sessions/session_1', '/api/turns/turn_1/events']);
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_1');
+  assert.equal(api.state.streamWasBackgrounded, false);
+  assert.equal(api.state.status, 'Turn running');
+  assert.ok(api.state.streamAbortController);
+});
+
 test('PWA history refresh completes a paused active turn from session history', async () => {
   const { api } = await loadAppHarness({
     fetch: async (path) => {
@@ -9114,6 +9537,85 @@ test('PWA history refresh sends queued follow-up once the backgrounded turn is d
   assert.equal(JSON.parse(fetchCalls[1].options.body).text, 'Queued after background completion');
 });
 
+test('session refresh retries a queued follow-up that was left in sending state after an interrupted turn', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_1',
+              cwd: '/repo',
+              settings: { metadata: {} },
+              thread: {
+                turns: [
+                  {
+                    id: 'turn_interrupted',
+                    status: 'interrupted',
+                    items: [
+                      { type: 'message', role: 'user', text: 'Original question' },
+                      { type: 'message', role: 'assistant', text: 'Stopped before follow-up was sent' },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_1/turns') {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ turnId: 'turn_2' }),
+        };
+      }
+      if (path === '/api/turns/turn_2/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => new Promise(() => {}),
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_stale';
+  api.state.streamWasBackgrounded = true;
+  api.state.queuedMessages = new Map([
+    ['session_1', [{ id: 'queued_1', text: 'Resume this follow-up', createdAt: '2026-06-09T02:00:00.000Z', sending: true }]],
+  ]);
+
+  await api.refreshCurrentSessionMetadata({ hydrateTimeline: true });
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls.map((call) => call.path), [
+    '/api/sessions/session_1',
+    '/api/sessions/session_1/turns',
+    '/api/turns/turn_2/events',
+  ]);
+  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.state.turnId, 'turn_2');
+  assert.equal(api.queuedMessagesForCurrentSession().length, 0);
+  assert.equal(JSON.parse(fetchCalls[1].options.body).text, 'Resume this follow-up');
+});
+
 test('session refresh restores running status when backend reports an active turn', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
@@ -9406,12 +9908,18 @@ async function loadAppHarness(overrides = {}) {
     elements.set(selector, element);
     return element;
   };
-	  const createTrackedElement = (selector, patch = {}) => ({
-	    innerHTML: '',
-	    style: {},
-	    className: '',
-	    __attributes: {},
-	    classList: {
+  const createTrackedElement = (selector, patch = {}) => {
+    const initialValue = typeof patch.value === 'string' ? patch.value : '';
+    return {
+      innerHTML: '',
+      style: {},
+      className: '',
+      value: initialValue,
+      selectionStart: Number.isFinite(patch.selectionStart) ? Number(patch.selectionStart) : 0,
+      selectionEnd: Number.isFinite(patch.selectionEnd) ? Number(patch.selectionEnd) : 0,
+      selectionDirection: typeof patch.selectionDirection === 'string' ? patch.selectionDirection : 'none',
+      __attributes: {},
+      classList: {
       add(...classNames) {
         if (this.element) {
           addClasses(this.element, classNames);
@@ -9435,46 +9943,56 @@ async function loadAppHarness(overrides = {}) {
         return String(this.element?.className || '').split(/\s+/u).includes(className);
       },
       element: null,
-    },
-    hidden: false,
-    scrollTop: 0,
-    scrollHeight: 0,
-    clientHeight: 0,
-	    __listeners: new Map(),
-	    addEventListener(type, listener) {
-	      this.__listeners.set(type, listener);
-	    },
-	    removeEventListener() {},
-	    getAttribute(name) {
-	      return this.__attributes?.[name] ?? null;
-	    },
-	    setAttribute(name, value) {
-	      this.__attributes[name] = String(value);
-	    },
-    querySelector: () => null,
-    getBoundingClientRect: () => ({ height: 0 }),
-    click() {
-      this.__listeners.get('click')?.({ target: this, stopPropagation() {} });
-    },
-    focus() {
-      activeElement = this;
-    },
-    ...patch,
-	  });
+      },
+      hidden: false,
+      scrollTop: 0,
+      scrollHeight: 0,
+      clientHeight: 0,
+      __listeners: new Map(),
+      addEventListener(type, listener) {
+        this.__listeners.set(type, listener);
+      },
+      removeEventListener() {},
+      getAttribute(name) {
+        return this.__attributes?.[name] ?? null;
+      },
+      setAttribute(name, value) {
+        this.__attributes[name] = String(value);
+      },
+      setSelectionRange(start, end, direction = 'none') {
+        this.selectionStart = Number(start);
+        this.selectionEnd = Number(end);
+        this.selectionDirection = direction;
+      },
+      querySelector: () => null,
+      getBoundingClientRect: () => ({ height: 0 }),
+      click() {
+        this.__listeners.get('click')?.({ target: this, stopPropagation() {} });
+      },
+      focus() {
+        activeElement = this;
+      },
+      ...patch,
+    };
+  };
 	  const createElementFromHtml = (selector, html, patch = {}) => {
 	    const attributes = {};
 	    for (const match of String(html || '').matchAll(/\s([A-Za-z0-9_-]+)="([^"]*)"/gu)) {
 	      attributes[match[1]] = match[2];
 	    }
+	    const tagName = html.match(/^<([A-Za-z0-9_-]+)/u)?.[1]?.toUpperCase() || '';
 	    const className = html.match(/\sclass="([^"]*)"/u)?.[1] || '';
 	    const id = html.match(/\sid="([^"]*)"/u)?.[1] || '';
-	    const element = createTrackedElement(selector, { className, id, __attributes: attributes, ...patch });
+	    const element = createTrackedElement(selector, { className, id, tagName, type: attributes.type || '', __attributes: attributes, ...patch });
 	    element.classList.element = element;
 	    return element;
 	  };
-	  const materializeAppHtml = (html) => {
+  const materializeAppHtml = (html) => {
     elements.delete('#timeline');
     elements.delete('#prompt-input');
+    elements.delete('#username');
+    elements.delete('#password');
+    elements.delete('#attach-button');
     elements.delete('.report-viewer');
 	    elements.delete('#mobile-sidebar-toggle-button');
 	    elements.delete('#mobile-drawer-backdrop');
@@ -9494,9 +10012,26 @@ async function loadAppHarness(overrides = {}) {
       }));
     }
     if (String(html || '').includes('id="prompt-input"')) {
+      const promptValue = String(html).match(/<textarea\b[^>]*id="prompt-input"[^>]*>([\s\S]*?)<\/textarea>/u)?.[1] || '';
       trackElement('#prompt-input', createTrackedElement('#prompt-input', {
-        value: '',
+        value: promptValue,
         scrollHeight: 38,
+      }));
+    }
+    if (String(html || '').includes('id="username"')) {
+      const usernameHtml = String(html).match(/<input\b[^>]*id="username"[^>]*>/u)?.[0] || '';
+      trackElement('#username', createElementFromHtml('#username', usernameHtml));
+    }
+    if (String(html || '').includes('id="password"')) {
+      const passwordHtml = String(html).match(/<input\b[^>]*id="password"[^>]*>/u)?.[0] || '';
+      trackElement('#password', createElementFromHtml('#password', passwordHtml));
+    }
+    if (String(html || '').includes('id="attach-button"')) {
+      const attachHtml = String(html).match(/<button\b[^>]*id="attach-button"[^>]*>/u)?.[0] || '';
+      trackElement('#attach-button', createElementFromHtml('#attach-button', attachHtml, {
+        remove() {
+          elements.delete('#attach-button');
+        },
       }));
     }
     if (String(html || '').includes('class="report-viewer"')) {
@@ -9524,7 +10059,8 @@ async function loadAppHarness(overrides = {}) {
 	      const mode = match[1];
 	      trackElement(`[data-sort-mode="${mode}"]`, createElementFromHtml(`[data-sort-mode="${mode}"]`, match[0]));
 	    }
-	  };
+  };
+  const windowListeners = new Map();
   const appElement = {
     _innerHTML: '',
     get innerHTML() {
@@ -9594,11 +10130,14 @@ async function loadAppHarness(overrides = {}) {
     },
     window: {
       innerWidth: overrides.viewportWidth ?? 390,
+      innerHeight: overrides.viewportHeight ?? 844,
       location: {
         pathname: overrides.pathname || '/',
         reload() {},
       },
-      addEventListener() {},
+      addEventListener(type, listener) {
+        windowListeners.set(type, listener);
+      },
       matchMedia: overrides.matchMedia || ((query: string) => ({
         matches: Boolean(overrides.desktopPointer) && query === '(hover: hover) and (pointer: fine)',
         media: query,
@@ -9607,6 +10146,9 @@ async function loadAppHarness(overrides = {}) {
       })),
       screen: overrides.screen || {},
       scrollTo() {},
+    },
+    __dispatchWindowEvent(type) {
+      windowListeners.get(type)?.({ type });
     },
     screen: overrides.screen || {},
     navigator: {
@@ -9617,6 +10159,8 @@ async function loadAppHarness(overrides = {}) {
     },
     setTimeout: overrides.setTimeout || setTimeout,
     clearTimeout: overrides.clearTimeout || clearTimeout,
+    setInterval: overrides.setInterval || (() => 1),
+    clearInterval: overrides.clearInterval || (() => {}),
     fetch: overrides.fetch || (async () => ({ ok: true, status: 204 })),
     TextDecoder,
     AbortController,
@@ -9662,6 +10206,7 @@ globalThis.__codexWebTest = {
   applyMessageFontSize: typeof applyMessageFontSize === 'function' ? applyMessageFontSize : null,
   setMessageFontSize: typeof setMessageFontSize === 'function' ? setMessageFontSize : null,
   updateComposerExpansionState: typeof updateComposerExpansionState === 'function' ? updateComposerExpansionState : null,
+  toggleComposerExpanded: typeof toggleComposerExpanded === 'function' ? toggleComposerExpanded : null,
   hydrateTimelineFromSession,
   restoreTimelineForSession: typeof restoreTimelineForSession === 'function' ? restoreTimelineForSession : null,
   showMoreSessionHistory: typeof showMoreSessionHistory === 'function' ? showMoreSessionHistory : null,
@@ -9701,6 +10246,7 @@ globalThis.__codexWebTest = {
   scrollTimelineToBottomIfFollowingLatest: typeof scrollTimelineToBottomIfFollowingLatest === 'function' ? scrollTimelineToBottomIfFollowingLatest : null,
   handleTimelineWheel: typeof handleTimelineWheel === 'function' ? handleTimelineWheel : null,
   handleComposerRefresh: typeof handleComposerRefresh === 'function' ? handleComposerRefresh : null,
+  recoverActiveTurnIfStreamUnhealthy: typeof recoverActiveTurnIfStreamUnhealthy === 'function' ? recoverActiveTurnIfStreamUnhealthy : null,
   filteredSessions: typeof filteredSessions === 'function' ? filteredSessions : null,
   sortedSessions: typeof sortedSessions === 'function' ? sortedSessions : null,
   workspaceProjects: typeof workspaceProjects === 'function' ? workspaceProjects : null,
