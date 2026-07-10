@@ -244,6 +244,56 @@ test('saved Codex Web default thread settings override Codex model defaults', as
   assert.equal(storage.get('codexWebDefaultThreadSettings'), JSON.stringify(savedDefaults));
 });
 
+test('saved gpt-5.6-sol ultra defaults seed the new session request', async () => {
+  let createBody = null;
+  const savedDefaults = {
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'ultra',
+    collaborationMode: 'default',
+    accessPreset: 'full-access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    personality: 'pragmatic',
+  };
+  const { api } = await loadAppHarness({
+    storage: {
+      codexWebDefaultThreadSettings: JSON.stringify(savedDefaults),
+    },
+    fetch: async (path, options = {}) => {
+      if (path === '/api/sessions' && options.method === 'POST') {
+        createBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_ultra',
+              cwd: '/repo',
+              settings: createBody.settings,
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.cwd = '/repo';
+  api.state.models = [{
+    id: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6-Sol',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    defaultReasoningEffort: 'low',
+  }];
+  api.applyDefaultSettings();
+
+  await api.ensureSession();
+
+  assert.equal(createBody.settings.model, 'gpt-5.6-sol');
+  assert.equal(createBody.settings.reasoningEffort, 'ultra');
+});
+
 test('opening a session applies its persisted settings to controls', async () => {
   const { api } = await loadAppHarness();
 
@@ -2011,6 +2061,39 @@ test('Chinese language setting localizes settings, chat, and admin management UI
   api.state.admin.page = 'users';
   const adminUsersHtml = api.renderAdminConsole().innerHTML;
   assert.match(adminUsersHtml, /保存用户/u);
+});
+
+test('Chinese UI keeps model and reasoning option labels untranslated', async () => {
+  const { api } = await loadAppHarness();
+  api.applyLanguage('zh-CN');
+  api.state.models = [{
+    id: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6-Sol',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    defaultReasoningEffort: 'low',
+  }];
+  api.state.defaultThreadSettings.model = 'gpt-5.6-sol';
+  api.state.defaultThreadSettings.reasoningEffort = 'ultra';
+  api.state.model = 'gpt-5.6-sol';
+  api.state.reasoningEffort = 'xhigh';
+
+  const defaultHtml = api.renderAppSettings().innerHTML;
+  const defaultReasoning = defaultHtml.match(/<select id="default-reasoning-select"[\s\S]*?<\/select>/u)?.[0] || '';
+  const sessionHtml = api.renderSettingsDrawer();
+  const sessionReasoning = sessionHtml.match(/<select id="reasoning-select"[\s\S]*?<\/select>/u)?.[0] || '';
+
+  assert.match(defaultHtml, /<label for="default-model-select">模型<\/label>/u);
+  assert.match(defaultHtml, /<label for="default-reasoning-select">推理<\/label>/u);
+  assert.match(defaultReasoning, />Medium<\/option>/u);
+  assert.match(defaultReasoning, />xhigh<\/option>/u);
+  assert.match(defaultReasoning, />Ultra<\/option>/u);
+  assert.doesNotMatch(defaultReasoning, />中<\/option>|>极高<\/option>/u);
+  assert.match(sessionHtml, /<select id="model-select" name="model" data-i18n-skip>/u);
+  assert.match(sessionHtml, /<select id="reasoning-select" name="reasoningEffort" data-i18n-skip>/u);
+  assert.match(sessionReasoning, />Medium<\/option>/u);
+  assert.match(sessionReasoning, />xhigh<\/option>/u);
+  assert.match(sessionReasoning, />Ultra<\/option>/u);
+  assert.doesNotMatch(sessionReasoning, />中<\/option>|>极高<\/option>/u);
 });
 
 test('Chinese language localization leaves conversation and report markdown content untouched', async () => {

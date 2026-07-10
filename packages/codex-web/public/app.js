@@ -2446,11 +2446,11 @@ function renderSettingsDrawer() {
       <div class="controls">
         <div class="control-group">
           <label for="model-select">Model</label>
-          <select id="model-select" name="model">${renderModelOptions()}</select>
+          <select id="model-select" name="model" data-i18n-skip>${renderModelOptions()}</select>
         </div>
         <div class="control-group">
           <label for="reasoning-select">Reasoning</label>
-          <select id="reasoning-select" name="reasoningEffort">
+          <select id="reasoning-select" name="reasoningEffort" data-i18n-skip>
             ${renderReasoningOptions(state.reasoningEffort, state.model)}
           </select>
         </div>
@@ -2903,7 +2903,7 @@ function renderOptions(values, current) {
   return values.map((value) => {
     const selected = value === current ? ' selected' : '';
     const label = value === 'xhigh' ? 'xhigh' : startCase(value);
-    return `<option value="${escapeAttribute(value)}"${selected} data-i18n-skip>${escapeHtml(t(label))}</option>`;
+    return `<option value="${escapeAttribute(value)}"${selected} data-i18n-skip>${escapeHtml(label)}</option>`;
   }).join('');
 }
 
