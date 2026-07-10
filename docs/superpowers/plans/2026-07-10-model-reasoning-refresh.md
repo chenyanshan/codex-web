@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Refresh model-dependent reasoning controls immediately, honor saved browser-local `gpt-5.6-sol + ultra` defaults, keep dynamic option labels untranslated, and document the complete macOS upgrade flow.
+**Goal:** Refresh model-dependent reasoning controls immediately, honor saved browser-local `gpt-5.6-sol + ultra` defaults, keep dynamic option labels untranslated, and document the upgrade flow for existing macOS LaunchAgent-managed installs.
 
-**Architecture:** Keep the existing dynamic `/api/models` contract and reasoning normalization functions. Fix the active-session model change at the UI event boundary by rendering after state normalization, remove translation from provider-owned option labels, and preserve the existing browser-local default settings data flow. Document that repository and Codex runtime upgrades are separate concerns.
+**Architecture:** Keep the existing dynamic `/api/models` contract and reasoning normalization functions. Fix the active-session model change at the UI event boundary by rendering after state normalization, remove translation from provider-owned option labels, and preserve the existing browser-local default settings data flow. Document that repository updates for an existing macOS LaunchAgent install and upgrades to its selected Codex runtime are separate concerns.
 
 **Tech Stack:** Browser JavaScript, Node.js test runner with `tsx`, TypeScript test harness, Markdown documentation.
 
@@ -98,23 +98,33 @@ test('changing an active session model refreshes reasoning options immediately',
   ];
   api.state.model = 'gpt-5.4';
   api.state.reasoningEffort = 'xhigh';
+  api.state.timelineShouldFollowLatest = false;
   api.render();
 
   const renderCount = context.__appRenderCount;
   const modelSelect = context.document.querySelector('#model-select');
+  const timeline = context.document.querySelector('#timeline');
   assert.ok(modelSelect);
+  assert.ok(timeline);
   assert.doesNotMatch(context.document.querySelector('#reasoning-select').innerHTML, /value="ultra"/u);
+  timeline.scrollTop = 240;
 
   modelSelect.value = 'gpt-5.6-sol';
   modelSelect.__listeners.get('change')?.({ target: modelSelect });
 
   const reasoningSelect = context.document.querySelector('#reasoning-select');
+  const nextTimeline = context.document.querySelector('#timeline');
+  assert.equal(nextTimeline.scrollTop, 240);
   assert.ok(context.__appRenderCount > renderCount);
   assert.match(reasoningSelect.innerHTML, /value="max"/u);
   assert.match(reasoningSelect.innerHTML, /value="ultra"/u);
   assert.match(reasoningSelect.innerHTML, /value="xhigh" selected/u);
   assert.equal(api.state.reasoningEffort, 'xhigh');
   assert.equal(fetchCalls[0]?.path, '/api/sessions/session_model/settings');
+  assert.equal(fetchCalls[0]?.options.method, 'PATCH');
+  const savedSettings = JSON.parse(fetchCalls[0]?.options.body);
+  assert.equal(savedSettings.model, 'gpt-5.6-sol');
+  assert.equal(savedSettings.reasoningEffort, 'xhigh');
 });
 ```
 
@@ -128,7 +138,7 @@ node --import tsx --test \
   packages/codex-web/test/public_ui.test.ts
 ```
 
-Expected: FAIL because the render count does not increase and the existing reasoning select does not contain `ultra`.
+Expected: FAIL because the render count does not increase and the existing reasoning select does not contain `ultra`. An implementation that adds a bare `render()` also fails the viewport safeguard because the replacement timeline resets instead of retaining `scrollTop === 240`.
 
 - [ ] **Step 4: Render immediately after normalizing the new model**
 
@@ -140,7 +150,7 @@ Change the active-session model listener in `packages/codex-web/public/app.js` t
     modelSelect.addEventListener('change', (event) => {
       state.model = event.target.value;
       state.reasoningEffort = reasoningEffortForModel(state.model, state.reasoningEffort);
-      render();
+      withTimelineScrollPreserved(() => render());
       void updateSessionSettings();
     });
   }
@@ -150,7 +160,7 @@ Change the active-session model listener in `packages/codex-web/public/app.js` t
 
 Run the command from Step 3.
 
-Expected: PASS with `xhigh` selected and `max` plus `ultra` present immediately.
+Expected: PASS with `xhigh` selected, `max` plus `ultra` present immediately, the replacement timeline preserving `scrollTop === 240`, and the PATCH body retaining `gpt-5.6-sol + xhigh`.
 
 - [ ] **Step 6: Commit the active-session fix**
 
@@ -329,7 +339,7 @@ git add packages/codex-web/public/app.js packages/codex-web/test/public_ui.test.
 git commit -m "fix: keep dynamic model settings untranslated"
 ```
 
-### Task 3: Document Cross-Machine Upgrade Requirements
+### Task 3: Document Existing macOS LaunchAgent Upgrade Requirements
 
 **Files:**
 - Modify: `packages/codex-web/test/install_docs.test.ts:30`
@@ -338,16 +348,51 @@ git commit -m "fix: keep dynamic model settings untranslated"
 
 - [ ] **Step 1: Write the failing documentation test**
 
-Extend `README files point AI installers to install.md and include PWA setup guidance` with:
+Add this helper after `readRepoFile()` so the test requires the exact level-two heading and slices the section through the next level-two heading or end of file:
 
 ```ts
-  assert.match(readme, /git pull --ff-only[\s\S]*npm install[\s\S]*restart-codex-web-launchd-user\.sh/u);
-  assert.match(readme, /CODEX_REAL_BIN[\s\S]*ultra/iu);
+function extractMarkdownSection(markdown: string, heading: string): string {
+  const headingLine = `## ${heading}`;
+  const lines = markdown.split('\n');
+  const headingStart = lines.indexOf(headingLine);
+  assert.notEqual(headingStart, -1, `missing Markdown section: ${headingLine}`);
+
+  const sectionLines = lines.slice(headingStart + 1);
+  const nextHeadingStart = sectionLines.findIndex((line) => line.startsWith('## '));
+  const sectionEnd = nextHeadingStart === -1 ? sectionLines.length : nextHeadingStart;
+  return sectionLines.slice(0, sectionEnd).join('\n');
+}
 ```
 
+In `README files point AI installers to install.md and include PWA setup guidance`, extract both exact upgrade sections after reading the README files:
+
 ```ts
-  assert.match(readmeZh, /git pull --ff-only[\s\S]*npm install[\s\S]*restart-codex-web-launchd-user\.sh/u);
-  assert.match(readmeZh, /CODEX_REAL_BIN[\s\S]*ultra/iu);
+  const updateSection = extractMarkdownSection(
+    readme,
+    'Updating An Existing macOS LaunchAgent Install',
+  );
+  const updateSectionZh = extractMarkdownSection(
+    readmeZh,
+    '更新已有的 macOS LaunchAgent 安装',
+  );
+```
+
+Add section-scoped assertions for the exact ordered command block, PWA reopen/refresh guidance, and the `CODEX_REAL_BIN` to `ultra` relationship:
+
+```ts
+  assert.match(
+    updateSection,
+    /```bash\ngit pull --ff-only\nnpm install\nscripts\/service\/restart-codex-web-launchd-user\.sh\n```/u,
+  );
+  assert.match(updateSection, /reopen or refresh the installed PWA/iu);
+  assert.match(updateSection, /CODEX_REAL_BIN[\s\S]*?ultra/iu);
+
+  assert.match(
+    updateSectionZh,
+    /```bash\ngit pull --ff-only\nnpm install\nscripts\/service\/restart-codex-web-launchd-user\.sh\n```/u,
+  );
+  assert.match(updateSectionZh, /重新打开或刷新已安装的 PWA/u);
+  assert.match(updateSectionZh, /CODEX_REAL_BIN[\s\S]*?ultra/iu);
 ```
 
 - [ ] **Step 2: Run the documentation test and verify RED**
@@ -360,17 +405,19 @@ node --import tsx --test \
   packages/codex-web/test/install_docs.test.ts
 ```
 
-Expected: FAIL because neither README contains the complete upgrade sequence or the Codex capability note.
+Expected: FAIL because the exact LaunchAgent upgrade sections or their scoped command, PWA refresh, and Codex capability guidance are missing.
 
 - [ ] **Step 3: Add the English upgrade section**
 
 Insert this section before `## Service Install` in `README.md`:
 
 ```markdown
-## Updating An Existing macOS Install
+## Updating An Existing macOS LaunchAgent Install
 
-Repository updates do not hot-reload the running Codex Web backend. From the
-repository root, update dependencies and restart the LaunchAgent:
+Repository updates do not hot-reload the running Codex Web backend. For an
+existing macOS install managed by the user LaunchAgent, run the following from
+the repository checkout to pull the update, install dependencies, and restart
+the service:
 
 \`\`\`bash
 git pull --ff-only
@@ -378,10 +425,12 @@ npm install
 scripts/service/restart-codex-web-launchd-user.sh
 \`\`\`
 
-Then reopen or refresh the installed PWA. Dynamic reasoning choices come from
-the Codex CLI selected by \`CODEX_REAL_BIN\`. The selected model must advertise
-\`ultra\`; pulling this repository does not upgrade the Codex CLI or add runtime
-capabilities that the local app-server does not expose.
+After the restart, reopen or refresh the installed PWA.
+
+The reasoning choices shown by Codex Web come dynamically from the Codex CLI
+selected by \`CODEX_REAL_BIN\`. The selected model must advertise \`ultra\` for
+that choice to appear. Pulling this repository does not upgrade the Codex CLI
+or add capabilities to the selected runtime.
 ```
 
 - [ ] **Step 4: Add the Chinese upgrade section**
@@ -389,10 +438,10 @@ capabilities that the local app-server does not expose.
 Insert this section before `## 服务安装` in `README.zh-CN.md`:
 
 ```markdown
-## 更新已有的 macOS 安装
+## 更新已有的 macOS LaunchAgent 安装
 
-拉取仓库代码不会热加载正在运行的 Codex Web 后端。在仓库根目录更新依赖并重启
-LaunchAgent：
+拉取仓库更新不会热重载正在运行的 Codex Web 后端。对于由用户级 LaunchAgent
+管理的现有 macOS 安装，请在仓库检出目录中拉取更新、安装依赖，然后重启服务：
 
 \`\`\`bash
 git pull --ff-only
@@ -400,16 +449,18 @@ npm install
 scripts/service/restart-codex-web-launchd-user.sh
 \`\`\`
 
-随后重新打开或刷新已安装的 PWA。动态思考强度来自 \`CODEX_REAL_BIN\` 指向的
-Codex CLI；所选模型必须在元数据中声明支持 \`ultra\`。仅更新本仓库不会升级
-Codex CLI，也不会增加本地 app-server 没有暴露的运行时能力。
+重启后，请重新打开或刷新已安装的 PWA。
+
+Codex Web 中显示的推理选项由 \`CODEX_REAL_BIN\` 所选择的 Codex CLI 动态提供。
+只有当所选模型声明支持 \`ultra\` 时，界面才会显示该选项。仅拉取本仓库不会升级
+Codex CLI，也不会为所选运行时增加新能力。
 ```
 
 - [ ] **Step 5: Run the documentation test and verify GREEN**
 
 Run the command from Step 2.
 
-Expected: PASS for both English and Chinese README assertions.
+Expected: PASS for both exact, section-scoped English and Chinese LaunchAgent upgrade assertions.
 
 - [ ] **Step 6: Commit the upgrade documentation**
 
