@@ -131,6 +131,119 @@ test('new sessions default to gpt-5.4 xhigh full access settings', async () => {
   );
 });
 
+test('first-run default thread settings initialize from Codex model defaults', async () => {
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path: string) => {
+      if (path === '/api/auth/me') {
+        return { ok: true, status: 200, json: async () => ({ session: { id: 'auth_1' } }) };
+      }
+      if (path === '/api/settings') {
+        return { ok: true, status: 200, json: async () => ({ settings: {}, permissions: {} }) };
+      }
+      if (path === '/api/models') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              {
+                id: 'gpt-5.5',
+                model: 'gpt-5.5',
+                displayName: 'GPT 5.5',
+                isDefault: true,
+                supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+                defaultReasoningEffort: 'xhigh',
+              },
+              {
+                id: 'gpt-5.5-mini',
+                model: 'gpt-5.5-mini',
+                displayName: 'GPT 5.5 Mini',
+                isDefault: false,
+                supportedReasoningEfforts: ['low', 'medium', 'high'],
+                defaultReasoningEffort: 'medium',
+              },
+            ],
+          }),
+        };
+      }
+      if (path === '/api/projects' || path === '/api/sessions' || path === '/api/reports') {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  await api.restoreAuth();
+
+  assert.equal(api.state.defaultThreadSettings.model, 'gpt-5.5');
+  assert.equal(api.state.defaultThreadSettings.reasoningEffort, 'xhigh');
+  assert.equal(api.state.model, 'gpt-5.5');
+  assert.deepEqual(JSON.parse(storage.get('codexWebDefaultThreadSettings') || '{}'), {
+    model: 'gpt-5.5',
+    reasoningEffort: 'xhigh',
+    collaborationMode: 'default',
+    accessPreset: 'full-access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    personality: 'pragmatic',
+  });
+});
+
+test('saved Codex Web default thread settings override Codex model defaults', async () => {
+  const savedDefaults = {
+    model: 'gpt-5.4-mini',
+    reasoningEffort: 'medium',
+    collaborationMode: 'plan',
+    accessPreset: 'default',
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
+    personality: 'pragmatic',
+  };
+  const { api, storage } = await loadAppHarness({
+    storage: {
+      codexWebDefaultThreadSettings: JSON.stringify(savedDefaults),
+    },
+    fetch: async (path: string) => {
+      if (path === '/api/auth/me') {
+        return { ok: true, status: 200, json: async () => ({ session: { id: 'auth_1' } }) };
+      }
+      if (path === '/api/settings') {
+        return { ok: true, status: 200, json: async () => ({ settings: {}, permissions: {} }) };
+      }
+      if (path === '/api/models') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{
+              id: 'gpt-5.5',
+              model: 'gpt-5.5',
+              displayName: 'GPT 5.5',
+              isDefault: true,
+              supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultReasoningEffort: 'xhigh',
+            }],
+          }),
+        };
+      }
+      if (path === '/api/projects' || path === '/api/sessions' || path === '/api/reports') {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  await api.restoreAuth();
+  api.applyDefaultSettings();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(api.state.defaultThreadSettings)), savedDefaults);
+  assert.equal(api.state.model, 'gpt-5.4-mini');
+  assert.equal(api.state.reasoningEffort, 'medium');
+  assert.equal(storage.get('codexWebDefaultThreadSettings'), JSON.stringify(savedDefaults));
+});
+
 test('opening a session applies its persisted settings to controls', async () => {
   const { api } = await loadAppHarness();
 
@@ -1630,6 +1743,38 @@ test('app settings persist theme and default thread settings', async () => {
   assert.equal(api.state.permissionPreset, 'default');
   assert.equal(api.state.approvalPolicy, 'on-request');
   assert.equal(api.state.sandboxMode, 'workspace-write');
+});
+
+test('reasoning options follow the selected model metadata', async () => {
+  const { api } = await loadAppHarness();
+
+  api.state.models = [
+    {
+      id: 'gpt-5.5',
+      label: 'GPT 5.5',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultReasoningEffort: 'xhigh',
+    },
+    {
+      id: 'gpt-6',
+      label: 'GPT 6',
+      supportedReasoningEfforts: ['minimal', 'standard', 'deep'],
+      defaultReasoningEffort: 'deep',
+    },
+  ];
+  api.state.model = 'gpt-6';
+  api.state.reasoningEffort = 'deep';
+
+  const html = api.renderSettingsDrawer();
+
+  assert.match(html, /<option value="minimal"/u);
+  assert.match(html, /<option value="standard"/u);
+  assert.match(html, /<option value="deep" selected/u);
+  assert.doesNotMatch(html, /<option value="xhigh"/u);
+
+  api.applyDefaultThreadSettings({ model: 'gpt-6', reasoningEffort: 'xhigh' });
+
+  assert.equal(api.state.defaultThreadSettings.reasoningEffort, 'deep');
 });
 
 test('global website title is editable only by single-user or admin principals', async () => {

@@ -1670,6 +1670,32 @@ test('server stop closes live SSE streams promptly', async () => {
   }
 });
 
+test('server stop stops the runtime client', async () => {
+  let runtimeStopped = false;
+  const server = createCodexWebServer({
+    auth: {
+      isConfigured: async () => true,
+      login: async () => ({ token: 'cw_token', session: { id: 's1', deviceName: 'phone', createdAt: '', lastSeenAt: '' }, configuredNow: false }),
+      verifyToken: async (token) => token === 'cw_token'
+        ? { id: 's1', deviceName: 'phone', createdAt: '', lastSeenAt: '' }
+        : null,
+      logout: async () => {},
+    },
+    runtime: {
+      ...createRuntimeStub(),
+      stop: async () => {
+        runtimeStopped = true;
+      },
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+
+  await server.stop();
+
+  assert.equal(runtimeStopped, true);
+});
+
 test('SSE route rejects query token without bearer auth', async () => {
   const server = createCodexWebServer({
     auth: {

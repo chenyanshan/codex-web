@@ -71,6 +71,7 @@ export interface CodexWebSession {
 }
 
 export interface CodexWebRuntimeClient {
+  stop?(): Promise<void> | void;
   listModels(): Promise<ProviderModelInfo[]>;
   readUsage(): Promise<ProviderUsageReport | null>;
   listThreads(args?: {
@@ -223,7 +224,7 @@ export class CodexWebRuntime {
 
   private readonly activeTurns = new Map<string, Promise<ProviderTurnResult>>();
 
-  private readonly workSummaries = new Map<string, Record<string, unknown>>();
+  private readonly workSummaries = new Map<string, Map<string, Record<string, unknown>>>();
 
   private readonly helpReportPath: string | null;
 
@@ -257,6 +258,18 @@ export class CodexWebRuntime {
       return null;
     }
     return this.client.readUsage();
+  }
+
+  async stop(): Promise<void> {
+    this.sessionSettings.clear();
+    this.turnToThread.clear();
+    this.approvalToTurn.clear();
+    this.approvalToBatch.clear();
+    this.activeTurns.clear();
+    this.workSummaries.clear();
+    if (typeof this.client.stop === 'function') {
+      await this.client.stop();
+    }
   }
 
   async listSessions(options: ListSessionsOptions = {}): Promise<CodexWebSession[]> {
@@ -517,7 +530,7 @@ export class CodexWebRuntime {
         return false;
       }
       startedTurnId = turnId;
-      this.turnToThread.set(turnId, sessionId);
+      this.rememberTurnThread(turnId, sessionId);
       this.append(turnId, normalizeTurnStartedEvent({
         turnId,
         threadId: sessionId,
@@ -563,9 +576,11 @@ export class CodexWebRuntime {
         if (!startedTurnId) {
           return;
         }
-        const existing = this.workSummaries.get(event.itemId) ?? {};
+        const turnWorkSummaries = this.workSummaries.get(startedTurnId) ?? new Map<string, Record<string, unknown>>();
+        this.workSummaries.set(startedTurnId, turnWorkSummaries);
+        const existing = turnWorkSummaries.get(event.itemId) ?? {};
         Object.assign(existing, event.summary ?? {});
-        this.workSummaries.set(event.itemId, existing);
+        turnWorkSummaries.set(event.itemId, existing);
         for (const normalized of normalizeWorkBatchEvents({
           turnId: startedTurnId,
           event: {
@@ -581,7 +596,7 @@ export class CodexWebRuntime {
         if (!turnId) {
           return;
         }
-        this.turnToThread.set(turnId, sessionId);
+        this.rememberTurnThread(turnId, sessionId);
         this.approvalToTurn.set(request.requestId, turnId);
         this.approvalToBatch.set(request.requestId, request.itemId || request.requestId);
         const batchStart = normalizeApprovalBatchEvent({ turnId, request });
@@ -613,6 +628,9 @@ export class CodexWebRuntime {
       for (const event of normalizedEvents) {
         this.append(startedTurnId, event);
       }
+      if (isTerminalProviderTurnResult(result)) {
+        this.cleanupFinishedTurn(startedTurnId);
+      }
       return result;
     }).catch((error: unknown) => {
       if (!startedTurnId) {
@@ -641,6 +659,9 @@ export class CodexWebRuntime {
         items: [],
         message: error instanceof Error ? error.message : String(error || ''),
       }), timelineMessagesFromThread(session.thread).length + 1);
+      if (startedTurnId) {
+        this.cleanupFinishedTurn(startedTurnId);
+      }
       throw error;
     });
     runPromise.catch(() => {});
@@ -984,6 +1005,24 @@ export class CodexWebRuntime {
     };
   }
 
+  private rememberTurnThread(turnId: string, threadId: string): void {
+    if (this.turnToThread.has(turnId)) {
+      this.turnToThread.delete(turnId);
+    }
+    this.turnToThread.set(turnId, threadId);
+    while (this.turnToThread.size > MAX_TURN_THREAD_MAPPINGS) {
+      const oldestTurnId = this.turnToThread.keys().next().value as string | undefined;
+      if (!oldestTurnId) {
+        break;
+      }
+      this.turnToThread.delete(oldestTurnId);
+    }
+  }
+
+  private cleanupFinishedTurn(turnId: string): void {
+    this.workSummaries.delete(turnId);
+  }
+
   private activeTurnIdForThread(threadId: string, thread: ProviderThreadSummary | null = null): string | null {
     for (const [turnId] of this.activeTurns) {
       if (this.turnToThread.get(turnId) === threadId) {
@@ -1165,6 +1204,7 @@ export class CodexWebRuntime {
 }
 
 const SESSION_INPUT_PREVIEW_MAX_LENGTH = 240;
+const MAX_TURN_THREAD_MAPPINGS = 1_000;
 
 function summarizeProjectName(cwd: string | null | undefined): string | null {
   const segments = cwd?.split(/[\\/]+/u).filter(Boolean) ?? [];

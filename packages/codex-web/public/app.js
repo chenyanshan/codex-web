@@ -19,6 +19,7 @@ const MAX_TIMELINE_SUMMARY_DEPTH = 4;
 const MIN_HYDRATED_COMPLETE_EXCHANGES = 2;
 const DEFAULT_MODEL = 'gpt-5.4';
 const DEFAULT_REASONING_EFFORT = 'xhigh';
+const FALLBACK_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const DEFAULT_COLLABORATION_MODE = 'default';
 const DEFAULT_PERMISSION_PRESET = 'full-access';
 const DEFAULT_APPROVAL_POLICY = 'never';
@@ -567,7 +568,13 @@ async function restoreAuth() {
     state.authSession = session;
     applyGlobalSettingsPayload(settingsPayload, { renderAfter: false });
     state.models = Array.isArray(modelsPayload.items) ? modelsPayload.items : [];
-    state.model = pickModel(state.models, state.model || DEFAULT_MODEL);
+    initializeDefaultThreadSettingsFromCodexModels();
+    if (!state.sessionId) {
+      applyDefaultSettings();
+    } else {
+      state.model = pickModel(state.models, state.model || DEFAULT_MODEL);
+      state.reasoningEffort = reasoningEffortForModel(state.model, state.reasoningEffort);
+    }
     state.status = 'Ready';
     state.statusTone = 'success';
     state.error = '';
@@ -1353,7 +1360,7 @@ function renderAppSettingsSections() {
             <div class="control-group">
               <label for="default-reasoning-select">Reasoning</label>
               <select id="default-reasoning-select" name="defaultReasoningEffort" data-i18n-skip>
-                ${renderOptions(['low', 'medium', 'high', 'xhigh'], state.defaultThreadSettings.reasoningEffort)}
+                ${renderReasoningOptions(state.defaultThreadSettings.reasoningEffort, state.defaultThreadSettings.model)}
               </select>
             </div>
             <div class="control-group">
@@ -2444,7 +2451,7 @@ function renderSettingsDrawer() {
         <div class="control-group">
           <label for="reasoning-select">Reasoning</label>
           <select id="reasoning-select" name="reasoningEffort">
-            ${renderOptions(['low', 'medium', 'high', 'xhigh'], state.reasoningEffort)}
+            ${renderReasoningOptions(state.reasoningEffort, state.model)}
           </select>
         </div>
         <div class="control-group">
@@ -2867,8 +2874,8 @@ function renderModelOptions(currentValue = state.model) {
   } else {
     for (const model of state.models) {
       options.push({
-        id: model.id || model.name || '',
-        label: model.label || model.id || model.name || 'Unnamed model',
+        id: modelId(model),
+        label: modelLabel(model),
       });
     }
     if (current && !options.some((option) => option.id === current)) {
@@ -2883,12 +2890,109 @@ function renderModelOptions(currentValue = state.model) {
   }).join('');
 }
 
+function renderReasoningOptions(currentValue = state.reasoningEffort, modelValue = state.model) {
+  const selected = reasoningEffortForModel(modelValue, currentValue);
+  const options = uniqueStrings([
+    ...reasoningEffortsForModel(modelValue),
+    selected,
+  ]);
+  return renderOptions(options, selected);
+}
+
 function renderOptions(values, current) {
   return values.map((value) => {
     const selected = value === current ? ' selected' : '';
     const label = value === 'xhigh' ? 'xhigh' : startCase(value);
     return `<option value="${escapeAttribute(value)}"${selected} data-i18n-skip>${escapeHtml(t(label))}</option>`;
   }).join('');
+}
+
+function modelId(model) {
+  return normalizeNonEmptyString(model?.id)
+    || normalizeNonEmptyString(model?.model)
+    || normalizeNonEmptyString(model?.name)
+    || '';
+}
+
+function modelLabel(model) {
+  return normalizeNonEmptyString(model?.label)
+    || normalizeNonEmptyString(model?.displayName)
+    || normalizeNonEmptyString(model?.model)
+    || normalizeNonEmptyString(model?.id)
+    || normalizeNonEmptyString(model?.name)
+    || 'Unnamed model';
+}
+
+function findModelInfo(modelValue) {
+  const target = normalizeNonEmptyString(modelValue);
+  if (!target) {
+    return null;
+  }
+  return state.models.find((model) => {
+    const ids = [
+      model?.id,
+      model?.model,
+      model?.name,
+    ].map(normalizeNonEmptyString);
+    return ids.includes(target);
+  }) || null;
+}
+
+function codexDefaultModelInfo() {
+  return state.models.find((model) => model?.isDefault === true) || state.models[0] || null;
+}
+
+function reasoningEffortsForModel(modelValue) {
+  const model = findModelInfo(modelValue);
+  const supported = normalizeReasoningEffortList(model?.supportedReasoningEfforts);
+  const defaultEffort = normalizeNonEmptyString(model?.defaultReasoningEffort);
+  if (supported.length) {
+    return uniqueStrings([...supported, defaultEffort]);
+  }
+  return uniqueStrings([defaultEffort, ...FALLBACK_REASONING_EFFORTS]);
+}
+
+function reasoningEffortForModel(modelValue, effortValue) {
+  const model = findModelInfo(modelValue);
+  const requested = normalizeNonEmptyString(effortValue);
+  const supported = normalizeReasoningEffortList(model?.supportedReasoningEfforts);
+  if (!supported.length) {
+    return requested || normalizeNonEmptyString(model?.defaultReasoningEffort) || DEFAULT_REASONING_EFFORT;
+  }
+  if (requested && supported.includes(requested)) {
+    return requested;
+  }
+  return normalizeNonEmptyString(model?.defaultReasoningEffort) || supported[0] || DEFAULT_REASONING_EFFORT;
+}
+
+function normalizeReasoningEffortList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return uniqueStrings(values.map((entry) => {
+    if (typeof entry === 'string') {
+      return entry;
+    }
+    return entry?.reasoningEffort;
+  }));
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const normalized = normalizeNonEmptyString(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizeNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
 function bindGlobalEvents() {
@@ -3347,6 +3451,7 @@ function bindGlobalEvents() {
   if (modelSelect) {
     modelSelect.addEventListener('change', (event) => {
       state.model = event.target.value;
+      state.reasoningEffort = reasoningEffortForModel(state.model, state.reasoningEffort);
       void updateSessionSettings();
     });
   }
@@ -3378,7 +3483,10 @@ function bindGlobalEvents() {
   const defaultModelSelect = document.querySelector('#default-model-select');
   if (defaultModelSelect) {
     defaultModelSelect.addEventListener('change', (event) => {
-      applyDefaultThreadSettings({ model: event.target.value });
+      applyDefaultThreadSettings({
+        model: event.target.value,
+        reasoningEffort: reasoningEffortForModel(event.target.value, state.defaultThreadSettings.reasoningEffort),
+      });
       render();
     });
   }
@@ -8413,7 +8521,7 @@ function applyDefaultThreadPermissionPreset(settings, preset) {
 function applyDefaultSettings() {
   const defaults = state.defaultThreadSettings || createDefaultThreadSettings();
   state.model = defaults.model || DEFAULT_MODEL;
-  state.reasoningEffort = defaults.reasoningEffort || DEFAULT_REASONING_EFFORT;
+  state.reasoningEffort = reasoningEffortForModel(state.model, defaults.reasoningEffort || DEFAULT_REASONING_EFFORT);
   state.collaborationMode = defaults.collaborationMode || DEFAULT_COLLABORATION_MODE;
   applyPermissionPreset(defaults.accessPreset || DEFAULT_PERMISSION_PRESET);
 }
@@ -8427,9 +8535,12 @@ function applySessionSettings(session) {
   state.model = typeof settings.model === 'string' && settings.model
     ? settings.model
     : DEFAULT_MODEL;
-  state.reasoningEffort = typeof settings.reasoningEffort === 'string' && settings.reasoningEffort
-    ? settings.reasoningEffort
-    : DEFAULT_REASONING_EFFORT;
+  state.reasoningEffort = reasoningEffortForModel(
+    state.model,
+    typeof settings.reasoningEffort === 'string' && settings.reasoningEffort
+      ? settings.reasoningEffort
+      : DEFAULT_REASONING_EFFORT,
+  );
   state.collaborationMode = typeof settings.collaborationMode === 'string' && settings.collaborationMode
     ? settings.collaborationMode
     : DEFAULT_COLLABORATION_MODE;
@@ -8470,11 +8581,44 @@ function loadDefaultThreadSettings() {
   }
 }
 
+function initializeDefaultThreadSettingsFromCodexModels() {
+  if (hasSavedDefaultThreadSettings()) {
+    return;
+  }
+  const defaultModel = codexDefaultModelInfo();
+  const defaultModelId = modelId(defaultModel);
+  if (!defaultModelId) {
+    return;
+  }
+  const next = createDefaultThreadSettings();
+  next.model = defaultModelId;
+  next.reasoningEffort = reasoningEffortForModel(
+    defaultModelId,
+    normalizeNonEmptyString(defaultModel?.defaultReasoningEffort) || next.reasoningEffort,
+  );
+  state.defaultThreadSettings = next;
+  localStorage.setItem(DEFAULT_THREAD_SETTINGS_KEY, JSON.stringify(next));
+}
+
+function hasSavedDefaultThreadSettings() {
+  const raw = localStorage.getItem(DEFAULT_THREAD_SETTINGS_KEY);
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+  } catch (_error) {
+    return false;
+  }
+}
+
 function applyDefaultThreadSettings(patch = {}) {
   const next = normalizeThreadSettings({
     ...state.defaultThreadSettings,
     ...patch,
   });
+  next.reasoningEffort = reasoningEffortForModel(next.model, next.reasoningEffort);
   if (typeof patch.accessPreset === 'string') {
     applyDefaultThreadPermissionPreset(next, patch.accessPreset);
   }
@@ -8493,8 +8637,8 @@ function normalizeThreadSettings(value) {
   if (typeof value.model === 'string' && value.model) {
     next.model = value.model;
   }
-  if (['low', 'medium', 'high', 'xhigh'].includes(value.reasoningEffort)) {
-    next.reasoningEffort = value.reasoningEffort;
+  if (typeof value.reasoningEffort === 'string' && value.reasoningEffort.trim()) {
+    next.reasoningEffort = value.reasoningEffort.trim();
   }
   if (value.collaborationMode === 'plan' || value.collaborationMode === 'default') {
     next.collaborationMode = value.collaborationMode;
@@ -8809,6 +8953,7 @@ async function updateSessionSettings(patch = {}) {
     ...collectSettings(),
     ...patch,
   };
+  settings.reasoningEffort = reasoningEffortForModel(settings.model, settings.reasoningEffort);
   if (!state.sessionId) {
     return null;
   }
@@ -8916,9 +9061,10 @@ function currentHydratedHistoryLength() {
 }
 
 function collectSettings() {
+  const model = state.model || DEFAULT_MODEL;
   return {
-    model: state.model || DEFAULT_MODEL,
-    reasoningEffort: state.reasoningEffort || DEFAULT_REASONING_EFFORT,
+    model,
+    reasoningEffort: reasoningEffortForModel(model, state.reasoningEffort || DEFAULT_REASONING_EFFORT),
     collaborationMode: state.collaborationMode || DEFAULT_COLLABORATION_MODE,
     accessPreset: state.permissionPreset || DEFAULT_PERMISSION_PRESET,
     approvalPolicy: state.approvalPolicy || DEFAULT_APPROVAL_POLICY,

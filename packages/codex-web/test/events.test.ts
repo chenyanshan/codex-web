@@ -7,7 +7,7 @@ import {
   normalizeTurnFailedEvent,
 } from '../src/event_model.js';
 
-test('progress normalization emits assistant delta events with raw payload preserved', () => {
+test('progress normalization emits assistant delta events without retaining cumulative raw text', () => {
   const event = normalizeProgressEvent({
     turnId: 'turn_1',
     threadId: 'thread_1',
@@ -26,9 +26,9 @@ test('progress normalization emits assistant delta events with raw payload prese
     text: 'lo',
     phase: 'final_answer',
     raw: {
-      text: 'Hello',
-      delta: 'lo',
       outputKind: 'final_answer',
+      textLength: 5,
+      deltaLength: 2,
     },
   });
 });
@@ -79,8 +79,17 @@ test('turn completion uses provider status and final text', () => {
 
   assert.equal(events[0].type, 'assistant.final');
   assert.equal(events[0].text, 'Final answer');
+  assert.equal(events[0].raw, undefined);
   assert.equal(events[1].type, 'turn.completed');
   assert.equal(events[1].status, 'completed');
+  assert.deepEqual(events[1].raw, {
+    status: 'completed',
+    outputState: null,
+    finalSource: null,
+    errorMessage: null,
+    threadId: 'thread_3',
+    turnId: 'turn_3',
+  });
 });
 
 test('turn completion with provider error emits only a failed event', () => {

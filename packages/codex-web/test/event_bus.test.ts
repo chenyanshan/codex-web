@@ -47,3 +47,14 @@ test('event bus keeps bounded history per turn', () => {
 
   assert.deepEqual(bus.list('turn_1').map((entry) => entry.event.id), ['evt_2', 'evt_3']);
 });
+
+test('event bus keeps bounded turn histories globally', () => {
+  const bus = new CodexWebEventBus({ maxEventsPerTurn: 5, maxTurns: 2 });
+  bus.append('turn_1', { id: 'evt_1', type: 'turn.started', turnId: 'turn_1', threadId: 'thread_1' });
+  bus.append('turn_2', { id: 'evt_2', type: 'turn.started', turnId: 'turn_2', threadId: 'thread_1' });
+  bus.append('turn_3', { id: 'evt_3', type: 'turn.started', turnId: 'turn_3', threadId: 'thread_1' });
+
+  assert.deepEqual(bus.list('turn_1'), []);
+  assert.deepEqual(bus.list('turn_2').map((entry) => entry.event.id), ['evt_2']);
+  assert.deepEqual(bus.list('turn_3').map((entry) => entry.event.id), ['evt_3']);
+});

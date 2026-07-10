@@ -199,17 +199,22 @@ export async function runTaskCommand(
       ?? (({ identityPath }) => new FileIdentityStore({ identityPath }));
     const runTaskFn = dependencies.runTask ?? runScheduledTask;
     stdout.write(`task_started: ${task.id}\n`);
-    const result = await runTaskFn({
-      task,
-      runtime: createRuntimeFn({ config }),
-      identityStore: createIdentityStoreFn({ identityPath: path.join(config.stateDir, 'identity.json') }),
-      stateDir: config.stateDir,
-    });
-    stdout.write(`session_id: ${result.sessionId}\n`);
-    if (result.turnId) {
-      stdout.write(`turn_id: ${result.turnId}\n`);
+    const runtime = createRuntimeFn({ config });
+    try {
+      const result = await runTaskFn({
+        task,
+        runtime,
+        identityStore: createIdentityStoreFn({ identityPath: path.join(config.stateDir, 'identity.json') }),
+        stateDir: config.stateDir,
+      });
+      stdout.write(`session_id: ${result.sessionId}\n`);
+      if (result.turnId) {
+        stdout.write(`turn_id: ${result.turnId}\n`);
+      }
+      stdout.write(`archived: ${result.archived ? 'true' : 'false'}\n`);
+    } finally {
+      await runtime.stop();
     }
-    stdout.write(`archived: ${result.archived ? 'true' : 'false'}\n`);
     return;
   }
 

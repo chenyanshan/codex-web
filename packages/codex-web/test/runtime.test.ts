@@ -2765,6 +2765,71 @@ test('runtime publishes live work update summaries to subscribers', async () => 
   ]);
 });
 
+test('runtime does not carry work summaries across turns with reused item ids', async () => {
+  let turnCount = 0;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async (): Promise<ProviderUsageReport | null> => null,
+    listThreads: async () => ({ items: [createThread('thread_1')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_1', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread('thread_1'),
+    writeConfigValue: async () => {},
+    startTurn: async ({
+      onTurnStarted,
+      onWorkEvent,
+    }): Promise<ProviderTurnResult> => {
+      turnCount += 1;
+      const turnId = `turn_${turnCount}`;
+      await onTurnStarted?.({ turnId, threadId: 'thread_1' });
+      await onWorkEvent?.({
+        type: 'started',
+        itemId: 'cmd_reused',
+        kind: 'command',
+        title: 'command',
+        summary: {
+          command: turnCount === 1 ? 'first command' : 'second command',
+        },
+      });
+      if (turnCount === 1) {
+        await onWorkEvent?.({
+          type: 'updated',
+          itemId: 'cmd_reused',
+          kind: 'command',
+          summary: {
+            output: 'first command output',
+          },
+        });
+      }
+      return {
+        outputText: `Final answer ${turnCount}`,
+        status: 'completed',
+        turnId,
+        threadId: 'thread_1',
+      };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  await runtime.startTurn('thread_1', { text: 'first' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await runtime.startTurn('thread_1', { text: 'second' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const secondTurnSummaries = runtime.getTurnEvents('turn_2')
+    .map((entry) => entry.event)
+    .filter((event) => event.type === 'batch.updated')
+    .map((event) => event.summary);
+
+  assert.deepEqual(secondTurnSummaries, [{ command: 'second command' }]);
+});
+
 test('runtime exposes owning thread ids for active turns and approvals', async () => {
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],

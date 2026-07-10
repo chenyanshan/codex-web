@@ -32,7 +32,7 @@ export function normalizeTurnStartedEvent({
     type: 'turn.started',
     turnId,
     threadId,
-    raw,
+    raw: compactTurnStartRaw(raw),
   };
 }
 
@@ -52,7 +52,7 @@ export function normalizeProgressEvent({
     threadId,
     text: progress.delta || progress.text || '',
     phase: progress.outputKind || null,
-    raw: progress,
+    raw: compactProgressRaw(progress),
   };
 }
 
@@ -292,7 +292,6 @@ export function normalizeTurnCompletedEvent({
       turnId,
       threadId,
       text,
-      raw: result,
     });
   }
   events.push({
@@ -301,7 +300,7 @@ export function normalizeTurnCompletedEvent({
     turnId,
     threadId,
     status: String(result.status || 'completed'),
-    raw: result,
+    raw: compactTurnResultRaw(result),
   });
   return events;
 }
@@ -401,4 +400,38 @@ function normalizeTurnMarker(value: unknown): string {
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, '');
+}
+
+function compactTurnStartRaw(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    turnId: normalizeRawString(record.turnId),
+    threadId: normalizeRawString(record.threadId),
+  };
+}
+
+function compactProgressRaw(progress: ProviderTurnProgress): Record<string, unknown> {
+  return {
+    outputKind: progress.outputKind ?? null,
+    textLength: String(progress.text || '').length,
+    deltaLength: String(progress.delta || '').length,
+  };
+}
+
+function compactTurnResultRaw(result: Partial<ProviderTurnResult>): Record<string, unknown> {
+  return {
+    status: result.status ?? null,
+    outputState: result.outputState ?? null,
+    finalSource: result.finalSource ?? null,
+    errorMessage: result.errorMessage ?? null,
+    threadId: normalizeRawString(result.threadId),
+    turnId: normalizeRawString(result.turnId),
+  };
+}
+
+function normalizeRawString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }

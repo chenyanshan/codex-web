@@ -312,6 +312,7 @@ test('serve command creates state and log directories before server start', asyn
 test('task run reads the configured task and invokes the scheduled task runner', async () => {
   const calls: unknown[] = [];
   const stdoutLines: string[] = [];
+  let stopped = false;
 
   const parsed = parseCliArgs(['task', 'run', 'morning-report']);
   assert.equal(parsed.command, 'task');
@@ -338,7 +339,11 @@ test('task run reads the configured task and invokes the scheduled task runner',
     }),
     createRuntime: ({ config }) => {
       calls.push({ runtimeStateDir: config.stateDir });
-      return {} as any;
+      return {
+        stop: async () => {
+          stopped = true;
+        },
+      } as any;
     },
     createIdentityStore: ({ identityPath }) => {
       calls.push({ identityPath });
@@ -365,6 +370,7 @@ test('task run reads the configured task and invokes the scheduled task runner',
     { identityPath: '/tmp/codex-web-state/identity.json' },
     { runTask: 'morning-report', stateDir: '/tmp/codex-web-state', hasIdentityStore: true },
   ]);
+  assert.equal(stopped, true);
   assert.deepEqual(stdoutLines, [
     'task_started: morning-report\n',
     'session_id: thread_task\n',

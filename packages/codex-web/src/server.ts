@@ -211,6 +211,7 @@ export function createCodexWebServer({
       for (const socket of sockets) {
         socket.destroy();
       }
+      await runtime.stop?.();
     },
   };
 }

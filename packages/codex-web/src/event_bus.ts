@@ -10,14 +10,23 @@ export type CodexWebEventListener = (storedEvent: CodexWebStoredEvent) => void;
 export class CodexWebEventBus {
   private readonly maxEventsPerTurn: number;
 
+  private readonly maxTurns: number;
+
   private readonly turns = new Map<string, CodexWebStoredEvent[]>();
 
   private readonly listeners = new Map<string, Set<CodexWebEventListener>>();
 
   private nextSequence = 1;
 
-  constructor({ maxEventsPerTurn = 500 }: { maxEventsPerTurn?: number } = {}) {
+  constructor({
+    maxEventsPerTurn = 500,
+    maxTurns = 200,
+  }: {
+    maxEventsPerTurn?: number;
+    maxTurns?: number;
+  } = {}) {
     this.maxEventsPerTurn = maxEventsPerTurn;
+    this.maxTurns = maxTurns;
   }
 
   append(turnId: string, event: CodexWebEvent): CodexWebStoredEvent {
@@ -25,12 +34,14 @@ export class CodexWebEventBus {
       event,
       sequence: this.nextSequence++,
     };
+    this.touchTurn(turnId);
     const history = this.turns.get(turnId) ?? [];
     history.push(storedEvent);
     if (history.length > this.maxEventsPerTurn) {
       history.splice(0, history.length - this.maxEventsPerTurn);
     }
     this.turns.set(turnId, history);
+    this.trimTurns();
     const turnListeners = this.listeners.get(turnId);
     if (turnListeners) {
       for (const listener of turnListeners) {
@@ -53,6 +64,7 @@ export class CodexWebEventBus {
   }
 
   subscribe(turnId: string, listener: CodexWebEventListener): () => void {
+    this.touchTurn(turnId);
     const turnListeners = this.listeners.get(turnId) ?? new Set<CodexWebEventListener>();
     turnListeners.add(listener);
     this.listeners.set(turnId, turnListeners);
@@ -66,5 +78,31 @@ export class CodexWebEventBus {
         this.listeners.delete(turnId);
       }
     };
+  }
+
+  private touchTurn(turnId: string): void {
+    const history = this.turns.get(turnId);
+    if (!history) {
+      return;
+    }
+    this.turns.delete(turnId);
+    this.turns.set(turnId, history);
+  }
+
+  private trimTurns(): void {
+    while (this.turns.size > this.maxTurns) {
+      const oldestTurnId = this.turns.keys().next().value as string | undefined;
+      if (!oldestTurnId) {
+        return;
+      }
+      if (this.listeners.has(oldestTurnId)) {
+        this.touchTurn(oldestTurnId);
+        if ([...this.turns.keys()].every((turnId) => this.listeners.has(turnId))) {
+          return;
+        }
+        continue;
+      }
+      this.turns.delete(oldestTurnId);
+    }
   }
 }
