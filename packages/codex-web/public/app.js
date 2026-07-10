@@ -3452,6 +3452,7 @@ function bindGlobalEvents() {
     modelSelect.addEventListener('change', (event) => {
       state.model = event.target.value;
       state.reasoningEffort = reasoningEffortForModel(state.model, state.reasoningEffort);
+      render();
       void updateSessionSettings();
     });
   }

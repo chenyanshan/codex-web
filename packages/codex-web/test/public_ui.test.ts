@@ -1777,6 +1777,67 @@ test('reasoning options follow the selected model metadata', async () => {
   assert.equal(api.state.defaultThreadSettings.reasoningEffort, 'deep');
 });
 
+test('changing an active session model refreshes reasoning options immediately', async () => {
+  const fetchCalls = [];
+  const { api, context } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: 'session_model',
+            cwd: '/repo',
+            settings: JSON.parse(options.body),
+          },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_model';
+  api.state.currentSession = { id: 'session_model', cwd: '/repo', settings: {} };
+  api.state.sessions = [api.state.currentSession];
+  api.state.settingsOpen = true;
+  api.state.models = [
+    {
+      id: 'gpt-5.4',
+      displayName: 'GPT-5.4',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultReasoningEffort: 'xhigh',
+    },
+    {
+      id: 'gpt-5.6-sol',
+      displayName: 'GPT-5.6-Sol',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'low',
+    },
+  ];
+  api.state.model = 'gpt-5.4';
+  api.state.reasoningEffort = 'xhigh';
+  api.render();
+
+  const renderCount = context.__appRenderCount;
+  const modelSelect = context.document.querySelector('#model-select');
+  assert.ok(modelSelect);
+  assert.doesNotMatch(context.document.querySelector('#reasoning-select').innerHTML, /value="ultra"/u);
+
+  modelSelect.value = 'gpt-5.6-sol';
+  modelSelect.__listeners.get('change')?.({ target: modelSelect });
+
+  const reasoningSelect = context.document.querySelector('#reasoning-select');
+  assert.ok(context.__appRenderCount > renderCount);
+  assert.match(reasoningSelect.innerHTML, /value="max"/u);
+  assert.match(reasoningSelect.innerHTML, /value="ultra"/u);
+  assert.match(reasoningSelect.innerHTML, /value="xhigh" selected/u);
+  assert.equal(api.state.reasoningEffort, 'xhigh');
+  assert.equal(fetchCalls[0]?.path, '/api/sessions/session_model/settings');
+  assert.equal(fetchCalls[0]?.options.method, 'PATCH');
+});
+
 test('global website title is editable only by single-user or admin principals', async () => {
   const { api } = await loadAppHarness();
 
@@ -10132,7 +10193,30 @@ async function loadAppHarness(overrides = {}) {
 	    element.classList.element = element;
 	    return element;
 	  };
+  const materializeSelectFromHtml = (html, id) => {
+    const selector = `#${id}`;
+    elements.delete(selector);
+    const escapedId = String(id).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const match = String(html || '').match(new RegExp(
+      `<select\\b[^>]*id="${escapedId}"[^>]*>([\\s\\S]*?)<\\/select>`,
+      'u',
+    ));
+    if (!match) {
+      return;
+    }
+    const openingTag = match[0].match(/^<select\b[^>]*>/u)?.[0] || '';
+    const optionsHtml = match[1] || '';
+    const selectedValue = optionsHtml.match(/<option\b[^>]*value="([^"]*)"[^>]*\sselected(?:\s|>)/u)?.[1]
+      || optionsHtml.match(/<option\b[^>]*value="([^"]*)"/u)?.[1]
+      || '';
+    trackElement(selector, createElementFromHtml(selector, openingTag, {
+      innerHTML: optionsHtml,
+      value: selectedValue,
+    }));
+  };
   const materializeAppHtml = (html) => {
+    materializeSelectFromHtml(html, 'model-select');
+    materializeSelectFromHtml(html, 'reasoning-select');
     elements.delete('#timeline');
     elements.delete('#prompt-input');
     elements.delete('#username');
