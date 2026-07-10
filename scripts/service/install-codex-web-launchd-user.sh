@@ -4,6 +4,7 @@ set -euo pipefail
 LABEL="com.chenyanshan.codex-web"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+NODE_BIN="$(command -v node)"
 CONFIG_DIR="${HOME}/.config/codex-web"
 ENV_FILE="${CONFIG_DIR}/service.env"
 STATE_DIR="${HOME}/.codex-web"
@@ -56,10 +57,11 @@ EOF
 write_plist() {
   local command
   command=$(
-    printf 'set -euo pipefail; mkdir -p %s; set -a; source %s; set +a; cd %s; exec npm run serve --workspace packages/codex-web' \
+    printf 'set -euo pipefail; mkdir -p %s; set -a; source %s; set +a; cd %s; exec %s --conditions=development --import tsx packages/codex-web/src/cli.ts serve' \
       "$(shell_escape "${LOG_DIR}")" \
       "$(shell_escape "${ENV_FILE}")" \
-      "$(shell_escape "${REPO_ROOT}")"
+      "$(shell_escape "${REPO_ROOT}")" \
+      "$(shell_escape "${NODE_BIN}")"
   )
 
   mkdir -p "${PLIST_DIR}"

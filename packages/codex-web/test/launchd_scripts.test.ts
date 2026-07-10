@@ -57,6 +57,14 @@ test('launchd install does not unload a running Codex Web service', async () => 
   assert.match(script, /launchctl kickstart -k "\$\{LAUNCHD_TARGET\}"/u);
 });
 
+test('launchd install runs the Codex Web server directly under node', async () => {
+  const script = await readScript('scripts/service/install-codex-web-launchd-user.sh');
+
+  assert.match(script, /NODE_BIN="\$\(command -v node\)"/u);
+  assert.match(script, /--conditions=development --import tsx packages\/codex-web\/src\/cli\.ts serve/u);
+  assert.doesNotMatch(script, /npm run serve --workspace packages\/codex-web/u);
+});
+
 test('macOS installer script installs dependencies, configures password, and optionally installs launchd', async () => {
   const script = await readScript('scripts/install/install-codex-web-macos.sh');
 
