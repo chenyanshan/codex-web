@@ -298,11 +298,12 @@ that turn as `interrupted` without an error payload. The UI shows `Stopped`
 instead of a red error because the turn ended due to service lifecycle
 interruption.
 
-## Updating An Existing macOS Install
+## Updating An Existing macOS LaunchAgent Install
 
-Repository updates do not hot-reload the running Codex Web backend. From the
-existing repository checkout, pull the update, install dependencies, and
-restart the user LaunchAgent:
+Repository updates do not hot-reload the running Codex Web backend. For an
+existing macOS install managed by the user LaunchAgent, run the following from
+the repository checkout to pull the update, install dependencies, and restart
+the service:
 
 ```bash
 git pull --ff-only

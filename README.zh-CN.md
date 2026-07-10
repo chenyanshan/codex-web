@@ -276,10 +276,10 @@ runtime context 文件路径注入到 turn 指令中，skill 再通过这个文�
 `interrupted` 且没有 error payload。此时 UI 显示 `Stopped`，不显示红色报错，
 因为这是服务生命周期打断。
 
-## 更新已有的 macOS 安装
+## 更新已有的 macOS LaunchAgent 安装
 
-拉取仓库更新不会热重载正在运行的 Codex Web 后端。请在现有仓库检出目录中拉取
-更新、安装依赖，然后重启用户级 LaunchAgent：
+拉取仓库更新不会热重载正在运行的 Codex Web 后端。对于由用户级 LaunchAgent
+管理的现有 macOS 安装，请在仓库检出目录中拉取更新、安装依赖，然后重启服务：
 
 ```bash
 git pull --ff-only
