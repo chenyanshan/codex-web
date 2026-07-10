@@ -2839,19 +2839,62 @@ function mapTurnItem(raw) {
 }
 
 function mapModel(raw) {
+  const capabilities = raw?.capabilities && typeof raw.capabilities === 'object'
+    ? raw.capabilities
+    : null;
+  const supportedReasoningEfforts = uniqueNormalizedStrings([
+    ...normalizeReasoningEffortList(raw?.supportedReasoningEfforts),
+    ...normalizeReasoningEffortList(raw?.supported_reasoning_efforts),
+    ...normalizeReasoningEffortList(capabilities?.supportedReasoningEfforts),
+    ...normalizeReasoningEffortList(capabilities?.supported_reasoning_efforts),
+  ]);
   return {
     id: String(raw.id),
     model: String(raw.model),
     displayName: String(raw.displayName || raw.model),
     description: String(raw.description || ''),
     isDefault: Boolean(raw.isDefault),
-    supportedReasoningEfforts: Array.isArray(raw.supportedReasoningEfforts)
-      ? raw.supportedReasoningEfforts
-        .map((entry) => entry?.reasoningEffort)
-        .filter((value) => typeof value === 'string')
-      : [],
-    defaultReasoningEffort: typeof raw.defaultReasoningEffort === 'string' ? raw.defaultReasoningEffort : null,
+    supportedReasoningEfforts,
+    defaultReasoningEffort: normalizeNullableString(raw.defaultReasoningEffort)
+      ?? normalizeNullableString(raw.default_reasoning_effort)
+      ?? normalizeNullableString(capabilities?.defaultReasoningEffort)
+      ?? normalizeNullableString(capabilities?.default_reasoning_effort),
   };
+}
+
+function normalizeReasoningEffortList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        return normalizeNullableString(entry);
+      }
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      return normalizeNullableString(record.reasoningEffort)
+        ?? normalizeNullableString(record.reasoning_effort)
+        ?? normalizeNullableString(record.id)
+        ?? normalizeNullableString(record.name);
+    })
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function uniqueNormalizedStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeNullableString(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
 }
 
 function mapAppServerRateLimits(payload: CodexAppRateLimitsResponse | null | undefined): ProviderUsageReport | null {

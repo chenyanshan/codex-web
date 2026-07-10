@@ -9,6 +9,46 @@ import {
   type ProviderTurnWorkEvent,
 } from '../src/index.js';
 
+test('app client preserves string and snake_case model reasoning efforts', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  client.request = async (method: string) => {
+    assert.equal(method, 'model/list');
+    return {
+      data: [{
+        id: 'gpt-5.6-sol',
+        model: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6 Sol',
+        isDefault: true,
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'low',
+      }, {
+        id: 'gpt-5.6-luna',
+        model: 'gpt-5.6-luna',
+        displayName: 'GPT-5.6 Luna',
+        supported_reasoning_efforts: [
+          { reasoning_effort: 'low' },
+          { reasoning_effort: 'medium' },
+          { reasoning_effort: 'high' },
+          { reasoning_effort: 'xhigh' },
+          { reasoning_effort: 'max' },
+        ],
+        default_reasoning_effort: 'medium',
+      }],
+      nextCursor: null,
+    };
+  };
+
+  const models = await client.listModels();
+
+  assert.deepEqual(models[0]?.supportedReasoningEfforts, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+  assert.equal(models[0]?.defaultReasoningEffort, 'low');
+  assert.deepEqual(models[1]?.supportedReasoningEfforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(models[1]?.defaultReasoningEffort, 'medium');
+});
+
 test('app client extracts work details from function call notifications', async () => {
   const client = new CodexAppClient({
     codexCliBin: 'codex',
