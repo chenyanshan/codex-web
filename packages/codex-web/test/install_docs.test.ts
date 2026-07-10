@@ -39,6 +39,11 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readme, /~\/\.codex\/skills\//u);
   assert.match(readme, /Add to Home Screen/u);
   assert.match(readme, /Android/u);
+  assert.match(
+    readme,
+    /git pull --ff-only[\s\S]*?npm install[\s\S]*?scripts\/service\/restart-codex-web-launchd-user\.sh/u,
+  );
+  assert.match(readme, /CODEX_REAL_BIN[\s\S]*?ultra/iu);
 
   assert.match(readmeZh, /install\.md/u);
   assert.match(readmeZh, /AI 安装/u);
@@ -48,4 +53,9 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readmeZh, /~\/\.codex\/skills\//u);
   assert.match(readmeZh, /添加到主屏幕/u);
   assert.match(readmeZh, /Android/u);
+  assert.match(
+    readmeZh,
+    /git pull --ff-only[\s\S]*?npm install[\s\S]*?scripts\/service\/restart-codex-web-launchd-user\.sh/u,
+  );
+  assert.match(readmeZh, /CODEX_REAL_BIN[\s\S]*?ultra/iu);
 });

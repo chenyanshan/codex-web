@@ -298,6 +298,25 @@ that turn as `interrupted` without an error payload. The UI shows `Stopped`
 instead of a red error because the turn ended due to service lifecycle
 interruption.
 
+## Updating An Existing macOS Install
+
+Repository updates do not hot-reload the running Codex Web backend. From the
+existing repository checkout, pull the update, install dependencies, and
+restart the user LaunchAgent:
+
+```bash
+git pull --ff-only
+npm install
+scripts/service/restart-codex-web-launchd-user.sh
+```
+
+After the restart, reopen or refresh the installed PWA.
+
+The reasoning choices shown by Codex Web come dynamically from the Codex CLI
+selected by `CODEX_REAL_BIN`. The selected model must advertise `ultra` for
+that choice to appear. Pulling this repository does not upgrade the Codex CLI
+or add capabilities to the selected runtime.
+
 ## Service Install
 
 ### macOS launchd

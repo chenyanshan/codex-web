@@ -276,6 +276,23 @@ runtime context 文件路径注入到 turn 指令中，skill 再通过这个文�
 `interrupted` 且没有 error payload。此时 UI 显示 `Stopped`，不显示红色报错，
 因为这是服务生命周期打断。
 
+## 更新已有的 macOS 安装
+
+拉取仓库更新不会热重载正在运行的 Codex Web 后端。请在现有仓库检出目录中拉取
+更新、安装依赖，然后重启用户级 LaunchAgent：
+
+```bash
+git pull --ff-only
+npm install
+scripts/service/restart-codex-web-launchd-user.sh
+```
+
+重启后，请重新打开或刷新已安装的 PWA。
+
+Codex Web 中显示的推理选项由 `CODEX_REAL_BIN` 所选择的 Codex CLI 动态提供。
+只有当所选模型声明支持 `ultra` 时，界面才会显示该选项。仅拉取本仓库不会升级
+Codex CLI，也不会为所选运行时增加新能力。
+
 ## 服务安装
 
 ### macOS launchd
