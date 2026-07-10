@@ -1818,17 +1818,23 @@ test('changing an active session model refreshes reasoning options immediately',
   ];
   api.state.model = 'gpt-5.4';
   api.state.reasoningEffort = 'xhigh';
+  api.state.timelineShouldFollowLatest = false;
   api.render();
 
   const renderCount = context.__appRenderCount;
   const modelSelect = context.document.querySelector('#model-select');
+  const timeline = context.document.querySelector('#timeline');
   assert.ok(modelSelect);
+  assert.ok(timeline);
   assert.doesNotMatch(context.document.querySelector('#reasoning-select').innerHTML, /value="ultra"/u);
+  timeline.scrollTop = 240;
 
   modelSelect.value = 'gpt-5.6-sol';
   modelSelect.__listeners.get('change')?.({ target: modelSelect });
 
   const reasoningSelect = context.document.querySelector('#reasoning-select');
+  const nextTimeline = context.document.querySelector('#timeline');
+  assert.equal(nextTimeline.scrollTop, 240);
   assert.ok(context.__appRenderCount > renderCount);
   assert.match(reasoningSelect.innerHTML, /value="max"/u);
   assert.match(reasoningSelect.innerHTML, /value="ultra"/u);
@@ -1836,6 +1842,9 @@ test('changing an active session model refreshes reasoning options immediately',
   assert.equal(api.state.reasoningEffort, 'xhigh');
   assert.equal(fetchCalls[0]?.path, '/api/sessions/session_model/settings');
   assert.equal(fetchCalls[0]?.options.method, 'PATCH');
+  const savedSettings = JSON.parse(fetchCalls[0]?.options.body);
+  assert.equal(savedSettings.model, 'gpt-5.6-sol');
+  assert.equal(savedSettings.reasoningEffort, 'xhigh');
 });
 
 test('global website title is editable only by single-user or admin principals', async () => {
