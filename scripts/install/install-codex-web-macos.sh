@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -8,21 +9,19 @@ MANUAL_LOG_DIR="${HOME}/.codex-web/logs"
 MANUAL_STDOUT_LOG="${MANUAL_LOG_DIR}/codex-web-manual.stdout.log"
 MANUAL_STDERR_LOG="${MANUAL_LOG_DIR}/codex-web-manual.stderr.log"
 
-PASSWORD="${CODEX_WEB_INSTALL_PASSWORD:-}"
+PASSWORD=""
 AUTOSTART="ask"
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/install/install-codex-web-macos.sh --password <password> --autostart <yes|no>
+  scripts/install/install-codex-web-macos.sh [--password-stdin] --autostart <yes|no>
 
 Options:
-  --password <password>  Password to store for Codex Web login.
+  --password-stdin       Read one password line from standard input.
+                         Omit this flag for a hidden interactive prompt.
   --autostart <value>    yes or no. yes installs launchd startup.
   --help                 Show this help.
-
-Environment:
-  CODEX_WEB_INSTALL_PASSWORD  Optional password alternative to --password.
 EOF
 }
 
@@ -48,8 +47,8 @@ prompt_password() {
     printf '\n'
     read -r -s -p "Confirm password: " second
     printf '\n'
-    if [[ -z "${first}" ]]; then
-      echo "password cannot be empty" >&2
+    if [[ ${#first} -lt 8 ]]; then
+      echo "password must contain at least 8 characters" >&2
       continue
     fi
     if [[ "${first}" != "${second}" ]]; then
@@ -59,6 +58,17 @@ prompt_password() {
     PASSWORD="${first}"
     break
   done
+}
+
+read_password_from_stdin() {
+  IFS= read -r PASSWORD || {
+    echo "failed to read password from standard input" >&2
+    exit 1
+  }
+  if [[ ${#PASSWORD} -lt 8 ]]; then
+    echo "password must contain at least 8 characters" >&2
+    exit 1
+  fi
 }
 
 prompt_autostart() {
@@ -110,10 +120,9 @@ wait_for_http() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --password)
-      [[ $# -ge 2 ]] || { echo "missing value for --password" >&2; exit 1; }
-      PASSWORD="$2"
-      shift 2
+    --password-stdin)
+      read_password_from_stdin
+      shift
       ;;
     --autostart)
       [[ $# -ge 2 ]] || { echo "missing value for --autostart" >&2; exit 1; }
@@ -165,9 +174,25 @@ npm install
 
 echo "saving Codex Web password hash"
 CODEX_WEB_PASSWORD="${PASSWORD}" npm run codex-web -- auth set-password
+PASSWORD=""
+unset CODEX_WEB_PASSWORD 2>/dev/null || true
+
+install_bundled_skill() {
+  local skill_name="$1"
+  local source_dir="${REPO_ROOT}/skills/${skill_name}"
+  local target_dir="${HOME}/.codex/skills/${skill_name}"
+  [[ -d "${source_dir}" ]] || return
+  mkdir -p "${target_dir}"
+  cp -R "${source_dir}/." "${target_dir}/"
+  echo "installed skill: ${target_dir}"
+}
+
+install_bundled_skill "codex-mobile-report"
+install_bundled_skill "codex-web-user-context"
 
 mkdir -p "${MANUAL_LOG_DIR}"
 touch "${MANUAL_STDOUT_LOG}" "${MANUAL_STDERR_LOG}"
+chmod 600 "${MANUAL_STDOUT_LOG}" "${MANUAL_STDERR_LOG}"
 
 if [[ "${AUTOSTART}" == "yes" ]]; then
   echo "installing launchd service"

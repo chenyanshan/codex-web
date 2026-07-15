@@ -9,29 +9,31 @@ const indexUrl = new URL('../public/index.html', import.meta.url);
 const manifestUrl = new URL('../public/manifest.webmanifest', import.meta.url);
 const serviceWorkerUrl = new URL('../public/service-worker.js', import.meta.url);
 const pwaPullRefreshUrl = new URL('../public/pwa-pull-refresh.js', import.meta.url);
+const themeInitUrl = new URL('../public/theme-init.js', import.meta.url);
 
 test('mobile UI exposes iOS PWA install metadata and registers a service worker', async () => {
-  const [index, app, manifest, serviceWorker] = await Promise.all([
+  const [index, app, manifest, serviceWorker, themeInit] = await Promise.all([
     readFile(indexUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
     readFile(manifestUrl, 'utf8'),
     readFile(serviceWorkerUrl, 'utf8'),
+    readFile(themeInitUrl, 'utf8'),
   ]);
   const parsedManifest = JSON.parse(manifest);
 
   assert.equal(parsedManifest.name, 'Codex Web');
   assert.equal(parsedManifest.short_name, 'Codex');
   assert.equal(parsedManifest.display, 'standalone');
-  assert.equal(parsedManifest.orientation, 'portrait-primary');
+  assert.equal(parsedManifest.orientation, undefined);
   assert.equal(parsedManifest.start_url, '/');
-  assert.equal(parsedManifest.theme_color, '#0b0d12');
-  assert.equal(parsedManifest.background_color, '#0b0d12');
+  assert.equal(parsedManifest.theme_color, '#f8f3e3');
+  assert.equal(parsedManifest.background_color, '#f8f3e3');
   assert.match(index, /<link rel="manifest" href="\/manifest\.webmanifest">/u);
   assert.match(index, /<link rel="icon" href="\/icon-192\.png" type="image\/png">/u);
   assert.match(index, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png">/u);
-  assert.match(index, /<meta name="theme-color" content="#0b0d12">/u);
-  assert.match(index, /<meta name="screen-orientation" content="portrait">/u);
-  assert.match(index, /<meta name="x5-orientation" content="portrait">/u);
+  assert.match(index, /<meta name="theme-color" content="#f8f3e3">/u);
+  assert.match(index, /<script src="\/theme-init\.js"><\/script>\s*<link rel="stylesheet"/u);
+  assert.doesNotMatch(index, /screen-orientation|x5-orientation/u);
   assert.match(index, /<meta name="apple-mobile-web-app-capable" content="yes">/u);
   assert.match(index, /<meta name="apple-mobile-web-app-title" content="Codex">/u);
   assert.deepEqual(parsedManifest.icons.map((icon) => icon.src), ['/icon-192.png', '/icon-512.png']);
@@ -43,6 +45,7 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.doesNotMatch(app, /runtime-status-v37/u);
   assert.doesNotMatch(serviceWorker, /runtime-status-v37/u);
   assert.match(serviceWorker, /'\/icon-192\.png'/u);
+  assert.match(serviceWorker, /'\/theme-init\.js'/u);
   assert.match(serviceWorker, /'\/icon-512\.png'/u);
   assert.match(serviceWorker, /'\/apple-touch-icon\.png'/u);
   assert.match(serviceWorker, /self\.addEventListener\('install'/u);
@@ -50,6 +53,10 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.doesNotMatch(serviceWorker, /cached \|\| fetch\(request\)/u);
   assert.match(serviceWorker, /fetch\(request\)/u);
   assert.match(serviceWorker, /cache\.put\(request, response\.clone\(\)\)/u);
+  assert.match(serviceWorker, /STATIC_ASSET_PATHS\.has\(url\.pathname\)/u);
+  assert.match(serviceWorker, /!url\.search/u);
+  assert.match(themeInit, /let theme = 'sunny'/u);
+  assert.match(themeInit, /document\.documentElement\.dataset\.theme = theme/u);
 });
 
 test('PWA checks app version on foreground to escape stale standalone caches', async () => {
@@ -57,12 +64,53 @@ test('PWA checks app version on foreground to escape stale standalone caches', a
 
   assert.match(app, /const APP_BUILD_ID = /u);
   assert.match(app, /setupAppVersionRefresh\(\)/u);
-  assert.match(app, /async function checkForAppUpdate\(\)/u);
-  assert.match(app, /fetch\(`\/app\.js\?version-check=\$\{Date\.now\(\)\}`/u);
+  assert.match(app, /function checkForAppUpdate\(\)/u);
+  assert.match(app, /fetch\('\/app\.js', \{ cache: 'no-store' \}\)/u);
+  assert.match(app, /appVersionCheckPromise/u);
+  assert.match(app, /APP_VERSION_CHECK_COOLDOWN_MS/u);
+  assert.doesNotMatch(app, /version-check=\$\{Date\.now\(\)\}/u);
   assert.match(app, /window\.location\.reload\(\)/u);
 });
 
-test('mobile UI tries to lock mobile browsers to portrait orientation', async () => {
+test('PWA version checks share one request across duplicate foreground events', async () => {
+  const fetchCalls: string[] = [];
+  let releaseFetch: ((response: unknown) => void) | null = null;
+  const { api, context } = await loadAppHarness({
+    fetch: async (path: string) => {
+      fetchCalls.push(path);
+      return await new Promise((resolve) => {
+        releaseFetch = resolve;
+      });
+    },
+  });
+  context.navigator.standalone = true;
+
+  const first = api.checkForAppUpdate();
+  const duplicate = api.checkForAppUpdate();
+
+  assert.deepEqual(fetchCalls, ['/app.js']);
+  assert.equal(first, duplicate);
+  assert.equal(typeof releaseFetch, 'function');
+  releaseFetch?.({
+    ok: true,
+    text: async () => "const APP_BUILD_ID = '__CODEX_WEB_BUILD_ID__';",
+  });
+  await Promise.all([first, duplicate]);
+  await api.checkForAppUpdate();
+  assert.deepEqual(fetchCalls, ['/app.js']);
+});
+
+test('rerendered element listeners use abortable render and timeline lifecycles', async () => {
+  const app = await readFile(appUrl, 'utf8');
+
+  assert.match(app, /function beginRenderEventBindings\(\) \{[\s\S]*renderEventController\?\.abort\(\);[\s\S]*timelineEventController\?\.abort\(\);/u);
+  assert.match(app, /function listenRendered\([\s\S]*renderEventController\?\.signal/u);
+  assert.match(app, /function listenTimeline\([\s\S]*timelineEventController\?\.signal/u);
+  assert.match(app, /function listenWithSignal\([\s\S]*target\.addEventListener\(type, listener, normalizedOptions\)/u);
+  assert.match(app, /function refreshChatDynamicUi\(\)[\s\S]*beginTimelineEventBindings\(\);\s*timeline\.innerHTML/u);
+});
+
+test('mobile UI leaves device orientation under user control', async () => {
   const lockCalls: string[] = [];
   await loadAppHarness({
     screen: {
@@ -76,10 +124,10 @@ test('mobile UI tries to lock mobile browsers to portrait orientation', async ()
 
   await flushMicrotasks();
 
-  assert.deepEqual(lockCalls, ['portrait-primary']);
+  assert.deepEqual(lockCalls, []);
 });
 
-test('desktop UI does not request a mobile portrait orientation lock', async () => {
+test('desktop UI also leaves device orientation under user control', async () => {
   const lockCalls: string[] = [];
   await loadAppHarness({
     viewportWidth: 1280,
@@ -98,7 +146,7 @@ test('desktop UI does not request a mobile portrait orientation lock', async () 
   assert.deepEqual(lockCalls, []);
 });
 
-test('mobile orientation lock does not render a landscape fallback UI', async () => {
+test('mobile landscape remains supported without a fallback screen', async () => {
   const [index, styles] = await Promise.all([
     readFile(indexUrl, 'utf8'),
     readFile(stylesUrl, 'utf8'),
@@ -129,6 +177,32 @@ test('new sessions default to gpt-5.4 xhigh full access settings', async () => {
       personality: 'pragmatic',
     }),
   );
+});
+
+test('ordinary multi-user UI matches the server-managed runtime policy', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: { userId: 'user_1', isAdmin: false, mode: 'multi' },
+  };
+
+  api.applyDefaultSettings();
+  api.state.permissionPreset = 'full-access';
+  api.state.approvalPolicy = 'never';
+  api.state.sandboxMode = 'danger-full-access';
+
+  assert.deepEqual(JSON.parse(JSON.stringify(api.collectSettings())), {
+    model: 'gpt-5.4',
+    reasoningEffort: 'xhigh',
+    collaborationMode: 'default',
+    accessPreset: 'default',
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
+    personality: 'pragmatic',
+  });
+  assert.doesNotMatch(api.renderSettingsDrawer(), /data-permission-preset="full-access"/u);
+  assert.doesNotMatch(api.renderAppSettings().innerHTML, /data-default-permission-preset="full-access"/u);
+  assert.match(api.renderAppSettings().innerHTML, /data-default-permission-preset="default" aria-pressed="true"/u);
 });
 
 test('first-run default thread settings initialize from Codex model defaults', async () => {
@@ -772,7 +846,7 @@ test('admin console stays open while restore auth finishes in the background', a
   assert.equal(api.state.admin.loaded, true);
 });
 
-test('settings and launch actions live in the mobile project drawer', async () => {
+test('mobile keeps New visible while secondary actions live in the project drawer', async () => {
   const { api } = await loadAppHarness();
 
   api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
@@ -785,10 +859,10 @@ test('settings and launch actions live in the mobile project drawer', async () =
 
   assert.match(topbarMain, /mobile-sidebar-toggle-button[\s\S]*mobile-session-sort-toggle/u);
   assert.doesNotMatch(topbarMain, /open-reports-button/u);
-  assert.doesNotMatch(topbarMain, /open-new-session-button/u);
+  assert.match(topbarMain, /open-new-session-button/u);
   assert.doesNotMatch(topbarMain, /open-app-settings-button/u);
   assert.match(drawerFooter, /id="open-reports-button"[\s\S]*>Reports<\/button>/u);
-  assert.match(drawerFooter, /id="open-new-session-button"[\s\S]*>New<\/button>/u);
+  assert.doesNotMatch(drawerFooter, /open-new-session-button/u);
   assert.match(drawerFooter, /id="open-app-settings-button"[\s\S]*>Setting<\/button>/u);
   assert.match(drawerFooter, /id="open-admin-console-button"[\s\S]*>Admin Console<\/button>/u);
   assert.doesNotMatch(drawerFooter, /rail-show-sessions-button/u);
@@ -1432,6 +1506,7 @@ test('settings drawer creates and copies share links for writable sessions', asy
   };
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
+  api.state.globalSettings.publicSharesEnabled = true;
   api.state.view = 'chat';
   api.state.sessionId = 'session_share';
   api.state.currentSession = {
@@ -1460,6 +1535,19 @@ test('settings drawer creates and copies share links for writable sessions', asy
   assert.equal(api.state.shareDialog?.url, 'https://codex.example/share/cws_public_token');
   assert.equal(api.state.status, 'Share link copied');
   assert.match(api.renderChat().innerHTML, /id="share-link-input"/u);
+});
+
+test('share controls stay hidden while public sharing is disabled', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.settingsOpen = true;
+  api.state.globalSettings.publicSharesEnabled = false;
+
+  assert.doesNotMatch(api.renderChat().innerHTML, /id="share-session-button"/u);
+  assert.equal(await api.shareCurrentSession(), null);
 });
 
 test('share dialog copy falls back when Clipboard API is unavailable', async () => {
@@ -1756,6 +1844,8 @@ test('mobile settings page title is centered with back on the left', async () =>
 test('app settings persist theme and default thread settings', async () => {
   const { api, storage, context } = await loadAppHarness();
 
+  assert.equal(api.state.theme, 'sunny');
+
   api.state.models = [
     { id: 'gpt-5.4', label: 'GPT 5.4' },
     { id: 'gpt-5.4-mini', label: 'GPT 5.4 Mini' },
@@ -1764,6 +1854,19 @@ test('app settings persist theme and default thread settings', async () => {
   api.applyTheme('light');
   assert.equal(storage.get('codexWebTheme'), 'light');
   assert.equal(context.document.documentElement.dataset.theme, 'light');
+
+  api.applyTheme('nord');
+  assert.equal(storage.get('codexWebTheme'), 'nord');
+  assert.equal(context.document.documentElement.dataset.theme, 'nord');
+
+  api.applyTheme('unsupported');
+  assert.equal(storage.get('codexWebTheme'), 'sunny');
+  assert.equal(context.document.documentElement.dataset.theme, 'sunny');
+
+  const settingsHtml = api.renderAppSettings().innerHTML;
+  for (const theme of ['sunny', 'light', 'dark', 'nord', 'forest', 'rose']) {
+    assert.match(settingsHtml, new RegExp(`data-app-theme="${theme}"`, 'u'));
+  }
 
   api.applyMessageFontSize('small');
   assert.equal(storage.get('codexWebMessageFontSize'), 'small');
@@ -2757,7 +2860,7 @@ test('session settings drawer closes when tapping outside the drawer', async () 
 
   api.handleSessionSettingsOutsideClick({
     target: {
-      closest: (selector) => selector === '#settings-toggle, .settings-drawer' ? {} : null,
+      closest: (selector) => selector.includes('.settings-drawer') ? {} : null,
     },
   });
 
@@ -2773,6 +2876,84 @@ test('session settings drawer closes when tapping outside the drawer', async () 
 
   assert.equal(api.state.settingsOpen, false);
   assert.ok(api.context.__appRenderCount > renderCountAfterInsideTap);
+});
+
+test('dialogs and drawers expose modal semantics, focus scopes, and live status regions', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  const { api } = await loadAppHarness();
+
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.globalSettings.publicSharesEnabled = true;
+  api.state.settingsOpen = true;
+  api.state.shareDialog = { url: 'https://example.test/share/token', copied: false };
+
+  const html = api.renderChat().innerHTML;
+  assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="share-dialog-title" data-focus-scope="share-dialog"/u);
+  assert.match(html, /id="share-link-input"[^>]*data-initial-focus/u);
+  assert.match(html, /role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings"/u);
+  assert.match(html, /class="composer-status"[^>]*role="status"[^>]*aria-live="polite"/u);
+  assert.match(app, /document\.addEventListener\('keydown', handleFocusScopeKeydown\)/u);
+  assert.match(app, /function makeBackgroundInert\(scope\)/u);
+  assert.match(app, /function resolveFocusReturnTarget\(target\)/u);
+});
+
+test('full renders clear managed inert state before replacing the DOM tree', async () => {
+  const app = await readFile(appUrl, 'utf8');
+
+  assert.match(app, /function render\(\)\s*\{[\s\S]*?detachTimelineScrollTracking\(\);\s*clearManagedInert\(\);\s*app\.innerHTML = '';/u);
+  assert.match(app, /function detachTimelineScrollTracking\(\)[\s\S]*removeEventListener\('scroll', updateTimelineFollowState\)[\s\S]*removeEventListener\('wheel', handleTimelineWheel\)/u);
+});
+
+test('Escape closes the active settings drawer', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.settingsOpen = true;
+  const event = {
+    key: 'Escape',
+    prevented: false,
+    stopped: false,
+    preventDefault() { this.prevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+
+  api.handleFocusScopeKeydown(event);
+
+  assert.equal(api.state.settingsOpen, false);
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+});
+
+test('Tab remains trapped inside the active modal focus scope', async () => {
+  const { api, context } = await loadAppHarness();
+  let firstFocusCount = 0;
+  const first = { hidden: false, inert: false, getAttribute: () => null, focus() { firstFocusCount += 1; } };
+  const last = { hidden: false, inert: false, getAttribute: () => null, focus() {} };
+  const scope = {
+    querySelectorAll: () => [first, last],
+  };
+  const originalQuerySelector = context.document.querySelector;
+  context.document.querySelector = (selector) => selector === '[data-focus-scope="share-dialog"]'
+    ? scope
+    : originalQuerySelector(selector);
+  Object.defineProperty(context.document, 'activeElement', { configurable: true, value: last });
+  api.state.shareDialog = { url: 'https://example.test/share/token', copied: false };
+  const event = {
+    key: 'Tab',
+    shiftKey: false,
+    prevented: false,
+    preventDefault() { this.prevented = true; },
+  };
+
+  api.handleFocusScopeKeydown(event);
+
+  assert.equal(event.prevented, true);
+  assert.equal(firstFocusCount, 1);
 });
 
 test('expanded composer positions collapse and Send inside a single editor surface', async () => {
@@ -2794,15 +2975,27 @@ test('expanded composer positions collapse and Send inside a single editor surfa
   assert.doesNotMatch(styles, /\.composer\.is-expanded \.compact-composer-row textarea\s*\{[^}]*max-height:\s*min\(72dvh,\s*560px\);/su);
 });
 
-test('running turns keep message sending available and move stop into settings', async () => {
+test('running turns keep message sending available and expose Stop in the chat header', async () => {
   const app = await readFile(appUrl, 'utf8');
+  const { api } = await loadAppHarness();
+
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_1';
+  api.state.settingsOpen = true;
+
+  const html = api.renderChat().innerHTML;
 
   assert.match(app, /<textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">/u);
   assert.doesNotMatch(app, /<textarea id="prompt-input"[^>]*state\.pendingTurn \? 'disabled'/u);
   assert.match(app, /id="send-button"/u);
   assert.doesNotMatch(app, /id="\$\{state\.pendingTurn \? 'stop-button' : 'send-button'\}"/u);
-  assert.match(app, /renderStopTurnControl\(\)/u);
-  assert.match(app, /id="stop-button"/u);
+  assert.match(html, /class="danger icon-button turn-stop-button"[^>]*id="stop-button"[^>]*aria-label="Stop current turn"/u);
+  assert.equal((html.match(/id="stop-button"/gu) || []).length, 1);
+  assert.doesNotMatch(html, /settings-stop-row/u);
   assert.match(app, /function onComposerSubmit\(event\)[\s\S]*const text = state\.prompt\.trim\(\);/u);
   assert.doesNotMatch(app, /function onComposerSubmit\(event\)\s*\{[\s\S]{0,180}if \(state\.pendingTurn\)/u);
 });
@@ -3109,7 +3302,7 @@ test('session refresh keeps a just-started turn running when backend detail temp
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
 });
 
 test('session refresh keeps a healthy active stream running when backend detail temporarily regresses to a completed view', async () => {
@@ -3189,7 +3382,7 @@ test('session refresh keeps a healthy active stream running when backend detail 
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_live');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
 });
 
 test('stream completion without a terminal event refreshes session state and sends the next queued message', async () => {
@@ -3633,7 +3826,7 @@ test('settings drawer opens without changing chat scroll geometry', async () => 
 
   assert.match(app, /function toggleSettingsDrawer\(\)/u);
   assert.match(app, /withTimelineScrollPreserved\(\(\) => render\(\)\)/u);
-  assert.match(app, /settingsToggle\.addEventListener\('click', toggleSettingsDrawer\)/u);
+  assert.match(app, /listenRendered\(settingsToggle, 'click', toggleSettingsDrawer\)/u);
   assert.match(styles, /\.composer\s*\{[^}]*position:\s*relative;/su);
   assert.match(styles, /\.settings-drawer\s*\{[^}]*position:\s*absolute;/su);
   assert.match(styles, /\.settings-drawer\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);/su);
@@ -3735,8 +3928,8 @@ test('changing message font size preserves timeline bottom offset', async () => 
 test('prompt focus protection keeps timeline scroll anchored during keyboard reflow', async () => {
   const app = await readFile(appUrl, 'utf8');
 
-  assert.match(app, /promptInput\.addEventListener\('touchstart',\s*syncPromptFocusLayout,\s*\{\s*passive:\s*true\s*\}\)/u);
-  assert.match(app, /promptInput\.addEventListener\('focus',\s*syncPromptFocusLayout\)/u);
+  assert.match(app, /listenRendered\(promptInput, 'touchstart',\s*syncPromptFocusLayout,\s*\{\s*passive:\s*true\s*\}\)/u);
+  assert.match(app, /listenRendered\(promptInput, 'focus',\s*syncPromptFocusLayout\)/u);
   assert.match(app, /function scheduleTimelineViewportRestore\(/u);
 });
 
@@ -3787,10 +3980,10 @@ test('report viewer uses its own scroll container instead of the outer document'
   assert.equal(api.getActiveScrollContainer({}), reportViewer);
 });
 
-test('desktop workspace CSS creates a three-pane layout on computer windows at 820px', async () => {
+test('desktop workspace CSS waits for enough room before creating three panes', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /@media \(min-width:\s*820px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
+  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
   assert.match(styles, /\.desktop-workspace\s*\{[^}]*display:\s*grid;/su);
   assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*240px minmax\(320px,\s*380px\) minmax\(0,\s*1fr\);/su);
   assert.match(styles, /\.desktop-project-rail,\s*\.desktop-session-pane\s*\{[^}]*overflow:\s*hidden;/su);
@@ -3810,10 +4003,10 @@ test('desktop sidebars use theme-aware panel backgrounds', async () => {
 test('desktop composer is anchored inside the right chat pane', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /@media \(min-width:\s*820px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*position:\s*absolute;/su);
-  assert.match(styles, /@media \(min-width:\s*820px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*left:\s*0;/su);
-  assert.match(styles, /@media \(min-width:\s*820px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*right:\s*0;/su);
-  assert.match(styles, /@media \(min-width:\s*820px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.timeline\s*\{[^}]*padding-bottom:\s*var\(--composer-offset\);/su);
+  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*position:\s*absolute;/su);
+  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*left:\s*0;/su);
+  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*right:\s*0;/su);
+  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.timeline\s*\{[^}]*padding-bottom:\s*var\(--composer-offset\);/su);
 });
 
 test('mobile session navigation still clears active session when returning to list', async () => {
@@ -3896,6 +4089,40 @@ test('desktop workspace render keeps the chat timeline anchored to latest messag
 
   const timeline = context.document.querySelector('#timeline');
   assert.equal(timeline.scrollTop, timeline.scrollHeight);
+});
+
+test('desktop workspace applies streamed timeline updates while sessions view stays active', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.timeline = [{ id: 'm1', kind: 'message', role: 'user', label: 'You', text: 'Run checks' }];
+  api.render();
+
+  api.state.timeline.push({
+    id: 'work_turn_1',
+    kind: 'work',
+    turnId: 'turn_1',
+    status: 'running',
+    batches: [{
+      id: 'batch_1',
+      batchId: 'batch_1',
+      batchKind: 'command',
+      title: 'npm test',
+      status: 'started',
+      summary: {},
+    }],
+    approvals: [],
+  });
+
+  assert.equal(api.refreshChatDynamicUi(), true);
+  assert.match(context.document.querySelector('#timeline').innerHTML, /class="card work-card"/u);
+  assert.match(context.document.querySelector('#timeline').innerHTML, /npm test/u);
+
+  api.state.view = 'new';
+  assert.equal(api.refreshChatDynamicUi(), false);
 });
 
 test('composer expand toggle stays hidden at two lines and appears at four lines', async () => {
@@ -3997,7 +4224,7 @@ test('session list scroll position is restored when returning from chat or refre
   assert.match(app, /function rememberSessionListScroll\(\)/u);
   assert.match(app, /if \(state\.view === 'sessions'\) \{\s*restoreSessionListScroll\(\);/u);
   assert.match(app, /showSessionList\(\) \{\s*savePromptDraftForCurrentSession\(\);\s*saveCurrentTimeline\(\);[\s\S]*rememberSessionListScroll\(\);/u);
-  assert.match(app, /for \(const button of document\.querySelectorAll\('\[data-session-id\]'\)\) \{\s*button\.addEventListener\('click', \(\) => \{\s*rememberSessionListScroll\(\);/u);
+  assert.match(app, /for \(const button of document\.querySelectorAll\('\[data-session-id\]'\)\) \{\s*listenRendered\(button, 'click', \(\) => \{\s*rememberSessionListScroll\(\);/u);
   assert.match(app, /function refreshCurrentView\(\)[\s\S]*rememberSessionListScroll\(\);[\s\S]*await refreshSessionsList/u);
 });
 
@@ -4260,7 +4487,7 @@ test('composer status renders a small bottom status separator', async () => {
   api.state.status = 'Turn running';
   api.state.statusTone = 'warn';
 
-  assert.match(api.renderComposerStatus(), /<div class="composer-status" data-tone="work"><span>Running<\/span><\/div>/u);
+  assert.match(api.renderComposerStatus(), /<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running<\/span><\/div>/u);
   assert.match(api.renderComposerStatus(), /<span>Running<\/span>/u);
   assert.doesNotMatch(api.renderComposerStatus(), /----- Running -----/u);
 
@@ -4379,6 +4606,31 @@ test('session detail updates can clear the current goal', async () => {
   assert.equal(api.state.currentSession.goal, null);
 });
 
+test('session lists retain summaries while only the current session retains full history', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo/one', settings: { metadata: {} } };
+  api.state.sessions = [api.state.currentSession];
+  api.state.sessionsByScope.all = [api.state.currentSession];
+
+  api.upsertSession({
+    id: 'session_1',
+    cwd: '/repo/one',
+    lastUserInput: 'Keep the summary',
+    settings: { metadata: {} },
+    thread: { turns: [{ id: 'turn_1', items: [{ text: 'x'.repeat(100_000) }] }] },
+    timeline: [{ id: 'history_1', text: 'y'.repeat(100_000) }],
+  });
+
+  assert.equal(api.state.currentSession.thread.turns[0].id, 'turn_1');
+  assert.equal(api.state.currentSession.timeline[0].id, 'history_1');
+  for (const session of [...api.state.sessions, ...api.state.sessionsByScope.all]) {
+    assert.equal(Object.hasOwn(session, 'thread'), false);
+    assert.equal(Object.hasOwn(session, 'timeline'), false);
+    assert.equal(session.lastUserInput, 'Keep the summary');
+  }
+});
+
 test('composer status separator uses continuous css rules outside the message box', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
@@ -4416,7 +4668,7 @@ test('assistant messages render markdown while user messages stay plain text', a
   assert.match(userHtml, /<p class="message-text">\*\*do not render\*\*<\/p>/u);
 });
 
-test('work batches are cached for recovery without rendering timeline cards', async () => {
+test('work batches retain compact recovery metadata without raw transport payloads', async () => {
   const { api } = await loadAppHarness();
 
   let assistantEntry = null;
@@ -4434,9 +4686,51 @@ test('work batches are cached for recovery without rendering timeline cards', as
     raw: { method: 'item/started', params: { item: { id: 'raw_batch' } } },
   }, assistantEntry);
 
-  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  const workItem = api.state.timeline.find((item) => item.kind === 'work');
+  assert.equal(workItem?.turnId, 'turn_raw');
+  assert.equal(workItem?.batches.length, 1);
   assert.equal(api.state.batches.get('raw_batch')?.batchId, 'raw_batch');
-  assert.equal(api.state.batches.get('raw_batch')?.summary?.raw?.method, 'item/started');
+  assert.equal(api.state.batches.get('raw_batch')?.summary?.raw, undefined);
+  const html = api.renderTimelineItem(workItem);
+  assert.match(html, /class="card work-card"/u);
+  assert.match(html, /Ran 1/u);
+  assert.match(html, /npm test/u);
+  assert.doesNotMatch(html, /item\/started/u);
+});
+
+test('file-change batches surface changed paths and line counts', async () => {
+  const { api } = await loadAppHarness();
+
+  api.applyTurnEvent({
+    type: 'batch.started',
+    turnId: 'turn_edit',
+    batchId: 'edit_1',
+    kind: 'file_change',
+    title: 'Update runtime state',
+  }, null);
+  api.applyTurnEvent({
+    type: 'batch.updated',
+    turnId: 'turn_edit',
+    batchId: 'edit_1',
+    summary: {
+      fileChanges: [
+        { path: 'packages/codex-web/src/runtime.ts', action: 'update', additions: 8, deletions: 2 },
+      ],
+    },
+  }, null);
+  api.applyTurnEvent({
+    type: 'batch.completed',
+    turnId: 'turn_edit',
+    batchId: 'edit_1',
+    status: 'completed',
+  }, null);
+
+  const workItem = api.state.timeline.find((item) => item.kind === 'work');
+  const html = api.renderTimelineItem(workItem);
+  assert.match(html, /Edited 1/u);
+  assert.match(html, /packages\/codex-web\/src\/runtime\.ts/u);
+  assert.match(html, /update/u);
+  assert.match(html, /\+8 \/ -2/u);
 });
 
 test('returning to sessions and back keeps the unsent prompt draft', async () => {
@@ -4513,6 +4807,49 @@ test('turn events update the chat timeline without replacing the focused compose
   assert.equal(api.context.document.querySelector('#prompt-input'), promptInput);
   assert.equal(api.context.document.querySelector('#timeline'), originalTimeline);
   assert.match(originalTimeline.innerHTML, /hello/u);
+});
+
+test('streaming deltas coalesce timeline rendering and persistence', async () => {
+  const frames: Array<() => void> = [];
+  const timers: Array<() => void> = [];
+  const { api, storage } = await loadAppHarness({
+    requestAnimationFrame: (callback: () => void) => {
+      frames.push(callback);
+      return frames.length;
+    },
+    setTimeout: (callback: () => void) => {
+      timers.push(callback);
+      return timers.length;
+    },
+    clearTimeout: () => {},
+  });
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_stream';
+  api.state.currentSession = { id: 'session_stream', cwd: '/repo', settings: { metadata: {} } };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_stream';
+  api.render();
+  frames.length = 0;
+  timers.length = 0;
+
+  let assistantEntry = null;
+  for (let index = 0; index < 40; index += 1) {
+    assistantEntry = api.applyTurnEvent({
+      type: 'assistant.delta',
+      turnId: 'turn_stream',
+      text: String(index % 10),
+      phase: 'streaming',
+    }, assistantEntry);
+  }
+
+  assert.equal(frames.length, 1);
+  assert.equal(timers.length, 1);
+  assert.equal(storage.has('codexWebTimelineCache'), false);
+  frames.shift()?.();
+  assert.match(api.context.document.querySelector('#timeline').innerHTML, /0123456789/u);
+  timers.shift()?.();
+  assert.match(storage.get('codexWebTimelineCache') || '', /0123456789/u);
 });
 
 test('stream completion refreshes chat chrome without replacing the focused composer', async () => {
@@ -4770,6 +5107,48 @@ test('opening a report path switches to a report loading view before resolve fin
   await pending;
 
   assert.match(context.document.querySelector('.report-viewer')?.innerHTML || '', /Summary/u);
+});
+
+test('closing a report prevents a late content response from retaining the document', async () => {
+  let releaseContent: ((payload: unknown) => void) | null = null;
+  let requestSignal: AbortSignal | null = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path: string, options: { signal?: AbortSignal } = {}) => {
+      assert.equal(path, '/api/reports/project-a%2Fsummary.md/content');
+      requestSignal = options.signal || null;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => await new Promise((resolve) => {
+          releaseContent = resolve;
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'reports';
+  api.state.reports = [{
+    id: 'project-a/summary.md',
+    project: 'project-a',
+    title: 'Summary',
+    kind: 'markdown',
+  }];
+
+  const pending = api.openReportById('project-a/summary.md');
+  await flushMicrotasks();
+  assert.equal(typeof releaseContent, 'function');
+  api.closeReportViewer();
+
+  assert.equal(requestSignal?.aborted, true);
+  releaseContent?.({
+    report: api.state.reports[0],
+    content: 'x'.repeat(500_000),
+  });
+  await pending;
+  assert.equal(api.state.currentReport, null);
+  assert.equal(api.state.currentReportContent, '');
+  assert.equal(api.state.currentReportLoading, false);
 });
 
 test('returning from a report restores the chat timeline position', async () => {
@@ -5257,7 +5636,7 @@ test('stream failures persist visible errors through the backend session timelin
   assert.equal(api.state.timeline.find((item) => item.id === 'error_turn_stream_error')?.text, 'SSE failed hard');
 });
 
-test('thread work updates stay off the timeline and surface failures as visible error messages', async () => {
+test('thread work updates render failed command details and a visible error message', async () => {
   const { api } = await loadAppHarness();
 
   let assistantEntry = null;
@@ -5305,15 +5684,20 @@ test('thread work updates stay off the timeline and surface failures as visible 
   }, assistantEntry);
 
   const latest = api.state.timeline.at(-1);
-  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  const workItem = api.state.timeline.find((item) => item.kind === 'work');
+  assert.equal(workItem?.status, 'failed');
   assert.equal(latest?.kind, 'message');
   assert.equal(latest?.role, 'system');
   assert.equal(latest?.severity, 'error');
 
-  const html = api.renderTimelineItem(latest);
-  assert.doesNotMatch(html, /work-card/u);
-  assert.match(html, /<span class="error-badge">Error<\/span>/u);
-  assert.match(html, /Command failed with exit code 1/u);
+  const workHtml = api.renderTimelineItem(workItem);
+  assert.match(workHtml, /work-card work-error" open/u);
+  assert.match(workHtml, /npm test/u);
+  assert.match(workHtml, /1 failing/u);
+
+  const errorHtml = api.renderTimelineItem(latest);
+  assert.match(errorHtml, /<span class="error-badge">Error<\/span>/u);
+  assert.match(errorHtml, /Command failed with exit code 1/u);
 });
 
 test('composer API failures render a visible timeline error', async () => {
@@ -5597,7 +5981,7 @@ test('new first-turn rollout errors report after the recovery delay when history
   assert.match(errorItem?.text || '', /rollout.*is empty/u);
 });
 
-test('approval requests still render as standalone actionable cards without work timeline items', async () => {
+test('approval requests remain standalone actionable cards beside work timeline items', async () => {
   const { api } = await loadAppHarness();
 
   let assistantEntry = null;
@@ -5633,7 +6017,7 @@ test('approval requests still render as standalone actionable cards without work
     summary: { command: 'npm install' },
   }, assistantEntry);
 
-  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), true);
   assert.equal(api.state.timeline.some((item) => item.kind === 'batch'), false);
   assert.equal(api.state.timeline.filter((item) => item.kind === 'approval').length, 1);
 
@@ -5646,7 +6030,7 @@ test('approval requests still render as standalone actionable cards without work
   assert.match(html, /data-approval-action="accept"/u);
 });
 
-test('assistant final messages stay at the bottom after hidden work updates complete', async () => {
+test('assistant final messages stay at the bottom after visible work updates complete', async () => {
   const { api } = await loadAppHarness();
 
   let assistantEntry = null;
@@ -5681,10 +6065,55 @@ test('assistant final messages stay at the bottom after hidden work updates comp
     status: 'completed',
   }, assistantEntry);
 
-  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), true);
   assert.equal(api.state.timeline.at(-1)?.id, 'assistant_turn_bottom_final');
   assert.equal(api.state.timeline.at(-1)?.kind, 'message');
   assert.match(api.renderTimelineItem(api.state.timeline.at(-1)), /Final response/u);
+});
+
+test('session status ignores stale in-progress history when activeTurnId is missing', async () => {
+  const { api } = await loadAppHarness();
+  const session = {
+    id: 'session_restarted',
+    activeTurnId: null,
+    thread: {
+      turns: [
+        { id: 'turn_finished', status: 'completed', items: [] },
+        { id: 'turn_running', status: 'inProgress', items: [] },
+      ],
+    },
+  };
+  api.state.sessionId = session.id;
+  api.state.currentSession = session;
+  api.state.status = 'Ready';
+  api.state.statusTone = 'success';
+
+  const result = api.syncRuntimeStatusFromSession(session);
+
+  assert.equal(result.activeTurnId, null);
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.turnId, null);
+  assert.equal(api.composerStatusLabel(), 'Done');
+});
+
+test('a stale terminal event cannot finish the current running turn', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessionId = 'session_1';
+  api.state.turnId = 'turn_current';
+  api.state.pendingTurn = true;
+  api.state.status = 'Turn running';
+  api.state.statusTone = 'warn';
+
+  api.applyTurnEvent({
+    type: 'turn.completed',
+    turnId: 'turn_stale',
+    threadId: 'session_1',
+    status: 'completed',
+  }, null);
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_current');
+  assert.equal(api.state.status, 'Turn running');
 });
 
 test('mobile UI persists per-browser chat timelines across reloads', async () => {
@@ -6595,16 +7024,16 @@ test('opening a read-only session from the session list starts at the earliest m
   assert.match(api.renderChat().innerHTML, /First archived question/u);
 });
 
-test('layout mode uses desktop workspace on pointer-based computer windows', async () => {
-  const { api, context } = await loadAppHarness({ viewportWidth: 900, desktopPointer: true });
+test('layout mode uses desktop workspace only on sufficiently wide pointer-based windows', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1200, desktopPointer: true });
 
-  assert.equal(api.DESKTOP_WORKSPACE_MIN_WIDTH, 820);
+  assert.equal(api.DESKTOP_WORKSPACE_MIN_WIDTH, 1024);
   assert.equal(api.isDesktopLayout(), true);
 
-  context.window.innerWidth = 819;
+  context.window.innerWidth = 1023;
   assert.equal(api.isDesktopLayout(), false);
 
-  context.window.innerWidth = 900;
+  context.window.innerWidth = 1200;
   context.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   assert.equal(api.isDesktopLayout(), false);
 });
@@ -7049,7 +7478,7 @@ test('desktop session selection keeps the workspace view active', async () => {
   assert.match(api.context.document.querySelector('#app').innerHTML, /Desktop answer/u);
 });
 
-test('desktop session selection stays two-pane on common narrow computer windows', async () => {
+test('narrow computer windows use the single-pane session flow', async () => {
   const { api } = await loadAppHarness({
     viewportWidth: 900,
     desktopPointer: true,
@@ -7085,14 +7514,11 @@ test('desktop session selection stays two-pane on common narrow computer windows
 
   await api.selectSession('session_2');
 
-  assert.equal(api.state.view, 'sessions');
+  assert.equal(api.state.view, 'chat');
   assert.equal(api.state.sessionId, 'session_2');
-  assert.match(api.context.document.querySelector('#app').innerHTML, /desktop-workspace/u);
-  assert.match(api.context.document.querySelector('#app').innerHTML, /desktop-project-rail/u);
-  assert.match(api.context.document.querySelector('#app').innerHTML, /desktop-session-pane/u);
-  assert.match(api.context.document.querySelector('#app').innerHTML, /desktop-chat-pane/u);
+  assert.doesNotMatch(api.context.document.querySelector('#app').innerHTML, /desktop-workspace/u);
   assert.match(api.context.document.querySelector('#app').innerHTML, /Right pane switched/u);
-  assert.doesNotMatch(api.context.document.querySelector('#app').innerHTML, /chat-back-button/u);
+  assert.match(api.context.document.querySelector('#app').innerHTML, /chat-back-button/u);
 });
 
 test('desktop showSessionList keeps the active right pane instead of clearing it', async () => {
@@ -7119,21 +7545,21 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
     readFile(appUrl, 'utf8'),
   ]);
 
-  assert.match(styles, /@media \(min-width:\s*820px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*960px\);/su);
-  assert.match(styles, /@media \(min-width:\s*820px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
-  assert.match(styles, /@media \(min-width:\s*820px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
-  assert.doesNotMatch(styles, /@media \(min-width:\s*820px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
+  assert.match(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*960px\);/su);
+  assert.match(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
+  assert.match(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
+  assert.doesNotMatch(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
   assert.match(app, /if \(!isDesktopLayout\(\)\) \{[\s\S]*id="composer-expand-button"/u);
   assert.match(app, /id="composer-refresh-button"/u);
   assert.match(app, /class="composer-action-buttons"/u);
   assert.match(app, /function handlePromptKeydown\(event\)/u);
-  assert.match(app, /promptInput\.addEventListener\('keydown', handlePromptKeydown\)/u);
+  assert.match(app, /listenRendered\(promptInput, 'keydown', handlePromptKeydown\)/u);
   assert.doesNotMatch(app, /document\.querySelector\('#composer-form'\)\?\.requestSubmit\(\)/u);
 });
 
 test('desktop prompt Enter does not submit the form', async () => {
   let submitCount = 0;
-  const { api, context } = await loadAppHarness({ viewportWidth: 900, desktopPointer: true });
+  const { api, context } = await loadAppHarness({ viewportWidth: 1200, desktopPointer: true });
 
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'sessions';
@@ -7376,9 +7802,8 @@ test('mobile sessions render drawer actions and keep favorites toggle beside the
   assert.match(html, /mobile-sidebar-toggle-button/u);
   assert.match(html, /class="mobile-project-drawer/is);
   assert.match(html, /id="mobile-drawer-backdrop"/u);
-  assert.match(html, /<div class="project-rail-brand">Yan Shan Lab<\/div>/u);
-  assert.doesNotMatch(html, /mobile-project-drawer-close-button/u);
-  assert.doesNotMatch(html, />Close<\/button>/u);
+  assert.match(html, /<div class="project-rail-brand" id="mobile-project-drawer-title">Yan Shan Lab<\/div>/u);
+  assert.match(html, /id="mobile-drawer-close-button"[^>]*aria-label="Close projects"/u);
   assert.match(html, /All Sessions/u);
   assert.match(html, /Project Alpha/u);
   assert.match(html, /open-new-session-button/u);
@@ -7395,21 +7820,22 @@ test('mobile sessions render drawer actions and keep favorites toggle beside the
   assert.doesNotMatch(mobileHeader, /mobile-session-page-title/u);
   assert.doesNotMatch(mobileHeader, />Sessions<\/div>/u);
   assert.doesNotMatch(mobileHeader, /id="open-reports-button"/u);
-  assert.doesNotMatch(mobileHeader, /id="open-new-session-button"/u);
-  assert.match(drawerFooter, /id="open-reports-button"[\s\S]*id="open-new-session-button"[\s\S]*id="open-app-settings-button"/u);
+  assert.match(mobileHeader, /id="open-new-session-button"/u);
+  assert.match(drawerFooter, /id="open-reports-button"[\s\S]*id="open-app-settings-button"/u);
+  assert.doesNotMatch(drawerFooter, /id="open-new-session-button"/u);
 });
 
 test('mobile project drawer closes from the uncovered backdrop area', async () => {
   const app = await readFile(appUrl, 'utf8');
 
   assert.match(app, /id="mobile-drawer-backdrop"/u);
-  assert.doesNotMatch(app, /mobile-project-drawer-close-button/u);
+  assert.match(app, /id="mobile-drawer-close-button"/u);
   assert.match(app, /const mobileProjectDrawerBackdrop = document\.querySelector\('#mobile-drawer-backdrop'\);/u);
-  assert.match(app, /mobileProjectDrawerBackdrop\.addEventListener\('click',\s*\(event\) => \{/u);
+  assert.match(app, /listenRendered\(mobileProjectDrawerBackdrop, 'click',\s*\(event\) => \{/u);
   assert.match(app, /if \(event\.target !== mobileProjectDrawerBackdrop\) \{\s*return;\s*\}/u);
-  assert.match(app, /setMobileSidebarOpen\(false\);/u);
+  assert.match(app, /closeMobileSidebar\(\);/u);
   assert.match(app, /function setMobileSidebarOpen\(open\)/u);
-  assert.match(app, /\.mobile-project-drawer'\)\?\.classList\.toggle\('is-open', state\.mobileSidebarOpen\)/u);
+  assert.match(app, /drawer\?\.classList\.toggle\('is-open', state\.mobileSidebarOpen\)/u);
 });
 
 test('mobile project drawer title stays below the phone status bar', async () => {
@@ -8674,6 +9100,212 @@ test('auth expiration clears cached session summaries from local storage', async
   assert.equal(api.state.authSession, null);
 });
 
+test('auth expiration prevents late session and report responses from restoring logged-out state', async () => {
+  let releaseSessionDetail: ((payload: unknown) => void) | null = null;
+  let releaseSessionList: ((payload: unknown) => void) | null = null;
+  let releaseReportList: ((payload: unknown) => void) | null = null;
+  let releaseReportContent: ((payload: unknown) => void) | null = null;
+  const delayedJson = (release: (value: (payload: unknown) => void) => void) => ({
+    ok: true,
+    status: 200,
+    json: async () => await new Promise((resolve) => {
+      release(resolve);
+    }),
+  });
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_active') {
+        return delayedJson((resolve) => {
+          releaseSessionDetail = resolve;
+        });
+      }
+      if (path === '/api/sessions') {
+        return delayedJson((resolve) => {
+          releaseSessionList = resolve;
+        });
+      }
+      if (path === '/api/reports') {
+        return delayedJson((resolve) => {
+          releaseReportList = resolve;
+        });
+      }
+      if (path === '/api/reports/project-a%2Flate.md/content') {
+        return delayedJson((resolve) => {
+          releaseReportContent = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  storage.set('codexWebToken', 'token');
+  storage.set('codexWebSessionsCache', JSON.stringify({
+    scopes: {
+      all: [{ id: 'session_active', cwd: '/repo', firstUserInput: 'Cached prompt' }],
+    },
+  }));
+  storage.set('codexWebTimelineCache', JSON.stringify({
+    entries: [{ sessionId: 'session_active', timeline: [{ id: 'cached_message', text: 'Cached answer' }] }],
+  }));
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'reports';
+  api.state.sessionId = 'session_active';
+  api.state.currentSession = { id: 'session_active', cwd: '/repo', settings: { metadata: {} } };
+  api.state.sessions = [api.state.currentSession];
+  api.state.sessionsByScope.all = [api.state.currentSession];
+  api.state.reports = [{
+    id: 'project-a/late.md',
+    project: 'project-a',
+    title: 'Late report',
+    kind: 'markdown',
+  }];
+
+  const pendingSessionDetail = api.refreshCurrentSessionMetadata();
+  const pendingSessionList = api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+  const pendingReportList = api.refreshReportsList({ renderAfter: false });
+  const pendingReportContent = api.openReportById('project-a/late.md');
+  await flushMicrotasks();
+
+  assert.equal(typeof releaseSessionDetail, 'function');
+  assert.equal(typeof releaseSessionList, 'function');
+  assert.equal(typeof releaseReportList, 'function');
+  assert.equal(typeof releaseReportContent, 'function');
+
+  api.handleApiError({ status: 401, payload: { message: 'Session expired' } });
+
+  releaseSessionDetail?.({
+    session: { id: 'session_active', cwd: '/late-detail', firstUserInput: 'Late detail response', settings: { metadata: {} } },
+  });
+  releaseSessionList?.({
+    items: [{ id: 'session_late_list', cwd: '/late-list', firstUserInput: 'Late list response', settings: { metadata: {} } }],
+  });
+  releaseReportList?.({
+    items: [{ id: 'project-a/list-late.md', project: 'project-a', title: 'Late list report', kind: 'markdown' }],
+  });
+  releaseReportContent?.({
+    report: { id: 'project-a/late.md', project: 'project-a', title: 'Late report', kind: 'markdown' },
+    content: '# Late report content',
+  });
+  await Promise.all([pendingSessionDetail, pendingSessionList, pendingReportList, pendingReportContent]);
+
+  assert.equal(api.state.authSession, null);
+  assert.equal(api.state.sessionId, null);
+  assert.equal(api.state.currentSession, null);
+  assert.equal(api.state.currentReport, null);
+  assert.equal(api.state.currentReportContent, '');
+  assert.equal(api.state.sessions.length, 0);
+  assert.equal(api.state.sessionsByScope.favorites.length, 0);
+  assert.equal(api.state.sessionsByScope.all.length, 0);
+  assert.equal(api.state.sessionsByScope.archived.length, 0);
+  assert.equal(api.state.reports.length, 0);
+  assert.equal(storage.get('codexWebToken'), undefined);
+  assert.equal(storage.get('codexWebSessionsCache'), undefined);
+  assert.equal(storage.get('codexWebTimelineCache'), undefined);
+  assert.doesNotMatch(JSON.stringify(api.state), /Late detail response|Late list response|Late report content/u);
+});
+
+test('auth expiration prevents late session mutations from upserting or persisting session data', async () => {
+  let releaseFavorite: ((payload: unknown) => void) | null = null;
+  let releaseUnarchive: ((payload: unknown) => void) | null = null;
+  let releaseSettings: ((payload: unknown) => void) | null = null;
+  const delayedJson = (release: (value: (payload: unknown) => void) => void) => ({
+    ok: true,
+    status: 200,
+    json: async () => await new Promise((resolve) => {
+      release(resolve);
+    }),
+  });
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_active/favorite') {
+        return delayedJson((resolve) => {
+          releaseFavorite = resolve;
+        });
+      }
+      if (path === '/api/sessions/session_active/unarchive') {
+        return delayedJson((resolve) => {
+          releaseUnarchive = resolve;
+        });
+      }
+      if (path === '/api/sessions/session_active/settings') {
+        return delayedJson((resolve) => {
+          releaseSettings = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  const activeSession = {
+    id: 'session_active',
+    cwd: '/repo',
+    archived: true,
+    readOnly: true,
+    settings: { metadata: {} },
+  };
+  storage.set('codexWebToken', 'token');
+  storage.set('codexWebSessionsCache', JSON.stringify({
+    scopes: { archived: [activeSession] },
+  }));
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessionId = activeSession.id;
+  api.state.currentSession = activeSession;
+  api.state.sessions = [activeSession];
+  api.state.sessionsByScope.archived = [activeSession];
+
+  const pendingFavorite = api.toggleSessionFavorite(activeSession.id);
+  const pendingUnarchive = api.unarchiveSession(activeSession.id);
+  const pendingSettings = api.updateSessionSettings({ model: 'gpt-5-mini', reasoningEffort: 'low' });
+  await flushMicrotasks();
+
+  assert.equal(typeof releaseFavorite, 'function');
+  assert.equal(typeof releaseUnarchive, 'function');
+  assert.equal(typeof releaseSettings, 'function');
+
+  api.handleApiError({ status: 401, payload: { message: 'Session expired' } });
+
+  releaseFavorite?.({
+    session: {
+      id: activeSession.id,
+      cwd: '/late-favorite',
+      favorite: true,
+      firstUserInput: 'Late favorite response',
+      settings: { metadata: {} },
+    },
+  });
+  releaseUnarchive?.({
+    session: {
+      id: activeSession.id,
+      cwd: '/late-unarchive',
+      archived: false,
+      firstUserInput: 'Late unarchive response',
+      settings: { metadata: {} },
+    },
+  });
+  releaseSettings?.({
+    session: {
+      id: activeSession.id,
+      cwd: '/late-settings',
+      firstUserInput: 'Late settings response',
+      settings: { metadata: { source: 'late-settings' } },
+    },
+  });
+  await Promise.all([pendingFavorite, pendingUnarchive, pendingSettings]);
+
+  assert.equal(api.state.authSession, null);
+  assert.equal(api.state.sessionId, null);
+  assert.equal(api.state.currentSession, null);
+  assert.equal(api.state.sessions.length, 0);
+  assert.equal(api.state.sessionsByScope.favorites.length, 0);
+  assert.equal(api.state.sessionsByScope.all.length, 0);
+  assert.equal(api.state.sessionsByScope.archived.length, 0);
+  assert.equal(storage.get('codexWebToken'), undefined);
+  assert.equal(storage.get('codexWebSessionsCache'), undefined);
+  assert.doesNotMatch(JSON.stringify(api.state), /Late favorite response|Late unarchive response|Late settings response/u);
+});
+
 test('archived session scope requests the archived sessions endpoint and marks read-only summaries', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
@@ -8759,7 +9391,7 @@ test('archive action requires a confirmation dialog before deleting a session', 
   assert.match(app, /requestArchiveSession\(button\.getAttribute\('data-session-archive-request-id'\) \|\| ''\)/u);
   assert.match(app, /archiveSession\(button\.getAttribute\('data-session-archive-confirm-id'\) \|\| ''\)/u);
   assert.doesNotMatch(app, /archiveSession\(button\.getAttribute\('data-session-archive-id'\) \|\| ''\)/u);
-  assert.match(app, /<button class="ghost compact-button" type="button" id="archive-cancel-button">Cancel<\/button>/u);
+  assert.match(app, /<button class="ghost compact-button" type="button" id="archive-cancel-button" data-initial-focus>Cancel<\/button>/u);
   assert.match(app, /<button class="danger compact-button" type="button" data-session-archive-confirm-id="\$\{escapeAttribute\(session\.id\)\}">Archive<\/button>/u);
   assert.match(styles, /\.modal-backdrop\s*\{/u);
   assert.match(styles, /\.confirm-dialog\s*\{/u);
@@ -9234,7 +9866,7 @@ test('PWA stream network failures keep the active turn recoverable when visibili
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, true);
   assert.equal(api.state.status, 'Stream paused');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn"><span>Paused</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Paused</span></div>');
 });
 
 test('PWA stream ending without a terminal event keeps the active turn recoverable', async () => {
@@ -9271,7 +9903,7 @@ test('PWA stream ending without a terminal event keeps the active turn recoverab
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, true);
   assert.equal(api.state.status, 'Stream paused');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn"><span>Paused</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Paused</span></div>');
 });
 
 test('PWA stream recovery reconnects a paused active turn while the page stays visible', async () => {
@@ -9494,7 +10126,7 @@ test('PWA history refresh surfaces the latest failed turn as a visible error', a
   assert.equal(api.state.turnId, null);
   assert.equal(api.state.status, 'Turn failed');
   assert.equal(api.state.statusTone, 'danger');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="danger"><span>Failed</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="danger" role="status" aria-live="polite" aria-atomic="true"><span>Failed</span></div>');
   assert.equal(api.state.error, '');
   const errorItem = api.state.timeline.find((item) => item.id === 'error_turn_failed');
   assert.equal(errorItem?.kind, 'message');
@@ -9658,7 +10290,7 @@ test('interrupted turn events render as stopped instead of interrupted', async (
   assert.equal(api.state.pendingTurn, false);
   assert.equal(api.state.status, 'Turn stopped');
   assert.equal(api.state.statusTone, 'warn');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn"><span>Stopped</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Stopped</span></div>');
 });
 
 test('history refresh renders interrupted terminal turns as stopped', async () => {
@@ -9702,7 +10334,7 @@ test('history refresh renders interrupted terminal turns as stopped', async () =
 
   assert.equal(api.state.status, 'Turn stopped');
   assert.equal(api.state.statusTone, 'warn');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn"><span>Stopped</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Stopped</span></div>');
 });
 
 test('PWA history refresh clears stale running state from the latest terminal turn', async () => {
@@ -9755,7 +10387,7 @@ test('PWA history refresh clears stale running state from the latest terminal tu
   assert.equal(api.state.streamWasBackgrounded, false);
   assert.equal(api.state.status, 'Ready');
   assert.equal(api.state.statusTone, 'success');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success"><span>Done</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success" role="status" aria-live="polite" aria-atomic="true"><span>Done</span></div>');
 });
 
 test('PWA history refresh sends queued follow-up once the backgrounded turn is done', async () => {
@@ -9973,11 +10605,11 @@ test('session refresh restores running status when backend reports an active tur
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_active');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
   assert.ok(fetchCalls.includes('/api/turns/turn_active/events'));
 });
 
-test('session refresh ignores stale in-progress history without a backend active turn', async () => {
+test('session refresh ignores in-progress history without an active marker after restart', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path) => {
@@ -10026,8 +10658,8 @@ test('session refresh ignores stale in-progress history without a backend active
   assert.equal(api.state.turnId, null);
   assert.equal(api.state.status, 'Ready');
   assert.equal(api.state.statusTone, 'success');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success"><span>Done</span></div>');
-  assert.deepEqual(fetchCalls, ['/api/sessions/session_1']);
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success" role="status" aria-live="polite" aria-atomic="true"><span>Done</span></div>');
+  assert.equal(fetchCalls.includes('/api/turns/turn_stale/events'), false);
 });
 
 test('opening a session restores running status when the session has an active turn', async () => {
@@ -10086,7 +10718,7 @@ test('opening a session restores running status when the session has an active t
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_active');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
   assert.ok(fetchCalls.includes('/api/turns/turn_active/events'));
 });
 
@@ -10263,6 +10895,7 @@ async function loadAppHarness(overrides = {}) {
         this.selectionDirection = direction;
       },
       querySelector: () => null,
+      querySelectorAll: () => [],
       getBoundingClientRect: () => ({ height: 0 }),
       click() {
         this.__listeners.get('click')?.({ target: this, stopPropagation() {} });
@@ -10475,9 +11108,9 @@ async function loadAppHarness(overrides = {}) {
     navigator: {
       userAgent: 'Node test',
     },
-    requestAnimationFrame: (callback) => {
+    requestAnimationFrame: overrides.requestAnimationFrame || ((callback) => {
       callback();
-    },
+    }),
     setTimeout: overrides.setTimeout || setTimeout,
     clearTimeout: overrides.clearTimeout || clearTimeout,
     setInterval: overrides.setInterval || (() => 1),
@@ -10524,6 +11157,8 @@ globalThis.__codexWebTest = {
   renderReportViewer: typeof renderReportViewer === 'function' ? renderReportViewer : null,
   renderTimelineItem: typeof renderTimelineItem === 'function' ? renderTimelineItem : null,
   renderComposerStatus: typeof renderComposerStatus === 'function' ? renderComposerStatus : null,
+  refreshChatDynamicUi: typeof refreshChatDynamicUi === 'function' ? refreshChatDynamicUi : null,
+  composerStatusLabel: typeof composerStatusLabel === 'function' ? composerStatusLabel : null,
   applyMessageFontSize: typeof applyMessageFontSize === 'function' ? applyMessageFontSize : null,
   setMessageFontSize: typeof setMessageFontSize === 'function' ? setMessageFontSize : null,
   updateComposerExpansionState: typeof updateComposerExpansionState === 'function' ? updateComposerExpansionState : null,
@@ -10535,6 +11170,7 @@ globalThis.__codexWebTest = {
   updateSessionSettings: typeof updateSessionSettings === 'function' ? updateSessionSettings : null,
   collectSettings,
   refreshCurrentSessionMetadata,
+  syncRuntimeStatusFromSession: typeof syncRuntimeStatusFromSession === 'function' ? syncRuntimeStatusFromSession : null,
   refreshSessionsList: typeof refreshSessionsList === 'function' ? refreshSessionsList : null,
   refreshCurrentView: typeof refreshCurrentView === 'function' ? refreshCurrentView : null,
   restoreAuth: typeof restoreAuth === 'function' ? restoreAuth : null,
@@ -10568,6 +11204,7 @@ globalThis.__codexWebTest = {
   handleTimelineWheel: typeof handleTimelineWheel === 'function' ? handleTimelineWheel : null,
   handleComposerRefresh: typeof handleComposerRefresh === 'function' ? handleComposerRefresh : null,
   recoverActiveTurnIfStreamUnhealthy: typeof recoverActiveTurnIfStreamUnhealthy === 'function' ? recoverActiveTurnIfStreamUnhealthy : null,
+  checkForAppUpdate: typeof checkForAppUpdate === 'function' ? checkForAppUpdate : null,
   filteredSessions: typeof filteredSessions === 'function' ? filteredSessions : null,
   sortedSessions: typeof sortedSessions === 'function' ? sortedSessions : null,
   workspaceProjects: typeof workspaceProjects === 'function' ? workspaceProjects : null,
@@ -10597,6 +11234,8 @@ globalThis.__codexWebTest = {
 	  renderSettingsDrawer: typeof renderSettingsDrawer === 'function' ? renderSettingsDrawer : null,
 	  handleSessionSettingsOutsideClick: typeof handleSessionSettingsOutsideClick === 'function' ? handleSessionSettingsOutsideClick : null,
 	  handleApiError: typeof handleApiError === 'function' ? handleApiError : null,
+	  handleFocusScopeKeydown: typeof handleFocusScopeKeydown === 'function' ? handleFocusScopeKeydown : null,
+	  syncFocusScope: typeof syncFocusScope === 'function' ? syncFocusScope : null,
 	  streamTurnEvents,
 	  applyTurnEvent: typeof applyTurnEvent === 'function' ? applyTurnEvent : null,
 	  enqueueQueuedMessage: typeof enqueueQueuedMessage === 'function' ? enqueueQueuedMessage : null,

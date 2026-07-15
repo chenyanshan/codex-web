@@ -90,7 +90,19 @@ export interface CodexWebRuntimeClient {
     ephemeral?: boolean | null;
   }): Promise<ProviderThreadStartResult>;
   readThread(threadId: string, includeTurns?: boolean): Promise<ProviderThreadSummary | null>;
-  resumeThread?(args: { threadId: string }): Promise<unknown>;
+  resumeThread?(args: {
+    threadId: string;
+    approvalPolicy?: string | null;
+    sandboxMode?: string | null;
+  }): Promise<unknown>;
+  getPendingApprovals?(args?: {
+    threadId?: string | null;
+    turnId?: string | null;
+  }): ProviderApprovalRequest[];
+  subscribeToApprovalRequests?(
+    listener: (request: ProviderApprovalRequest) => Promise<void> | void,
+    options?: { replayPending?: boolean },
+  ): () => void;
   getThreadGoal?(threadId: string): Promise<ProviderThreadGoal | null>;
   setThreadGoal?(args: {
     threadId: string;
@@ -127,6 +139,14 @@ export interface CodexWebRuntimeClient {
     onTurnStarted?: ((meta: Record<string, unknown>) => Promise<void> | void) | null;
     onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
     timeoutMs?: number;
+  }): Promise<ProviderTurnResult>;
+  waitForTurnResult?(args: {
+    threadId: string;
+    turnId: string;
+    onProgress?: ((progress: any) => Promise<void> | void) | null;
+    onWorkEvent?: ((event: ProviderTurnWorkEvent) => Promise<void> | void) | null;
+    onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
+    timeoutMs: number;
   }): Promise<ProviderTurnResult>;
   interruptTurn(args: { threadId: string; turnId: string }): Promise<void>;
   respondToApproval(args: { requestId: string; option: 1 | 2 | 3 }): Promise<void>;
@@ -226,6 +246,8 @@ export class CodexWebRuntime {
 
   private readonly workSummaries = new Map<string, Map<string, Record<string, unknown>>>();
 
+  private unsubscribeApprovalRequests: (() => void) | null = null;
+
   private readonly helpReportPath: string | null;
 
   private readonly logger: CodexWebRuntimeLogger;
@@ -247,6 +269,14 @@ export class CodexWebRuntime {
     this.timelineStore = timelineStore ?? null;
     this.helpReportPath = helpReportPath;
     this.logger = logger;
+    if (typeof this.client.subscribeToApprovalRequests === 'function') {
+      this.unsubscribeApprovalRequests = this.client.subscribeToApprovalRequests(
+        (request) => this.captureApprovalRequest(request),
+        { replayPending: true },
+      );
+    } else {
+      this.replayPendingApprovals();
+    }
   }
 
   async listModels(): Promise<ProviderModelInfo[]> {
@@ -261,6 +291,8 @@ export class CodexWebRuntime {
   }
 
   async stop(): Promise<void> {
+    this.unsubscribeApprovalRequests?.();
+    this.unsubscribeApprovalRequests = null;
     this.sessionSettings.clear();
     this.turnToThread.clear();
     this.approvalToTurn.clear();
@@ -310,7 +342,7 @@ export class CodexWebRuntime {
       return null;
     }
     try {
-      await this.client.resumeThread({ threadId });
+      await this.resumeThreadWithSessionSettings(threadId);
     } catch (error) {
       if (isUnavailableThreadError(error)) {
         return null;
@@ -353,7 +385,10 @@ export class CodexWebRuntime {
       const archivedThread = this.readArchivedThreadSummary(sessionId);
       return archivedThread ? this.toSession(archivedThread) : null;
     }
-    return this.withThreadGoal(this.toSession(thread));
+    this.replayPendingApprovals(sessionId);
+    const session = this.toSession(thread);
+    this.observeRecoveredTurn(session);
+    return this.withThreadGoal(session);
   }
 
   async updateSessionSettings(
@@ -576,33 +611,10 @@ export class CodexWebRuntime {
         if (!startedTurnId) {
           return;
         }
-        const turnWorkSummaries = this.workSummaries.get(startedTurnId) ?? new Map<string, Record<string, unknown>>();
-        this.workSummaries.set(startedTurnId, turnWorkSummaries);
-        const existing = turnWorkSummaries.get(event.itemId) ?? {};
-        Object.assign(existing, event.summary ?? {});
-        turnWorkSummaries.set(event.itemId, existing);
-        for (const normalized of normalizeWorkBatchEvents({
-          turnId: startedTurnId,
-          event: {
-            ...event,
-            summary: { ...existing },
-          },
-        })) {
-          this.append(startedTurnId, normalized);
-        }
+        this.captureTurnWorkEvent(startedTurnId, event);
       },
       onApprovalRequest: async (request) => {
-        const turnId = request.turnId ?? startedTurnId;
-        if (!turnId) {
-          return;
-        }
-        this.rememberTurnThread(turnId, sessionId);
-        this.approvalToTurn.set(request.requestId, turnId);
-        this.approvalToBatch.set(request.requestId, request.itemId || request.requestId);
-        const batchStart = normalizeApprovalBatchEvent({ turnId, request });
-        this.append(turnId, batchStart);
-        this.append(turnId, normalizeApprovalBatchUpdatedEvent({ turnId, request }));
-        this.append(turnId, normalizeApprovalEvent({ turnId, request }));
+        this.captureApprovalRequest(request, startedTurnId || null, sessionId);
       },
     }).then((result) => {
       const resultTurnId = String(result.turnId ?? '');
@@ -667,13 +679,11 @@ export class CodexWebRuntime {
     runPromise.catch(() => {});
     startedPromise.then(({ turnId }) => {
       this.activeTurns.set(turnId, runPromise);
-      runPromise.then((result) => {
-        if (isTerminalProviderTurnResult(result)) {
+      runPromise.finally(() => {
+        if (this.activeTurns.get(turnId) === runPromise) {
           this.activeTurns.delete(turnId);
         }
-      }).catch(() => {
-        this.activeTurns.delete(turnId);
-      });
+      }).catch(() => {});
     }).catch(() => {});
     return startedPromise;
   }
@@ -727,7 +737,7 @@ export class CodexWebRuntime {
     const goal = await this.requireGoalSetter()({
       threadId: sessionId,
       objective: command.objective,
-      status: null,
+      status: 'active',
       suppressAutoTurn: true,
     });
     return createGoalCommandResult({
@@ -836,6 +846,127 @@ export class CodexWebRuntime {
     return this.eventBus.subscribe(turnId, listener);
   }
 
+  private captureApprovalRequest(
+    request: ProviderApprovalRequest,
+    fallbackTurnId: string | null = null,
+    fallbackThreadId: string | null = null,
+  ): void {
+    const requestId = String(request.requestId ?? '').trim();
+    const threadId = String(request.threadId ?? fallbackThreadId ?? '').trim();
+    const turnId = String(request.turnId ?? fallbackTurnId ?? this.activeTurnIdForThread(threadId) ?? '').trim();
+    if (!requestId || !threadId || !turnId) {
+      this.logDebug('approval_unroutable', {
+        requestId,
+        threadId,
+        turnId: request.turnId ?? null,
+      });
+      return;
+    }
+    if (this.approvalToTurn.get(requestId) === turnId) {
+      return;
+    }
+    this.rememberTurnThread(turnId, threadId);
+    this.approvalToTurn.set(requestId, turnId);
+    this.approvalToBatch.set(requestId, request.itemId || requestId);
+    this.append(turnId, normalizeApprovalBatchEvent({ turnId, request }));
+    this.append(turnId, normalizeApprovalBatchUpdatedEvent({ turnId, request }));
+    this.append(turnId, normalizeApprovalEvent({ turnId, request }));
+    this.logDebug('approval_captured', {
+      requestId,
+      threadId,
+      turnId,
+      kind: request.kind,
+    });
+  }
+
+  private replayPendingApprovals(threadId: string | null = null): void {
+    if (typeof this.client.getPendingApprovals !== 'function') {
+      return;
+    }
+    for (const request of this.client.getPendingApprovals({ threadId })) {
+      this.captureApprovalRequest(request);
+    }
+  }
+
+  private captureTurnWorkEvent(turnId: string, event: ProviderTurnWorkEvent): void {
+    const turnWorkSummaries = this.workSummaries.get(turnId) ?? new Map<string, Record<string, unknown>>();
+    this.workSummaries.set(turnId, turnWorkSummaries);
+    const existing = turnWorkSummaries.get(event.itemId) ?? {};
+    Object.assign(existing, event.summary ?? {});
+    turnWorkSummaries.set(event.itemId, existing);
+    for (const normalized of normalizeWorkBatchEvents({
+      turnId,
+      event: {
+        ...event,
+        summary: { ...existing },
+      },
+    })) {
+      this.append(turnId, normalized);
+    }
+  }
+
+  private observeRecoveredTurn(session: CodexWebSession): void {
+    const turnId = session.activeTurnId;
+    if (
+      !turnId
+      || threadRuntimeStatusType(session.thread) !== 'active'
+      || this.activeTurns.has(turnId)
+      || typeof this.client.waitForTurnResult !== 'function'
+    ) {
+      return;
+    }
+    this.rememberTurnThread(turnId, session.id);
+    if (!this.eventBus.list(turnId).some((entry) => entry.event.type === 'turn.started')) {
+      this.append(turnId, normalizeTurnStartedEvent({
+        turnId,
+        threadId: session.id,
+        raw: { recovered: true },
+      }));
+    }
+    const runPromise = this.client.waitForTurnResult({
+      threadId: session.id,
+      turnId,
+      timeoutMs: 15 * 60 * 1000,
+      onProgress: async (progress) => {
+        this.append(turnId, normalizeProgressEvent({
+          turnId,
+          threadId: session.id,
+          progress,
+        }));
+      },
+      onWorkEvent: async (event) => {
+        this.captureTurnWorkEvent(turnId, event);
+      },
+      onApprovalRequest: async (request) => {
+        this.captureApprovalRequest(request, turnId, session.id);
+      },
+    });
+    this.activeTurns.set(turnId, runPromise);
+    void runPromise.then((result) => {
+      for (const event of normalizeTurnCompletedEvent({
+        turnId,
+        threadId: session.id,
+        result,
+      })) {
+        this.append(turnId, event);
+      }
+      if (isTerminalProviderTurnResult(result)) {
+        this.cleanupFinishedTurn(turnId);
+      }
+    }).catch((error: unknown) => {
+      this.append(turnId, normalizeTurnFailedEvent({
+        turnId,
+        threadId: session.id,
+        error,
+      }));
+      this.cleanupFinishedTurn(turnId);
+    }).finally(() => {
+      if (this.activeTurns.get(turnId) === runPromise) {
+        this.activeTurns.delete(turnId);
+      }
+    });
+  }
+
   private append(turnId: string, event: CodexWebEvent): void {
     if (event.type === 'turn.completed' || event.type === 'turn.failed') {
       this.logDebug('event_append', {
@@ -889,7 +1020,7 @@ export class CodexWebRuntime {
       return null;
     }
     try {
-      await this.client.resumeThread({ threadId });
+      await this.resumeThreadWithSessionSettings(threadId);
     } catch (error) {
       if (isMissingThreadError(error)) {
         return null;
@@ -939,7 +1070,7 @@ export class CodexWebRuntime {
       return;
     }
     try {
-      await this.client.resumeThread({ threadId });
+      await this.resumeThreadWithSessionSettings(threadId);
     } catch (error) {
       if (isMissingRolloutError(error)) {
         return;
@@ -948,7 +1079,21 @@ export class CodexWebRuntime {
     }
   }
 
+  private async resumeThreadWithSessionSettings(threadId: string): Promise<void> {
+    if (typeof this.client.resumeThread !== 'function') {
+      return;
+    }
+    const settings = this.getSessionSettings(threadId);
+    const permissions = resolveResumePermissions(settings);
+    await this.client.resumeThread({
+      threadId,
+      approvalPolicy: permissions.approvalPolicy,
+      sandboxMode: permissions.sandboxMode,
+    });
+  }
+
   private toSession(thread: ProviderThreadSummary): CodexWebSession {
+    this.rememberThreadTurns(thread);
     const current = this.getSessionSettings(thread.threadId);
     const updatedAt = thread.updatedAt ?? null;
     const inputSummary = summarizeSessionInputs(thread);
@@ -1019,11 +1164,34 @@ export class CodexWebRuntime {
     }
   }
 
+  private rememberThreadTurns(thread: ProviderThreadSummary): void {
+    const turns = Array.isArray(thread.turns) ? thread.turns : [];
+    for (const turn of turns) {
+      if (turn?.id) {
+        this.rememberTurnThread(turn.id, thread.threadId);
+      }
+    }
+  }
+
   private cleanupFinishedTurn(turnId: string): void {
     this.workSummaries.delete(turnId);
   }
 
   private activeTurnIdForThread(threadId: string, thread: ProviderThreadSummary | null = null): string | null {
+    const approvalTurnId = this.pendingApprovalTurnIdForThread(threadId);
+    if (approvalTurnId) {
+      return approvalTurnId;
+    }
+    const providerTurnId = latestActiveThreadTurnId(thread);
+    const runtimeStatus = threadRuntimeStatusType(thread);
+    if (thread && runtimeStatus && runtimeStatus !== 'active') {
+      this.forgetTrackedTurnsForThread(threadId);
+      return null;
+    }
+    if (providerTurnId) {
+      this.forgetTrackedTurnsForThread(threadId, providerTurnId);
+      return providerTurnId;
+    }
     for (const [turnId] of this.activeTurns) {
       if (this.turnToThread.get(turnId) === threadId) {
         if (thread && isTerminalThreadTurn(thread, turnId)) {
@@ -1033,11 +1201,30 @@ export class CodexWebRuntime {
         return turnId;
       }
     }
+    return latestActiveThreadTurnId(thread);
+  }
+
+  private pendingApprovalTurnIdForThread(threadId: string): string | null {
+    const entries = [...this.approvalToTurn.entries()];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const turnId = entries[index]?.[1] ?? null;
+      if (turnId && this.turnToThread.get(turnId) === threadId) {
+        return turnId;
+      }
+    }
     return null;
   }
 
+  private forgetTrackedTurnsForThread(threadId: string, keepTurnId: string | null = null): void {
+    for (const turnId of this.activeTurns.keys()) {
+      if (this.turnToThread.get(turnId) === threadId && turnId !== keepTurnId) {
+        this.activeTurns.delete(turnId);
+      }
+    }
+  }
+
   private conflictingActiveTurnId(session: CodexWebSession): string | null {
-    return this.activeTurnIdForThread(session.id);
+    return this.activeTurnIdForThread(session.id, session.thread);
   }
 
   private async withThreadGoal(session: CodexWebSession): Promise<CodexWebSession> {
@@ -1592,6 +1779,31 @@ function isTerminalThreadTurn(thread: ProviderThreadSummary, turnId: string): bo
   return Boolean(turn && !isActiveTurnStatus(turn.status));
 }
 
+function latestActiveThreadTurnId(thread: ProviderThreadSummary | null): string | null {
+  const turns = Array.isArray(thread?.turns) ? thread.turns : [];
+  let latestTurnId: string | null = null;
+  let latestStartedAt = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < turns.length; index += 1) {
+    const turn = turns[index];
+    if (turn?.id && isActiveTurnStatus(turn.status)) {
+      const startedAt = Number((turn as typeof turn & { startedAt?: number | null }).startedAt);
+      const comparableStartedAt = Number.isFinite(startedAt) && startedAt > 0 ? startedAt : index;
+      if (comparableStartedAt >= latestStartedAt) {
+        latestTurnId = turn.id;
+        latestStartedAt = comparableStartedAt;
+      }
+    }
+  }
+  return latestTurnId;
+}
+
+function threadRuntimeStatusType(thread: ProviderThreadSummary | null): string | null {
+  const runtimeStatus = thread?.runtimeStatus ?? null;
+  return typeof runtimeStatus?.type === 'string' && runtimeStatus.type.trim()
+    ? runtimeStatus.type.trim()
+    : null;
+}
+
 function createTurnConflictError(sessionId: string, activeTurnId: string): CodexWebTurnConflictError {
   const error = new Error(`Session ${sessionId} already has an active turn (${activeTurnId}).`) as CodexWebTurnConflictError;
   error.code = 'turn_conflict';
@@ -1821,6 +2033,21 @@ function createDefaultSettings(sessionId: string): CodexWebStoredSessionSettings
     updatedAt: Date.now(),
     favorite: false,
     favoriteOrder: null,
+  };
+}
+
+function resolveResumePermissions(settings: CodexWebStoredSessionSettings): {
+  approvalPolicy: string;
+  sandboxMode: string;
+} {
+  const presetDefaults = settings.accessPreset === 'read-only'
+    ? { approvalPolicy: 'never', sandboxMode: 'read-only' }
+    : settings.accessPreset === 'default'
+      ? { approvalPolicy: 'on-request', sandboxMode: 'workspace-write' }
+      : { approvalPolicy: 'never', sandboxMode: 'danger-full-access' };
+  return {
+    approvalPolicy: settings.approvalPolicy || presetDefaults.approvalPolicy,
+    sandboxMode: settings.sandboxMode || presetDefaults.sandboxMode,
   };
 }
 

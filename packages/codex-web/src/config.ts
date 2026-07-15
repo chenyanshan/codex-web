@@ -13,17 +13,36 @@ export interface CodexWebConfig {
   reportIndexPath: string;
   envPath: string;
   debug: boolean;
+  publicSharesEnabled: boolean;
+  publicShareTtlSeconds: number;
+  managedStorageMaxBytes: number;
+  projectUploadMaxBytes: number;
+  uploadTtlSeconds: number;
+  turnAttachmentTtlSeconds: number;
+  reportTtlSeconds: number;
+  runtimeContextTtlSeconds: number;
+  timelineMaxEntriesPerSession: number;
+  timelineMaxBytes: number;
 }
 
-export function loadServiceConfig({
-  env = process.env,
-  homeDir = os.homedir(),
-  envPath = path.join(homeDir, '.config', 'codex-web', 'service.env'),
-}: {
+const DEFAULT_PUBLIC_SHARE_TTL_SECONDS = 24 * 60 * 60;
+const MAX_PUBLIC_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const MEBIBYTE = 1024 * 1024;
+const GIBIBYTE = 1024 * MEBIBYTE;
+const DAY_SECONDS = 24 * 60 * 60;
+const MAX_STORAGE_BYTES = 1024 * GIBIBYTE;
+const MAX_RETENTION_SECONDS = 10 * 365 * DAY_SECONDS;
+
+export function loadServiceConfig(options: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   envPath?: string;
 } = {}): CodexWebConfig {
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? os.homedir();
+  const envPath = options.envPath
+    ?? normalizeString(env.CODEX_WEB_ENV_PATH)
+    ?? path.join(homeDir, '.config', 'codex-web', 'service.env');
   const fileEnv = readEnvFile(envPath);
   const merged = {
     ...fileEnv,
@@ -43,6 +62,52 @@ export function loadServiceConfig({
     reportIndexPath: path.join(stateDir, 'report-index.json'),
     envPath,
     debug: parseBoolean(merged.CODEX_WEB_DEBUG, false),
+    publicSharesEnabled: parseBoolean(merged.CODEX_WEB_PUBLIC_SHARES_ENABLED, false),
+    publicShareTtlSeconds: parsePositiveInteger(
+      merged.CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS,
+      DEFAULT_PUBLIC_SHARE_TTL_SECONDS,
+      MAX_PUBLIC_SHARE_TTL_SECONDS,
+    ),
+    managedStorageMaxBytes: parsePositiveInteger(
+      merged.CODEX_WEB_MANAGED_STORAGE_MAX_BYTES,
+      2 * GIBIBYTE,
+      MAX_STORAGE_BYTES,
+    ),
+    projectUploadMaxBytes: parsePositiveInteger(
+      merged.CODEX_WEB_PROJECT_UPLOAD_MAX_BYTES,
+      512 * MEBIBYTE,
+      MAX_STORAGE_BYTES,
+    ),
+    uploadTtlSeconds: parsePositiveInteger(
+      merged.CODEX_WEB_UPLOAD_TTL_SECONDS,
+      7 * DAY_SECONDS,
+      MAX_RETENTION_SECONDS,
+    ),
+    turnAttachmentTtlSeconds: parsePositiveInteger(
+      merged.CODEX_WEB_TURN_ATTACHMENT_TTL_SECONDS,
+      30 * DAY_SECONDS,
+      MAX_RETENTION_SECONDS,
+    ),
+    reportTtlSeconds: parsePositiveInteger(
+      merged.CODEX_WEB_REPORT_TTL_SECONDS,
+      365 * DAY_SECONDS,
+      MAX_RETENTION_SECONDS,
+    ),
+    runtimeContextTtlSeconds: parsePositiveInteger(
+      merged.CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS,
+      30 * DAY_SECONDS,
+      MAX_RETENTION_SECONDS,
+    ),
+    timelineMaxEntriesPerSession: parsePositiveInteger(
+      merged.CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION,
+      500,
+      100_000,
+    ),
+    timelineMaxBytes: parsePositiveInteger(
+      merged.CODEX_WEB_TIMELINE_MAX_BYTES,
+      16 * MEBIBYTE,
+      MAX_STORAGE_BYTES,
+    ),
   };
 }
 
@@ -84,6 +149,14 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
   }
   const normalized = String(value).trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function parsePositiveInteger(value: unknown, fallback: number, maximum: number): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(parsed, maximum);
 }
 
 function normalizeString(value: unknown): string | null {

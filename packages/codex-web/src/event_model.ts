@@ -18,6 +18,96 @@ export type CodexWebEvent =
   | { id: string; type: 'turn.completed'; turnId: string; threadId: string; status: string; raw?: unknown }
   | { id: string; type: 'turn.failed'; turnId: string; threadId: string | null; message: string; details?: string | null; raw?: unknown };
 
+export type CodexWebEventAudience = 'workspace' | 'share';
+
+export function presentCodexWebEvent(
+  event: CodexWebEvent,
+  audience: CodexWebEventAudience = 'workspace',
+): Record<string, unknown> | null {
+  const base = {
+    id: event.id,
+    type: event.type,
+    turnId: event.turnId,
+  };
+  switch (event.type) {
+    case 'turn.started':
+      return base;
+    case 'assistant.delta':
+      return {
+        ...base,
+        text: event.text,
+        phase: event.phase,
+      };
+    case 'assistant.final':
+      return {
+        ...base,
+        text: event.text,
+      };
+    case 'batch.started':
+      return audience === 'share' ? null : {
+        ...base,
+        batchId: event.batchId,
+        kind: event.kind,
+        title: event.title,
+      };
+    case 'batch.updated':
+      return audience === 'share' ? null : {
+        ...base,
+        batchId: event.batchId,
+        summary: presentEventSummary(event.summary),
+      };
+    case 'batch.completed':
+      return audience === 'share' ? null : {
+        ...base,
+        batchId: event.batchId,
+        status: event.status,
+      };
+    case 'approval.requested':
+      return audience === 'share' ? null : {
+        ...base,
+        approvalId: event.approvalId,
+        approvalKind: event.approvalKind,
+        summary: presentEventSummary(event.summary),
+      };
+    case 'approval.resolved':
+      return audience === 'share' ? null : {
+        ...base,
+        approvalId: event.approvalId,
+        decision: event.decision,
+      };
+    case 'turn.completed':
+      return {
+        ...base,
+        status: event.status,
+      };
+    case 'turn.failed':
+      return {
+        ...base,
+        message: audience === 'share' ? 'Turn failed.' : event.message,
+        ...(audience === 'workspace' && event.details ? { details: event.details } : {}),
+      };
+  }
+}
+
+const PUBLIC_EVENT_SUMMARY_KEYS = new Set([
+  'availableDecisionKeys',
+  'command',
+  'exitCode',
+  'fileChanges',
+  'networkPermission',
+  'output',
+  'reason',
+  'status',
+]);
+
+function presentEventSummary(summary: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(summary)
+      .filter(([key]) => PUBLIC_EVENT_SUMMARY_KEYS.has(key))
+      .filter(([, value]) => hasWorkSummaryValue(value)),
+  );
+}
+
 export function normalizeTurnStartedEvent({
   turnId,
   threadId,

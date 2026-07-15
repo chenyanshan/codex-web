@@ -6,8 +6,150 @@ import path from 'node:path';
 
 import {
   CodexAppClient,
+  type ProviderApprovalRequest,
   type ProviderTurnWorkEvent,
 } from '../src/index.js';
+
+test('app client sends persisted permission settings when resuming a thread', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    assert.equal(method, 'thread/resume');
+    assert.equal(params.approvalPolicy, 'never');
+    assert.equal(params.sandbox, 'danger-full-access');
+    assert.equal(Object.hasOwn(params, 'sandboxPolicy'), false);
+    return {};
+  };
+
+  await client.resumeThread({
+    threadId: 'thread_full_access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+  });
+});
+
+test('app client replays pending approvals and stops delivery after unsubscribe', () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.handleMessage(JSON.stringify({
+    jsonrpc: '2.0',
+    id: 41,
+    method: 'item/commandExecution/requestApproval',
+    params: {
+      threadId: 'thread_replay',
+      turnId: 'turn_replay',
+      itemId: 'item_replay',
+      command: 'npm test',
+      cwd: '/workspace',
+      reason: 'Run tests',
+      availableDecisions: ['accept', 'decline'],
+    },
+  }));
+  const received: ProviderApprovalRequest[] = [];
+
+  const unsubscribe = client.subscribeToApprovalRequests((request) => {
+    received.push(request);
+  }, { replayPending: true });
+
+  assert.deepEqual(received.map((request) => request.requestId), ['41']);
+  unsubscribe();
+  client.emit('approval_request', {
+    ...received[0],
+    requestId: '42',
+  });
+  assert.deepEqual(received.map((request) => request.requestId), ['41']);
+});
+
+test('app client registers approval listeners before reading the pending snapshot', () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const liveRequest: ProviderApprovalRequest = {
+    requestId: 'live',
+    kind: 'command',
+    threadId: 'thread_live',
+    turnId: 'turn_live',
+    itemId: 'item_live',
+    reason: null,
+  };
+  const replayedRequest: ProviderApprovalRequest = {
+    requestId: 'replayed',
+    kind: 'file_change',
+    threadId: 'thread_replayed',
+    turnId: 'turn_replayed',
+    itemId: 'item_replayed',
+    reason: null,
+  };
+  client.getPendingApprovals = () => {
+    client.emit('approval_request', liveRequest);
+    return [replayedRequest];
+  };
+  const received: ProviderApprovalRequest[] = [];
+
+  client.subscribeToApprovalRequests((request) => {
+    received.push(request);
+  }, { replayPending: true });
+
+  assert.deepEqual(received.map((request) => request.requestId), ['live', 'replayed']);
+});
+
+test('app client maps thread runtime status and turn timestamps', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async (method: string) => {
+    if (method === 'thread/list') {
+      return {
+        data: [{
+          id: 'thread_active',
+          name: 'Active thread',
+          cwd: '/workspace',
+          updatedAt: 1_784_117_000,
+          status: {
+            type: 'active',
+            activeFlags: ['waitingOnApproval', 'waitingOnUserInput'],
+          },
+        }],
+        nextCursor: null,
+      };
+    }
+    assert.equal(method, 'thread/read');
+    return {
+      thread: {
+        id: 'thread_idle',
+        name: 'Idle thread',
+        cwd: '/workspace',
+        updatedAt: 1_784_117_100,
+        status: { type: 'idle' },
+        turns: [{
+          id: 'turn_completed',
+          status: 'completed',
+          error: null,
+          items: [],
+          startedAt: 1_784_117_001,
+          completedAt: 1_784_117_099,
+        }, {
+          id: 'turn_running',
+          status: 'inProgress',
+          error: null,
+          items: [],
+          startedAt: 1_784_117_100,
+          completedAt: null,
+        }],
+      },
+    };
+  };
+
+  const listed = await client.listThreads();
+  const read = await client.readThread('thread_idle', true);
+
+  assert.deepEqual(listed.items[0]?.runtimeStatus, {
+    type: 'active',
+    activeFlags: ['waitingOnApproval', 'waitingOnUserInput'],
+  });
+  assert.deepEqual(read?.runtimeStatus, { type: 'idle', activeFlags: [] });
+  assert.equal(read?.turns?.[0]?.startedAt, 1_784_117_001_000);
+  assert.equal(read?.turns?.[0]?.completedAt, 1_784_117_099_000);
+  assert.equal(read?.turns?.[1]?.startedAt, 1_784_117_100_000);
+  assert.equal(read?.turns?.[1]?.completedAt, null);
+});
 
 test('app client preserves string and snake_case model reasoning efforts', async () => {
   const client = new CodexAppClient({

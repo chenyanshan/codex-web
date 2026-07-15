@@ -1,11 +1,14 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { withFileLock } from './file_lock.js';
 
 const PASSWORD_ITERATIONS = 310_000;
 const KEY_LENGTH = 32;
 const DIGEST = 'sha256';
 const DEFAULT_SITE_TITLE = 'Codex Web';
+const DEFAULT_SHARE_TTL_SECONDS = 24 * 60 * 60;
+const MAX_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export interface CodexWebProjectGrant {
   projectId: string;
@@ -64,6 +67,8 @@ export interface CodexWebShare {
   createdByUserId: string;
   enabled: boolean;
   createdAt: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
 }
 
 export interface CodexWebUserSession {
@@ -361,14 +366,19 @@ export class FileIdentityStore {
   async createShare({
     sessionId,
     createdByUserId,
+    ttlSeconds = DEFAULT_SHARE_TTL_SECONDS,
   }: {
     sessionId: string;
     createdByUserId: string;
+    ttlSeconds?: number;
   }): Promise<{ token: string; share: CodexWebShare }> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
       const now = new Date().toISOString();
       const token = createShareToken();
+      const normalizedTtlSeconds = Number.isFinite(ttlSeconds) && ttlSeconds > 0
+        ? Math.min(Number(ttlSeconds), MAX_SHARE_TTL_SECONDS)
+        : DEFAULT_SHARE_TTL_SECONDS;
       const share: CodexWebShare = {
         id: crypto.randomUUID(),
         tokenHash: hashToken(token),
@@ -376,10 +386,31 @@ export class FileIdentityStore {
         createdByUserId: normalizeRequiredId(createdByUserId, 'user id'),
         enabled: true,
         createdAt: now,
+        expiresAt: new Date(Date.now() + normalizedTtlSeconds * 1_000).toISOString(),
+        revokedAt: null,
       };
       state.shares = [...state.shares, share];
       await this.writeState(state);
       return { token, share };
+    });
+  }
+
+  async revokeShare(shareId: string, revokedAt = new Date().toISOString()): Promise<CodexWebShare | null> {
+    return this.withMutationLock(async () => {
+      const state = await this.readState();
+      const normalizedShareId = normalizeRequiredId(shareId, 'share id');
+      const existing = state.shares.find((share) => share.id === normalizedShareId);
+      if (!existing) {
+        return null;
+      }
+      const share: CodexWebShare = {
+        ...existing,
+        enabled: false,
+        revokedAt: normalizeOptionalIsoString(revokedAt) ?? new Date().toISOString(),
+      };
+      state.shares = upsertById(state.shares, share);
+      await this.writeState(state);
+      return share;
     });
   }
 
@@ -419,7 +450,14 @@ export class FileIdentityStore {
   async findShareByToken(token: string): Promise<string | null> {
     const tokenHash = hashToken(String(token ?? '').trim());
     const state = await this.readState();
-    return state.shares.find((share) => share.enabled !== false && safeEqual(share.tokenHash, tokenHash))?.id ?? null;
+    const now = Date.now();
+    return state.shares.find((share) => (
+      share.enabled !== false
+      && share.revokedAt === null
+      && typeof share.expiresAt === 'string'
+      && Date.parse(share.expiresAt) > now
+      && safeEqual(share.tokenHash, tokenHash)
+    ))?.id ?? null;
   }
 
   private async writeState(state: CodexWebIdentityState): Promise<void> {
@@ -447,7 +485,7 @@ export class FileIdentityStore {
     });
     await prior.catch(() => {});
     try {
-      return await operation();
+      return await withFileLock(`${this.identityPath}.lock`, operation);
     } finally {
       release();
     }
@@ -467,20 +505,47 @@ function emptyState(): CodexWebIdentityState {
 }
 
 function normalizeState(value: unknown): CodexWebIdentityState {
-  const record = isRecord(value) ? value : {};
+  if (!isRecord(value)) {
+    throw new Error('Invalid identity state: expected an object');
+  }
+  const record = value;
+  if (record.settings !== undefined && !isRecord(record.settings)) {
+    throw new Error('Invalid identity state: settings must be an object');
+  }
   const settings = isRecord(record.settings) ? record.settings : {};
   return {
     settings: {
       multiUserEnabled: settings.multiUserEnabled === true,
       siteTitle: normalizeSiteTitle(settings.siteTitle),
     },
-    users: Array.isArray(record.users) ? record.users.map(normalizeUserOrNull).filter(isPresent) : [],
-    roles: Array.isArray(record.roles) ? record.roles.map(normalizeRoleOrNull).filter(isPresent) : [],
-    projects: Array.isArray(record.projects) ? record.projects.map(normalizeProjectOrNull).filter(isPresent) : [],
-    sessions: Array.isArray(record.sessions) ? record.sessions.map(normalizeAppSessionOrNull).filter(isPresent) : [],
-    shares: Array.isArray(record.shares) ? record.shares.map(normalizeShareOrNull).filter(isPresent) : [],
-    userSessions: Array.isArray(record.userSessions) ? record.userSessions.map(normalizeUserSessionOrNull).filter(isPresent) : [],
+    users: normalizeStateCollection(record, 'users', normalizeUserOrNull),
+    roles: normalizeStateCollection(record, 'roles', normalizeRoleOrNull),
+    projects: normalizeStateCollection(record, 'projects', normalizeProjectOrNull),
+    sessions: normalizeStateCollection(record, 'sessions', normalizeAppSessionOrNull),
+    shares: normalizeStateCollection(record, 'shares', normalizeShareOrNull),
+    userSessions: normalizeStateCollection(record, 'userSessions', normalizeUserSessionOrNull),
   };
+}
+
+function normalizeStateCollection<T>(
+  record: Record<string, any>,
+  key: string,
+  normalize: (value: unknown) => T | null,
+): T[] {
+  const value = record[key];
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid identity state: ${key} must be an array`);
+  }
+  return value.map((entry, index) => {
+    const normalized = normalize(entry);
+    if (!normalized) {
+      throw new Error(`Invalid identity state: ${key}[${index}] is malformed`);
+    }
+    return normalized;
+  });
 }
 
 function normalizeUserOrNull(value: unknown): CodexWebUser | null {
@@ -577,6 +642,8 @@ function normalizeShareOrNull(value: unknown): CodexWebShare | null {
     createdByUserId: typeof value.createdByUserId === 'string' ? value.createdByUserId : '',
     enabled: value.enabled !== false,
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : '',
+    expiresAt: normalizeOptionalIsoString(value.expiresAt),
+    revokedAt: normalizeOptionalIsoString(value.revokedAt),
   };
 }
 

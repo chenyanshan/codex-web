@@ -10,15 +10,23 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "codex-web": "node --conditions=development --import tsx packages/codex-web/src/cli.ts",
+    "lint": "eslint .",
     "serve": "npm run serve --workspace packages/codex-web",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:browser": "playwright test"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
   },
   "engines": {
     "node": ">=24"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^25.6.0",
+    "eslint": "^9.39.5",
+    "globals": "^16.5.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }

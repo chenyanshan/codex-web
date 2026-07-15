@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import path from 'node:path';
 import { CodexNativeApiService } from './native_api_service.js';
 import { parseServeCliArgs, normalizeServeHost, isLoopbackHost } from './cli_options.js';

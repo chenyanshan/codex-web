@@ -2,6 +2,7 @@ const STATIC_CACHE = 'codex-web-static-__CODEX_WEB_BUILD_ID__';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
+  '/theme-init.js',
   '/styles.css',
   '/pwa-pull-refresh.js',
   '/app.js',
@@ -10,6 +11,7 @@ const STATIC_ASSETS = [
   '/icon-512.png',
   '/apple-touch-icon.png',
 ];
+const STATIC_ASSET_PATHS = new Set(STATIC_ASSETS);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -30,7 +32,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
+  const isCanonicalStaticAsset = !url.search && STATIC_ASSET_PATHS.has(url.pathname);
+  if (request.method !== 'GET' || url.origin !== self.location.origin || !isCanonicalStaticAsset) {
     return;
   }
   event.respondWith(

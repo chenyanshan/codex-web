@@ -1277,8 +1277,10 @@ test('runtime resumes a readable historical thread before starting a turn', asyn
     listThreads: async () => ({ items: [createThread('turn_history_thread')], nextCursor: null }),
     startThread: async () => ({ threadId: 'turn_history_thread', cwd: '/workspace', title: 'Thread' }),
     readThread: async () => createThread('turn_history_thread'),
-    resumeThread: async ({ threadId }) => {
+    resumeThread: async ({ threadId, approvalPolicy, sandboxMode }) => {
       calls.push(`resume:${threadId}`);
+      assert.equal(approvalPolicy, 'never');
+      assert.equal(sandboxMode, 'danger-full-access');
       resumed = true;
     },
     writeConfigValue: async () => {},
@@ -1493,6 +1495,7 @@ test('runtime handles goal slash commands without starting a native turn', async
   assert.equal((created as any).command.name, 'goal');
   assert.match((created as any).command.message, /Goal set/u);
   assert.equal((created as any).command.goal.objective, 'improve benchmark coverage');
+  assert.equal((created as any).command.goal.status, 'active');
 
   const paused = await runtime.startTurn('thread_goal', { text: '/goal pause' });
   assert.equal((paused as any).command.goal.status, 'paused');
@@ -1500,8 +1503,20 @@ test('runtime handles goal slash commands without starting a native turn', async
   const resumed = await runtime.startTurn('thread_goal', { text: '/goal resume' });
   assert.equal((resumed as any).command.goal.status, 'active');
 
+  currentGoal = {
+    threadId: 'thread_goal',
+    objective: 'improve benchmark coverage',
+    status: 'complete',
+    tokenBudget: null,
+    tokensUsed: null,
+    timeUsedSeconds: null,
+  };
+  const replaced = await runtime.startTurn('thread_goal', { text: '/goal improve product experience' });
+  assert.equal((replaced as any).command.goal.objective, 'improve product experience');
+  assert.equal((replaced as any).command.goal.status, 'active');
+
   const reported = await runtime.startTurn('thread_goal', { text: '/goal' });
-  assert.match((reported as any).command.message, /improve benchmark coverage/u);
+  assert.match((reported as any).command.message, /improve product experience/u);
 
   const cleared = await runtime.startTurn('thread_goal', { text: '/goal clear' });
   assert.equal((cleared as any).command.goal, null);
@@ -1513,7 +1528,7 @@ test('runtime handles goal slash commands without starting a native turn', async
     {
       threadId: 'thread_goal',
       objective: 'improve benchmark coverage',
-      status: null,
+      status: 'active',
       suppressAutoTurn: true,
     },
     {
@@ -1525,6 +1540,12 @@ test('runtime handles goal slash commands without starting a native turn', async
     {
       threadId: 'thread_goal',
       objective: null,
+      status: 'active',
+      suppressAutoTurn: true,
+    },
+    {
+      threadId: 'thread_goal',
+      objective: 'improve product experience',
       status: 'active',
       suppressAutoTurn: true,
     },
@@ -1718,8 +1739,7 @@ test('runtime readSession keeps archived sessions readable when goal metadata is
   assert.equal(session?.goal, null);
 });
 
-test('runtime readSession exposes only process-active turn state', async () => {
-  let resolveTurn: ((result: ProviderTurnResult) => void) | null = null;
+test('runtime readSession recovers provider-active turn state after a process restart', async () => {
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
     readUsage: async (): Promise<ProviderUsageReport | null> => null,
@@ -1739,12 +1759,12 @@ test('runtime readSession exposes only process-active turn state', async () => {
       ],
     }),
     writeConfigValue: async () => {},
-    startTurn: async ({ onTurnStarted }): Promise<ProviderTurnResult> => {
-      await onTurnStarted?.({ turnId: 'turn_active_state', threadId: 'thread_active_state' });
-      return new Promise<ProviderTurnResult>((resolve) => {
-        resolveTurn = resolve;
-      });
-    },
+    startTurn: async (): Promise<ProviderTurnResult> => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_unexpected',
+      threadId: 'thread_active_state',
+    }),
     interruptTurn: async () => {},
     respondToApproval: async () => {},
   };
@@ -1756,24 +1776,11 @@ test('runtime readSession exposes only process-active turn state', async () => {
     eventBus: new CodexWebEventBus(),
   });
 
-  assert.equal((await runtime.readSession('thread_active_state'))?.activeTurnId, null);
-  const started = await runtime.startTurn('thread_active_state', { text: 'hi' });
-
-  assert.deepEqual(started, { turnId: 'turn_active_state' });
   assert.equal((await runtime.readSession('thread_active_state'))?.activeTurnId, 'turn_active_state');
-
-  resolveTurn?.({
-    outputText: 'done',
-    status: 'completed',
-    turnId: 'turn_active_state',
-    threadId: 'thread_active_state',
-  });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.equal((await runtime.readSession('thread_active_state'))?.activeTurnId, null);
+  assert.equal(runtime.threadIdForTurn('turn_active_state'), 'thread_active_state');
 });
 
-test('runtime ignores stale historical active turns when starting a new non-command turn', async () => {
+test('runtime rejects a new non-command turn when the provider reports an active turn', async () => {
   let startTurnCalls = 0;
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
@@ -1823,13 +1830,21 @@ test('runtime ignores stale historical active turns when starting a new non-comm
     eventBus: new CodexWebEventBus(),
   });
 
-  assert.deepEqual(await runtime.startTurn('thread_busy', { text: 'new question' }), { turnId: 'turn_new' });
-  assert.equal(startTurnCalls, 1);
+  await assert.rejects(
+    runtime.startTurn('thread_busy', { text: 'new question' }),
+    (error: unknown) => {
+      assert.equal((error as Error & { code?: string }).code, 'turn_conflict');
+      assert.equal((error as Error & { activeTurnId?: string }).activeTurnId, 'turn_existing_active_2');
+      return true;
+    },
+  );
+  assert.equal(startTurnCalls, 0);
 });
 
 test('runtime rejects overlapping non-command turns that are active in this process', async () => {
   let resolveFirstTurn: ((result: ProviderTurnResult) => void) | null = null;
   let startTurnCalls = 0;
+  let providerTurnStarted = false;
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
     readUsage: async (): Promise<ProviderUsageReport | null> => null,
@@ -1837,7 +1852,7 @@ test('runtime rejects overlapping non-command turns that are active in this proc
     startThread: async () => ({ threadId: 'thread_busy', cwd: '/workspace', title: 'Thread' }),
     readThread: async () => ({
       ...createThread('thread_busy'),
-      turns: [
+      turns: providerTurnStarted ? [
         {
           id: 'turn_process_active',
           status: 'in_progress',
@@ -1846,11 +1861,12 @@ test('runtime rejects overlapping non-command turns that are active in this proc
             { type: 'message', role: 'user', phase: null, text: 'Still working' },
           ],
         },
-      ],
+      ] : [],
     }),
     writeConfigValue: async () => {},
     startTurn: async ({ onTurnStarted }): Promise<ProviderTurnResult> => {
       startTurnCalls += 1;
+      providerTurnStarted = true;
       await onTurnStarted?.({ turnId: 'turn_process_active', threadId: 'thread_busy' });
       return new Promise<ProviderTurnResult>((resolve) => {
         resolveFirstTurn = resolve;
@@ -2336,6 +2352,192 @@ test('runtime emits normalized turn and approval events and maps approval decisi
   assert.deepEqual(resolvedTypes, ['approval.resolved', 'batch.completed']);
 });
 
+test('runtime replays a recovered old-turn approval and makes that turn visible', async () => {
+  const approvalRequest: ProviderApprovalRequest = {
+    requestId: 'approval_recovered',
+    kind: 'command',
+    threadId: 'thread_recovered',
+    turnId: 'turn_waiting_approval',
+    itemId: 'item_recovered',
+    reason: 'needs shell access',
+    command: 'npm test',
+    cwd: '/workspace',
+    availableDecisionKeys: ['accept', 'acceptForSession', 'decline'],
+  };
+  const responses: Array<{ requestId: string; option: 1 | 2 | 3 }> = [];
+  let approvalListener: ((request: ProviderApprovalRequest) => Promise<void> | void) | null = null;
+  let unsubscribed = false;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_recovered', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_recovered'),
+      runtimeStatus: { type: 'active', activeFlags: ['waitingOnApproval'] },
+      turns: [
+        {
+          id: 'turn_waiting_approval',
+          status: 'in_progress',
+          error: null,
+          startedAt: 10,
+          completedAt: null,
+          items: [],
+        },
+        {
+          id: 'turn_newer_but_not_waiting',
+          status: 'in_progress',
+          error: null,
+          startedAt: 20,
+          completedAt: null,
+          items: [],
+        },
+      ],
+    }),
+    subscribeToApprovalRequests: (listener, options) => {
+      assert.equal(options?.replayPending, true);
+      approvalListener = listener;
+      void listener(approvalRequest);
+      return () => {
+        unsubscribed = true;
+      };
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'unused',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_recovered',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async ({ requestId, option }) => {
+      responses.push({ requestId, option });
+    },
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  const session = await runtime.readSession('thread_recovered');
+
+  assert.equal(session?.activeTurnId, 'turn_waiting_approval');
+  assert.equal(runtime.threadIdForApproval('approval_recovered'), 'thread_recovered');
+  assert.deepEqual(runtime.getTurnEvents('turn_waiting_approval').map((entry) => entry.event.type), [
+    'batch.started',
+    'batch.updated',
+    'approval.requested',
+  ]);
+
+  await approvalListener?.(approvalRequest);
+  assert.equal(runtime.getTurnEvents('turn_waiting_approval').length, 3);
+
+  await runtime.resolveApprovalForThread('thread_recovered', 'approval_recovered', 'accept_for_session');
+  assert.deepEqual(responses, [{ requestId: 'approval_recovered', option: 2 }]);
+  await runtime.stop();
+  assert.equal(unsubscribed, true);
+});
+
+test('runtime ignores historical in-progress turns when provider thread status is idle', async () => {
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_idle', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_idle'),
+      runtimeStatus: { type: 'idle', activeFlags: [] },
+      turns: [{
+        id: 'turn_orphaned',
+        status: 'in_progress',
+        error: null,
+        startedAt: 10,
+        completedAt: null,
+        items: [],
+      }],
+    }),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'unused',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_idle',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  const session = await runtime.readSession('thread_idle');
+
+  assert.equal(session?.activeTurnId, null);
+});
+
+test('runtime observes an active provider turn recovered after restart', async () => {
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_observed', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_observed'),
+      runtimeStatus: { type: 'active', activeFlags: [] },
+      turns: [{
+        id: 'turn_observed',
+        status: 'in_progress',
+        error: null,
+        startedAt: 10,
+        completedAt: null,
+        items: [],
+      }],
+    }),
+    waitForTurnResult: async ({ threadId, turnId, onProgress }) => {
+      assert.equal(threadId, 'thread_observed');
+      assert.equal(turnId, 'turn_observed');
+      await onProgress?.({ text: 'Recovered', delta: 'Recovered', outputKind: 'commentary' });
+      return {
+        outputText: 'Recovered answer',
+        status: 'completed',
+        turnId,
+        threadId,
+      };
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'unused',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_observed',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  assert.equal((await runtime.readSession('thread_observed'))?.activeTurnId, 'turn_observed');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(runtime.getTurnEvents('turn_observed').map((entry) => entry.event.type), [
+    'turn.started',
+    'assistant.delta',
+    'assistant.final',
+    'turn.completed',
+  ]);
+  assert.equal(runtime.hasActiveTurn('turn_observed'), false);
+});
+
 test('runtime preserves raw turn failure details for UI display', async () => {
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
@@ -2449,6 +2651,7 @@ test('runtime uses completed turn id when start callback is missing', async () =
 });
 
 test('runtime keeps partial provider turn results active instead of completing them', async () => {
+  let providerTurnStarted = false;
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
     readUsage: async (): Promise<ProviderUsageReport | null> => null,
@@ -2456,7 +2659,7 @@ test('runtime keeps partial provider turn results active instead of completing t
     startThread: async () => ({ threadId: 'thread_partial', cwd: '/workspace', title: 'Thread' }),
     readThread: async () => ({
       ...createThread('thread_partial'),
-      turns: [
+      turns: providerTurnStarted ? [
         {
           id: 'turn_partial',
           status: 'in_progress',
@@ -2465,10 +2668,11 @@ test('runtime keeps partial provider turn results active instead of completing t
             { type: 'message', role: 'user', phase: null, text: 'Keep working' },
           ],
         },
-      ],
+      ] : [],
     }),
     writeConfigValue: async () => {},
     startTurn: async ({ onTurnStarted }): Promise<ProviderTurnResult> => {
+      providerTurnStarted = true;
       await onTurnStarted?.({ turnId: 'turn_partial', threadId: 'thread_partial' });
       return {
         outputText: '',

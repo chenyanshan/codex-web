@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
-LABEL="com.chenyanshan.codex-web"
+LABEL="${CODEX_WEB_LAUNCHD_LABEL:-com.chenyanshan.codex-web}"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 LAUNCHD_TARGET="gui/${UID}/${LABEL}"
 

@@ -30,13 +30,18 @@ test('install.md is the AI install entrypoint for GitHub blob links and local pr
   assert.match(installDoc, /install\.md/u);
   assert.match(installDoc, /Windows.*unsupported/iu);
   assert.match(installDoc, /scripts\/install\/install-codex-web-macos\.sh/u);
-  assert.match(installDoc, /--password/u);
+  assert.match(installDoc, /--password-stdin/u);
+  assert.doesNotMatch(installDoc, /--password\s+['"<]/u);
+  assert.match(installDoc, /Do not ask the user to send their password/u);
   assert.match(installDoc, /--autostart/u);
   assert.match(installDoc, /skills\/codex-mobile-report/u);
   assert.match(installDoc, /skills\/codex-web-user-context/u);
   assert.match(installDoc, /~\/\.codex\/skills\/codex-web-user-context/u);
   assert.match(installDoc, /~\/\.codex-web\/reports\//u);
   assert.match(installDoc, /phone-readable report/u);
+  assert.match(installDoc, /fully trusted users/u);
+  assert.match(installDoc, /CODEX_WEB_PUBLIC_SHARES_ENABLED=true/u);
+  assert.match(installDoc, /hourly private log rotation/u);
 });
 
 test('README files point AI installers to install.md and include PWA setup guidance', async () => {
@@ -59,6 +64,10 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readme, /~\/\.codex\/skills\//u);
   assert.match(readme, /Add to Home Screen/u);
   assert.match(readme, /Android/u);
+  assert.match(readme, /not tenant, OS-user, process, Codex-runtime, or filesystem isolation/u);
+  assert.match(readme, /CODEX_WEB_PUBLIC_SHARES_ENABLED=true/u);
+  assert.match(readme, /Storage lifecycle/u);
+  assert.match(readme, /CODEX_WEB_LOG_GENERATIONS/u);
   assert.match(
     updateSection,
     /```bash\ngit pull --ff-only\nnpm install\nscripts\/service\/restart-codex-web-launchd-user\.sh\n```/u,
@@ -74,6 +83,10 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readmeZh, /~\/\.codex\/skills\//u);
   assert.match(readmeZh, /添加到主屏幕/u);
   assert.match(readmeZh, /Android/u);
+  assert.match(readmeZh, /不提供 tenant、OS 用户、进程、Codex runtime 或/u);
+  assert.match(readmeZh, /CODEX_WEB_PUBLIC_SHARES_ENABLED=true/u);
+  assert.match(readmeZh, /存储生命周期/u);
+  assert.match(readmeZh, /CODEX_WEB_LOG_GENERATIONS/u);
   assert.match(
     updateSectionZh,
     /```bash\ngit pull --ff-only\nnpm install\nscripts\/service\/restart-codex-web-launchd-user\.sh\n```/u,

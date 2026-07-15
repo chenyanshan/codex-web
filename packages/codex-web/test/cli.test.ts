@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  currentCliSchedulerArgv,
   parseCliArgs,
   runAuthSetPasswordCommand,
   runTaskCommand,
@@ -143,6 +144,32 @@ test('spawned auth set-password runs through a symlinked TypeScript entrypoint a
   assert.equal(typeof parsed.passwordHash, 'string');
   assert.equal(typeof parsed.passwordSalt, 'string');
   assert.deepEqual(parsed.sessions, []);
+});
+
+test('scheduler argv launches the current source CLI outside the repository cwd', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-scheduler argv-'));
+  const stateDir = path.join(tempRoot, 'scheduled state');
+  const envPath = path.join(tempRoot, 'scheduled service.env');
+  await fs.writeFile(envPath, `CODEX_WEB_STATE_DIR=${stateDir}\n`);
+  const argv = currentCliSchedulerArgv();
+
+  const result = await spawnProcess(argv[0]!, [
+    ...argv.slice(1),
+    'auth',
+    'set-password',
+  ], {
+    cwd: tempRoot,
+    env: {
+      ...process.env,
+      CODEX_WEB_ENV_PATH: envPath,
+      CODEX_WEB_PASSWORD: 'scheduled-secret-password',
+    },
+  });
+
+  assert.equal(result.code, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+  assert.match(result.stdout, /password_saved:/u);
+  const raw = await fs.readFile(path.join(stateDir, 'auth.json'), 'utf8');
+  assert.equal(raw.includes('scheduled-secret-password'), false);
 });
 
 test('serve command applies host and port overrides and bootstraps auth from one-time env', async () => {
@@ -379,6 +406,88 @@ test('task run reads the configured task and invokes the scheduled task runner',
   ]);
 });
 
+test('task run preserves start, terminal, archive, and runtime stop order', async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-task-order-'));
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }));
+  const stateDir = path.join(tempRoot, 'state');
+  const order: string[] = [];
+  let terminalListener!: (entry: { event: any; sequence: number }) => void;
+  let markSubscribed!: () => void;
+  const subscribed = new Promise<void>((resolve) => {
+    markSubscribed = resolve;
+  });
+  const command = runTaskCommand(parseCliArgs([
+    'task',
+    'run',
+    'deferred-task',
+  ]) as Extract<ReturnType<typeof parseCliArgs>, { command: 'task' }>, {
+    env: {},
+    loadConfig: () => ({
+      ...createConfig(),
+      stateDir,
+      authPath: path.join(stateDir, 'auth.json'),
+      reportsDir: path.join(stateDir, 'reports'),
+      reportIndexPath: path.join(stateDir, 'report-index.json'),
+    }),
+    createTaskStore: () => ({
+      readTask: async (taskId: string) => ({
+        id: taskId,
+        title: 'Deferred task',
+        cwd: null,
+        projectId: null,
+        runAsUserId: null,
+        schedule: { kind: 'daily', time: '09:00' },
+        settings: {},
+        archive: { onCompletion: true },
+        prompt: 'Run task\n',
+        taskDir: '/tmp/task',
+      }),
+    }),
+    createIdentityStore: () => ({}) as any,
+    createRuntime: () => ({
+      createSession: async () => {
+        order.push('start');
+        return { id: 'thread_deferred' } as any;
+      },
+      startTurn: async () => ({ turnId: 'turn_deferred' }),
+      getTurnEvents: () => [],
+      subscribeToTurn: (
+        _turnId: string,
+        listener: (entry: { event: any; sequence: number }) => void,
+      ) => {
+        terminalListener = listener;
+        markSubscribed();
+        return () => {};
+      },
+      archiveSession: async () => {
+        order.push('archive');
+        return true;
+      },
+      stop: async () => {
+        order.push('stop');
+      },
+    }) as any,
+    stdout: { write: () => true },
+  });
+
+  await subscribed;
+  assert.deepEqual(order, ['start']);
+  order.push('terminal');
+  terminalListener({
+    event: {
+      id: 'evt_terminal',
+      type: 'turn.completed',
+      turnId: 'turn_deferred',
+      threadId: 'thread_deferred',
+      status: 'completed',
+    },
+    sequence: 1,
+  });
+  await command;
+
+  assert.deepEqual(order, ['start', 'terminal', 'archive', 'stop']);
+});
+
 test('task install writes scheduler files and runs platform commands', async () => {
   const writes: Array<{ filePath: string; content: string; mode?: number }> = [];
   const commands: Array<{ argv: string[]; allowFailure?: boolean }> = [];
@@ -390,7 +499,7 @@ test('task install writes scheduler files and runs platform commands', async () 
     env: {},
     platform: 'linux',
     homeDir: '/home/alice',
-    codexWebBin: '/home/alice/.local/bin/codex-web',
+    codexWebArgv: ['/usr/bin/node', '/home/alice/.local/lib/codex-web/dist/cli.js'],
     loadConfig: () => createConfig(),
     createTaskStore: () => ({
       readTask: async (taskId: string) => ({
@@ -435,7 +544,7 @@ test('task install continues past allowed scheduler command failures', async () 
     env: {},
     platform: 'darwin',
     homeDir: '/Users/alice',
-    codexWebBin: '/opt/codex-web/bin/codex-web',
+    codexWebArgv: ['/usr/bin/node', '/opt/codex-web/dist/cli.js'],
     loadConfig: () => createConfig(),
     createTaskStore: () => ({
       readTask: async (taskId: string) => ({

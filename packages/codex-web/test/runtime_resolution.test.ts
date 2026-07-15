@@ -15,6 +15,8 @@ test('development serve loads codex native api source instead of stale dist', as
 
   assert.match(String(rootPackage.scripts?.['codex-web'] ?? ''), /--conditions=development/u);
   assert.match(String(webPackage.scripts?.serve ?? ''), /--conditions=development/u);
+  assert.match(String(webPackage.scripts?.test ?? ''), /--conditions=development/u);
+  assert.match(String(webPackage.scripts?.pretypecheck ?? ''), /build --workspace @codex-mobile-web-app\/codex-native-api/u);
   assert.equal(nativePackage.exports?.['.']?.development, './src/index.ts');
   assert.equal(nativePackage.exports?.['.']?.default, './dist/index.js');
 });

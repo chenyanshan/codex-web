@@ -10,7 +10,6 @@ unsupported_platforms:
   - Windows
 primary_script: scripts/install/install-codex-web-macos.sh
 required_questions:
-  - password
   - autostart
 ---
 
@@ -42,34 +41,39 @@ unsupported and do not attempt to translate the steps.
 
 ## Questions The Agent Must Ask
 
-Ask the user these two questions before running the installer:
+Ask the user this question before running the installer:
 
-1. What password should Codex Web use?
-2. Should it be installed as a macOS login/startup service?
+1. Should it be installed as a macOS login/startup service?
 
-The password may be passed to the installer directly because this repository is
-explicitly optimized for personal/internal use rather than a hardened shared
-deployment flow.
+Do not ask the user to send their password through agent chat and do not place a
+password in a tool command, shell history, process argument, or environment
+file. The installer prompts the user directly with terminal echo disabled.
 
 ## macOS Automated Install
 
 From the repo root, run:
 
 ```bash
-scripts/install/install-codex-web-macos.sh --password '<user-password>' --autostart yes
+scripts/install/install-codex-web-macos.sh --autostart yes
 ```
 
 or:
 
 ```bash
-scripts/install/install-codex-web-macos.sh --password '<user-password>' --autostart no
+scripts/install/install-codex-web-macos.sh --autostart no
 ```
+
+For non-interactive automation, `--password-stdin` reads exactly one line from
+standard input. Feed it only from the deployment platform's secret channel;
+never put a literal password in the command itself.
 
 The installer script will:
 
 - run `npm install`
 - write the password via `npm run codex-web -- auth set-password`
+- install the bundled report and user-context skills
 - install or skip launchd based on `--autostart`
+- install hourly private log rotation when launchd is enabled
 - start the service
 - print the local and LAN URLs when available
 
@@ -136,6 +140,19 @@ After installation, the agent should explain the basic usage flow:
 5. The report skill writes reports under:
    `~/.codex-web/reports/`
 6. Codex Web lists those reports inside the mobile app.
+
+The handoff must also state these deployment boundaries:
+
+- Phone login and PWA use require the operator's HTTPS endpoint; plain LAN HTTP
+  does not protect passwords or bearer tokens.
+- Multi-user mode is a facade for fully trusted users, not tenant, OS-user, or
+  filesystem isolation. Separate untrusted users by OS user, container, or host.
+- Public share links are off by default. Enabling them requires
+  `CODEX_WEB_PUBLIC_SHARES_ENABLED=true`; links use the configured TTL and must
+  be treated as bearer capabilities.
+- Managed uploads, attachment snapshots, reports, runtime context, timeline,
+  and launchd logs use the quotas and retention defaults documented in
+  `README.md`.
 
 ## Post-Install Handoff
 

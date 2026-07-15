@@ -5,6 +5,7 @@ import {
   normalizeProgressEvent,
   normalizeTurnCompletedEvent,
   normalizeTurnFailedEvent,
+  presentCodexWebEvent,
 } from '../src/event_model.js';
 
 test('progress normalization emits assistant delta events without retaining cumulative raw text', () => {
@@ -129,4 +130,62 @@ test('turn failure normalization does not expose local stack traces to frontend 
   assert.equal(event.details, null);
   assert.doesNotMatch(JSON.stringify(event), /\/Users\/test\/project/u);
   assert.doesNotMatch(JSON.stringify(event), /codex_app_client\.ts/u);
+});
+
+test('public event DTOs omit internal thread ids, raw payloads, and cwd fields', () => {
+  const presented = presentCodexWebEvent({
+    id: 'evt_approval',
+    type: 'approval.requested',
+    turnId: 'turn_1',
+    approvalId: 'approval_1',
+    approvalKind: 'command',
+    summary: {
+      reason: 'Run tests',
+      command: 'npm test',
+      cwd: '/Users/alice/private',
+      threadId: 'thread_private',
+      unknownProviderField: 'secret',
+    },
+    raw: { cwd: '/Users/alice/private', token: 'secret' },
+  });
+
+  assert.deepEqual(presented, {
+    id: 'evt_approval',
+    type: 'approval.requested',
+    turnId: 'turn_1',
+    approvalId: 'approval_1',
+    approvalKind: 'command',
+    summary: { reason: 'Run tests', command: 'npm test' },
+  });
+  assert.doesNotMatch(JSON.stringify(presented), /thread_private|\/Users\/alice|unknownProviderField|raw/u);
+});
+
+test('share event DTOs expose answer lifecycle but suppress machine work and approval events', () => {
+  const delta = presentCodexWebEvent({
+    id: 'evt_delta',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    threadId: 'thread_private',
+    text: 'Hello',
+    phase: 'final_answer',
+    raw: { threadId: 'thread_private' },
+  }, 'share');
+  const batch = presentCodexWebEvent({
+    id: 'evt_batch',
+    type: 'batch.started',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    kind: 'command',
+    title: 'cat /Users/alice/private',
+    raw: { cwd: '/Users/alice/private' },
+  }, 'share');
+
+  assert.deepEqual(delta, {
+    id: 'evt_delta',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    text: 'Hello',
+    phase: 'final_answer',
+  });
+  assert.equal(batch, null);
 });

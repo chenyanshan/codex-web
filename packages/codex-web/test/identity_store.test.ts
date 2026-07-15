@@ -53,6 +53,52 @@ test('identity store persists a normalized global site title', async () => {
   assert.equal((await store.readState()).settings.siteTitle, 'Yan Shan Lab');
 });
 
+test('identity store serializes mutations across store instances without losing updates', async () => {
+  const identityPath = await tempIdentityPath();
+  const stores = Array.from({ length: 12 }, () => new FileIdentityStore({ identityPath }));
+
+  await Promise.all(stores.map((store, index) => store.upsertProject({
+    id: `project_${index}`,
+    internalName: `project-${index}`,
+    cwd: `/tmp/project-${index}`,
+    displayName: `Project ${index}`,
+    enabled: true,
+    activeSessionLimit: 30,
+  })));
+
+  const state = await stores[0]!.readState();
+  assert.deepEqual(
+    state.projects.map((project) => project.id).sort(),
+    Array.from({ length: 12 }, (_, index) => `project_${index}`).sort(),
+  );
+});
+
+test('identity store recovers a stale filesystem mutation lock', async () => {
+  const identityPath = await tempIdentityPath();
+  await fs.writeFile(`${identityPath}.lock`, JSON.stringify({
+    version: 1,
+    pid: process.pid,
+    createdAt: '2000-01-01T00:00:00.000Z',
+    token: 'stale-lock',
+  }));
+
+  const store = new FileIdentityStore({ identityPath });
+  await store.setSiteTitle('Recovered');
+
+  assert.equal((await store.readState()).settings.siteTitle, 'Recovered');
+  await assert.rejects(() => fs.access(`${identityPath}.lock`), { code: 'ENOENT' });
+});
+
+test('identity store fails closed instead of overwriting malformed persisted state', async () => {
+  const identityPath = await tempIdentityPath();
+  const malformed = '[]\n';
+  await fs.writeFile(identityPath, malformed);
+  const store = new FileIdentityStore({ identityPath });
+
+  await assert.rejects(() => store.setSiteTitle('Must not persist'), /Invalid identity state/u);
+  assert.equal(await fs.readFile(identityPath, 'utf8'), malformed);
+});
+
 test('identity store updates user access without changing password hash', async () => {
   const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
   await store.upsertUserWithPassword({
@@ -270,20 +316,20 @@ test('access control merges role grants and direct user grants', async () => {
   assert.deepEqual(effectiveProjectGrant(state, principal, 'project_one'), {
     projectId: 'project_one',
     canRead: true,
-    canCreate: true,
-    canWrite: true,
+    canCreate: false,
+    canWrite: false,
   });
   assert.deepEqual(effectiveProjectGrant(state, principal, 'project_two'), {
     projectId: 'project_two',
     canRead: true,
     canCreate: true,
-    canWrite: true,
+    canWrite: false,
   });
   assert.equal(canCreateProjectSession(state, principal, 'project_two'), true);
-  assert.equal(canCreateProjectSession(state, principal, 'project_one'), true);
+  assert.equal(canCreateProjectSession(state, principal, 'project_one'), false);
 });
 
-test('project assignment still allows creation even when legacy canNewSession is false', async () => {
+test('explicit create grant still allows creation when legacy canNewSession is false', async () => {
   const state = {
     settings: { multiUserEnabled: true },
     users: [{
@@ -298,7 +344,7 @@ test('project assignment still allows creation even when legacy canNewSession is
       id: 'role_reader',
       name: 'Reader',
       isAdmin: false,
-      projectGrants: [{ projectId: 'project_one', canRead: true, canCreate: false, canWrite: false }],
+      projectGrants: [{ projectId: 'project_one', canRead: true, canCreate: true, canWrite: false }],
     }],
     projects: [],
     sessions: [],
@@ -317,7 +363,7 @@ test('project assignment still allows creation even when legacy canNewSession is
     projectId: 'project_one',
     canRead: true,
     canCreate: true,
-    canWrite: true,
+    canWrite: false,
   });
   assert.equal(canCreateProjectSession(state, principal, 'project_one'), true);
 });
@@ -364,6 +410,30 @@ test('identity store stores only hashed share tokens', async () => {
 
   assert.match(created.token, /^cws_/u);
   assert.equal(share?.tokenHash.includes(created.token), false);
+  assert.equal(typeof share?.expiresAt, 'string');
+  assert.equal(share?.revokedAt, null);
   assert.equal(await store.findShareByToken(created.token), share?.id);
   assert.equal(await store.findShareByToken('wrong-token'), null);
+});
+
+test('identity store rejects expired and revoked share capabilities', async () => {
+  const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
+  const expired = await store.createShare({
+    sessionId: 'app_expired',
+    createdByUserId: 'user_alice',
+    ttlSeconds: 0.001,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(await store.findShareByToken(expired.token), null);
+
+  const active = await store.createShare({
+    sessionId: 'app_active',
+    createdByUserId: 'user_alice',
+    ttlSeconds: 60,
+  });
+  assert.equal(await store.findShareByToken(active.token), active.share.id);
+  const revoked = await store.revokeShare(active.share.id);
+  assert.equal(revoked?.enabled, false);
+  assert.equal(typeof revoked?.revokedAt, 'string');
+  assert.equal(await store.findShareByToken(active.token), null);
 });

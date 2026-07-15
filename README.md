@@ -32,19 +32,21 @@ the browser.
 - Fits LAN-only installs and remote-access setups built with your own network
   edge.
 
-### 2. Multi-user foundation for internal agents
+### 2. Multi-user facade for fully trusted teams
 
-Codex Web also supports a multi-user facade that can be used as the base for
-internal enterprise agents built on top of Codex. Teams can expose controlled
-workspaces to employees, keep administration on the host, and manage access with
-RBAC instead of sharing one Codex login.
+Codex Web includes a Web-layer multi-user facade for teams whose members fully
+trust one another. RBAC controls what the Web UI and HTTP API expose, but it is
+not tenant, OS-user, process, Codex-runtime, or filesystem isolation. Every turn
+still executes as the same host user with access allowed by that Codex runtime.
+Untrusted users must be separated with distinct OS users, containers, or hosts.
 
 | Mobile admin audit | Desktop user management |
 | --- | --- |
 | ![Mobile admin console with session audit](docs/assets/readme/mobile-admin-audit.png) | ![Desktop admin console with user and role management](docs/assets/readme/admin-user-management.png) |
 
-- Multi-user mode, project management, role management, and user management.
-- RBAC for project access, admin operations, observer mode, and share links.
+- Multi-user mode, project management, role management, and user management for
+  a fully trusted group.
+- Web-layer RBAC for project access, admin operations, and observer mode.
 - Session audit views for reviewing activity across users, projects, and
   sessions.
 
@@ -56,10 +58,10 @@ RBAC instead of sharing one Codex login.
   pane; mobile uses a project drawer.
 - Live Codex turn stream with assistant deltas, final answers, command batches,
   file-change batches, approval requests, and runtime errors.
-- Multi-user/RBAC facade for project access, admin management, observer mode,
-  and read-only share links.
-- Share links open a dedicated read-only conversation page with the full session
-  context and no workspace navigation.
+- Multi-user/RBAC facade for fully trusted users, project access, admin
+  management, and observer mode.
+- Optional read-only share links open a dedicated conversation page. Public
+  sharing is disabled by default and must be explicitly enabled by the operator.
 - File and image attachments for turns. The backend stores files locally and
   passes safe local paths to Codex.
 - Authenticated report index and report viewer, plus the bundled
@@ -69,6 +71,8 @@ RBAC instead of sharing one Codex login.
 - macOS launchd and Linux systemd service helpers.
 - English and Simplified Chinese UI language setting, plus a backend-managed
   site title for admins/single-user installs.
+- Six contrast-checked themes with Sunlit yellow as the first-run default,
+  including Paper, Graphite, Nordic, Forest, and Rose alternatives.
 
 ## Repository Layout
 
@@ -114,8 +118,10 @@ npm run serve
 ```
 
 By default the service listens on `0.0.0.0:43210`, so phones on the same LAN can
-reach it. Open the printed local or LAN URL and log in with the configured
-password.
+reach it. Use `http://127.0.0.1:43210` only on the Mac. Before entering a
+password from a phone, put the service behind your own HTTPS reverse proxy,
+tunnel, or private-network HTTPS endpoint; bearer tokens and passwords are not
+protected on plain LAN HTTP, and Service Workers require a secure context.
 
 Run checks:
 
@@ -141,8 +147,9 @@ Expected agent behavior:
   the repo root and follow `install.md`.
 - If the user says "help me install this project" from inside a local checkout,
   find the repo root and follow `install.md`.
-- On macOS, ask for the web password and whether launchd autostart should be
-  installed.
+- On macOS, ask whether launchd autostart should be installed. Never ask the
+  user to send a password in agent chat; the installer opens a hidden terminal
+  prompt directly.
 - On Windows, stop and report that this repository does not provide a Windows
   installer.
 
@@ -154,7 +161,7 @@ scripts/install/install-codex-web-macos.sh
 ```
 
 The installer handles dependency install, password setup, service start,
-optional launchd autostart, and installation of the bundled report skill.
+optional launchd autostart, and installation of both bundled skills.
 
 ## Configuration
 
@@ -175,11 +182,9 @@ Default paths:
 tokens. The browser stores only an opaque session token. Do not store
 `CODEX_WEB_PASSWORD` in `service.env`.
 
-For non-interactive first setup, a one-time environment variable is supported:
-
-```bash
-CODEX_WEB_PASSWORD='choose-a-strong-password' npm run serve
-```
+For non-interactive first setup, the one-time `CODEX_WEB_PASSWORD` environment
+variable is supported, but it should only be injected by a local secret manager.
+Do not put a literal password in shell history or a service env file.
 
 The generated service env defaults to:
 
@@ -189,6 +194,8 @@ CODEX_WEB_PORT=43210
 CODEX_WEB_DEFAULT_CWD=/Users/you/path/to/codex-web
 CODEX_REAL_BIN=codex
 CODEX_WEB_DEBUG=0
+CODEX_WEB_PUBLIC_SHARES_ENABLED=false
+CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS=86400
 ```
 
 Edit `~/.config/codex-web/service.env` to change host, port, default working
@@ -197,6 +204,33 @@ directory, or Codex binary. To restrict access to the local machine only:
 ```env
 CODEX_WEB_HOST=127.0.0.1
 ```
+
+Public share capabilities stay hidden and all `/api/share/*` routes return not
+found unless `CODEX_WEB_PUBLIC_SHARES_ENABLED=true`. When enabled, new links
+default to a 24-hour TTL set by `CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS` and are
+capped at seven days. A share is also invalid after revocation or after
+multi-user mode is disabled. Treat a share URL as a bearer capability.
+
+### Storage lifecycle
+
+Codex Web cleans only files it owns by managed filename or report extension;
+it does not follow symlinks or delete unrelated project files. Cleanup runs at
+startup, before managed writes, and before report access. When a quota is full,
+expired files go first, then the oldest managed files.
+
+| Managed data | Default policy | Configuration |
+| --- | --- | --- |
+| State uploads, turn snapshots, reports, runtime context | 2 GiB total | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
+| Project-local uploads | 512 MiB per project | `CODEX_WEB_PROJECT_UPLOAD_MAX_BYTES` |
+| Uploaded source files | 7-day TTL | `CODEX_WEB_UPLOAD_TTL_SECONDS` |
+| Turn attachment snapshots | 30-day TTL | `CODEX_WEB_TURN_ATTACHMENT_TTL_SECONDS` |
+| Reports | 365-day TTL | `CODEX_WEB_REPORT_TTL_SECONDS` |
+| Runtime context files | 30-day TTL | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
+| App timeline | 500 entries per session, 16 MiB total | `CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION`, `CODEX_WEB_TIMELINE_MAX_BYTES` |
+
+Report favorites are presentation metadata, not an archival guarantee. Move
+long-term records outside `~/.codex-web/reports/` or increase the configured
+retention and quota.
 
 ## Attachments
 
@@ -225,6 +259,9 @@ Upload limits:
 32 MiB request body
 25 MiB per file
 ```
+
+Uploaded source files and immutable turn snapshots are also subject to the
+storage lifecycle policy above.
 
 ## Reports Skill
 
@@ -335,10 +372,19 @@ scripts/service/status-codex-web-launchd-user.sh
 scripts/service/restart-codex-web-launchd-user.sh
 scripts/service/restart-codex-web-launchd-user-detached.sh
 scripts/service/logs-codex-web-launchd-user.sh
+scripts/service/rotate-codex-web-logs.sh
+scripts/service/stop-codex-web-launchd-user.sh
+scripts/service/uninstall-codex-web-launchd-user.sh
 ```
 
 Use the detached restart helper when Codex Web needs to restart itself from a
-running Codex-controlled session.
+running Codex-controlled session. Uninstalling preserves both
+`~/.config/codex-web/service.env` and `~/.codex-web/`. Set
+`CODEX_WEB_LAUNCHD_LABEL` when a deployment needs a custom service label.
+The installer also creates an hourly `${CODEX_WEB_LAUNCHD_LABEL}.logrotate`
+LaunchAgent. It copy-truncates logs without restarting the running service,
+keeps five private generations at 10 MiB each by default, and reads
+`CODEX_WEB_LOG_MAX_BYTES` plus `CODEX_WEB_LOG_GENERATIONS` from `service.env`.
 
 ### Linux systemd
 

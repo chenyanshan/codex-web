@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
   CodexWebRuntime,
@@ -7,16 +6,25 @@ import type {
   CreateSessionInput,
   StartTurnInput,
 } from './runtime.js';
+import type { CodexWebEvent } from './event_model.js';
+import { FileLockBusyError, withFileLock } from './file_lock.js';
 import type { ScheduledTaskDefinition } from './task_store.js';
 import type {
   CodexWebAppSession,
   CodexWebIdentityState,
 } from './identity_store.js';
 
+const TASK_LOCK_STALE_MS = 24 * 60 * 60 * 1_000;
+
 export interface ScheduledTaskRuntimeLike {
   createSession(input: CreateSessionInput): Promise<CodexWebSession>;
   startTurn(sessionId: string, input: StartTurnInput): Promise<CodexWebStartTurnResult>;
   archiveSession(sessionId: string): Promise<boolean>;
+  getTurnEvents(turnId: string): Array<{ event: CodexWebEvent; sequence: number }>;
+  subscribeToTurn(
+    turnId: string,
+    listener: (entry: { event: CodexWebEvent; sequence: number }) => void,
+  ): () => void;
 }
 
 export interface ScheduledTaskIdentityStoreLike {
@@ -71,6 +79,10 @@ export async function runScheduledTask({
       text: task.prompt,
       settings: task.settings,
     });
+    const turnId = 'turnId' in turn ? turn.turnId : null;
+    if (turnId) {
+      await waitForScheduledTurnTerminal(runtime, turnId);
+    }
     const archived = task.archive.onCompletion
       ? await runtime.archiveSession(session.id)
       : false;
@@ -87,9 +99,58 @@ export async function runScheduledTask({
     return {
       taskId: task.id,
       sessionId: session.id,
-      turnId: 'turnId' in turn ? turn.turnId : null,
+      turnId,
       archived,
     };
+  });
+}
+
+export async function waitForScheduledTurnTerminal(
+  runtime: Pick<ScheduledTaskRuntimeLike, 'getTurnEvents' | 'subscribeToTurn'>,
+  turnId: string,
+): Promise<CodexWebEvent> {
+  const existing = findTerminalTurnEvent(runtime.getTurnEvents(turnId));
+  if (existing) {
+    return requireSuccessfulTerminalEvent(existing, turnId);
+  }
+
+  return new Promise<CodexWebEvent>((resolve, reject) => {
+    let unsubscribe: (() => void) | null = null;
+    let unsubscribeWhenReady = false;
+    let settled = false;
+    const cleanup = () => {
+      if (unsubscribe) {
+        unsubscribe();
+      } else {
+        unsubscribeWhenReady = true;
+      }
+    };
+    const settle = (event: CodexWebEvent) => {
+      if (settled || !isTerminalTurnEvent(event)) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      try {
+        resolve(requireSuccessfulTerminalEvent(event, turnId));
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    try {
+      unsubscribe = runtime.subscribeToTurn(turnId, ({ event }) => settle(event));
+      if (unsubscribeWhenReady) {
+        unsubscribe();
+      }
+      const racedTerminal = findTerminalTurnEvent(runtime.getTurnEvents(turnId));
+      if (racedTerminal) {
+        settle(racedTerminal);
+      }
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }
 
@@ -103,28 +164,36 @@ async function withTaskLock<T>(
   callback: () => Promise<T>,
 ): Promise<T> {
   const runDir = path.join(stateDir, 'task-runs');
-  await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
   const lockPath = path.join(runDir, `${taskId}.lock`);
-  let handle: fs.FileHandle | null = null;
   try {
-    handle = await fs.open(lockPath, 'wx', 0o600);
+    return await withFileLock(lockPath, callback, {
+      timeoutMs: 0,
+      staleMs: TASK_LOCK_STALE_MS,
+    });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+    if (error instanceof FileLockBusyError) {
       throw new Error(`Scheduled task ${taskId} is already running`);
     }
     throw error;
   }
-  try {
-    await handle.writeFile(`${process.pid}\n`);
-    await handle.close();
-    handle = null;
-    return await callback();
-  } finally {
-    if (handle) {
-      await handle.close();
-    }
-    await fs.rm(lockPath, { force: true });
+}
+
+function findTerminalTurnEvent(
+  entries: Array<{ event: CodexWebEvent }>,
+): CodexWebEvent | null {
+  return entries.find(({ event }) => isTerminalTurnEvent(event))?.event ?? null;
+}
+
+function isTerminalTurnEvent(event: CodexWebEvent): boolean {
+  return event.type === 'turn.completed' || event.type === 'turn.failed';
+}
+
+function requireSuccessfulTerminalEvent(event: CodexWebEvent, turnId: string): CodexWebEvent {
+  if (event.type !== 'turn.failed') {
+    return event;
   }
+  const details = event.details || event.message || 'unknown error';
+  throw new Error(`Scheduled task turn ${turnId} failed: ${details}`);
 }
 
 function formatUtcMinute(date: Date): string {

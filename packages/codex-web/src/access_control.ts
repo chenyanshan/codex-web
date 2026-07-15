@@ -48,12 +48,11 @@ export function effectiveProjectGrant(
   if (!grants.length) {
     return null;
   }
-  const hasProjectAccess = grants.some((grant) => grant.canRead === true || grant.canCreate === true || grant.canWrite === true);
   return {
     projectId,
-    canRead: hasProjectAccess,
-    canCreate: hasProjectAccess,
-    canWrite: true,
+    canRead: grants.some((grant) => grant.canRead === true),
+    canCreate: grants.some((grant) => grant.canCreate === true),
+    canWrite: grants.some((grant) => grant.canWrite === true),
   };
 }
 
@@ -84,13 +83,7 @@ export function canReadArchivedAppSession(
   principal: CodexWebPrincipal,
   session: CodexWebAppSession,
 ): boolean {
-  if (canReadAppSession(state, principal, session)) {
-    return true;
-  }
-  if (session.archived !== true) {
-    return false;
-  }
-  return effectiveProjectGrant(state, principal, session.projectId)?.canRead === true;
+  return canReadAppSession(state, principal, session);
 }
 
 export function canWriteAppSession(

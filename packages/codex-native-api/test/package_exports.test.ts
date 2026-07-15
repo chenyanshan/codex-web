@@ -78,6 +78,7 @@ test('service can bootstrap the default Codex provider and auth path automatical
 test('package metadata and root entrypoint keep a stable public boundary', () => {
   const packageJsonPath = path.resolve(import.meta.dirname, '../package.json');
   const indexPath = path.resolve(import.meta.dirname, '../src/index.ts');
+  const cliPath = path.resolve(import.meta.dirname, '../src/cli.ts');
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as {
     name?: string;
     private?: boolean;
@@ -89,6 +90,7 @@ test('package metadata and root entrypoint keep a stable public boundary', () =>
     devDependencies?: Record<string, string>;
   };
   const source = fs.readFileSync(indexPath, 'utf8');
+  const cliSource = fs.readFileSync(cliPath, 'utf8');
 
   assert.equal(packageJson.name, '@codex-mobile-web-app/codex-native-api');
   assert.equal(packageJson.private, true);
@@ -102,6 +104,7 @@ test('package metadata and root entrypoint keep a stable public boundary', () =>
   assert.equal(typeof packageJson.devDependencies?.typescript, 'string');
   assert.equal(typeof packageJson.devDependencies?.tsx, 'string');
   assert.equal(typeof packageJson.devDependencies?.['@types/node'], 'string');
+  assert.match(cliSource, /^#!\/usr\/bin\/env node\n/u);
   assert.equal(source.includes('export * from'), false);
   assert.match(source, /export \{\s*[\s\S]*CodexNativeRuntime/);
   assert.match(source, /export type \{\s*[\s\S]*ProviderPluginContract/);

@@ -134,6 +134,8 @@ export interface ProviderThreadTurn {
   status: string | null;
   error: string | null;
   items: ProviderThreadTurnItem[];
+  startedAt?: number | null;
+  completedAt?: number | null;
 }
 
 export interface ProviderThreadSummary {
@@ -143,6 +145,10 @@ export interface ProviderThreadSummary {
   updatedAt?: number | null;
   preview?: string | null;
   turns?: ProviderThreadTurn[] | null;
+  runtimeStatus?: {
+    type: string;
+    activeFlags: string[];
+  } | null;
   bridgeSessionId?: string | null;
   path?: string | null;
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
-LABEL="com.chenyanshan.codex-web"
+LABEL="${CODEX_WEB_LAUNCHD_LABEL:-com.chenyanshan.codex-web}"
 LOG_DIR="${HOME}/.codex-web/logs"
 STDOUT_LOG="${LOG_DIR}/codex-web.stdout.log"
 STDERR_LOG="${LOG_DIR}/codex-web.stderr.log"
@@ -9,6 +10,7 @@ LAUNCHD_TARGET="gui/${UID}/${LABEL}"
 
 mkdir -p "${LOG_DIR}"
 touch "${STDOUT_LOG}" "${STDERR_LOG}"
+chmod 600 "${STDOUT_LOG}" "${STDERR_LOG}"
 
 if launchctl print "${LAUNCHD_TARGET}" >/dev/null 2>&1; then
   echo "service loaded: ${LAUNCHD_TARGET}"

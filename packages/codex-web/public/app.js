@@ -24,7 +24,16 @@ const DEFAULT_COLLABORATION_MODE = 'default';
 const DEFAULT_PERMISSION_PRESET = 'full-access';
 const DEFAULT_APPROVAL_POLICY = 'never';
 const DEFAULT_SANDBOX_MODE = 'danger-full-access';
-const DEFAULT_THEME = 'dark';
+const THEMES = Object.freeze([
+  { id: 'sunny', label: 'Sunlit', chromeColor: '#f8f3e3' },
+  { id: 'light', label: 'Paper', chromeColor: '#f6f8fa' },
+  { id: 'dark', label: 'Graphite', chromeColor: '#181a1f' },
+  { id: 'nord', label: 'Nordic', chromeColor: '#252a35' },
+  { id: 'forest', label: 'Forest', chromeColor: '#101613' },
+  { id: 'rose', label: 'Rose', chromeColor: '#f9f4f5' },
+]);
+const THEME_IDS = THEMES.map((theme) => theme.id);
+const DEFAULT_THEME = 'sunny';
 const DEFAULT_SITE_TITLE = 'Codex Web';
 const DEFAULT_MESSAGE_FONT_SIZE = 'medium';
 const DEFAULT_LANGUAGE = 'en';
@@ -34,9 +43,11 @@ const DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT = 220;
 const PROMPT_EXPAND_LINE_THRESHOLD = 4;
 const STREAM_STALE_MS = 30_000;
 const STREAM_RECOVERY_CHECK_MS = 10_000;
+const APP_VERSION_CHECK_COOLDOWN_MS = 15_000;
+const TIMELINE_PERSIST_DEBOUNCE_MS = 750;
 const FIRST_TURN_RECOVERY_DELAY_MS = 10_000;
 const LOCAL_TURN_SYNC_GRACE_MS = 10_000;
-const DESKTOP_WORKSPACE_MIN_WIDTH = 820;
+const DESKTOP_WORKSPACE_MIN_WIDTH = 1024;
 const EDGE_SWIPE_START_PX = 24;
 const EDGE_SWIPE_TRIGGER_PX = 72;
 const EDGE_SWIPE_MAX_VERTICAL_PX = 48;
@@ -142,10 +153,12 @@ const UI_TRANSLATIONS = {
     'Website title': '网站标题',
     'Browser title': '浏览器标题',
     Theme: '主题',
-    Dark: '深色',
-    White: '白色',
-    Yellow: '黄色',
-    Green: '绿色',
+    Sunlit: '日光黄',
+    Paper: '纸白',
+    Graphite: '石墨',
+    Nordic: '北境蓝',
+    Forest: '森林绿',
+    Rose: '柔和玫瑰',
     'Message Size': '消息字号',
     Small: '小',
     Medium: '中',
@@ -369,6 +382,7 @@ const state = {
   globalSettings: {
     siteTitle: INITIAL_SITE_TITLE,
     canSetSiteTitle: false,
+    publicSharesEnabled: false,
     loaded: false,
   },
   messageFontSize: normalizeMessageFontSize(localStorage.getItem(MESSAGE_FONT_SIZE_KEY)),
@@ -429,7 +443,7 @@ let promptFocusRestoreTimer = null;
 let promptFocusLayoutTimer = null;
 let promptRestoreRun = 0;
 let sessionListRestoreScrollTop = null;
-let timelineScrollTrackingAttached = false;
+let timelineScrollTrackingElement = null;
 let chatTimelineReturnSnapshot = null;
 let chatTimelineForegroundSnapshot = null;
 let chatTimelineViewportSnapshot = null;
@@ -437,8 +451,19 @@ let nextTimelineRestoreSnapshot = null;
 let sharedSessionLoadPromise = null;
 let streamRecoveryTimer = null;
 let streamRecoveryPromise = null;
+let appVersionCheckPromise = null;
+let lastAppVersionCheckAt = 0;
+let timelinePersistTimer = null;
+let chatDynamicUiFramePending = false;
+let reportLoadAbortController = null;
+let renderEventController = null;
+let timelineEventController = null;
+let authRequestGeneration = 0;
 let lastViewportWidth = typeof window?.innerWidth === 'number' ? window.innerWidth : 0;
 let lastViewportHeight = typeof window?.innerHeight === 'number' ? window.innerHeight : 0;
+let activeFocusScopeKey = '';
+let focusReturnTarget = null;
+let pendingFocusRestore = false;
 
 bootstrap();
 applyTheme(state.theme, { persist: false });
@@ -449,13 +474,14 @@ registerServiceWorker();
 setupPwaPullToRefresh();
 setupEdgeSwipeBackNavigation();
 setupAppVersionRefresh();
-setupMobileOrientationLock();
 setupStreamRecoveryWatchdog();
 document.addEventListener('visibilitychange', onVisibilityChange);
 document.addEventListener('click', handleSessionSettingsOutsideClick);
+document.addEventListener('keydown', handleFocusScopeKeydown);
 window.addEventListener('resize', handleWindowResize);
 window.addEventListener('pageshow', onPageResume);
 window.addEventListener('focus', onPageResume);
+window.addEventListener('pagehide', flushScheduledTimelineSave);
 
 function bootstrap() {
   if (isShareRoute()) {
@@ -550,10 +576,14 @@ async function loadSharedSessionFromLocationOnce() {
 }
 
 async function restoreAuth() {
+  const requestGeneration = authRequestGeneration;
   try {
     state.status = 'Restoring session';
     render();
     const { session } = await apiFetch('/api/auth/me');
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     state.authSession = session;
     state.status = 'Syncing sessions';
     state.statusTone = 'warn';
@@ -565,6 +595,9 @@ async function restoreAuth() {
       refreshSessionsList({ renderAfter: false, scope: 'all' }).catch(() => null),
       refreshReportsList({ renderAfter: false }).catch(() => null),
     ]);
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     state.authSession = session;
     applyGlobalSettingsPayload(settingsPayload, { renderAfter: false });
     state.models = Array.isArray(modelsPayload.items) ? modelsPayload.items : [];
@@ -580,6 +613,9 @@ async function restoreAuth() {
     state.error = '';
     render();
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     handleApiError(error, { auth: true });
   }
 }
@@ -593,7 +629,11 @@ function createCachedAuthSession() {
 }
 
 function setLoggedOut(message = '') {
+  authRequestGeneration += 1;
+  cancelReportLoad();
+  clearScheduledTimelineSave();
   localStorage.removeItem(SESSIONS_CACHE_KEY);
+  localStorage.removeItem(TIMELINE_CACHE_KEY);
   state.authSession = null;
   state.sessions = [];
   state.sessionsByScope = {
@@ -653,6 +693,12 @@ function setLoggedOut(message = '') {
   state.desktopSettingsOpen = false;
   state.desktopOverlay = null;
   state.shareDialog = null;
+  state.globalSettings = {
+    siteTitle: state.siteTitle,
+    canSetSiteTitle: false,
+    publicSharesEnabled: false,
+    loaded: false,
+  };
   state.sortMode = 'time';
   state.sessionsScope = 'all';
   state.archiveConfirmSessionId = null;
@@ -665,7 +711,7 @@ function setLoggedOut(message = '') {
   state.streamWasBackgrounded = false;
   state.timeline = [];
   resetSessionHistoryWindow();
-  state.timelineCache = loadTimelineCache();
+  state.timelineCache = new Map();
   state.batches = new Map();
   state.approvals = new Map();
   state.status = 'Login required';
@@ -680,28 +726,38 @@ function setLoggedOut(message = '') {
   render();
 }
 
+function isAuthRequestCurrent(requestGeneration) {
+  return requestGeneration === authRequestGeneration;
+}
+
 function render() {
   const shouldRestoreLatestTimeline = state.timelineShouldFollowLatest;
   const promptRestoreSnapshot = capturePromptRestoreState();
+  beginRenderEventBindings();
+  detachTimelineScrollTracking();
+  clearManagedInert();
   app.innerHTML = '';
   if (state.setupRequired) {
     app.appendChild(renderSetup());
     bindGlobalEvents();
+    bindTimelineActionEvents();
     resetComposerOffset();
     return;
   }
   if (!state.authSession) {
     app.appendChild(renderLogin());
     bindGlobalEvents();
+    bindTimelineActionEvents();
     resetComposerOffset();
     return;
   }
   app.appendChild(renderMain());
   bindGlobalEvents();
+  bindTimelineActionEvents();
+  syncFocusScope();
   const timeline = document.querySelector('#timeline');
   if (timeline) {
     syncComposerOffset();
-    timelineScrollTrackingAttached = false;
     const shouldStartAtEarliest = shouldOpenTimelineAtEarliest();
     attachTimelineScrollTracking({ updateInitial: !shouldRestoreLatestTimeline && !shouldStartAtEarliest });
     if (shouldStartAtEarliest) {
@@ -713,12 +769,229 @@ function render() {
     }
   } else {
     resetComposerOffset();
-    timelineScrollTrackingAttached = false;
   }
   if (state.view === 'sessions') {
     restoreSessionListScroll();
   }
   schedulePromptRestore(promptRestoreSnapshot);
+}
+
+function rememberFocusReturn(element = document.activeElement) {
+  if (!element) {
+    return;
+  }
+  const id = String(element.id || '').trim();
+  if (id) {
+    focusReturnTarget = { id };
+    return;
+  }
+  for (const attribute of ['data-session-archive-request-id', 'data-session-id']) {
+    const value = element.getAttribute?.(attribute);
+    if (value) {
+      focusReturnTarget = { attribute, value };
+      return;
+    }
+  }
+}
+
+function requestFocusRestore() {
+  pendingFocusRestore = true;
+  activeFocusScopeKey = '';
+}
+
+function activeFocusScope() {
+  if (state.shareDialog?.url) {
+    return { key: 'share-dialog', element: document.querySelector('[data-focus-scope="share-dialog"]') };
+  }
+  if (state.archiveConfirmSessionId) {
+    return { key: 'archive-dialog', element: document.querySelector('[data-focus-scope="archive-dialog"]') };
+  }
+  if (state.mobileSidebarOpen) {
+    return { key: 'mobile-projects', element: document.querySelector('[data-focus-scope="mobile-projects"]') };
+  }
+  if (state.settingsOpen) {
+    return { key: 'session-settings', element: document.querySelector('[data-focus-scope="session-settings"]') };
+  }
+  if (state.desktopSettingsOpen) {
+    return { key: 'desktop-settings', element: document.querySelector('[data-focus-scope="desktop-settings"]') };
+  }
+  return { key: '', element: null };
+}
+
+function syncFocusScope() {
+  clearManagedInert();
+  const scope = activeFocusScope();
+  const shouldRestore = pendingFocusRestore;
+  if (scope.element) {
+    makeBackgroundInert(scope.element);
+  }
+  if (shouldRestore) {
+    pendingFocusRestore = false;
+    activeFocusScopeKey = scope.key;
+    const returnTarget = focusReturnTarget;
+    focusReturnTarget = null;
+    requestAnimationFrame(() => {
+      (resolveFocusReturnTarget(returnTarget) || focusFallbackElement())?.focus?.();
+    });
+    return;
+  }
+  if (!scope.element || scope.key === activeFocusScopeKey) {
+    activeFocusScopeKey = scope.key;
+    return;
+  }
+  activeFocusScopeKey = scope.key;
+  requestAnimationFrame(() => {
+    const latest = activeFocusScope();
+    if (latest.key !== scope.key || !latest.element) {
+      return;
+    }
+    const initial = latest.element.querySelector?.('[data-initial-focus]')
+      || focusableElements(latest.element)[0]
+      || latest.element;
+    if (initial === latest.element && !latest.element.hasAttribute?.('tabindex')) {
+      latest.element.setAttribute?.('tabindex', '-1');
+    }
+    initial.focus?.();
+  });
+}
+
+function makeBackgroundInert(scope) {
+  let current = scope;
+  while (current && current !== app) {
+    const parent = current.parentElement;
+    if (!parent) {
+      break;
+    }
+    for (const sibling of parent.children || []) {
+      if (sibling !== current) {
+        markManagedInert(sibling);
+      }
+    }
+    current = parent;
+  }
+}
+
+function markManagedInert(element) {
+  if (!element || element.hasAttribute?.('data-codex-managed-inert')) {
+    return;
+  }
+  element.setAttribute?.('data-codex-managed-inert', 'true');
+  element.setAttribute?.('data-codex-previous-inert', String(Boolean(element.inert)));
+  const previousAriaHidden = element.getAttribute?.('aria-hidden');
+  element.setAttribute?.('data-codex-previous-aria-hidden', previousAriaHidden == null ? '' : previousAriaHidden);
+  element.inert = true;
+  element.setAttribute?.('aria-hidden', 'true');
+}
+
+function clearManagedInert() {
+  for (const element of document.querySelectorAll('[data-codex-managed-inert]')) {
+    const previousInert = element.getAttribute?.('data-codex-previous-inert') === 'true';
+    const previousAriaHidden = element.getAttribute?.('data-codex-previous-aria-hidden');
+    element.inert = previousInert;
+    if (previousAriaHidden) {
+      element.setAttribute?.('aria-hidden', previousAriaHidden);
+    } else {
+      element.removeAttribute?.('aria-hidden');
+    }
+    element.removeAttribute?.('data-codex-managed-inert');
+    element.removeAttribute?.('data-codex-previous-inert');
+    element.removeAttribute?.('data-codex-previous-aria-hidden');
+  }
+}
+
+function focusableElements(scope) {
+  if (!scope?.querySelectorAll) {
+    return [];
+  }
+  return [...scope.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => !element.hidden && element.inert !== true && element.getAttribute?.('aria-hidden') !== 'true');
+}
+
+function resolveFocusReturnTarget(target) {
+  if (!target) {
+    return null;
+  }
+  if (target.id) {
+    return document.querySelector(`#${target.id}`);
+  }
+  if (target.attribute && target.value) {
+    return [...document.querySelectorAll(`[${target.attribute}]`)]
+      .find((element) => element.getAttribute?.(target.attribute) === target.value) || null;
+  }
+  return null;
+}
+
+function focusFallbackElement() {
+  return document.querySelector('#settings-toggle')
+    || document.querySelector('#mobile-sidebar-toggle-button')
+    || document.querySelector('#open-new-session-button')
+    || document.querySelector('main');
+}
+
+function handleFocusScopeKeydown(event) {
+  if (event.key === 'Escape' && closeFocusScope()) {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    return;
+  }
+  if (event.key !== 'Tab') {
+    return;
+  }
+  const scope = activeFocusScope().element;
+  if (!scope) {
+    return;
+  }
+  const focusable = focusableElements(scope);
+  if (!focusable.length) {
+    event.preventDefault?.();
+    scope.focus?.();
+    return;
+  }
+  const currentIndex = focusable.indexOf(document.activeElement);
+  if (event.shiftKey && currentIndex <= 0) {
+    event.preventDefault?.();
+    focusable.at(-1)?.focus?.();
+  } else if (!event.shiftKey && (currentIndex < 0 || currentIndex === focusable.length - 1)) {
+    event.preventDefault?.();
+    focusable[0]?.focus?.();
+  }
+}
+
+function closeFocusScope(kind = '') {
+  if ((!kind || kind === 'share') && state.shareDialog?.url) {
+    closeShareDialog();
+    return true;
+  }
+  if ((!kind || kind === 'archive') && state.archiveConfirmSessionId) {
+    cancelArchiveSession();
+    return true;
+  }
+  if ((!kind || kind === 'mobile-projects') && state.mobileSidebarOpen) {
+    closeMobileSidebar();
+    return true;
+  }
+  if ((!kind || kind === 'settings') && state.settingsOpen) {
+    requestFocusRestore();
+    state.settingsOpen = false;
+    withTimelineScrollPreserved(() => render());
+    return true;
+  }
+  if ((!kind || kind === 'desktop-settings') && state.desktopSettingsOpen) {
+    requestFocusRestore();
+    state.desktopSettingsOpen = false;
+    render();
+    return true;
+  }
+  return false;
+}
+
+function closeShareDialog() {
+  if (!state.shareDialog) {
+    return;
+  }
+  requestFocusRestore();
+  state.shareDialog = null;
+  render();
 }
 
 function resetSessionHistoryWindow() {
@@ -1140,7 +1413,10 @@ function renderSessionListHeader({ desktop = false } = {}) {
       <header class="topbar page-topbar mobile-session-topbar">
         <div class="topbar-main">
           <button class="ghost page-back-button mobile-sidebar-toggle-button" type="button" id="mobile-sidebar-toggle-button" aria-label="Projects">${renderSidebarButtonIcon()}</button>
-          ${sortToggle}
+          <div class="mobile-session-actions">
+            ${sortToggle}
+            <button class="ghost icon-button mobile-new-session-button" type="button" id="open-new-session-button" aria-label="New session" title="New session"><span aria-hidden="true">+</span></button>
+          </div>
         </div>
       </header>
   `;
@@ -1311,10 +1587,10 @@ function renderAppSettings() {
 
 function renderDesktopSettingsPanel() {
   return localizeFragment(`
-    <aside class="desktop-settings-panel">
+    <aside class="desktop-settings-panel" role="dialog" aria-modal="true" aria-labelledby="desktop-settings-title" data-focus-scope="desktop-settings">
       <header class="desktop-panel-header">
-        <h2>Settings</h2>
-        <button class="ghost compact-button" type="button" id="desktop-settings-close-button">Close</button>
+        <h2 id="desktop-settings-title">Settings</h2>
+        <button class="ghost compact-button" type="button" id="desktop-settings-close-button" data-initial-focus>Close</button>
       </header>
       <main class="app-settings-page desktop-settings-body">
         ${renderAppSettingsSections()}
@@ -1335,11 +1611,16 @@ function renderAppSettingsSections() {
         </section>
         <section class="settings-section">
           <div class="settings-section-title">Theme</div>
-          <div class="toggle theme-toggle">
-            <button type="button" data-app-theme="dark" aria-pressed="${String(state.theme === 'dark')}">Dark</button>
-            <button type="button" data-app-theme="light" aria-pressed="${String(state.theme === 'light')}">White</button>
-            <button type="button" data-app-theme="sunny" aria-pressed="${String(state.theme === 'sunny')}">Yellow</button>
-            <button type="button" data-app-theme="forest" aria-pressed="${String(state.theme === 'forest')}">Green</button>
+          <div class="theme-picker" role="group" aria-label="Theme">
+            ${THEMES.map((theme) => `
+              <button class="theme-option" type="button" data-app-theme="${escapeAttribute(theme.id)}" aria-pressed="${String(state.theme === theme.id)}">
+                <span class="theme-swatch" aria-hidden="true">
+                  <span class="theme-swatch-surface"></span>
+                  <span class="theme-swatch-accent"></span>
+                </span>
+                <span class="theme-option-name">${escapeHtml(theme.label)}</span>
+              </button>
+            `).join('')}
           </div>
         </section>
         <section class="settings-section">
@@ -1373,9 +1654,9 @@ function renderAppSettingsSections() {
             <div class="control-group">
               <label>Permissions</label>
               <div class="toggle permission-toggle">
-                <button type="button" data-default-permission-preset="read-only" aria-pressed="${String(state.defaultThreadSettings.accessPreset === 'read-only')}">Read</button>
-                <button type="button" data-default-permission-preset="default" aria-pressed="${String(state.defaultThreadSettings.accessPreset === 'default')}">Ask</button>
-                <button type="button" data-default-permission-preset="full-access" aria-pressed="${String(state.defaultThreadSettings.accessPreset === 'full-access')}">Full</button>
+                <button type="button" data-default-permission-preset="read-only" aria-pressed="${String(defaultThreadAccessPreset() === 'read-only')}">Read</button>
+                <button type="button" data-default-permission-preset="default" aria-pressed="${String(defaultThreadAccessPreset() === 'default')}">Ask</button>
+                ${isManagedMultiUserPrincipal() ? '' : `<button type="button" data-default-permission-preset="full-access" aria-pressed="${String(defaultThreadAccessPreset() === 'full-access')}">Full</button>`}
               </div>
             </div>
           </div>
@@ -1950,6 +2231,7 @@ function renderChatHeaderActions({ readOnly, sessionReportsProject }) {
   }
   return `
           <div class="chat-header-actions">
+            ${state.pendingTurn && state.turnId ? '<button class="danger icon-button turn-stop-button" type="button" id="stop-button" aria-label="Stop current turn" title="Stop current turn"><span aria-hidden="true">&#9632;</span></button>' : ''}
             ${canOpenSettings ? `<button class="ghost icon-button settings-toggle-button" type="button" id="settings-toggle" aria-label="Session menu" title="Session menu" aria-expanded="${String(state.settingsOpen)}">${renderMoreButtonIcon()}</button>` : ''}
             ${sessionReportsProject ? `<button class="ghost compact-button session-report-button" type="button" data-session-reports-project="${escapeAttribute(sessionReportsProject)}">Reports</button>` : ''}
           </div>
@@ -1957,7 +2239,12 @@ function renderChatHeaderActions({ readOnly, sessionReportsProject }) {
 }
 
 function canShareCurrentSession() {
-  return Boolean(state.sessionId && !state.draftSessionActive && !isReadOnlySession(state.currentSession));
+  return Boolean(
+    state.globalSettings.publicSharesEnabled === true
+      && state.sessionId
+      && !state.draftSessionActive
+      && !isReadOnlySession(state.currentSession),
+  );
 }
 
 function renderShareDialog() {
@@ -1965,13 +2252,13 @@ function renderShareDialog() {
     return '';
   }
   return `
-      <div class="modal-backdrop share-modal-backdrop">
-        <section class="confirm-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
+      <div class="modal-backdrop share-modal-backdrop" data-modal-dismiss="share">
+        <section class="confirm-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title" data-focus-scope="share-dialog">
           <div>
             <h2 id="share-dialog-title">Share link</h2>
             <p class="meta">${escapeHtml(state.shareDialog.copied ? 'Copied to clipboard.' : 'Copy this read-only session link.')}</p>
           </div>
-          <input id="share-link-input" class="share-link-input" type="text" readonly value="${escapeAttribute(state.shareDialog.url)}">
+          <input id="share-link-input" class="share-link-input" type="text" readonly value="${escapeAttribute(state.shareDialog.url)}" data-initial-focus>
           <div class="actions">
             <button class="ghost compact-button" type="button" id="copy-share-link-button">Copy</button>
             <button class="primary compact-button" type="button" id="close-share-dialog-button">Done</button>
@@ -1988,7 +2275,7 @@ function renderComposer(composerClassName, { desktop = false } = {}) {
         ${renderQueuedMessages()}
         <form class="composer ${composerClassName}" id="composer-form">
           ${state.settingsOpen && !state.composerExpanded ? renderSettingsDrawer() : ''}
-          ${state.error && !state.composerExpanded ? `<div class="composer-error">${escapeHtml(shorten(state.error, 96))}</div>` : ''}
+          ${state.error && !state.composerExpanded ? `<div class="composer-error" role="alert">${escapeHtml(shorten(state.error, 96))}</div>` : ''}
           ${renderAttachmentTray()}
           <input class="visually-hidden" id="attachment-input" type="file" multiple aria-label="Upload files">
           <div class="compact-composer-row">
@@ -2401,15 +2688,15 @@ function renderArchiveConfirmModal() {
     return '';
   }
   return `
-    <div class="modal-backdrop">
-      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="archive-confirm-title">
+    <div class="modal-backdrop" data-modal-dismiss="archive">
+      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="archive-confirm-title" data-focus-scope="archive-dialog">
         <div>
           <h2 id="archive-confirm-title">Archive session?</h2>
           <p class="meta" data-i18n-skip>${escapeHtml(projectNameForSession(session))}</p>
           <p class="meta"${previewInputForSession(session) ? ' data-i18n-skip' : ''}>${escapeHtml(shorten(previewInputForSession(session), 120) || 'No prompt preview')}</p>
         </div>
         <div class="actions">
-          <button class="ghost compact-button" type="button" id="archive-cancel-button">Cancel</button>
+          <button class="ghost compact-button" type="button" id="archive-cancel-button" data-initial-focus>Cancel</button>
           <button class="danger compact-button" type="button" data-session-archive-confirm-id="${escapeAttribute(session.id)}">Archive</button>
         </div>
       </section>
@@ -2436,12 +2723,11 @@ function renderPathChoices() {
 
 function renderSettingsDrawer() {
   return `
-    <div class="settings-drawer">
-      ${renderStopTurnControl()}
+    <div class="settings-drawer" role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings">
       ${renderShareSettingsControl()}
       <div class="settings-action-row">
         <span class="meta">Runtime</span>
-        <button class="ghost compact-button" type="button" id="runtime-reload-button">Reload</button>
+        <button class="ghost compact-button" type="button" id="runtime-reload-button" data-initial-focus>Reload</button>
       </div>
       <div class="controls">
         <div class="control-group">
@@ -2466,7 +2752,7 @@ function renderSettingsDrawer() {
           <div class="toggle permission-toggle">
             <button type="button" data-permission-preset="read-only" aria-pressed="${String(state.permissionPreset === 'read-only')}">Read</button>
             <button type="button" data-permission-preset="default" aria-pressed="${String(state.permissionPreset === 'default')}">Ask</button>
-            <button type="button" data-permission-preset="full-access" aria-pressed="${String(state.permissionPreset === 'full-access')}">Full</button>
+            ${isManagedMultiUserPrincipal() ? '' : `<button type="button" data-permission-preset="full-access" aria-pressed="${String(state.permissionPreset === 'full-access')}">Full</button>`}
           </div>
         </div>
       </div>
@@ -2486,18 +2772,6 @@ function renderShareSettingsControl() {
   `;
 }
 
-function renderStopTurnControl() {
-  if (!state.pendingTurn || !state.turnId) {
-    return '';
-  }
-  return `
-    <div class="settings-stop-row">
-      <span class="meta">Current turn is running.</span>
-      <button class="danger compact-button" type="button" id="stop-button">Stop</button>
-    </div>
-  `;
-}
-
 function renderTimeline() {
   if (!state.timeline.length) {
     return `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`;
@@ -2506,7 +2780,7 @@ function renderTimeline() {
 }
 
 function renderComposerStatus() {
-  return localizeFragment(`<div class="composer-status" data-tone="${escapeAttribute(composerStatusTone())}"><span>${escapeHtml(composerStatusLabel())}</span></div>`);
+  return localizeFragment(`<div class="composer-status" data-tone="${escapeAttribute(composerStatusTone())}" role="status" aria-live="polite" aria-atomic="true"><span>${escapeHtml(composerStatusLabel())}</span></div>`);
 }
 
 function composerStatusLabel() {
@@ -2554,6 +2828,9 @@ function renderTimelineItem(item) {
       </article>
     `;
   }
+  if (item.kind === 'work') {
+    return renderWorkItem(item);
+  }
   if (item.kind === 'batch') {
     return `
       <article class="card">
@@ -2567,7 +2844,7 @@ function renderTimelineItem(item) {
   }
   if (item.kind === 'approval') {
     return `
-    <article class="card">
+    <article class="card" aria-live="polite">
       <div class="card-header">
         <span class="card-title">${escapeHtml(t('Approval requested'))}</span>
         <span class="card-kind" data-i18n-skip>${escapeHtml(item.approvalKind)}</span>
@@ -2625,7 +2902,7 @@ function renderWorkItem(item) {
   const details = workDetailsForItem(item);
   const hasError = workItemHasError(item);
   return `
-    <details class="card work-card${hasError ? ' work-error' : ''}" open>
+    <details class="card work-card${hasError ? ' work-error' : ''}"${hasError ? ' open' : ''}>
       <summary>
         <span class="work-title">Work</span>
         <span class="work-counts">${escapeHtml(formatWorkCounts(summary))}</span>
@@ -2774,7 +3051,7 @@ function renderWorkTextBlock(label, value) {
   return `
     <div class="work-text-block">
       <strong>${escapeHtml(label)}</strong>
-      <pre class="work-output">${escapeHtml(String(value))}</pre>
+      <pre class="work-output">${escapeHtml(shorten(String(value), MAX_TIMELINE_SUMMARY_TEXT))}</pre>
     </div>
   `;
 }
@@ -2995,122 +3272,156 @@ function normalizeNonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
+function beginRenderEventBindings() {
+  renderEventController?.abort();
+  timelineEventController?.abort();
+  renderEventController = new AbortController();
+  timelineEventController = null;
+}
+
+function beginTimelineEventBindings() {
+  timelineEventController?.abort();
+  timelineEventController = new AbortController();
+}
+
+function listenRendered(target, type, listener, options = {}) {
+  listenWithSignal(target, type, listener, options, renderEventController?.signal);
+}
+
+function listenTimeline(target, type, listener, options = {}) {
+  listenWithSignal(target, type, listener, options, timelineEventController?.signal);
+}
+
+function listenWithSignal(target, type, listener, options, signal) {
+  if (!target || !signal) {
+    return;
+  }
+  const normalizedOptions = typeof options === 'boolean'
+    ? { capture: options, signal }
+    : { ...(options || {}), signal };
+  target.addEventListener(type, listener, normalizedOptions);
+}
+
 function bindGlobalEvents() {
   const loginForm = document.querySelector('#login-form');
   if (loginForm) {
-    loginForm.addEventListener('submit', onLoginSubmit);
+    listenRendered(loginForm, 'submit', onLoginSubmit);
   }
 
   const composerForm = document.querySelector('#composer-form');
   if (composerForm) {
-    composerForm.addEventListener('submit', onComposerSubmit);
+    listenRendered(composerForm, 'submit', onComposerSubmit);
   }
 
   for (const button of document.querySelectorAll('[data-queued-message-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       removeQueuedMessage(currentQueuedSessionId(), button.getAttribute('data-queued-message-id') || '');
     });
   }
 
   const logoutButton = document.querySelector('#logout-button');
   if (logoutButton) {
-    logoutButton.addEventListener('click', onLogout);
+    listenRendered(logoutButton, 'click', onLogout);
   }
 
   const settingsLogoutButton = document.querySelector('#settings-logout-button');
   if (settingsLogoutButton) {
-    settingsLogoutButton.addEventListener('click', onLogout);
+    listenRendered(settingsLogoutButton, 'click', onLogout);
   }
 
   const openAppSettingsButton = document.querySelector('#open-app-settings-button');
   if (openAppSettingsButton) {
-    openAppSettingsButton.addEventListener('click', () => {
+    listenRendered(openAppSettingsButton, 'click', () => {
       openAppSettingsPage();
     });
   }
 
   const openNewSessionButton = document.querySelector('#open-new-session-button');
   if (openNewSessionButton) {
-    openNewSessionButton.addEventListener('click', () => {
+    listenRendered(openNewSessionButton, 'click', () => {
       openNewSessionPage();
     });
   }
 
   const openAdminConsoleButton = document.querySelector('#open-admin-console-button');
   if (openAdminConsoleButton) {
-    openAdminConsoleButton.addEventListener('click', () => {
+    listenRendered(openAdminConsoleButton, 'click', () => {
       void openAdminConsole();
     });
   }
 
   const stopButton = document.querySelector('#stop-button');
   if (stopButton) {
-    stopButton.addEventListener('click', onStopTurn);
+    listenRendered(stopButton, 'click', onStopTurn);
   }
 
   const runtimeReloadButton = document.querySelector('#runtime-reload-button');
   if (runtimeReloadButton) {
-    runtimeReloadButton.addEventListener('click', () => {
+    listenRendered(runtimeReloadButton, 'click', () => {
       void reloadRuntime();
     });
   }
 
   const composerRefreshButton = document.querySelector('#composer-refresh-button');
   if (composerRefreshButton) {
-    composerRefreshButton.addEventListener('click', () => {
+    listenRendered(composerRefreshButton, 'click', () => {
       void handleComposerRefresh();
     });
   }
 
   const attachButton = document.querySelector('#attach-button');
   const attachmentInput = document.querySelector('#attachment-input');
-  if (attachButton && attachmentInput) {
-    attachButton.addEventListener('click', () => {
-      attachmentInput.click?.();
-    });
-    attachmentInput.addEventListener('change', (event) => {
-      void handleAttachmentInputChange(event);
-    });
+  if (attachButton) {
+    listenRendered(attachButton, 'click', openAttachmentPicker);
+  }
+  if (attachmentInput) {
+    listenRendered(attachmentInput, 'change', handleAttachmentInputChange);
   }
 
   for (const button of document.querySelectorAll('[data-attachment-remove-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       removeComposerAttachment(button.getAttribute('data-attachment-remove-id') || '');
     });
   }
 
   const railShowSessionsButton = document.querySelector('#rail-show-sessions-button');
   if (railShowSessionsButton) {
-    railShowSessionsButton.addEventListener('click', () => {
+    listenRendered(railShowSessionsButton, 'click', () => {
       showSessionList();
     });
   }
 
   const mobileSidebarToggleButton = document.querySelector('#mobile-sidebar-toggle-button');
   if (mobileSidebarToggleButton) {
-    mobileSidebarToggleButton.addEventListener('click', () => {
+    listenRendered(mobileSidebarToggleButton, 'click', () => {
+      rememberFocusReturn(mobileSidebarToggleButton);
       setMobileSidebarOpen(true);
     });
   }
 
+  const mobileDrawerCloseButton = document.querySelector('#mobile-drawer-close-button');
+  if (mobileDrawerCloseButton) {
+    listenRendered(mobileDrawerCloseButton, 'click', closeMobileSidebar);
+  }
+
   const mobileProjectDrawerBackdrop = document.querySelector('#mobile-drawer-backdrop');
   if (mobileProjectDrawerBackdrop) {
-    mobileProjectDrawerBackdrop.addEventListener('click', (event) => {
+    listenRendered(mobileProjectDrawerBackdrop, 'click', (event) => {
       if (event.target !== mobileProjectDrawerBackdrop) {
         return;
       }
-      setMobileSidebarOpen(false);
+      closeMobileSidebar();
     });
   }
 
   for (const button of document.querySelectorAll('[data-project-scope-key]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void selectProjectScope(button.getAttribute('data-project-scope-key') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-project-favorite-id]')) {
-    button.addEventListener('click', (event) => {
+    listenRendered(button, 'click', (event) => {
       event.stopPropagation();
       void toggleProjectFavorite(button.getAttribute('data-project-favorite-id') || '');
     });
@@ -3118,14 +3429,15 @@ function bindGlobalEvents() {
 
   const desktopEmptyNewSessionButton = document.querySelector('#desktop-empty-new-session-button');
   if (desktopEmptyNewSessionButton) {
-    desktopEmptyNewSessionButton.addEventListener('click', () => {
+    listenRendered(desktopEmptyNewSessionButton, 'click', () => {
       openNewSessionPage();
     });
   }
 
   const desktopSettingsCloseButton = document.querySelector('#desktop-settings-close-button');
   if (desktopSettingsCloseButton) {
-    desktopSettingsCloseButton.addEventListener('click', () => {
+    listenRendered(desktopSettingsCloseButton, 'click', () => {
+      requestFocusRestore();
       state.desktopSettingsOpen = false;
       render();
     });
@@ -3133,68 +3445,77 @@ function bindGlobalEvents() {
 
   const openReportsButton = document.querySelector('#open-reports-button');
   if (openReportsButton) {
-    openReportsButton.addEventListener('click', () => {
+    listenRendered(openReportsButton, 'click', () => {
       void openReportsPage();
     });
   }
 
   const desktopReportsCloseButton = document.querySelector('#desktop-reports-close-button');
   if (desktopReportsCloseButton) {
-    desktopReportsCloseButton.addEventListener('click', () => {
+    listenRendered(desktopReportsCloseButton, 'click', () => {
       closeReportsPage();
     });
   }
 
   const shareSessionButton = document.querySelector('#share-session-button');
   if (shareSessionButton) {
-    shareSessionButton.addEventListener('click', () => {
+    listenRendered(shareSessionButton, 'click', () => {
       void shareCurrentSession();
     });
   }
 
   const copyShareLinkButton = document.querySelector('#copy-share-link-button');
   if (copyShareLinkButton) {
-    copyShareLinkButton.addEventListener('click', () => {
+    listenRendered(copyShareLinkButton, 'click', () => {
       void copyShareLink(state.shareDialog?.url || '');
     });
   }
 
   const closeShareDialogButton = document.querySelector('#close-share-dialog-button');
   if (closeShareDialogButton) {
-    closeShareDialogButton.addEventListener('click', () => {
-      state.shareDialog = null;
-      render();
+    listenRendered(closeShareDialogButton, 'click', closeShareDialog);
+  }
+
+  for (const backdrop of document.querySelectorAll('[data-modal-dismiss]')) {
+    listenRendered(backdrop, 'click', (event) => {
+      if (event.target === backdrop) {
+        event.stopPropagation?.();
+        closeFocusScope(backdrop.getAttribute('data-modal-dismiss') || '');
+      }
     });
   }
 
   for (const button of document.querySelectorAll('[data-report-project]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       state.reportProject = button.getAttribute('data-report-project') || '';
       render();
     });
   }
 
   for (const button of document.querySelectorAll('[data-report-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void openReportById(button.getAttribute('data-report-id') || '', { returnView: 'reports' });
     });
   }
 
   for (const button of document.querySelectorAll('[data-session-reports-project]')) {
-    button.addEventListener('click', (event) => {
+    listenRendered(button, 'click', (event) => {
       event.stopPropagation();
       void openReportsPage({ project: button.getAttribute('data-session-reports-project') || '', returnView: 'chat' });
     });
   }
 
   for (const button of document.querySelectorAll('[data-report-favorite-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void toggleReportFavorite(button.getAttribute('data-report-favorite-id') || '');
     });
   }
 
   for (const link of document.querySelectorAll('[data-report-path]')) {
-    link.addEventListener('click', (event) => {
+    if (link.closest?.('#timeline')) {
+      continue;
+    }
+    listenRendered(link, 'click', (event) => {
       event.preventDefault();
       void openReportByPath(link.getAttribute('data-report-path') || '', { returnView: 'chat' });
     });
@@ -3202,14 +3523,14 @@ function bindGlobalEvents() {
 
   const backToReportsButton = document.querySelector('#back-to-reports-button');
   if (backToReportsButton) {
-    backToReportsButton.addEventListener('click', () => {
+    listenRendered(backToReportsButton, 'click', () => {
       closeReportViewer();
     });
   }
 
   const backToListButton = document.querySelector('#back-to-list-button');
   if (backToListButton) {
-    backToListButton.addEventListener('click', () => {
+    listenRendered(backToListButton, 'click', () => {
       if (state.view === 'reports') {
         handleReportsBackNavigation();
       } else {
@@ -3219,119 +3540,119 @@ function bindGlobalEvents() {
   }
 
   for (const button of document.querySelectorAll('[data-session-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       rememberSessionListScroll();
       void selectSession(button.getAttribute('data-session-id') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-sort-mode]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void setSessionSortMode(button.getAttribute('data-sort-mode') || 'favorites');
     });
   }
 
   for (const button of document.querySelectorAll('[data-session-favorite-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void toggleSessionFavorite(button.getAttribute('data-session-favorite-id') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-session-archive-request-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       requestArchiveSession(button.getAttribute('data-session-archive-request-id') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-session-archive-confirm-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void archiveSession(button.getAttribute('data-session-archive-confirm-id') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-session-unarchive-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void unarchiveSession(button.getAttribute('data-session-unarchive-id') || '');
     });
   }
 
   const archiveCancelButton = document.querySelector('#archive-cancel-button');
   if (archiveCancelButton) {
-    archiveCancelButton.addEventListener('click', () => {
+    listenRendered(archiveCancelButton, 'click', () => {
       cancelArchiveSession();
     });
   }
 
   const newSessionForm = document.querySelector('#new-session-form');
   if (newSessionForm) {
-    newSessionForm.addEventListener('submit', onNewSessionSubmit);
+    listenRendered(newSessionForm, 'submit', onNewSessionSubmit);
   }
 
   const newCwdInput = document.querySelector('#new-cwd-input');
   if (newCwdInput) {
-    newCwdInput.addEventListener('input', (event) => {
+    listenRendered(newCwdInput, 'input', (event) => {
       state.newCwd = event.target.value;
     });
   }
 
   const newProjectSelect = document.querySelector('#new-project-select');
   if (newProjectSelect) {
-    newProjectSelect.addEventListener('change', (event) => {
+    listenRendered(newProjectSelect, 'change', (event) => {
       state.newProjectId = event.target.value;
     });
   }
 
   const adminMultiUserToggle = document.querySelector('#admin-multi-user-toggle');
   if (adminMultiUserToggle) {
-    adminMultiUserToggle.addEventListener('change', (event) => {
+    listenRendered(adminMultiUserToggle, 'change', (event) => {
       void updateAdminSettings({ multiUserEnabled: event.target.checked });
     });
   }
 
   const adminSessionUserFilter = document.querySelector('#admin-session-user-filter');
   if (adminSessionUserFilter) {
-    adminSessionUserFilter.addEventListener('change', (event) => {
+    listenRendered(adminSessionUserFilter, 'change', (event) => {
       void refreshAdminSessions({ userId: event.target.value, renderAfter: true });
     });
   }
 
   const adminSessionProjectFilter = document.querySelector('#admin-session-project-filter');
   if (adminSessionProjectFilter) {
-    adminSessionProjectFilter.addEventListener('change', (event) => {
+    listenRendered(adminSessionProjectFilter, 'change', (event) => {
       void refreshAdminSessions({ projectId: event.target.value, renderAfter: true });
     });
   }
 
   const adminSessionStateFilter = document.querySelector('#admin-session-state-filter');
   if (adminSessionStateFilter) {
-    adminSessionStateFilter.addEventListener('change', (event) => {
+    listenRendered(adminSessionStateFilter, 'change', (event) => {
       void refreshAdminSessions({ state: event.target.value, renderAfter: true });
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-page]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       state.admin.page = normalizeAdminPage(button.getAttribute('data-admin-page') || '');
       render();
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-edit-project]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       state.admin.editingProjectId = button.getAttribute('data-admin-edit-project') || '';
       render();
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-edit-role]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       state.admin.editingRoleId = button.getAttribute('data-admin-edit-role') || '';
       render();
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-edit-user]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       state.admin.editingUserId = button.getAttribute('data-admin-edit-user') || '';
       render();
     });
@@ -3339,7 +3660,7 @@ function bindGlobalEvents() {
 
   const adminProjectEditCancel = document.querySelector('#admin-project-edit-cancel');
   if (adminProjectEditCancel) {
-    adminProjectEditCancel.addEventListener('click', () => {
+    listenRendered(adminProjectEditCancel, 'click', () => {
       state.admin.editingProjectId = '';
       render();
     });
@@ -3347,7 +3668,7 @@ function bindGlobalEvents() {
 
   const adminRoleEditCancel = document.querySelector('#admin-role-edit-cancel');
   if (adminRoleEditCancel) {
-    adminRoleEditCancel.addEventListener('click', () => {
+    listenRendered(adminRoleEditCancel, 'click', () => {
       state.admin.editingRoleId = '';
       render();
     });
@@ -3355,7 +3676,7 @@ function bindGlobalEvents() {
 
   const adminUserEditCancel = document.querySelector('#admin-user-edit-cancel');
   if (adminUserEditCancel) {
-    adminUserEditCancel.addEventListener('click', () => {
+    listenRendered(adminUserEditCancel, 'click', () => {
       state.admin.editingUserId = '';
       render();
     });
@@ -3363,27 +3684,27 @@ function bindGlobalEvents() {
 
   const adminProjectForm = document.querySelector('#admin-project-form');
   if (adminProjectForm) {
-    adminProjectForm.addEventListener('submit', (event) => {
+    listenRendered(adminProjectForm, 'submit', (event) => {
       void onAdminProjectSubmit(event);
     });
   }
 
   const adminRoleForm = document.querySelector('#admin-role-form');
   if (adminRoleForm) {
-    adminRoleForm.addEventListener('submit', (event) => {
+    listenRendered(adminRoleForm, 'submit', (event) => {
       void onAdminRoleSubmit(event);
     });
   }
 
   const adminUserForm = document.querySelector('#admin-user-form');
   if (adminUserForm) {
-    adminUserForm.addEventListener('submit', (event) => {
+    listenRendered(adminUserForm, 'submit', (event) => {
       void onAdminUserSubmit(event);
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-toggle-user-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void toggleAdminUserEnabled(
         button.getAttribute('data-admin-toggle-user-id') || '',
         button.getAttribute('data-admin-toggle-user-enabled') === 'true',
@@ -3392,19 +3713,19 @@ function bindGlobalEvents() {
   }
 
   for (const button of document.querySelectorAll('[data-admin-delete-user-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void deleteAdminUser(button.getAttribute('data-admin-delete-user-id') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-session-id]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       void openAdminObservedSession(button.getAttribute('data-admin-session-id') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-cwd-choice]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       state.newCwd = button.getAttribute('data-cwd-choice') || '';
       render();
     });
@@ -3412,10 +3733,10 @@ function bindGlobalEvents() {
 
   const promptInput = document.querySelector('#prompt-input');
   if (promptInput) {
-    promptInput.addEventListener('touchstart', syncPromptFocusLayout, { passive: true });
-    promptInput.addEventListener('focus', syncPromptFocusLayout);
-    promptInput.addEventListener('keydown', handlePromptKeydown);
-    promptInput.addEventListener('input', (event) => {
+    listenRendered(promptInput, 'touchstart', syncPromptFocusLayout, { passive: true });
+    listenRendered(promptInput, 'focus', syncPromptFocusLayout);
+    listenRendered(promptInput, 'keydown', handlePromptKeydown);
+    listenRendered(promptInput, 'input', (event) => {
       state.prompt = event.target.value;
       savePromptDraftForCurrentSession();
       syncPromptInputLayout(event.target);
@@ -3426,22 +3747,22 @@ function bindGlobalEvents() {
 
   const settingsToggle = document.querySelector('#settings-toggle');
   if (settingsToggle) {
-    settingsToggle.addEventListener('click', toggleSettingsDrawer);
+    listenRendered(settingsToggle, 'click', toggleSettingsDrawer);
   }
 
   const composerExpandButton = document.querySelector('#composer-expand-button');
   if (composerExpandButton) {
-    composerExpandButton.addEventListener('click', toggleComposerExpanded);
+    listenRendered(composerExpandButton, 'click', toggleComposerExpanded);
   }
 
   for (const button of document.querySelectorAll('[data-message-font-size]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       setMessageFontSize(button.getAttribute('data-message-font-size') || DEFAULT_MESSAGE_FONT_SIZE);
     });
   }
 
   for (const button of document.querySelectorAll('[data-app-language]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       applyLanguage(button.getAttribute('data-app-language') || DEFAULT_LANGUAGE);
       render();
     });
@@ -3449,7 +3770,7 @@ function bindGlobalEvents() {
 
   const modelSelect = document.querySelector('#model-select');
   if (modelSelect) {
-    modelSelect.addEventListener('change', (event) => {
+    listenRendered(modelSelect, 'change', (event) => {
       state.model = event.target.value;
       state.reasoningEffort = reasoningEffortForModel(state.model, state.reasoningEffort);
       withTimelineScrollPreserved(() => render());
@@ -3459,14 +3780,14 @@ function bindGlobalEvents() {
 
   const reasoningSelect = document.querySelector('#reasoning-select');
   if (reasoningSelect) {
-    reasoningSelect.addEventListener('change', (event) => {
+    listenRendered(reasoningSelect, 'change', (event) => {
       state.reasoningEffort = event.target.value;
       void updateSessionSettings();
     });
   }
 
   for (const button of document.querySelectorAll('[data-mode]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       state.collaborationMode = button.getAttribute('data-mode') || 'default';
       void updateSessionSettings();
       render();
@@ -3474,7 +3795,7 @@ function bindGlobalEvents() {
   }
 
   for (const button of document.querySelectorAll('[data-permission-preset]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       applyPermissionPreset(button.getAttribute('data-permission-preset') || 'default');
       void updateSessionSettings();
       render();
@@ -3483,7 +3804,7 @@ function bindGlobalEvents() {
 
   const defaultModelSelect = document.querySelector('#default-model-select');
   if (defaultModelSelect) {
-    defaultModelSelect.addEventListener('change', (event) => {
+    listenRendered(defaultModelSelect, 'change', (event) => {
       applyDefaultThreadSettings({
         model: event.target.value,
         reasoningEffort: reasoningEffortForModel(event.target.value, state.defaultThreadSettings.reasoningEffort),
@@ -3494,14 +3815,14 @@ function bindGlobalEvents() {
 
   const defaultReasoningSelect = document.querySelector('#default-reasoning-select');
   if (defaultReasoningSelect) {
-    defaultReasoningSelect.addEventListener('change', (event) => {
+    listenRendered(defaultReasoningSelect, 'change', (event) => {
       applyDefaultThreadSettings({ reasoningEffort: event.target.value });
       render();
     });
   }
 
   for (const button of document.querySelectorAll('[data-app-theme]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       applyTheme(button.getAttribute('data-app-theme') || DEFAULT_THEME);
       render();
     });
@@ -3509,33 +3830,29 @@ function bindGlobalEvents() {
 
   const siteTitleInput = document.querySelector('#site-title-input');
   if (siteTitleInput) {
-    siteTitleInput.addEventListener('change', (event) => {
+    listenRendered(siteTitleInput, 'change', (event) => {
       void saveSiteTitle(event.target.value);
     });
   }
 
   for (const button of document.querySelectorAll('[data-default-mode]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       applyDefaultThreadSettings({ collaborationMode: button.getAttribute('data-default-mode') || DEFAULT_COLLABORATION_MODE });
       render();
     });
   }
 
   for (const button of document.querySelectorAll('[data-default-permission-preset]')) {
-    button.addEventListener('click', () => {
+    listenRendered(button, 'click', () => {
       applyDefaultThreadSettings({ accessPreset: button.getAttribute('data-default-permission-preset') || DEFAULT_PERMISSION_PRESET });
       render();
     });
   }
 
-  for (const button of document.querySelectorAll('[data-approval-action]')) {
-    button.addEventListener('click', () => {
-      void resolveApproval(
-        button.getAttribute('data-approval-id'),
-        button.getAttribute('data-approval-action'),
-      );
-    });
-  }
+}
+
+function openAttachmentPicker() {
+  document.querySelector('#attachment-input')?.click?.();
 }
 
 function resetComposerOffset() {
@@ -3577,7 +3894,13 @@ function syncComposerOffset() {
 }
 
 function toggleSettingsDrawer() {
-  state.settingsOpen = !state.settingsOpen;
+  const opening = !state.settingsOpen;
+  if (opening) {
+    rememberFocusReturn(document.activeElement);
+  } else {
+    requestFocusRestore();
+  }
+  state.settingsOpen = opening;
   withTimelineScrollPreserved(() => render());
 }
 
@@ -3586,9 +3909,10 @@ function handleSessionSettingsOutsideClick(event) {
     return;
   }
   const target = event?.target;
-  if (target?.closest?.('#settings-toggle, .settings-drawer')) {
+  if (state.shareDialog?.url || state.archiveConfirmSessionId || target?.closest?.('#settings-toggle, .settings-drawer, .modal-backdrop')) {
     return;
   }
+  requestFocusRestore();
   state.settingsOpen = false;
   withTimelineScrollPreserved(() => render());
 }
@@ -3680,14 +4004,12 @@ function syncComposerAttachButton() {
     return;
   }
   const button = htmlToElement(`<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled ? ' disabled' : ''}>+</button>`);
-  button.addEventListener('click', () => {
-    document.querySelector('#attachment-input')?.click?.();
-  });
+  listenRendered(button, 'click', openAttachmentPicker);
   leadingControls.appendChild(button);
 }
 
 function refreshChatDynamicUi() {
-  if (state.view !== 'chat') {
+  if (state.view !== 'chat' && !(state.view === 'sessions' && isDesktopLayout())) {
     return false;
   }
   const timeline = document.querySelector('#timeline');
@@ -3695,12 +4017,25 @@ function refreshChatDynamicUi() {
     render();
     return false;
   }
+  beginTimelineEventBindings();
   timeline.innerHTML = renderTimeline();
-  bindTimelineActionEvents();
+  bindTimelineActionEvents({ reset: false });
   syncComposerStatusDisplay();
   syncComposerErrorDisplay();
   syncComposerOffset();
   return true;
+}
+
+function scheduleChatDynamicUiRefresh() {
+  if (chatDynamicUiFramePending) {
+    return;
+  }
+  chatDynamicUiFramePending = true;
+  requestAnimationFrame(() => {
+    chatDynamicUiFramePending = false;
+    refreshChatDynamicUi();
+    scrollTimelineToBottomIfFollowingLatest();
+  });
 }
 
 function syncComposerStatusDisplay() {
@@ -3734,7 +4069,7 @@ function syncComposerErrorDisplay() {
     current?.remove?.();
     return;
   }
-  const errorHtml = localizeFragment(`<div class="composer-error">${escapeHtml(shorten(state.error, 96))}</div>`);
+  const errorHtml = localizeFragment(`<div class="composer-error" role="alert">${escapeHtml(shorten(state.error, 96))}</div>`);
   if (current) {
     current.outerHTML = errorHtml;
     return;
@@ -3885,9 +4220,16 @@ function htmlToElement(html) {
   return template.content.firstElementChild;
 }
 
-function bindTimelineActionEvents() {
-  for (const button of document.querySelectorAll('[data-approval-action]')) {
-    button.addEventListener('click', () => {
+function bindTimelineActionEvents({ reset = true } = {}) {
+  if (reset) {
+    beginTimelineEventBindings();
+  }
+  const timeline = document.querySelector('#timeline');
+  if (!timeline) {
+    return;
+  }
+  for (const button of timeline.querySelectorAll?.('[data-approval-action]') || []) {
+    listenTimeline(button, 'click', () => {
       void resolveApproval(
         button.getAttribute('data-approval-id'),
         button.getAttribute('data-approval-action'),
@@ -3895,8 +4237,8 @@ function bindTimelineActionEvents() {
     });
   }
 
-  for (const link of document.querySelectorAll('[data-report-path]')) {
-    link.addEventListener('click', (event) => {
+  for (const link of timeline.querySelectorAll?.('[data-report-path]') || []) {
+    listenTimeline(link, 'click', (event) => {
       event.preventDefault();
       void openReportByPath(link.getAttribute('data-report-path') || '', { returnView: 'chat' });
     });
@@ -4202,15 +4544,25 @@ function clampPromptSelectionIndex(value, max) {
 
 function attachTimelineScrollTracking({ updateInitial = true } = {}) {
   const timeline = document.querySelector('#timeline');
-  if (!timeline || timelineScrollTrackingAttached) {
+  if (!timeline || timelineScrollTrackingElement === timeline) {
     return;
   }
+  detachTimelineScrollTracking();
   timeline.addEventListener('scroll', updateTimelineFollowState, { passive: true });
   timeline.addEventListener('wheel', handleTimelineWheel, { passive: false });
-  timelineScrollTrackingAttached = true;
+  timelineScrollTrackingElement = timeline;
   if (updateInitial) {
     updateTimelineFollowState();
   }
+}
+
+function detachTimelineScrollTracking() {
+  if (!timelineScrollTrackingElement) {
+    return;
+  }
+  timelineScrollTrackingElement.removeEventListener('scroll', updateTimelineFollowState);
+  timelineScrollTrackingElement.removeEventListener('wheel', handleTimelineWheel);
+  timelineScrollTrackingElement = null;
 }
 
 function handleTimelineWheel(event) {
@@ -4251,6 +4603,7 @@ async function onLoginSubmit(event) {
   state.loginError = '';
   state.status = 'Logging in';
   state.statusTone = 'warn';
+  const requestGeneration = authRequestGeneration;
   render();
   try {
     const payload = await apiFetch('/api/auth/login', {
@@ -4258,6 +4611,9 @@ async function onLoginSubmit(event) {
       skipAuth: true,
       body: { username, password },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     state.token = payload.token;
     localStorage.setItem(TOKEN_KEY, payload.token);
     state.authSession = payload.session || createCachedAuthSession();
@@ -4269,6 +4625,9 @@ async function onLoginSubmit(event) {
     render();
     void restoreAuth();
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     handleApiError(error, { login: true });
   }
 }
@@ -4441,6 +4800,7 @@ function openAppSettingsPage() {
   state.mobileSidebarOpen = false;
   state.error = '';
   if (isDesktopLayout()) {
+    rememberFocusReturn(document.activeElement);
     state.view = 'sessions';
     state.desktopSettingsOpen = true;
     state.desktopOverlay = null;
@@ -4559,6 +4919,7 @@ function onNewSessionSubmit(event) {
 }
 
 async function selectSession(sessionId) {
+  const requestGeneration = authRequestGeneration;
   const nextSession = state.sessions.find((session) => session.id === sessionId) || null;
   if (!nextSession) {
     openNewSessionPage();
@@ -4594,8 +4955,14 @@ async function selectSession(sessionId) {
   scrollTimelineToOpenPositionForSession(nextSession);
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(nextSession.id)}`);
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     upsertSession(payload.session);
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (handleMissingSession(error, '')) {
       return;
     }
@@ -4606,7 +4973,7 @@ async function selectSession(sessionId) {
     renderSessionListAfterBackgroundUpdate();
     return;
   }
-  const refreshedSession = state.sessions.find((session) => session.id === sessionId) || nextSession;
+  const refreshedSession = state.currentSession?.id === sessionId ? state.currentSession : nextSession;
   state.currentSession = refreshedSession;
   state.cwd = refreshedSession.cwd || '';
   restorePromptDraftForSession(refreshedSession.id);
@@ -4682,6 +5049,7 @@ function isSlashCommandText(text) {
 }
 
 async function sendComposerMessage(text, { queuedMessageId = '', sessionId: preferredSessionId = '', includeComposerAttachments = true } = {}) {
+  const requestGeneration = authRequestGeneration;
   state.error = '';
   state.pendingTurn = true;
   state.lastTurnEventSequence = null;
@@ -4708,6 +5076,9 @@ async function sendComposerMessage(text, { queuedMessageId = '', sessionId: pref
   let submittedSessionId = '';
   try {
     const sessionId = preferredSessionId || await ensureSession();
+    if (!isAuthRequestCurrent(requestGeneration) || !sessionId) {
+      return;
+    }
     submittedSessionId = sessionId;
     clearPromptDraftForCurrentSession();
     optimisticallyUpdateSessionInput(promptToSend);
@@ -4726,6 +5097,9 @@ async function sendComposerMessage(text, { queuedMessageId = '', sessionId: pref
           : {}),
       },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (attachments.length) {
       state.composerAttachments = [];
     }
@@ -4751,6 +5125,9 @@ async function sendComposerMessage(text, { queuedMessageId = '', sessionId: pref
     renderChatAtLatest(() => {});
     void streamTurnEvents(turn.turnId);
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     const failedQueuedSessionId = submittedSessionId || preferredSessionId || state.sessionId;
     if (queuedMessageId && failedQueuedSessionId) {
       setQueuedMessageSending(failedQueuedSessionId, queuedMessageId, false);
@@ -4831,7 +5208,7 @@ function handleCommandResult(result) {
   if (result?.session && commandResultSessionHasTimeline(result)) {
     upsertSession(result.session);
     if (state.sessionId === result.session.id) {
-      state.currentSession = state.sessions.find((session) => session.id === result.session.id) || result.session;
+      state.currentSession = state.currentSession?.id === result.session.id ? state.currentSession : result.session;
       state.cwd = result.session.cwd || state.cwd;
       hydrateCurrentTimelineFromSession(result.session);
     }
@@ -4890,10 +5267,14 @@ async function ensureSession() {
         cwd: state.cwd.trim() || null,
         settings: collectSettings(),
       };
+  const requestGeneration = authRequestGeneration;
   const payload = await apiFetch('/api/sessions', {
     method: 'POST',
     body,
   });
+  if (!isAuthRequestCurrent(requestGeneration)) {
+    return null;
+  }
   state.currentSession = payload.session;
   state.sessionId = payload.session.id;
   migrateDraftPromptToSession(payload.session.id);
@@ -4911,6 +5292,10 @@ function isMultiUserMode() {
   return state.authSession?.principal?.mode === 'multi';
 }
 
+function isManagedMultiUserPrincipal() {
+  return isMultiUserMode() && !isAdminPrincipal();
+}
+
 function canSetSiteTitle() {
   return state.globalSettings.canSetSiteTitle === true
     || state.authSession?.principal?.mode === 'single'
@@ -4922,12 +5307,14 @@ function requestArchiveSession(sessionId) {
     render();
     return;
   }
+  rememberFocusReturn(document.activeElement);
   state.archiveConfirmSessionId = sessionId;
   state.error = '';
   render();
 }
 
 function cancelArchiveSession() {
+  requestFocusRestore();
   state.archiveConfirmSessionId = null;
   render();
 }
@@ -4937,9 +5324,13 @@ async function archiveSession(sessionId) {
     render();
     return;
   }
+  const requestGeneration = authRequestGeneration;
   state.archiveConfirmSessionId = null;
   try {
     await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: 'POST' });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     removeSession(sessionId);
     state.sessionsLoadedByScope.archived = false;
     state.timelineCache.delete(sessionId);
@@ -4957,6 +5348,9 @@ async function archiveSession(sessionId) {
     state.error = '';
     render();
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (isMissingSessionError(error)) {
       removeSession(sessionId);
       state.error = 'Selected session was unavailable and was removed from the list.';
@@ -4972,8 +5366,12 @@ async function unarchiveSession(sessionId) {
     render();
     return;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/unarchive`, { method: 'POST' });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     removeSession(sessionId);
     if (payload?.session) {
       upsertSession(payload.session);
@@ -4983,6 +5381,9 @@ async function unarchiveSession(sessionId) {
     state.error = '';
     render();
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (isMissingSessionError(error)) {
       removeSession(sessionId);
       render();
@@ -4994,9 +5395,11 @@ async function unarchiveSession(sessionId) {
 
 async function shareCurrentSession() {
   const sessionId = state.sessionId || state.currentSession?.id || '';
-  if (!sessionId || state.draftSessionActive || isReadOnlySession(state.currentSession)) {
+  if (!sessionId || !canShareCurrentSession()) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
+  rememberFocusReturn(document.activeElement);
   try {
     state.status = 'Creating share link';
     state.statusTone = 'warn';
@@ -5004,6 +5407,9 @@ async function shareCurrentSession() {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`, {
       method: 'POST',
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     const shareUrl = absoluteShareUrl(payload?.shareUrl || '');
     if (!shareUrl) {
       throw new Error('Share link was not returned.');
@@ -5016,6 +5422,9 @@ async function shareCurrentSession() {
     render();
     return shareUrl;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -5101,23 +5510,27 @@ async function toggleSessionFavorite(sessionId) {
   if (!session) {
     return;
   }
+  const requestGeneration = authRequestGeneration;
   const favorite = !isFavoriteSession(session);
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/favorite`, {
       method: 'PATCH',
       body: { favorite },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (payload?.session) {
       upsertSession(payload.session);
-      if (state.currentSession?.id === payload.session.id) {
-        state.currentSession = state.sessions.find((item) => item.id === payload.session.id) || payload.session;
-      }
     }
     state.status = favorite ? 'Session favorited' : 'Favorite removed';
     state.statusTone = 'success';
     state.error = '';
     render();
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (handleMissingSession(error, '')) {
       return;
     }
@@ -5246,7 +5659,8 @@ async function streamTurnEvents(turnId, options = {}) {
     }
     try {
       const payload = JSON.parse(dataLines.join('\n'));
-      if (payload?.type === 'turn.completed' || payload?.type === 'turn.failed') {
+      if ((payload?.type === 'turn.completed' || payload?.type === 'turn.failed')
+        && (!payload.turnId || payload.turnId === turnId)) {
         sawTerminalEvent = true;
       }
       if (eventId && !payload.sequence) {
@@ -5346,6 +5760,12 @@ async function resolveApproval(approvalId, action) {
 }
 
 function applyTurnEvent(event, assistantEntry) {
+  if ((event.type === 'turn.completed' || event.type === 'turn.failed')
+    && state.turnId
+    && event.turnId
+    && event.turnId !== state.turnId) {
+    return assistantEntry;
+  }
   switch (event.type) {
     case 'turn.started':
       if (state.turnId !== event.turnId) {
@@ -5389,21 +5809,18 @@ function applyTurnEvent(event, assistantEntry) {
         batchKind: event.kind,
         title: event.title || 'Batch',
         status: 'started',
-        summary: event.raw ? { raw: event.raw } : {},
+        summary: {},
       });
       break;
     case 'batch.updated':
       upsertWorkBatch(event.turnId, event.batchId, {
-        summary: {
-          ...(event.summary || {}),
-          ...(event.raw ? { raw: event.raw } : {}),
-        },
+        summary: sanitizeWorkSummary(event.summary),
       });
       break;
     case 'batch.completed':
       upsertWorkBatch(event.turnId, event.batchId, {
         status: event.status || 'completed',
-        summary: event.raw ? { raw: event.raw } : {},
+        summary: {},
       });
       void maybeInterruptRunningTurnForQueuedMessage();
       break;
@@ -5414,7 +5831,7 @@ function applyTurnEvent(event, assistantEntry) {
         kind: 'approval',
         approvalId: event.approvalId,
         approvalKind: event.approvalKind,
-        summary: event.summary || {},
+        summary: sanitizeWorkSummary(event.summary),
         resolved: false,
       };
       state.approvals.set(event.approvalId, approval);
@@ -5437,6 +5854,7 @@ function applyTurnEvent(event, assistantEntry) {
       break;
     }
     case 'turn.completed':
+      syncWorkTimelineItem(event.turnId, event.status || 'completed');
       state.pendingTurn = false;
       state.streamWasBackgrounded = false;
       state.queuedInterruptRequestedTurnId = null;
@@ -5465,6 +5883,7 @@ function applyTurnEvent(event, assistantEntry) {
       void refreshCurrentSessionMetadata();
       break;
     case 'turn.failed':
+      syncWorkTimelineItem(event.turnId, 'failed');
       state.pendingTurn = false;
       state.streamWasBackgrounded = false;
       state.queuedInterruptRequestedTurnId = null;
@@ -5479,13 +5898,32 @@ function applyTurnEvent(event, assistantEntry) {
   if (!state.pendingTurn && state.sessionId) {
     restoreStaleQueuedMessagesForSession(state.sessionId);
   }
-  saveCurrentTimeline();
+  const shouldCoalesceDynamicUpdate = event.type === 'assistant.delta' || event.type === 'batch.updated';
+  if (shouldCoalesceDynamicUpdate) {
+    scheduleCurrentTimelineSave();
+  } else {
+    saveCurrentTimeline();
+  }
   if (!state.pendingTurn && state.sessionId && pendingQueuedMessagesForCurrentSession().length && event.type !== 'turn.completed') {
     void sendNextQueuedMessage(state.sessionId);
   }
-  refreshChatDynamicUi();
-  scrollTimelineToBottomIfFollowingLatest();
+  if (shouldCoalesceDynamicUpdate) {
+    scheduleChatDynamicUiRefresh();
+  } else {
+    refreshChatDynamicUi();
+    scrollTimelineToBottomIfFollowingLatest();
+  }
   return assistantEntry;
+}
+
+function sanitizeWorkSummary(summary) {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
+    return {};
+  }
+  const displaySummary = { ...summary };
+  delete displaySummary.raw;
+  const sanitized = sanitizeCacheValue(displaySummary);
+  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized) ? sanitized : {};
 }
 
 function upsertWorkBatch(turnId, batchId, patch) {
@@ -5507,6 +5945,41 @@ function upsertWorkBatch(turnId, batchId, patch) {
     summary: { ...current.summary, ...(patch.summary || {}) },
   };
   state.batches.set(batchId, next);
+  syncWorkTimelineItem(turnId);
+}
+
+function syncWorkTimelineItem(turnId, terminalStatus = '') {
+  const normalizedTurnId = String(turnId || '').trim();
+  if (!normalizedTurnId) {
+    return;
+  }
+  const batches = [...state.batches.values()].filter((batch) => batch?.turnId === normalizedTurnId);
+  if (!batches.length) {
+    return;
+  }
+  const status = terminalStatus || workTimelineStatus(batches);
+  const entry = {
+    id: `work_${normalizedTurnId}`,
+    kind: 'work',
+    turnId: normalizedTurnId,
+    status,
+    batches,
+    approvals: [],
+  };
+  appendOrReplace(entry, (item) => item?.id === entry.id);
+}
+
+function workTimelineStatus(batches) {
+  if (batches.some(workBatchHasError)) {
+    return 'failed';
+  }
+  if (batches.some((batch) => {
+    const status = String(batch?.status || '').trim().toLowerCase();
+    return !status || status === 'started' || status === 'running' || status === 'pending';
+  })) {
+    return 'running';
+  }
+  return 'completed';
 }
 
 function upsertWorkApproval(_turnId, approval) {
@@ -5677,11 +6150,9 @@ async function recoverFirstTurnAfterDelay({ sessionId, promptText, message }) {
 
 function hasRecoveredFirstTurn(session, promptText) {
   const turns = Array.isArray(session?.thread?.turns) ? session.thread.turns : [];
-  if (turns.some((turn) => isActiveTurnStatus(turn?.status))) {
-    const activeTurn = findActiveTurn(session);
-    if (activeTurn?.id) {
-      state.turnId = activeTurn.id;
-    }
+  const activeTurn = findActiveTurn(session);
+  if (activeTurn?.id) {
+    state.turnId = activeTurn.id;
     return true;
   }
   const prompt = String(promptText || '').trim();
@@ -5704,14 +6175,20 @@ async function refreshCurrentSessionMetadata({ hydrateTimeline = false, viewport
     return null;
   }
   const sessionId = state.sessionId;
+  const requestGeneration = authRequestGeneration;
   const wasPendingTurn = state.pendingTurn;
   const hadQueuedMessages = queuedMessagesForSession(sessionId).length > 0;
   const snapshot = viewportSnapshot || (isDesktopWorkspaceView() ? latestTimelineViewportSnapshot() : captureTimelineViewport());
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     if (payload?.session) {
       upsertSession(payload.session);
-      const session = state.sessions.find((item) => item.id === sessionId) || null;
+      const session = state.currentSession?.id === sessionId
+        ? state.currentSession
+        : state.sessions.find((item) => item.id === sessionId) || null;
       if (state.sessionId === sessionId) {
         state.currentSession = session;
         state.cwd = session?.cwd || state.cwd;
@@ -5741,6 +6218,9 @@ async function refreshCurrentSessionMetadata({ hydrateTimeline = false, viewport
       return session;
     }
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     if (isMissingSessionError(error)) {
       if (state.sessionId === sessionId) {
         handleMissingSession(error, '');
@@ -5762,10 +6242,14 @@ async function refreshSessionsList({
   scope = state.sortMode === 'favorites' ? 'favorites' : 'all',
   background = false,
 } = {}) {
+  const requestGeneration = authRequestGeneration;
   const normalizedScope = normalizeSessionScope(scope);
   const path = sessionListPath(normalizedScope);
   if (background) {
     const payload = await apiFetch(path);
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return [];
+    }
     const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
@@ -5786,6 +6270,9 @@ async function refreshSessionsList({
   }
   try {
     const payload = await apiFetch(path);
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return [];
+    }
     const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
@@ -5802,7 +6289,7 @@ async function refreshSessionsList({
       state.sessionsLoading = false;
       state.sessionsLoadingScope = null;
     }
-    if (renderAfter) {
+    if (renderAfter && isAuthRequestCurrent(requestGeneration)) {
       render();
     }
   }
@@ -5828,18 +6315,25 @@ async function refreshReportsList({ renderAfter = true } = {}) {
     if (requestId === state.reportsRequestId) {
       state.reportsLoading = false;
     }
-    if (renderAfter) {
+    if (renderAfter && requestId === state.reportsRequestId) {
       render();
     }
   }
 }
 
 async function refreshGlobalSettings({ renderAfter = true } = {}) {
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch('/api/settings');
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     applyGlobalSettingsPayload(payload, { renderAfter });
     return payload;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -5853,6 +6347,7 @@ function applyGlobalSettingsPayload(payload, { renderAfter = true } = {}) {
   state.globalSettings = {
     siteTitle,
     canSetSiteTitle: payload.permissions?.canSetSiteTitle === true,
+    publicSharesEnabled: payload.features?.publicSharesEnabled === true,
     loaded: true,
   };
   applySiteTitle(siteTitle, { persist: false });
@@ -5867,28 +6362,39 @@ async function saveSiteTitle(siteTitle) {
   if (!canSetSiteTitle()) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch('/api/settings', {
       method: 'PATCH',
       body: { siteTitle },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.error = '';
     return applyGlobalSettingsPayload(payload);
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
 }
 
 async function refreshProjectsList({ renderAfter = true } = {}) {
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch('/api/projects');
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return [];
+    }
     state.projects = normalizeProjects(payload);
     state.projectsLoaded = true;
     initializeNewProjectSelection();
     return state.projects;
   } finally {
-    if (renderAfter) {
+    if (renderAfter && isAuthRequestCurrent(requestGeneration)) {
       render();
     }
   }
@@ -5903,6 +6409,7 @@ async function toggleProjectFavorite(projectId) {
   if (!existing) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   const previousFavorite = Boolean(existing.favorite);
   const nextFavorite = !previousFavorite;
   state.projects = state.projects.map((project) => (
@@ -5914,19 +6421,27 @@ async function toggleProjectFavorite(projectId) {
       method: 'PATCH',
       body: { favorite: nextFavorite },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     const savedFavorite = typeof payload?.favorite === 'boolean' ? payload.favorite : nextFavorite;
     state.projects = state.projects.map((project) => (
       project.id === normalizedId ? { ...project, favorite: savedFavorite } : project
     ));
     return state.projects.find((project) => project.id === normalizedId) || null;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.projects = state.projects.map((project) => (
       project.id === normalizedId ? { ...project, favorite: previousFavorite } : project
     ));
     handleApiError(error);
     return null;
   } finally {
-    render();
+    if (isAuthRequestCurrent(requestGeneration)) {
+      render();
+    }
   }
 }
 
@@ -5934,6 +6449,7 @@ async function refreshAdminConsole({ renderAfter = true } = {}) {
   if (!isAdminPrincipal()) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   state.admin.loading = true;
   if (renderAfter) {
     render();
@@ -5946,6 +6462,9 @@ async function refreshAdminConsole({ renderAfter = true } = {}) {
       apiFetch('/api/admin/roles'),
       apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId, state.admin.filterState)),
     ]);
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.admin.settings = settingsPayload?.settings || null;
     state.admin.projects = normalizeAdminItems(projectsPayload);
     state.admin.users = normalizeAdminItems(usersPayload);
@@ -5955,12 +6474,17 @@ async function refreshAdminConsole({ renderAfter = true } = {}) {
     state.error = '';
     return state.admin;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   } finally {
-    state.admin.loading = false;
-    if (renderAfter) {
-      render();
+    if (isAuthRequestCurrent(requestGeneration)) {
+      state.admin.loading = false;
+      if (renderAfter) {
+        render();
+      }
     }
   }
 }
@@ -5969,16 +6493,23 @@ async function refreshAdminSettings({ renderAfter = true } = {}) {
   if (!isAdminPrincipal()) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch('/api/admin/settings');
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.admin.settings = payload?.settings || null;
     state.error = '';
     return state.admin.settings;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   } finally {
-    if (renderAfter) {
+    if (renderAfter && isAuthRequestCurrent(requestGeneration)) {
       render();
     }
   }
@@ -5993,6 +6524,7 @@ async function refreshAdminSessions({
   if (!isAdminPrincipal()) {
     return [];
   }
+  const requestGeneration = authRequestGeneration;
   state.admin.filterUserId = String(userId || '');
   state.admin.filterProjectId = String(projectId || '');
   state.admin.filterState = normalizeAdminSessionState(sessionState);
@@ -6002,16 +6534,24 @@ async function refreshAdminSessions({
   }
   try {
     const payload = await apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId, state.admin.filterState));
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return [];
+    }
     state.admin.sessions = normalizeAdminItems(payload);
     state.error = '';
     return state.admin.sessions;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return [];
+    }
     handleApiError(error);
     return [];
   } finally {
-    state.admin.loading = false;
-    if (renderAfter) {
-      render();
+    if (isAuthRequestCurrent(requestGeneration)) {
+      state.admin.loading = false;
+      if (renderAfter) {
+        render();
+      }
     }
   }
 }
@@ -6020,16 +6560,23 @@ async function updateAdminSettings(patch = {}) {
   if (!isAdminPrincipal()) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch('/api/admin/settings', {
       method: 'PATCH',
       body: patch,
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.admin.settings = payload?.settings || state.admin.settings;
     state.error = '';
     render();
     return state.admin.settings;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -6085,6 +6632,7 @@ async function saveAdminProject(project) {
   }
   const cwd = String(project.cwd || '').trim();
   const id = String(project.id || '').trim() || cwd;
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch('/api/admin/projects', {
       method: 'POST',
@@ -6096,11 +6644,17 @@ async function saveAdminProject(project) {
         activeSessionLimit: project.activeSessionLimit == null ? 30 : project.activeSessionLimit,
       },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.error = '';
     state.admin.editingProjectId = '';
     await refreshAdminConsole({ renderAfter: true });
     return payload?.project || null;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -6110,6 +6664,7 @@ async function saveAdminRole(role) {
   if (!isAdminPrincipal()) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch('/api/admin/roles', {
       method: 'POST',
@@ -6120,11 +6675,17 @@ async function saveAdminRole(role) {
         projectGrants: projectGrantsFromProjectIds(role.projectIds),
       },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.error = '';
     state.admin.editingRoleId = '';
     await refreshAdminConsole({ renderAfter: true });
     return payload?.role || null;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -6134,6 +6695,7 @@ async function saveAdminUser(user) {
   if (!isAdminPrincipal()) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     const roleId = String(user.roleId || '').trim();
     const body = {
@@ -6150,11 +6712,17 @@ async function saveAdminUser(user) {
       method: 'POST',
       body,
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.error = '';
     state.admin.editingUserId = '';
     await refreshAdminConsole({ renderAfter: true });
     return payload?.user || null;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -6168,6 +6736,7 @@ async function saveAdminUserAccess(user) {
   if (!userId) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   const roleId = String(user.roleId || '').trim();
   try {
     const body = {
@@ -6180,11 +6749,17 @@ async function saveAdminUserAccess(user) {
       method: 'PATCH',
       body,
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.error = '';
     state.admin.editingUserId = '';
     await refreshAdminConsole({ renderAfter: true });
     return payload?.user || null;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -6211,14 +6786,21 @@ async function deleteAdminUser(userId) {
   if (!normalizedUserId) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     await apiFetch(`/api/admin/users/${encodeURIComponent(normalizedUserId)}`, {
       method: 'DELETE',
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     state.error = '';
     await refreshAdminConsole({ renderAfter: true });
     return true;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     handleApiError(error);
     return null;
   }
@@ -6246,9 +6828,13 @@ async function openAdminObservedSession(sessionId) {
   state.statusTone = 'warn';
   state.admin.observedSessionLoading = true;
   state.error = '';
+  const requestGeneration = authRequestGeneration;
   render();
   try {
     const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}`);
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     const session = {
       ...(payload?.session || {}),
       mode: payload?.mode || payload?.session?.mode || 'observer',
@@ -6271,10 +6857,15 @@ async function openAdminObservedSession(sessionId) {
     render();
     scrollTimelineToTop();
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     handleApiError(error);
   } finally {
-    state.admin.observedSessionLoading = false;
-    render();
+    if (isAuthRequestCurrent(requestGeneration)) {
+      state.admin.observedSessionLoading = false;
+      render();
+    }
   }
 }
 
@@ -6282,6 +6873,7 @@ async function openReportById(reportId, { returnView = state.view } = {}) {
   if (!reportId) {
     return;
   }
+  const loadController = beginReportLoad();
   const desktop = isDesktopLayout();
   const normalizedReturnView = desktop
     ? normalizeDesktopReportReturnView(returnView)
@@ -6309,15 +6901,25 @@ async function openReportById(reportId, { returnView = state.view } = {}) {
   state.error = '';
   render();
   try {
-    const payload = await apiFetch(`/api/reports/${encodeURIComponent(reportId)}/content`);
+    const payload = await apiFetch(`/api/reports/${encodeURIComponent(reportId)}/content`, {
+      signal: loadController.signal,
+    });
+    if (!isActiveReportLoad(loadController)) {
+      return;
+    }
     state.currentReport = payload.report;
     state.currentReportContent = payload.content || '';
     state.currentReportLoading = false;
     upsertReport(payload.report);
     renderReportWithScrollPreserved(() => {});
   } catch (error) {
+    if (!isActiveReportLoad(loadController)) {
+      return;
+    }
     state.currentReportLoading = false;
     handleApiError(error);
+  } finally {
+    releaseReportLoad(loadController);
   }
 }
 
@@ -6342,6 +6944,7 @@ async function openReportByPath(reportPath, { returnView = 'chat' } = {}) {
   if (!reportPath) {
     return;
   }
+  const loadController = beginReportLoad();
   const desktop = isDesktopLayout();
   const normalizedReturnView = desktop
     ? normalizeDesktopReportReturnView(returnView)
@@ -6366,15 +6969,49 @@ async function openReportByPath(reportPath, { returnView = 'chat' } = {}) {
     const payload = await apiFetch('/api/reports/resolve', {
       method: 'POST',
       body: { path: reportPath },
+      signal: loadController.signal,
     });
+    if (!isActiveReportLoad(loadController)) {
+      return;
+    }
     if (payload?.report) {
       upsertReport(payload.report);
+      releaseReportLoad(loadController);
       await openReportById(payload.report.id, { returnView: normalizedReturnView });
     }
   } catch (error) {
+    if (!isActiveReportLoad(loadController)) {
+      return;
+    }
     state.currentReportLoading = false;
     handleApiError(error);
+  } finally {
+    releaseReportLoad(loadController);
   }
+}
+
+function beginReportLoad() {
+  cancelReportLoad();
+  reportLoadAbortController = new AbortController();
+  return reportLoadAbortController;
+}
+
+function isActiveReportLoad(controller) {
+  return reportLoadAbortController === controller && !controller.signal.aborted;
+}
+
+function releaseReportLoad(controller) {
+  if (reportLoadAbortController === controller) {
+    reportLoadAbortController = null;
+  }
+}
+
+function cancelReportLoad() {
+  if (!reportLoadAbortController) {
+    return;
+  }
+  reportLoadAbortController.abort();
+  reportLoadAbortController = null;
 }
 
 async function toggleReportFavorite(reportId) {
@@ -6382,12 +7019,16 @@ async function toggleReportFavorite(reportId) {
   if (!report) {
     return;
   }
+  const requestGeneration = authRequestGeneration;
   const favorite = report.favorite !== true;
   try {
     const payload = await apiFetch(`/api/reports/${encodeURIComponent(reportId)}/favorite`, {
       method: 'PATCH',
       body: { favorite },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (payload?.report) {
       upsertReport(payload.report);
       if (state.currentReport?.id === payload.report.id) {
@@ -6399,11 +7040,15 @@ async function toggleReportFavorite(reportId) {
     state.error = '';
     renderReportWithScrollPreserved(() => {});
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     handleApiError(error);
   }
 }
 
 function closeReportViewer() {
+  cancelReportLoad();
   if (isDesktopLayout()) {
     const returnToReports = state.reportReturnView === 'reports';
     state.currentReport = null;
@@ -6459,15 +7104,18 @@ function preloadAllSessionsInBackground() {
   if (!state.token || state.sessionsLoadedByScope.all === true || allSessionsPreloadPromise) {
     return allSessionsPreloadPromise;
   }
-  allSessionsPreloadPromise = refreshSessionsList({ renderAfter: false, scope: 'all', background: true })
+  const preloadPromise = refreshSessionsList({ renderAfter: false, scope: 'all', background: true })
     .catch((error) => {
       console.warn('[codex-web] all sessions preload failed', error);
       return null;
     })
     .finally(() => {
-      allSessionsPreloadPromise = null;
+      if (allSessionsPreloadPromise === preloadPromise) {
+        allSessionsPreloadPromise = null;
+      }
     });
-  return allSessionsPreloadPromise;
+  allSessionsPreloadPromise = preloadPromise;
+  return preloadPromise;
 }
 
 async function refreshCurrentView() {
@@ -6477,6 +7125,7 @@ async function refreshCurrentView() {
   if (!state.token) {
     return;
   }
+  const requestGeneration = authRequestGeneration;
   const wasPending = state.pendingTurn;
   if (!wasPending) {
     state.status = 'Refreshing';
@@ -6486,6 +7135,9 @@ async function refreshCurrentView() {
   try {
     if (state.view === 'chat' && state.sessionId) {
       await refreshCurrentSessionMetadata({ hydrateTimeline: true });
+      if (!isAuthRequestCurrent(requestGeneration)) {
+        return;
+      }
       if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) {
         streamTurnEvents(state.turnId, { forceReconnect: true });
       }
@@ -6495,6 +7147,9 @@ async function refreshCurrentView() {
         renderAfter: false,
         scope: state.sortMode === 'favorites' ? 'favorites' : 'all',
       });
+      if (!isAuthRequestCurrent(requestGeneration)) {
+        return;
+      }
       render();
     }
     if (!state.pendingTurn && !isRuntimeStatusLabel(state.status)) {
@@ -6503,6 +7158,9 @@ async function refreshCurrentView() {
       render();
     }
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     handleApiError(error);
   }
 }
@@ -6511,6 +7169,7 @@ async function handleComposerRefresh() {
   if (!state.sessionId) {
     return;
   }
+  const requestGeneration = authRequestGeneration;
   const wasPending = state.pendingTurn;
   if (!wasPending) {
     state.status = 'Refreshing';
@@ -6527,6 +7186,9 @@ async function handleComposerRefresh() {
         hadPromptFocus: document.activeElement === document.querySelector('#prompt-input'),
       },
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) {
       streamTurnEvents(state.turnId, { forceReconnect: true });
     }
@@ -6536,6 +7198,9 @@ async function handleComposerRefresh() {
       render();
     }
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return;
+    }
     handleApiError(error);
   }
 }
@@ -6832,14 +7497,14 @@ function latestRuntimeTurn(turns) {
 
 function findActiveTurn(session) {
   const activeTurnId = String(session?.activeTurnId || '').trim();
+  const turns = sessionTurns(session);
   if (!activeTurnId) {
     return null;
   }
-  const turns = sessionTurns(session);
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
-    if (turn?.id === activeTurnId && isActiveTurnStatus(turn.status)) {
-      return turn;
+    if (turn?.id === activeTurnId) {
+      return isActiveTurnStatus(turn.status) ? turn : null;
     }
   }
   return { id: activeTurnId, status: 'in_progress' };
@@ -6928,6 +7593,8 @@ function normalizeSessions(payload) {
         updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : null,
         settings: session.settings && typeof session.settings === 'object' ? session.settings : null,
       };
+      delete normalized.thread;
+      delete normalized.timeline;
       if (typeof session.projectId === 'string') {
         normalized.projectId = session.projectId;
       }
@@ -7094,7 +7761,9 @@ function syncCurrentSessionFromList() {
     state.draftSessionActive = false;
     return;
   }
-  state.currentSession = session;
+  state.currentSession = state.currentSession?.id === session.id
+    ? mergeSessionSummary(state.currentSession, session)
+    : session;
   state.cwd = session.cwd || '';
 }
 
@@ -7106,8 +7775,9 @@ function upsertSession(session) {
   if (!normalized) {
     return;
   }
+  const currentDetail = state.currentSession?.id === session.id ? state.currentSession : null;
   const index = state.sessions.findIndex((item) => item.id === normalized.id);
-  const next = mergeSessionSummary(index >= 0 ? state.sessions[index] : null, normalized);
+  const next = sessionSummaryOnly(mergeSessionSummary(index >= 0 ? state.sessions[index] : null, normalized));
   if (index >= 0) {
     state.sessions[index] = next;
   } else {
@@ -7120,7 +7790,7 @@ function upsertSession(session) {
     removeSessionFromScope('favorites', next.id);
   }
   if (state.sessionId === next.id) {
-    state.currentSession = next;
+    state.currentSession = mergeSessionSummary(currentDetail, session);
   }
   persistSessionsCache();
 }
@@ -7138,7 +7808,7 @@ function currentSessionScope() {
 function upsertSessionInScope(scope, session) {
   const list = state.sessionsByScope[scope] || [];
   const index = list.findIndex((item) => item.id === session.id);
-  const next = mergeSessionSummary(index >= 0 ? list[index] : null, session);
+  const next = sessionSummaryOnly(mergeSessionSummary(index >= 0 ? list[index] : null, session));
   if (index >= 0) {
     list[index] = next;
   } else {
@@ -7171,7 +7841,15 @@ function mergeSessionSummary(previous, next) {
   };
 }
 
+function sessionSummaryOnly(session) {
+  const summary = { ...(session || {}) };
+  delete summary.thread;
+  delete summary.timeline;
+  return summary;
+}
+
 function saveCurrentTimeline() {
+  clearScheduledTimelineSave();
   if (!state.sessionId) {
     return;
   }
@@ -7188,6 +7866,32 @@ function saveCurrentTimeline() {
     approvals: cloneCacheMap(state.approvals),
   });
   persistTimelineCache();
+}
+
+function scheduleCurrentTimelineSave() {
+  if (timelinePersistTimer || !state.sessionId) {
+    return;
+  }
+  timelinePersistTimer = setTimeout(() => {
+    timelinePersistTimer = null;
+    saveCurrentTimeline();
+  }, TIMELINE_PERSIST_DEBOUNCE_MS);
+}
+
+function clearScheduledTimelineSave() {
+  if (!timelinePersistTimer) {
+    return;
+  }
+  clearTimeout(timelinePersistTimer);
+  timelinePersistTimer = null;
+}
+
+function flushScheduledTimelineSave() {
+  if (!timelinePersistTimer) {
+    return;
+  }
+  clearScheduledTimelineSave();
+  saveCurrentTimeline();
 }
 
 function restoreTimelineForSession(session, options = {}) {
@@ -7827,11 +8531,9 @@ function renderWorkspaceRailActions({ mobile = false } = {}) {
   const showAdmin = isAdminPrincipal();
   const settingsActive = state.view === 'settings' || state.desktopSettingsOpen;
   const reportsActive = state.view === 'reports' || state.desktopOverlay === 'reports' || state.desktopOverlay === 'report';
-  const newActive = state.view === 'new';
   if (mobile) {
     return `
     <button class="project-rail-action${reportsActive ? ' is-active' : ''}" type="button" id="open-reports-button">Reports</button>
-    <button class="project-rail-action${newActive ? ' is-active' : ''}" type="button" id="open-new-session-button">New</button>
     <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">Setting</button>
     ${showAdmin ? '<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">Admin Console</button>' : ''}
   `;
@@ -7849,10 +8551,11 @@ function renderMobileProjectDrawer() {
     return '';
   }
   return `
-    <div class="mobile-drawer-backdrop${state.mobileSidebarOpen ? ' is-open' : ''}" id="mobile-drawer-backdrop">
-      <aside class="mobile-project-drawer${state.mobileSidebarOpen ? ' is-open' : ''}" aria-label="Projects">
+    <div class="mobile-drawer-backdrop${state.mobileSidebarOpen ? ' is-open' : ''}" id="mobile-drawer-backdrop" aria-hidden="${String(!state.mobileSidebarOpen)}">
+      <aside class="mobile-project-drawer${state.mobileSidebarOpen ? ' is-open' : ''}" role="dialog" aria-modal="true" aria-labelledby="mobile-project-drawer-title" data-focus-scope="mobile-projects"${state.mobileSidebarOpen ? '' : ' inert'}>
         <header class="project-rail-header mobile-project-drawer-header">
-          <div class="project-rail-brand">${escapeHtml(state.siteTitle)}</div>
+          <div class="project-rail-brand" id="mobile-project-drawer-title">${escapeHtml(state.siteTitle)}</div>
+          <button class="ghost page-back-button" type="button" id="mobile-drawer-close-button" aria-label="Close projects" data-initial-focus>${renderBackButtonIcon()}</button>
         </header>
         <nav class="project-rail-list" data-i18n-skip>
           ${renderWorkspaceProjectList()}
@@ -7867,8 +8570,20 @@ function renderMobileProjectDrawer() {
 
 function setMobileSidebarOpen(open) {
   state.mobileSidebarOpen = Boolean(open);
-  document.querySelector('#mobile-drawer-backdrop')?.classList.toggle('is-open', state.mobileSidebarOpen);
-  document.querySelector('.mobile-project-drawer')?.classList.toggle('is-open', state.mobileSidebarOpen);
+  const backdrop = document.querySelector('#mobile-drawer-backdrop');
+  const drawer = document.querySelector('.mobile-project-drawer');
+  backdrop?.classList.toggle('is-open', state.mobileSidebarOpen);
+  backdrop?.setAttribute?.('aria-hidden', String(!state.mobileSidebarOpen));
+  drawer?.classList.toggle('is-open', state.mobileSidebarOpen);
+  if (drawer) {
+    drawer.inert = !state.mobileSidebarOpen;
+  }
+  syncFocusScope();
+}
+
+function closeMobileSidebar() {
+  requestFocusRestore();
+  setMobileSidebarOpen(false);
 }
 
 function seedNewSessionTargetFromSelection() {
@@ -8488,6 +9203,13 @@ function compareSessionsForSelection(left, right) {
 }
 
 function applyPermissionPreset(preset) {
+  if (isManagedMultiUserPrincipal()) {
+    const readOnly = preset === 'read-only';
+    state.permissionPreset = readOnly ? 'read-only' : 'default';
+    state.approvalPolicy = 'on-request';
+    state.sandboxMode = readOnly ? 'read-only' : 'workspace-write';
+    return;
+  }
   state.permissionPreset = preset;
   if (preset === 'read-only') {
     state.approvalPolicy = 'never';
@@ -8527,6 +9249,14 @@ function applyDefaultSettings() {
   applyPermissionPreset(defaults.accessPreset || DEFAULT_PERMISSION_PRESET);
 }
 
+function defaultThreadAccessPreset() {
+  const preset = state.defaultThreadSettings?.accessPreset || DEFAULT_PERMISSION_PRESET;
+  if (isManagedMultiUserPrincipal() && preset !== 'read-only') {
+    return 'default';
+  }
+  return preset;
+}
+
 function applySessionSettings(session) {
   const settings = session?.settings;
   if (!settings || typeof settings !== 'object' || settings.metadata?.codexWebDefaultsOnly === true || !hasSavedThreadSettings(settings)) {
@@ -8548,6 +9278,10 @@ function applySessionSettings(session) {
   const preset = typeof settings.accessPreset === 'string' && settings.accessPreset
     ? settings.accessPreset
     : permissionPresetFromSettings(settings);
+  if (isManagedMultiUserPrincipal()) {
+    applyPermissionPreset(preset);
+    return;
+  }
   state.permissionPreset = preset;
   state.approvalPolicy = typeof settings.approvalPolicy === 'string' && settings.approvalPolicy
     ? settings.approvalPolicy
@@ -8621,7 +9355,10 @@ function applyDefaultThreadSettings(patch = {}) {
   });
   next.reasoningEffort = reasoningEffortForModel(next.model, next.reasoningEffort);
   if (typeof patch.accessPreset === 'string') {
-    applyDefaultThreadPermissionPreset(next, patch.accessPreset);
+    const preset = isManagedMultiUserPrincipal() && patch.accessPreset !== 'read-only'
+      ? 'default'
+      : patch.accessPreset;
+    applyDefaultThreadPermissionPreset(next, preset);
   }
   state.defaultThreadSettings = next;
   localStorage.setItem(DEFAULT_THREAD_SETTINGS_KEY, JSON.stringify(next));
@@ -8655,6 +9392,11 @@ function applyTheme(theme, options = {}) {
   const nextTheme = normalizeTheme(theme);
   state.theme = nextTheme;
   document.documentElement.dataset.theme = nextTheme;
+  const themeColor = THEMES.find((item) => item.id === nextTheme)?.chromeColor;
+  const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeColor && themeColorMeta) {
+    themeColorMeta.setAttribute('content', themeColor);
+  }
   if (options.persist !== false) {
     localStorage.setItem(THEME_KEY, nextTheme);
   }
@@ -8688,7 +9430,7 @@ function readBootstrapSiteTitle() {
 }
 
 function normalizeTheme(theme) {
-  return ['dark', 'light', 'sunny', 'forest'].includes(theme) ? theme : DEFAULT_THEME;
+  return THEME_IDS.includes(theme) ? theme : DEFAULT_THEME;
 }
 
 function normalizeLanguage(language) {
@@ -8958,20 +9700,24 @@ async function updateSessionSettings(patch = {}) {
   if (!state.sessionId) {
     return null;
   }
+  const requestGeneration = authRequestGeneration;
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(state.sessionId)}/settings`, {
       method: 'PATCH',
       body: settings,
     });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     if (payload?.session) {
       upsertSession(payload.session);
-      if (state.currentSession?.id === payload.session.id) {
-        state.currentSession = state.sessions.find((session) => session.id === payload.session.id) || payload.session;
-      }
     }
     state.error = '';
     return payload?.session || null;
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
     if (handleMissingSession(error, '')) {
       return null;
     }
@@ -9063,7 +9809,7 @@ function currentHydratedHistoryLength() {
 
 function collectSettings() {
   const model = state.model || DEFAULT_MODEL;
-  return {
+  const settings = {
     model,
     reasoningEffort: reasoningEffortForModel(model, state.reasoningEffort || DEFAULT_REASONING_EFFORT),
     collaborationMode: state.collaborationMode || DEFAULT_COLLABORATION_MODE,
@@ -9071,6 +9817,16 @@ function collectSettings() {
     approvalPolicy: state.approvalPolicy || DEFAULT_APPROVAL_POLICY,
     sandboxMode: state.sandboxMode || DEFAULT_SANDBOX_MODE,
     personality: 'pragmatic',
+  };
+  if (!isManagedMultiUserPrincipal()) {
+    return settings;
+  }
+  const readOnly = settings.accessPreset === 'read-only' || settings.sandboxMode === 'read-only';
+  return {
+    ...settings,
+    accessPreset: readOnly ? 'read-only' : 'default',
+    approvalPolicy: 'on-request',
+    sandboxMode: readOnly ? 'read-only' : 'workspace-write',
   };
 }
 
@@ -9198,49 +9954,9 @@ function resetEdgeSwipeNavigation() {
   edgeSwipeStart = null;
 }
 
-function setupMobileOrientationLock() {
-  requestMobilePortraitLock();
-  document.addEventListener('visibilitychange', requestMobilePortraitLock);
-  document.addEventListener('pointerdown', requestMobilePortraitLock, { passive: true });
-  window.addEventListener('focus', requestMobilePortraitLock);
-  window.addEventListener('orientationchange', requestMobilePortraitLock);
-}
-
-function requestMobilePortraitLock() {
-  if (!shouldRequestMobilePortraitLock()) {
-    return;
-  }
-  const orientation = globalThis.screen?.orientation || window.screen?.orientation;
-  if (!orientation || typeof orientation.lock !== 'function') {
-    return;
-  }
-  try {
-    const result = orientation.lock('portrait-primary');
-    if (result && typeof result.catch === 'function') {
-      result.catch(() => {});
-    }
-  } catch (_error) {
-  }
-}
-
-function shouldRequestMobilePortraitLock() {
-  if (isDesktopLayout()) {
-    return false;
-  }
-  if (document.visibilityState === 'hidden') {
-    return false;
-  }
-  const hasCoarsePointer = typeof window?.matchMedia === 'function'
-    ? window.matchMedia('(hover: none) and (pointer: coarse)').matches
-    : false;
-  const hasTouch = Number(navigator?.maxTouchPoints || 0) > 0;
-  const narrowViewport = typeof window?.innerWidth !== 'number'
-    || window.innerWidth < DESKTOP_WORKSPACE_MIN_WIDTH;
-  return hasCoarsePointer || hasTouch || narrowViewport;
-}
-
 function onVisibilityChange() {
   if (document.visibilityState === 'hidden') {
+    flushScheduledTimelineSave();
     if (state.view === 'chat' && state.sessionId) {
       chatTimelineForegroundSnapshot = captureTimelineViewport();
     }
@@ -9272,12 +9988,27 @@ function setupAppVersionRefresh() {
   });
 }
 
-async function checkForAppUpdate() {
+function checkForAppUpdate() {
   if (!isStandalonePwa()) {
-    return;
+    return Promise.resolve();
   }
+  if (appVersionCheckPromise) {
+    return appVersionCheckPromise;
+  }
+  const now = Date.now();
+  if (now - lastAppVersionCheckAt < APP_VERSION_CHECK_COOLDOWN_MS) {
+    return Promise.resolve();
+  }
+  lastAppVersionCheckAt = now;
+  appVersionCheckPromise = checkForAppUpdateOnce().finally(() => {
+    appVersionCheckPromise = null;
+  });
+  return appVersionCheckPromise;
+}
+
+async function checkForAppUpdateOnce() {
   try {
-    const response = await fetch(`/app.js?version-check=${Date.now()}`, { cache: 'no-store' });
+    const response = await fetch('/app.js', { cache: 'no-store' });
     if (!response.ok) {
       return;
     }
@@ -9381,6 +10112,7 @@ async function apiFetch(path, options = {}) {
     method: options.method || 'GET',
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    signal: options.signal,
   });
   if (!response.ok) {
     throw await buildApiError(response);

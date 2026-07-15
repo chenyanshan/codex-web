@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import type { CodexWebEvent } from '../src/event_model.js';
 import type { CodexWebSession, CodexWebStartTurnResult, CreateSessionInput, StartTurnInput } from '../src/runtime.js';
 import type { ScheduledTaskDefinition } from '../src/task_store.js';
 import { runScheduledTask } from '../src/task_runner.js';
@@ -10,6 +11,8 @@ import { runScheduledTask } from '../src/task_runner.js';
 test('scheduled task runner creates a session, sends the prompt, and archives by default', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-task-runner-'));
   const calls: string[] = [];
+  let terminalListener: ((entry: { event: CodexWebEvent; sequence: number }) => void) | null = null;
+  const subscribed = deferred<void>();
   const runtime = {
     createSession: async (input: CreateSessionInput): Promise<CodexWebSession> => {
       calls.push(`create:${input.title}:${input.cwd}:${input.settings?.model}:${input.settings?.approvalPolicy}`);
@@ -23,9 +26,20 @@ test('scheduled task runner creates a session, sends the prompt, and archives by
       calls.push(`archive:${sessionId}`);
       return true;
     },
+    getTurnEvents: () => [],
+    subscribeToTurn: (
+      _turnId: string,
+      listener: (entry: { event: CodexWebEvent; sequence: number }) => void,
+    ) => {
+      terminalListener = listener;
+      subscribed.resolve(undefined);
+      return () => {
+        terminalListener = null;
+      };
+    },
   };
 
-  const result = await runScheduledTask({
+  const running = runScheduledTask({
     task: createTask({
       id: 'morning-report',
       title: 'Morning report',
@@ -40,6 +54,18 @@ test('scheduled task runner creates a session, sends the prompt, and archives by
     stateDir,
     now: new Date('2026-06-08T01:00:00.000Z'),
   });
+  await subscribed.promise;
+
+  assert.deepEqual(calls, [
+    'create:Morning report - 2026-06-08 01:00:/workspace/project:gpt-5-codex:never',
+    'turn:thread_task_1:Summarize the repo.\n:gpt-5-codex',
+  ]);
+  assert.ok(terminalListener);
+  terminalListener({
+    event: completedTurnEvent('turn_task_1', 'thread_task_1'),
+    sequence: 1,
+  });
+  const result = await running;
 
   assert.deepEqual(calls, [
     'create:Morning report - 2026-06-08 01:00:/workspace/project:gpt-5-codex:never',
@@ -64,6 +90,7 @@ test('scheduled task runner can keep completed sessions active when configured',
       archived.push(sessionId);
       return true;
     },
+    ...completedTurnMethods('turn_keep', 'thread_keep'),
   };
 
   const result = await runScheduledTask({
@@ -92,12 +119,95 @@ test('scheduled task runner rejects overlapping runs for the same task', async (
         createSession: async () => createSession('unused'),
         startTurn: async () => ({ turnId: 'unused' }),
         archiveSession: async () => true,
+        ...completedTurnMethods('unused', 'unused'),
       },
       stateDir,
       now: new Date('2026-06-08T01:00:00.000Z'),
     }),
     /Scheduled task locked is already running/u,
   );
+});
+
+test('scheduled task runner recovers a lock owned by a dead process', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-task-runner-'));
+  const lockDir = path.join(stateDir, 'task-runs');
+  await fs.mkdir(lockDir, { recursive: true });
+  await fs.writeFile(path.join(lockDir, 'stale-pid.lock'), `${JSON.stringify({
+    version: 1,
+    pid: 999_999_999,
+    createdAt: new Date().toISOString(),
+    token: 'abandoned-task-lock',
+  })}\n`);
+
+  const result = await runScheduledTask({
+    task: createTask({ id: 'stale-pid' }),
+    runtime: {
+      createSession: async () => createSession('thread_recovered_pid'),
+      startTurn: async () => ({ turnId: 'turn_recovered_pid' }),
+      archiveSession: async () => true,
+      ...completedTurnMethods('turn_recovered_pid', 'thread_recovered_pid'),
+    },
+    stateDir,
+  });
+
+  assert.equal(result.turnId, 'turn_recovered_pid');
+});
+
+test('scheduled task runner recovers a lock older than the task lease', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-task-runner-'));
+  const lockDir = path.join(stateDir, 'task-runs');
+  await fs.mkdir(lockDir, { recursive: true });
+  await fs.writeFile(path.join(lockDir, 'stale-time.lock'), `${JSON.stringify({
+    version: 1,
+    pid: process.pid,
+    createdAt: '2000-01-01T00:00:00.000Z',
+    token: 'expired-task-lock',
+  })}\n`);
+
+  const result = await runScheduledTask({
+    task: createTask({ id: 'stale-time' }),
+    runtime: {
+      createSession: async () => createSession('thread_recovered_time'),
+      startTurn: async () => ({ turnId: 'turn_recovered_time' }),
+      archiveSession: async () => true,
+      ...completedTurnMethods('turn_recovered_time', 'thread_recovered_time'),
+    },
+    stateDir,
+  });
+
+  assert.equal(result.turnId, 'turn_recovered_time');
+});
+
+test('scheduled task runner propagates a failed terminal turn without archiving', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-task-runner-'));
+  const archived: string[] = [];
+  const runtime = {
+    createSession: async () => createSession('thread_failed'),
+    startTurn: async () => ({ turnId: 'turn_failed' }),
+    archiveSession: async (sessionId: string) => {
+      archived.push(sessionId);
+      return true;
+    },
+    getTurnEvents: () => [{
+      event: {
+        id: 'evt_failed',
+        type: 'turn.failed' as const,
+        turnId: 'turn_failed',
+        threadId: 'thread_failed',
+        message: 'turn failed',
+        details: 'provider unavailable',
+      },
+      sequence: 1,
+    }],
+    subscribeToTurn: () => () => {},
+  };
+
+  await assert.rejects(() => runScheduledTask({
+    task: createTask({ id: 'failed' }),
+    runtime,
+    stateDir,
+  }), /Scheduled task turn turn_failed failed: provider unavailable/u);
+  assert.deepEqual(archived, []);
 });
 
 test('scheduled task runner records owner project mapping and archive state when identity store is provided', async () => {
@@ -144,6 +254,7 @@ test('scheduled task runner records owner project mapping and archive state when
     },
     startTurn: async () => ({ turnId: 'turn_owned' }),
     archiveSession: async () => true,
+    ...completedTurnMethods('turn_owned', 'thread_owned'),
   };
 
   await runScheduledTask({
@@ -247,4 +358,34 @@ function createSession(id: string): CodexWebSession {
     },
     timeline: [],
   };
+}
+
+function completedTurnMethods(turnId: string, threadId: string) {
+  return {
+    getTurnEvents: () => [{
+      event: completedTurnEvent(turnId, threadId),
+      sequence: 1,
+    }],
+    subscribeToTurn: () => () => {},
+  };
+}
+
+function completedTurnEvent(turnId: string, threadId: string): CodexWebEvent {
+  return {
+    id: `evt_${turnId}`,
+    type: 'turn.completed',
+    turnId,
+    threadId,
+    status: 'completed',
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

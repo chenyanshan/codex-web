@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
-LABEL="com.chenyanshan.codex-web"
-HELPER_LABEL="com.chenyanshan.codex-web.restart"
+LABEL="${CODEX_WEB_LAUNCHD_LABEL:-com.chenyanshan.codex-web}"
+HELPER_LABEL="${LABEL}.restart"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 HELPER_PLIST_PATH="${HOME}/Library/LaunchAgents/${HELPER_LABEL}.plist"
 LAUNCHD_DOMAIN="gui/${UID}"
@@ -66,6 +67,7 @@ cat > "${HELPER_PLIST_PATH}" <<EOF
   </dict>
 </plist>
 EOF
+chmod 600 "${HELPER_PLIST_PATH}"
 
 launchctl bootout "${LAUNCHD_DOMAIN}/${HELPER_LABEL}" >/dev/null 2>&1 || true
 launchctl bootstrap "${LAUNCHD_DOMAIN}" "${HELPER_PLIST_PATH}"

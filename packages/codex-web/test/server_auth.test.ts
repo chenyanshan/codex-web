@@ -17,6 +17,16 @@ interface TestConfig {
   reportIndexPath: string;
   envPath: string;
   debug: boolean;
+  publicSharesEnabled: boolean;
+  publicShareTtlSeconds: number;
+  managedStorageMaxBytes?: number;
+  projectUploadMaxBytes?: number;
+  uploadTtlSeconds?: number;
+  turnAttachmentTtlSeconds?: number;
+  reportTtlSeconds?: number;
+  runtimeContextTtlSeconds?: number;
+  timelineMaxEntriesPerSession?: number;
+  timelineMaxBytes?: number;
 }
 
 function createConfig(overrides: Partial<TestConfig> = {}): TestConfig {
@@ -32,6 +42,8 @@ function createConfig(overrides: Partial<TestConfig> = {}): TestConfig {
     reportIndexPath: path.join(stateDir, 'report-index.json'),
     envPath: '/tmp/service.env',
     debug: false,
+    publicSharesEnabled: false,
+    publicShareTtlSeconds: 86_400,
     ...overrides,
   };
 }
@@ -68,6 +80,14 @@ function createRuntimeStub() {
     getTurnEvents: () => [],
     subscribeToTurn: () => () => {},
   };
+}
+
+function assertSecurityHeaders(response: Response): void {
+  assert.match(response.headers.get('content-security-policy') ?? '', /default-src 'self'/u);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(response.headers.get('cross-origin-resource-policy'), 'same-origin');
 }
 
 test('API routes reject missing bearer token', async () => {
@@ -115,6 +135,50 @@ test('API routes accept valid bearer token', async () => {
   }
 });
 
+test('static, API, and error responses use the common browser security policy', async () => {
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: createRuntimeStub() as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const [staticResponse, apiResponse, errorResponse, settingsResponse] = await Promise.all([
+      fetch(`${server.baseUrl}/`),
+      fetch(`${server.baseUrl}/api/health`, { headers: { Authorization: 'Bearer cw_token' } }),
+      fetch(`${server.baseUrl}/api/health`),
+      fetch(`${server.baseUrl}/api/settings`, { headers: { Authorization: 'Bearer cw_token' } }),
+    ]);
+    for (const response of [staticResponse, apiResponse, errorResponse, settingsResponse]) {
+      assertSecurityHeaders(response);
+    }
+    assert.match(staticResponse.headers.get('content-security-policy') ?? '', /worker-src 'self'/u);
+    assert.equal(errorResponse.status, 401);
+    assert.equal(((await settingsResponse.json()) as any).features.publicSharesEnabled, false);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('authenticated settings expose the server-side public-share feature flag', async () => {
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: createRuntimeStub() as any,
+    config: createConfig({ publicSharesEnabled: true }),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/settings`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json() as any;
+    assert.equal(payload.features.publicSharesEnabled, true);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('POST /api/sessions/:sessionId/attachments stores uploads in the session project', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-upload-state-'));
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-upload-project-'));
@@ -146,6 +210,40 @@ test('POST /api/sessions/:sessionId/attachments stores uploads in the session pr
     assert.match(payload.items[0].localPath, /uploads\/local-admin\/att_/u);
     assert.equal(await fs.readFile(payload.items[0].localPath, 'utf8'), 'hello upload');
     assert.equal(await fs.readFile(path.join(projectDir, 'uploads', '.gitignore'), 'utf8'), '*\n!.gitignore\n');
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.rm(projectDir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/sessions/:sessionId/attachments rejects files that exceed the project upload quota', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-upload-state-'));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-upload-project-'));
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      readSession: async () => ({ id: 'thread_1', cwd: projectDir }),
+    } as any,
+    config: createConfig({ stateDir, projectUploadMaxBytes: 5 }),
+  });
+  await server.start();
+  try {
+    const form = new FormData();
+    form.append('files', new Blob(['too large'], { type: 'text/plain' }), 'notes.txt');
+
+    const response = await fetch(`${server.baseUrl}/api/sessions/thread_1/attachments`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer cw_token' },
+      body: form,
+    });
+
+    assert.equal(response.status, 507);
+    assert.deepEqual(await response.json(), {
+      error: 'storage_quota_exceeded',
+      message: 'Managed storage quota is full. Remove old uploads or reports and try again.',
+    });
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -227,7 +325,13 @@ test('POST /api/sessions/:sessionId/turns accepts attachments only from upload r
       }),
     });
     assert.equal(accepted.status, 202);
-    assert.equal(startTurnInputs[0]?.attachments[0]?.localPath, uploadedPath);
+    const snapshotPath = startTurnInputs[0]?.attachments[0]?.localPath;
+    assert.notEqual(snapshotPath, uploadedPath);
+    assert.match(snapshotPath, /turn-attachments\/local-admin\/thread_1\//u);
+    assert.equal(await fs.readFile(snapshotPath, 'utf8'), 'safe');
+    assert.equal((await fs.stat(snapshotPath)).mode & 0o777, 0o400);
+    await fs.writeFile(uploadedPath, 'changed after validation');
+    assert.equal(await fs.readFile(snapshotPath, 'utf8'), 'safe');
 
     const rejected = await fetch(`${server.baseUrl}/api/sessions/thread_1/turns`, {
       method: 'POST',
@@ -249,6 +353,27 @@ test('POST /api/sessions/:sessionId/turns accepts attachments only from upload r
     assert.deepEqual(await rejected.json(), {
       error: 'invalid_attachment',
       message: 'Attachment path is outside the allowed upload directories.',
+    });
+
+    const outsidePath = path.join(projectDir, 'outside-secret.txt');
+    const symlinkPath = path.join(projectDir, 'uploads', 'local-admin', 'att_link.txt');
+    await fs.writeFile(outsidePath, 'outside secret');
+    await fs.symlink(outsidePath, symlinkPath);
+    const symlinkRejected = await fetch(`${server.baseUrl}/api/sessions/thread_1/turns`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        text: 'Read the attachment',
+        attachments: [{ kind: 'file', localPath: symlinkPath, fileName: 'link.txt' }],
+      }),
+    });
+    assert.equal(symlinkRejected.status, 400);
+    assert.deepEqual(await symlinkRejected.json(), {
+      error: 'invalid_attachment',
+      message: 'Attachment paths must not contain symbolic links.',
     });
   } finally {
     await server.stop();
@@ -614,6 +739,11 @@ test('static root is public', async () => {
     assert.equal(styleResponse.status, 200);
     assert.match(styleResponse.headers.get('content-type') ?? '', /^text\/css\b/i);
     assert.match(await styleResponse.text(), /body|--bg|font-family/u);
+
+    const themeInitResponse = await fetch(`${server.baseUrl}/theme-init.js`);
+    assert.equal(themeInitResponse.status, 200);
+    assert.match(themeInitResponse.headers.get('content-type') ?? '', /^application\/javascript\b/i);
+    assert.match(await themeInitResponse.text(), /codexWebTheme|dataset\.theme/u);
 
     const manifestResponse = await fetch(`${server.baseUrl}/manifest.webmanifest`);
     assert.equal(manifestResponse.status, 200);
@@ -1331,6 +1461,59 @@ test('GET /api/sessions?state=archived lists archived sessions in single-user mo
   }
 });
 
+test('single-user session list omits conversation details while direct reads retain them', async () => {
+  const runtimeSession = {
+    id: 'thread_1',
+    cwd: '/repo',
+    thread: {
+      turns: [{
+        id: 'turn_1',
+        status: 'completed',
+        error: null,
+        items: [{ type: 'message', role: 'assistant', text: 'Detailed answer' }],
+      }],
+    },
+    timeline: [{
+      id: 'timeline_1',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: '',
+      text: 'Detailed answer',
+    }],
+  };
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      listSessions: async () => [runtimeSession],
+      readSession: async () => runtimeSession,
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const listResponse = await fetch(`${server.baseUrl}/api/sessions`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = await listResponse.json();
+    assert.equal(listPayload.items[0].id, 'thread_1');
+    assert.equal('thread' in listPayload.items[0], false);
+    assert.equal('timeline' in listPayload.items[0], false);
+
+    const detailResponse = await fetch(`${server.baseUrl}/api/sessions/thread_1`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = await detailResponse.json();
+    assert.equal(detailPayload.session.thread.turns[0].items[0].text, 'Detailed answer');
+    assert.equal(detailPayload.session.timeline[0].text, 'Detailed answer');
+  } finally {
+    await server.stop();
+  }
+});
+
 test('PATCH /api/sessions/:id/favorite updates favorite state and order', async () => {
   const calls: Array<{ sessionId: string; favorite: boolean; favoriteOrder?: number | null }> = [];
   const server = createCodexWebServer({
@@ -1594,11 +1777,13 @@ test('SSE route accepts bearer auth and streams events', async () => {
       headers: { Authorization: 'Bearer cw_token' },
     });
     assert.equal(response.status, 200);
+    assertSecurityHeaders(response);
     const reader = response.body?.getReader();
     assert.ok(reader);
     const firstChunk = await reader!.read();
     const text = new TextDecoder().decode(firstChunk.value);
     assert.match(text, /turn.started/);
+    assert.doesNotMatch(text, /threadId|thread_1|raw/u);
     await reader!.cancel();
     await Promise.race([
       unsubscribed,

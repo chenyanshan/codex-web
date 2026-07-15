@@ -16,7 +16,13 @@ import { CodexWebRuntime } from './runtime.js';
 import { createCodexWebServer, type CodexWebAuthLike, type CodexWebServerHandle } from './server.js';
 import { FileSessionSettingsStore } from './session_settings_store.js';
 import { FileSessionTimelineStore } from './session_timeline_store.js';
-import { createTaskSchedulerPlan, type SchedulerCommand, type TaskSchedulerAction } from './task_scheduler.js';
+import { maintainManagedStateStorage } from './storage_governance.js';
+import {
+  createCodexWebCommandArgv,
+  createTaskSchedulerPlan,
+  type SchedulerCommand,
+  type TaskSchedulerAction,
+} from './task_scheduler.js';
 import { FileScheduledTaskStore, type FileScheduledTaskStore as FileScheduledTaskStoreType } from './task_store.js';
 import { runScheduledTask, type RunScheduledTaskInput, type RunScheduledTaskResult } from './task_runner.js';
 
@@ -118,7 +124,7 @@ interface TaskCommandDependencies {
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
   homeDir: string;
-  codexWebBin: string;
+  codexWebArgv: string[];
   loadConfig: (options?: { env?: NodeJS.ProcessEnv }) => CodexWebConfig;
   createTaskStore: (args: { stateDir: string }) => Pick<FileScheduledTaskStoreType, 'readTask'>;
   createIdentityStore: (args: { identityPath: string }) => ScheduledTaskIdentityStoreLike;
@@ -222,7 +228,7 @@ export async function runTaskCommand(
     platform: dependencies.platform ?? process.platform,
     action: parsed.action,
     task,
-    codexWebBin: dependencies.codexWebBin ?? process.argv[1] ?? 'codex-web',
+    codexWebArgv: dependencies.codexWebArgv ?? currentCliSchedulerArgv(),
     envPath: config.envPath,
     homeDir: dependencies.homeDir ?? process.env.HOME ?? process.cwd(),
   });
@@ -245,6 +251,25 @@ export async function runTaskCommand(
       throw error;
     }
   }
+}
+
+export function currentCliSchedulerArgv({
+  cliPath = fileURLToPath(import.meta.url),
+  nodePath = process.execPath,
+  tsxLoaderPath,
+}: {
+  cliPath?: string;
+  nodePath?: string;
+  tsxLoaderPath?: string | null;
+} = {}): string[] {
+  const resolvedTsxLoaderPath = tsxLoaderPath === undefined && /\.tsx?$/u.test(cliPath)
+    ? fileURLToPath(import.meta.resolve('tsx'))
+    : tsxLoaderPath ?? null;
+  return createCodexWebCommandArgv({
+    cliPath,
+    nodePath,
+    tsxLoaderPath: resolvedTsxLoaderPath,
+  });
 }
 
 export async function runAuthSetPasswordCommand(
@@ -287,6 +312,7 @@ export async function startServeCommand(
   const bootstrapPassword = takeOneTimePassword(env);
   await ensureRuntimeDirectories(config);
   await ensureBundledReports(config);
+  await maintainManagedStateStorage(config);
   const identityStore = new FileIdentityStore({
     identityPath: path.join(config.stateDir, 'identity.json'),
   });
@@ -422,6 +448,8 @@ function createDefaultRuntime({ config: runtimeConfig }: { config: CodexWebConfi
     }),
     timelineStore: new FileSessionTimelineStore({
       timelinePath: path.join(runtimeConfig.stateDir, 'session-timeline.json'),
+      maxEntriesPerSession: runtimeConfig.timelineMaxEntriesPerSession,
+      maxBytes: runtimeConfig.timelineMaxBytes,
     }),
   });
 }

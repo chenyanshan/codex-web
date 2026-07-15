@@ -11,7 +11,12 @@ project-scoped RBAC, admin audit/observer APIs, and read-only share links.
 This is not a hosted SaaS or a separate Codex runtime per user. All users share
 the same Mac, Codex login state, `CODEX_HOME`, and `codex app-server`.
 
-The isolation boundary is the Codex Web backend:
+This mode is only for users who fully trust one another with the host account.
+Codex Web authorization protects application routes and hides internal ids; it
+is not an OS, process, shell, or filesystem isolation boundary. Deploy separate
+OS users, containers, VMs, or hosts before admitting mutually untrusted users.
+
+The application authorization path is:
 
 ```text
 browser
@@ -85,6 +90,11 @@ Ordinary users may:
 
 Admins bypass project grants for audit and management APIs.
 
+Every ordinary multi-user session and turn is forced server-side to
+`workspace-write` with `on-request` approvals. Browser-supplied full-access or
+never-approve settings are ignored. This reduces accidental host exposure but
+does not turn a shared OS account into tenant isolation.
+
 ## Runtime Boundary
 
 `CodexWebRuntime` remains unaware of users, roles, and projects. It receives
@@ -121,11 +131,14 @@ normal owner/write path.
 
 ## Share Links
 
-Any authorized owner or admin may create a read-only share link for a session.
-The share route uses an independent random token. The backend stores only the
-hash.
+Public sharing is disabled by default and must be explicitly enabled with
+`CODEX_WEB_PUBLIC_SHARES_ENABLED=true`. An authorized session owner may create
+a read-only capability link. The backend stores only its token hash, applies a
+bounded TTL (24 hours by default, seven days maximum), and supports explicit
+revocation.
 
-Share routes do not require bearer auth, but expose only:
+When enabled, share routes use the unguessable capability token instead of a
+bearer login and expose only:
 
 - full session history
 - live read-only event stream
@@ -139,8 +152,9 @@ Focused tests cover:
 
 - legacy single-user routes still work
 - multi-user users cannot list/read/write sessions they do not own
+- unmatched multi-user routes fail closed instead of falling back to legacy routes
+- ordinary users cannot weaken server-enforced sandbox or approval settings
 - project create requests use configured cwd and return display names
 - admin can audit and observe any session but cannot inject via observer
-- share links read without auth and reject write attempts by route absence
+- disabled, expired, revoked, or no-longer-authorized share links fail closed
 - runtime turn/approval operations can be mapped back to their owning thread
-

@@ -3,7 +3,9 @@
 ## Project Purpose
 
 This repository builds a self-hosted mobile web app for controlling Codex from a
-phone while all execution remains on the current Mac.
+phone while all execution remains on the current Mac. Single-user mode is the
+default; optional multi-user mode is only for fully trusted users sharing that
+host account and is not a tenant-isolation boundary.
 
 The phone is only a remote UI. The backend owns Codex access, local filesystem
 access, shell execution, authentication, session state, and service lifecycle.
@@ -24,7 +26,7 @@ local `codex app-server` and reuses the host's local Codex login state.
 Primary design doc:
 
 ```text
-docs/superpowers/specs/2026-05-17-codex-mobile-web-app-design.md
+docs/superpowers/specs/2026-05-17-codex-web-design.md
 ```
 
 Visual reference:
@@ -37,7 +39,8 @@ docs/assets/codex-web-reference.jpg
 
 Do:
 
-- Build a single-user, self-hosted mobile web console.
+- Build a self-hosted mobile web console with a single-user default and an
+  explicitly trusted-team multi-user facade.
 - Keep Codex credentials and local execution on the Mac.
 - Require password login for remote access.
 - Store browser session tokens per device so returning devices stay logged in.
@@ -48,9 +51,12 @@ Do:
 
 Do not:
 
-- Turn this into a hosted multi-user SaaS.
+- Turn this into a hosted multi-user SaaS or claim shared-host RBAC provides OS,
+  shell, or filesystem isolation.
 - Store plaintext passwords.
-- Expose unauthenticated APIs.
+- Expose unauthenticated APIs. The only exception is the explicitly enabled
+  public-share capability flow described below; its URL token is authentication,
+  not an anonymous route.
 - Put Codex credentials in the browser.
 - Couple the mobile UI to WeChat slash-command UX.
 - Move or delete files from `CodexBridge-main` unless explicitly requested.
@@ -100,7 +106,12 @@ Authentication model:
 - password is hashed with a salt
 - session tokens are random and stored hashed on the backend
 - browser stores only the opaque session token
-- all API and event-stream routes require a valid bearer token
+- all API and event-stream routes require a valid bearer token, except the
+  opt-in `/api/share/<capability-token>/...` read-only routes
+- public shares default to disabled, require
+  `CODEX_WEB_PUBLIC_SHARES_ENABLED=true`, and authenticate with a random URL
+  capability token that is stored hashed, expires by TTL, can be revoked, and
+  becomes invalid when multi-user mode is disabled
 
 State should live outside the repo:
 

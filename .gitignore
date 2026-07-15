@@ -9,3 +9,6 @@ packages/*/dist/
 .worktrees/
 .codex-web/
 uploads/
+
+test-results/
+playwright-report/

@@ -544,15 +544,23 @@ export class CodexAppClient extends EventEmitter {
     };
   }
 
-  async resumeThread({ threadId }: { threadId: string }): Promise<unknown> {
+  async resumeThread({
+    threadId,
+    approvalPolicy = null,
+    sandboxMode = null,
+  }: {
+    threadId: string;
+    approvalPolicy?: string | null;
+    sandboxMode?: string | null;
+  }): Promise<unknown> {
     return this.request('thread/resume', {
       threadId,
       cwd: null,
-      approvalPolicy: null,
+      approvalPolicy,
       baseInstructions: null,
       developerInstructions: null,
       config: null,
-      sandbox: null,
+      sandbox: sandboxMode,
       model: null,
       modelProvider: null,
       personality: null,
@@ -742,6 +750,29 @@ export class CodexAppClient extends EventEmitter {
         }
         return true;
       });
+  }
+
+  subscribeToApprovalRequests(
+    listener: (request: ProviderApprovalRequest) => void,
+    { replayPending = true }: { replayPending?: boolean } = {},
+  ): () => void {
+    const onApprovalRequest = (request: ProviderApprovalRequest) => {
+      listener(request);
+    };
+    this.on('approval_request', onApprovalRequest);
+    try {
+      if (replayPending) {
+        for (const request of this.getPendingApprovals()) {
+          listener(request);
+        }
+      }
+    } catch (error) {
+      this.off('approval_request', onApprovalRequest);
+      throw error;
+    }
+    return () => {
+      this.off('approval_request', onApprovalRequest);
+    };
   }
 
   async respondToApproval({
@@ -2794,6 +2825,7 @@ function mapThreadSummary(raw) {
     cwd: raw.cwd ? String(raw.cwd) : null,
     updatedAt: normalizeTimestamp(raw.updatedAt),
     preview: typeof raw.preview === 'string' ? raw.preview : '',
+    runtimeStatus: mapThreadRuntimeStatus(raw.status),
   };
 }
 
@@ -2806,6 +2838,20 @@ function mapThread(raw, includeTurns) {
     updatedAt: normalizeTimestamp(raw.updatedAt),
     preview: typeof raw.preview === 'string' ? raw.preview : '',
     turns: includeTurns && Array.isArray(raw.turns) ? raw.turns.map(mapTurn) : [],
+    runtimeStatus: mapThreadRuntimeStatus(raw.status),
+  };
+}
+
+function mapThreadRuntimeStatus(raw) {
+  const type = normalizeNullableString(
+    typeof raw === 'string' ? raw : raw?.type,
+  );
+  if (!type) {
+    return null;
+  }
+  return {
+    type,
+    activeFlags: normalizeStringList(raw?.activeFlags),
   };
 }
 
@@ -2823,7 +2869,14 @@ function mapTurn(raw) {
     status: extractStructuredString(raw?.status),
     error: extractStructuredString(raw?.error),
     items: Array.isArray(raw?.items) ? raw.items.map(mapTurnItem) : [],
+    startedAt: normalizeNullableTimestamp(raw?.startedAt),
+    completedAt: normalizeNullableTimestamp(raw?.completedAt),
   };
+}
+
+function normalizeNullableTimestamp(value) {
+  const timestamp = normalizeTimestamp(value);
+  return timestamp > 0 ? timestamp : null;
 }
 
 function mapTurnItem(raw) {

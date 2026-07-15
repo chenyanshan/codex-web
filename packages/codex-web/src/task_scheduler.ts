@@ -24,7 +24,7 @@ export interface TaskSchedulerPlan {
 
 export interface SchedulerRenderInput {
   task: ScheduledTaskDefinition;
-  codexWebBin: string;
+  codexWebArgv: string[];
   envPath: string;
 }
 
@@ -44,9 +44,37 @@ export function createTaskSchedulerPlan(input: CreateTaskSchedulerPlanInput): Ta
   throw new Error(`Scheduled task install is not supported on ${input.platform}`);
 }
 
-export function renderLaunchdTaskPlist({ task, codexWebBin, envPath }: SchedulerRenderInput): string {
+export function createCodexWebCommandArgv({
+  cliPath,
+  nodePath,
+  tsxLoaderPath = null,
+}: {
+  cliPath: string;
+  nodePath: string;
+  tsxLoaderPath?: string | null;
+}): string[] {
+  if (!path.isAbsolute(cliPath) || !path.isAbsolute(nodePath)) {
+    throw new Error('Scheduled task command paths must be absolute');
+  }
+  if (/\.tsx?$/u.test(cliPath)) {
+    if (!tsxLoaderPath || !path.isAbsolute(tsxLoaderPath)) {
+      throw new Error('A source Codex Web CLI requires an absolute tsx loader path');
+    }
+    return [
+      nodePath,
+      '--conditions=development',
+      '--import',
+      tsxLoaderPath,
+      cliPath,
+    ];
+  }
+  return [nodePath, cliPath];
+}
+
+export function renderLaunchdTaskPlist({ task, codexWebArgv, envPath }: SchedulerRenderInput): string {
   const { hour, minute } = parseDailyTime(task.schedule.time);
   const label = launchdTaskLabel(task.id);
+  const taskArgv = appendTaskRunArgs(codexWebArgv, task.id);
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -56,10 +84,7 @@ export function renderLaunchdTaskPlist({ task, codexWebBin, envPath }: Scheduler
     `  <string>${escapeXml(label)}</string>`,
     '  <key>ProgramArguments</key>',
     '  <array>',
-    `    <string>${escapeXml(codexWebBin)}</string>`,
-    '    <string>task</string>',
-    '    <string>run</string>',
-    `    <string>${escapeXml(task.id)}</string>`,
+    ...taskArgv.map((arg) => `    <string>${escapeXml(arg)}</string>`),
     '  </array>',
     '  <key>EnvironmentVariables</key>',
     '  <dict>',
@@ -83,15 +108,17 @@ export function renderLaunchdTaskPlist({ task, codexWebBin, envPath }: Scheduler
   ].join('\n');
 }
 
-export function renderSystemdTaskService({ task, codexWebBin, envPath }: SchedulerRenderInput): string {
+export function renderSystemdTaskService({ task, codexWebArgv, envPath }: SchedulerRenderInput): string {
+  const taskArgv = appendTaskRunArgs(codexWebArgv, task.id);
   return [
     '[Unit]',
     `Description=Codex Web scheduled task ${task.id}`,
     '',
     '[Service]',
     'Type=oneshot',
-    `EnvironmentFile=-${envPath}`,
-    `ExecStart=${codexWebBin} task run ${systemdEscapeArg(task.id)}`,
+    `EnvironmentFile=${systemdQuoteArg(`-${envPath}`)}`,
+    `Environment=${systemdQuoteArg(`CODEX_WEB_ENV_PATH=${envPath}`)}`,
+    `ExecStart=${taskArgv.map(systemdQuoteArg).join(' ')}`,
     '',
   ].join('\n');
 }
@@ -234,8 +261,21 @@ function systemdUnitInstance(taskId: string): string {
   return taskId.replace(/%/gu, '%%');
 }
 
-function systemdEscapeArg(value: string): string {
-  return value.replace(/%/gu, '%%');
+function appendTaskRunArgs(codexWebArgv: string[], taskId: string): string[] {
+  if (codexWebArgv.length === 0 || codexWebArgv.some((arg) => !arg)) {
+    throw new Error('Scheduled task command argv cannot be empty');
+  }
+  if (!path.isAbsolute(codexWebArgv[0]!)) {
+    throw new Error('Scheduled task executable path must be absolute');
+  }
+  return [...codexWebArgv, 'task', 'run', taskId];
+}
+
+function systemdQuoteArg(value: string): string {
+  return `"${value
+    .replace(/%/gu, '%%')
+    .replace(/\\/gu, '\\\\')
+    .replace(/"/gu, '\\"')}"`;
 }
 
 function escapeXml(value: string): string {

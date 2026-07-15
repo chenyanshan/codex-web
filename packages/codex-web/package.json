@@ -19,8 +19,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "serve": "node --conditions=development --import tsx src/cli.ts serve",
+    "pretypecheck": "npm run build --workspace @codex-mobile-web-app/codex-native-api",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "test": "node --conditions=development --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@codex-mobile-web-app/codex-native-api": "0.1.0"

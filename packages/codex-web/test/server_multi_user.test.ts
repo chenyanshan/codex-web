@@ -20,6 +20,8 @@ interface TestConfig {
   reportIndexPath: string;
   envPath: string;
   debug: boolean;
+  publicSharesEnabled: boolean;
+  publicShareTtlSeconds: number;
 }
 
 function createConfig(overrides: Partial<TestConfig> = {}): TestConfig {
@@ -35,6 +37,8 @@ function createConfig(overrides: Partial<TestConfig> = {}): TestConfig {
     reportIndexPath: path.join(stateDir, 'report-index.json'),
     envPath: '/tmp/service.env',
     debug: false,
+    publicSharesEnabled: true,
+    publicShareTtlSeconds: 3_600,
     ...overrides,
   };
 }
@@ -139,7 +143,7 @@ async function createIdentityStore() {
     id: 'role_user',
     name: 'User',
     isAdmin: false,
-    projectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: false, canWrite: false }],
+    projectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: true, canWrite: true }],
   });
   await store.upsertUserWithPassword({
     id: 'user_alice',
@@ -174,21 +178,36 @@ async function createIdentityStore() {
   return store;
 }
 
-test('multi-user session list returns only owned authorized sessions with display names', async () => {
+test('multi-user session list omits conversation details while direct reads retain them', async () => {
   const identityStore = await createIdentityStore();
+  const aliceRuntimeSession = {
+    id: 'thread_alice',
+    cwd: '/secret/path',
+    projectName: 'secret/path',
+    settings: {},
+    thread: {
+      turns: [{
+        id: 'turn_1',
+        status: 'completed',
+        error: null,
+        items: [{ type: 'message', role: 'assistant', phase: 'final_answer', text: 'Detailed answer' }],
+      }],
+    },
+    timeline: [{
+      id: 'timeline_1',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: '',
+      text: 'Detailed answer',
+    }],
+  };
   const runtime = {
     ...runtimeStub(),
     listSessions: async (options?: { favorite?: boolean }) => {
       runtime.calls.push(`list:${options?.favorite === true ? 'favorites' : 'all'}`);
       return [
-        {
-          id: 'thread_alice',
-          cwd: '/secret/path',
-          projectName: 'secret/path',
-          settings: {},
-          thread: { turns: [] },
-          timeline: [],
-        },
+        aliceRuntimeSession,
         {
           id: 'thread_bob',
           cwd: '/other/path',
@@ -201,7 +220,10 @@ test('multi-user session list returns only owned authorized sessions with displa
     },
     readSession: async (threadId: string) => {
       runtime.calls.push(`read:${threadId}`);
-      throw new Error(`session list should not hydrate ${threadId}`);
+      if (threadId !== 'thread_alice') {
+        throw new Error(`unexpected session read ${threadId}`);
+      }
+      return aliceRuntimeSession;
     },
   };
   const server = createCodexWebServer({
@@ -222,7 +244,18 @@ test('multi-user session list returns only owned authorized sessions with displa
     assert.deepEqual(payload.items.map((item: any) => item.id), ['app_alice']);
     assert.equal(payload.items[0].projectDisplayName, 'Allowed Project');
     assert.equal(payload.items[0].cwd, undefined);
+    assert.equal('thread' in payload.items[0], false);
+    assert.equal('timeline' in payload.items[0], false);
     assert.deepEqual(runtime.calls, ['list:all']);
+
+    const detailResponse = await fetch(`${server.baseUrl}/api/sessions/app_alice`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = await detailResponse.json();
+    assert.equal(detailPayload.session.thread.turns[0].items[0].text, 'Detailed answer');
+    assert.equal(detailPayload.session.timeline[0].text, 'Detailed answer');
+    assert.deepEqual(runtime.calls, ['list:all', 'read:thread_alice']);
   } finally {
     await server.stop();
   }
@@ -893,7 +926,7 @@ test('admin can audit all sessions and read any session with observer mode', asy
     assert.equal(readPayload.session.id, 'app_bob');
     assert.equal(readPayload.session.mode, 'observer');
     assert.equal(readPayload.session.readOnly, true);
-    assert.equal(readPayload.session.cwd, '/secret/path');
+    assert.equal(readPayload.session.cwd, undefined);
     assert.deepEqual(runtime.calls, ['read:thread_bob']);
   } finally {
     await server.stop();
@@ -1622,6 +1655,7 @@ test('global site title settings are readable by users and writable only by admi
     assert.deepEqual(await readable.json(), {
       settings: { siteTitle: 'Codex Web' },
       permissions: { canSetSiteTitle: false },
+      features: { publicSharesEnabled: true },
     });
 
     const forbidden = await fetch(`${server.baseUrl}/api/settings`, {
@@ -1640,6 +1674,7 @@ test('global site title settings are readable by users and writable only by admi
     assert.deepEqual(await adminUpdate.json(), {
       settings: { siteTitle: 'Admin Title' },
       permissions: { canSetSiteTitle: true },
+      features: { publicSharesEnabled: true },
     });
 
     const singleUpdate = await fetch(`${server.baseUrl}/api/settings`, {
@@ -1651,6 +1686,7 @@ test('global site title settings are readable by users and writable only by admi
     assert.deepEqual(await singleUpdate.json(), {
       settings: { siteTitle: 'Single Title' },
       permissions: { canSetSiteTitle: true },
+      features: { publicSharesEnabled: true },
     });
 
     const state = await identityStore.readState();
@@ -2196,5 +2232,428 @@ test('starting a writable app session turn projects codex web runtime context an
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('ordinary multi-user requests are forced to safe runtime policies at every input boundary', async () => {
+  const identityStore = await createIdentityStore();
+  const createInputs: any[] = [];
+  const settingsInputs: any[] = [];
+  const turnInputs: any[] = [];
+  const runtime = {
+    ...runtimeStub(),
+    createSession: async (input: any) => {
+      createInputs.push(input);
+      return { id: 'thread_safe', cwd: input.cwd, settings: input.settings, thread: { turns: [] }, timeline: [] };
+    },
+    updateSessionSettings: async (_threadId: string, input: any) => {
+      settingsInputs.push(input);
+      return { id: 'thread_alice', settings: input, thread: { turns: [] }, timeline: [] };
+    },
+    startTurn: async (_threadId: string, input: any) => {
+      turnInputs.push(input);
+      return { turnId: 'turn_safe' };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const create = await fetch(`${server.baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId: 'project_allowed',
+        settings: { accessPreset: 'full-access', sandboxMode: 'danger-full-access', approvalPolicy: 'never' },
+      }),
+    });
+    assert.equal(create.status, 201);
+
+    const settings = await fetch(`${server.baseUrl}/api/sessions/app_alice/settings`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessPreset: 'full-access', sandboxMode: 'danger-full-access', approvalPolicy: 'never' }),
+    });
+    assert.equal(settings.status, 200);
+
+    const turn = await fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: 'continue safely',
+        settings: { accessPreset: 'full-access', sandboxMode: 'danger-full-access', approvalPolicy: 'never' },
+      }),
+    });
+    assert.equal(turn.status, 202);
+
+    for (const policy of [createInputs[0]?.settings, settingsInputs[0], turnInputs[0]?.settings]) {
+      assert.equal(policy.accessPreset, 'default');
+      assert.equal(policy.sandboxMode, 'workspace-write');
+      assert.equal(policy.approvalPolicy, 'on-request');
+    }
+  } finally {
+    await server.stop();
+  }
+});
+
+test('multi-user routing denies unlisted fallbacks and reserves usage and reload for admins', async () => {
+  const identityStore = await createIdentityStore();
+  let usageCalls = 0;
+  let reloadCalls = 0;
+  const runtime = {
+    ...runtimeStub(),
+    readUsage: async () => {
+      usageCalls += 1;
+      return { totalTokens: 1 };
+    },
+    reloadRuntime: async () => {
+      reloadCalls += 1;
+      return { mcpServersReloaded: true };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const aliceUsage = await fetch(`${server.baseUrl}/api/usage`, { headers: { Authorization: 'Bearer alice' } });
+    const aliceReload = await fetch(`${server.baseUrl}/api/runtime/reload`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    const unlisted = await fetch(`${server.baseUrl}/api/not-covered-by-multi-user`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(aliceUsage.status, 403);
+    assert.equal(aliceReload.status, 403);
+    assert.equal(unlisted.status, 404);
+    assert.equal(usageCalls, 0);
+    assert.equal(reloadCalls, 0);
+
+    const adminUsage = await fetch(`${server.baseUrl}/api/usage`, { headers: { Authorization: 'Bearer admin' } });
+    const adminReload = await fetch(`${server.baseUrl}/api/runtime/reload`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(adminUsage.status, 200);
+    assert.equal(adminReload.status, 200);
+    assert.equal(usageCalls, 1);
+    assert.equal(reloadCalls, 1);
+
+    await identityStore.setMultiUserEnabled(false);
+    const staleMultiPrincipal = await fetch(`${server.baseUrl}/api/usage`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(staleMultiPrincipal.status, 403);
+    assert.equal(usageCalls, 1);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('session timeline and favorite mutations enforce owner and project write access', async () => {
+  const identityStore = await createIdentityStore();
+  const calls: string[] = [];
+  const runtime = {
+    ...runtimeStub(),
+    appendSessionTimelineEntry: (threadId: string) => {
+      calls.push(`timeline:${threadId}`);
+      return { id: 'entry_1', kind: 'message', role: 'system', label: 'System', meta: '', text: 'notice' };
+    },
+    updateSessionFavorite: async (threadId: string) => {
+      calls.push(`favorite:${threadId}`);
+      return { id: threadId, settings: {}, thread: { turns: [] }, timeline: [] };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const foreignTimeline = await fetch(`${server.baseUrl}/api/sessions/app_bob/timeline`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'system', text: 'notice' }),
+    });
+    const foreignFavorite = await fetch(`${server.baseUrl}/api/sessions/app_bob/favorite`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: true }),
+    });
+    assert.equal(foreignTimeline.status, 404);
+    assert.equal(foreignFavorite.status, 404);
+    assert.deepEqual(calls, []);
+
+    const ownTimeline = await fetch(`${server.baseUrl}/api/sessions/app_alice/timeline`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'system', text: 'notice' }),
+    });
+    const ownFavorite = await fetch(`${server.baseUrl}/api/sessions/app_alice/favorite`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: true }),
+    });
+    assert.equal(ownTimeline.status, 201);
+    assert.equal(ownFavorite.status, 200);
+    assert.deepEqual(calls, ['timeline:thread_alice', 'favorite:thread_alice']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('read-only project grants cannot create or mutate sessions', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertRole({
+    id: 'role_user',
+    name: 'Reader',
+    isAdmin: false,
+    projectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: false, canWrite: false }],
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const read = await fetch(`${server.baseUrl}/api/sessions/app_alice`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    const create = await fetch(`${server.baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: 'project_allowed' }),
+    });
+    const write = await fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'not permitted' }),
+    });
+    assert.equal(read.status, 200);
+    assert.equal(create.status, 404);
+    assert.equal(write.status, 404);
+    assert.deepEqual(runtime.calls, ['read:thread_alice']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('multi-user reports are filtered by project grants and omit server paths', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-report-acl-'));
+  const identityStore = await createIdentityStore();
+  const allowedId = 'project_allowed/allowed.md';
+  const deniedId = 'project_denied/denied.md';
+  await fs.mkdir(path.join(stateDir, 'reports', 'project_allowed'), { recursive: true });
+  await fs.mkdir(path.join(stateDir, 'reports', 'project_denied'), { recursive: true });
+  await fs.writeFile(path.join(stateDir, 'reports', allowedId), '# Allowed\n');
+  await fs.writeFile(path.join(stateDir, 'reports', deniedId), '# Denied\n');
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtimeStub() as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  try {
+    const list = await fetch(`${server.baseUrl}/api/reports`, { headers: { Authorization: 'Bearer alice' } });
+    assert.equal(list.status, 200);
+    const payload = await list.json();
+    assert.deepEqual(payload.items.map((report: any) => report.id), [allowedId]);
+    assert.equal(payload.items[0].path, undefined);
+
+    const denied = await fetch(`${server.baseUrl}/api/reports/${encodeURIComponent(deniedId)}/content`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(denied.status, 404);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('session and share DTOs whitelist nested runtime data', async () => {
+  const identityStore = await createIdentityStore();
+  const { token } = await identityStore.createShare({ sessionId: 'app_alice', createdByUserId: 'user_alice' });
+  const runtime = {
+    ...runtimeStub(),
+    readSession: async () => ({
+      id: 'thread_alice',
+      cwd: '/Users/alice/private',
+      projectName: 'alice/private',
+      title: 'Safe title',
+      unknownProviderField: 'secret',
+      goal: { threadId: 'thread_alice', objective: 'Ship safely', status: 'active', raw: { secret: true } },
+      settings: {
+        bridgeSessionId: 'thread_alice',
+        model: 'gpt-5.4',
+        metadata: { cwd: '/Users/alice/private', secret: true },
+      },
+      thread: {
+        threadId: 'thread_alice',
+        cwd: '/Users/alice/private',
+        path: '/Users/alice/.codex/session.jsonl',
+        turns: [{
+          id: 'turn_1',
+          status: 'completed',
+          error: null,
+          items: [{
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            text: 'Safe answer',
+            savedPath: '/Users/alice/private/output.md',
+            raw: { cwd: '/Users/alice/private' },
+          }],
+        }],
+      },
+      timeline: [{ id: 'timeline_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: '', text: 'Safe answer' }],
+    }),
+  };
+  runtime.startTurn = async () => ({
+    type: 'command',
+    command: {
+      name: 'goal',
+      action: 'show',
+      message: 'Goal is active.',
+      goal: { threadId: 'thread_alice', objective: 'Ship safely', status: 'active' },
+    },
+    session: await runtime.readSession(),
+  }) as any;
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig({ publicSharesEnabled: true }),
+  });
+  await server.start();
+  try {
+    const workspace = await fetch(`${server.baseUrl}/api/sessions/app_alice`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    const share = await fetch(`${server.baseUrl}/api/share/${encodeURIComponent(token)}/session`);
+    const command = await fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '/goal' }),
+    });
+    assert.equal(workspace.status, 200);
+    assert.equal(share.status, 200);
+    assert.equal(command.status, 202);
+    const workspacePayload = await workspace.json();
+    const sharePayload = await share.json();
+    const commandPayload = await command.json();
+    for (const payload of [workspacePayload, sharePayload, commandPayload]) {
+      const serialized = JSON.stringify(payload);
+      assert.doesNotMatch(serialized, /"(?:cwd|threadId|raw|bridgeSessionId|metadata|savedPath)"/u);
+      assert.doesNotMatch(serialized, /\/Users\/alice\/private|session\.jsonl|unknownProviderField/u);
+      if (payload.session) {
+        assert.equal(payload.session.thread.turns[0].items[0].text, 'Safe answer');
+      }
+    }
+    assert.equal(workspacePayload.session.ownerUserId, 'user_alice');
+    assert.equal(sharePayload.session.ownerUserId, undefined);
+    assert.equal(sharePayload.session.readOnly, true);
+    assert.equal(commandPayload.command.goal.objective, 'Ship safely');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('public share capabilities require the feature flag and become invalid after revoke or multi-user shutdown', async () => {
+  const identityStore = await createIdentityStore();
+  const precreated = await identityStore.createShare({ sessionId: 'app_alice', createdByUserId: 'user_alice' });
+  const disabledServer = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtimeStub() as any,
+    config: createConfig({ publicSharesEnabled: false }),
+  });
+  await disabledServer.start();
+  try {
+    const create = await fetch(`${disabledServer.baseUrl}/api/sessions/app_alice/share`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    const read = await fetch(`${disabledServer.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/session`);
+    assert.equal(create.status, 403);
+    assert.equal(read.status, 404);
+  } finally {
+    await disabledServer.stop();
+  }
+
+  const enabledServer = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtimeStub() as any,
+    config: createConfig({ publicSharesEnabled: true }),
+  });
+  await enabledServer.start();
+  try {
+    const createdResponse = await fetch(`${enabledServer.baseUrl}/api/sessions/app_alice/share`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+    const revoke = await fetch(`${enabledServer.baseUrl}/api/shares/${encodeURIComponent(created.id)}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(revoke.status, 200);
+    const revokedRead = await fetch(`${enabledServer.baseUrl}/api/share/${encodeURIComponent(created.token)}/session`);
+    assert.equal(revokedRead.status, 404);
+
+    await identityStore.upsertRole({
+      id: 'role_user',
+      name: 'User',
+      isAdmin: false,
+      projectGrants: [],
+    });
+    const revokedByGrant = await fetch(`${enabledServer.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/session`);
+    assert.equal(revokedByGrant.status, 404);
+    await identityStore.upsertRole({
+      id: 'role_user',
+      name: 'User',
+      isAdmin: false,
+      projectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: true, canWrite: true }],
+    });
+    const restoredGrant = await fetch(`${enabledServer.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/session`);
+    assert.equal(restoredGrant.status, 200);
+
+    await identityStore.setMultiUserEnabled(false);
+    const disabledByMode = await fetch(`${enabledServer.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/session`);
+    assert.equal(disabledByMode.status, 404);
+  } finally {
+    await enabledServer.stop();
   }
 });

@@ -1,6 +1,8 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ProviderTurnSessionSettings } from '@codex-mobile-web-app/codex-native-api';
+import { withFileLockSync } from './file_lock.js';
 
 export type CodexWebStoredSessionSettings = ProviderTurnSessionSettings & {
   favorite?: boolean;
@@ -22,8 +24,6 @@ interface SessionSettingsFile {
 export class FileSessionSettingsStore implements CodexWebSessionSettingsStore {
   private readonly settingsPath: string;
 
-  private cache: SessionSettingsFile | null = null;
-
   constructor({ settingsPath }: { settingsPath: string }) {
     this.settingsPath = settingsPath;
   }
@@ -39,43 +39,78 @@ export class FileSessionSettingsStore implements CodexWebSessionSettingsStore {
   }
 
   set(sessionId: string, settings: CodexWebStoredSessionSettings): void {
-    const file = this.read();
-    file.sessions[sessionId] = normalizeSettings(sessionId, settings) ?? settings;
-    this.write(file);
+    const normalized = normalizeSettings(sessionId, settings);
+    if (!normalized) {
+      throw new TypeError(`Invalid session settings for ${sessionId}`);
+    }
+    withFileLockSync(`${this.settingsPath}.lock`, () => {
+      const file = this.read();
+      file.sessions[sessionId] = normalized;
+      this.write(file);
+    });
   }
 
   delete(sessionId: string): void {
-    const file = this.read();
-    if (!(sessionId in file.sessions)) {
-      return;
-    }
-    delete file.sessions[sessionId];
-    this.write(file);
+    withFileLockSync(`${this.settingsPath}.lock`, () => {
+      const file = this.read();
+      if (!(sessionId in file.sessions)) {
+        return;
+      }
+      delete file.sessions[sessionId];
+      this.write(file);
+    });
   }
 
   private read(): SessionSettingsFile {
-    if (this.cache) {
-      return this.cache;
-    }
+    let raw: string;
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.settingsPath, 'utf8')) as Partial<SessionSettingsFile>;
-      this.cache = {
-        version: 1,
-        sessions: isRecord(parsed.sessions) ? parsed.sessions as Record<string, CodexWebStoredSessionSettings> : {},
-      };
-    } catch {
-      this.cache = { version: 1, sessions: {} };
+      raw = fs.readFileSync(this.settingsPath, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return emptyFile();
+      }
+      throw error;
     }
-    return this.cache;
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.sessions)) {
+      throw new Error(`Invalid session settings file: ${this.settingsPath}`);
+    }
+    const sessions: Record<string, CodexWebStoredSessionSettings> = {};
+    for (const [sessionId, settings] of Object.entries(parsed.sessions)) {
+      const normalized = normalizeSettings(sessionId, settings as CodexWebStoredSessionSettings);
+      if (!normalized) {
+        throw new Error(`Invalid session settings entry for ${sessionId}: ${this.settingsPath}`);
+      }
+      sessions[sessionId] = normalized;
+    }
+    return { version: 1, sessions };
   }
 
   private write(file: SessionSettingsFile): void {
     fs.mkdirSync(path.dirname(this.settingsPath), { recursive: true, mode: 0o700 });
-    const tmpPath = `${this.settingsPath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-    fs.renameSync(tmpPath, this.settingsPath);
-    this.cache = file;
+    const tmpPath = `${this.settingsPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tmpPath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+      fs.renameSync(tmpPath, this.settingsPath);
+      try {
+        fs.chmodSync(this.settingsPath, 0o600);
+      } catch {
+        // The atomic state update succeeded; chmod is best-effort for non-POSIX filesystems.
+      }
+    } catch (error) {
+      try {
+        fs.rmSync(tmpPath, { force: true });
+      } catch {
+        // Preserve the original persistence error.
+      }
+      throw error;
+    }
   }
+}
+
+function emptyFile(): SessionSettingsFile {
+  return { version: 1, sessions: {} };
 }
 
 function normalizeSettings(

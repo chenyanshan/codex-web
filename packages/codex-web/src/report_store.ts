@@ -45,14 +45,26 @@ export class FileReportStore {
 
   private readonly indexPath: string;
 
+  private readonly beforeAccess: (() => Promise<void>) | null;
+
   private indexCache: ReportIndexFile | null = null;
 
-  constructor({ reportsDir, indexPath }: { reportsDir: string; indexPath: string }) {
+  constructor({
+    reportsDir,
+    indexPath,
+    beforeAccess = null,
+  }: {
+    reportsDir: string;
+    indexPath: string;
+    beforeAccess?: (() => Promise<void>) | null;
+  }) {
     this.reportsDir = path.resolve(reportsDir);
     this.indexPath = indexPath;
+    this.beforeAccess = beforeAccess;
   }
 
   async listReports(): Promise<CodexWebReport[]> {
+    await this.beforeAccess?.();
     const entries = await this.scanDirectory(this.reportsDir);
     entries.sort((left, right) => {
       if (left.favorite !== right.favorite) {
@@ -64,6 +76,11 @@ export class FileReportStore {
   }
 
   async readReport(reportId: string): Promise<CodexWebReport | null> {
+    await this.beforeAccess?.();
+    return this.readReportWithoutMaintenance(reportId);
+  }
+
+  private async readReportWithoutMaintenance(reportId: string): Promise<CodexWebReport | null> {
     const absolutePath = await this.resolveReportPath(reportId);
     const stat = await fs.stat(absolutePath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') {
@@ -79,7 +96,8 @@ export class FileReportStore {
   }
 
   async readContent(reportId: string): Promise<CodexWebReportContent | null> {
-    const report = await this.readReport(reportId);
+    await this.beforeAccess?.();
+    const report = await this.readReportWithoutMaintenance(reportId);
     if (!report) {
       return null;
     }
@@ -90,15 +108,17 @@ export class FileReportStore {
   }
 
   async resolveReport(inputPath: string): Promise<CodexWebReport | null> {
+    await this.beforeAccess?.();
     const absolutePath = path.isAbsolute(inputPath)
       ? path.resolve(inputPath)
       : await this.resolveReportPath(inputPath);
     const id = await this.reportIdFromPath(absolutePath);
-    return this.readReport(id);
+    return this.readReportWithoutMaintenance(id);
   }
 
   async setFavorite(reportId: string, favorite: boolean): Promise<CodexWebReport | null> {
-    const report = await this.readReport(reportId);
+    await this.beforeAccess?.();
+    const report = await this.readReportWithoutMaintenance(reportId);
     if (!report) {
       return null;
     }

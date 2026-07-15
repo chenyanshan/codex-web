@@ -28,18 +28,19 @@ Codex Web 把 Codex 凭据、shell 执行能力和本地文件访问能力保留
 - project-first workspace，实时展示会话列表、聊天和 turn 状态。
 - 既适合局域网内访问，也适合接在你自己的远程访问入口之后使用。
 
-### 2. 支持多人模式，可作为企业级 Agent 基座
+### 2. 面向完全互信团队的多人 facade
 
-Codex Web 也支持多用户 facade，可以作为基于 Codex 搭建企业内部 Agents 的基础
-平台。团队可以把受控工作区提供给公司内部成员使用，管理能力保留在宿主机端，
-通过 RBAC 管理访问权限，而不是让所有人共用同一个 Codex 登录态。
+Codex Web 提供 Web 层多用户 facade，只适用于成员彼此完全信任的团队。RBAC 仅控制
+Web UI 和 HTTP API 暴露的内容，不提供 tenant、OS 用户、进程、Codex runtime 或
+文件系统隔离。所有 turn 仍以同一个宿主机用户身份执行，并继承该 Codex runtime
+允许的访问能力。不受信任用户必须拆分到独立 OS 用户、容器或主机。
 
 | 手机管理审计 | 桌面用户管理 |
 | --- | --- |
 | ![手机管理控制台与会话审计](docs/assets/readme/mobile-admin-audit.png) | ![桌面管理控制台与用户角色管理](docs/assets/readme/admin-user-management.png) |
 
-- 支持多用户模式、项目管理、角色管理和用户管理。
-- 支持基于 RBAC 的项目授权、admin 操作、observer mode 和分享链接。
+- 为完全互信团队提供多用户模式、项目管理、角色管理和用户管理。
+- 提供 Web 层项目授权、admin 操作和 observer mode。
 - 支持会话审计视图，按用户、项目、session 查看活动记录。
 
 ## 功能概览
@@ -50,9 +51,8 @@ Codex Web 也支持多用户 facade，可以作为基于 Codex 搭建企业内�
   项目 drawer。
 - Codex turn 实时流：assistant delta、最终回答、命令批次、文件改动批次、
   approval 请求和 runtime 报错。
-- 多用户/RBAC facade：项目授权、admin 管理、observer mode、只读分享链接。
-- 分享链接会打开独立的只读对话页，展示完整 session 上下文，不显示 workspace
-  导航。
+- 面向完全互信用户的多用户/RBAC facade：项目授权、admin 管理和 observer mode。
+- 可选只读分享链接会打开独立对话页；公开分享默认关闭，必须由部署者显式开启。
 - turn 文件和图片附件。后端在本机保存文件，并把安全 local path 交给 Codex。
 - 已鉴权 reports 列表和报告查看器，以及仓库自带的 `codex-mobile-report`
   skill。
@@ -60,6 +60,8 @@ Codex Web 也支持多用户 facade，可以作为基于 Codex 搭建企业内�
   登录用户和项目上下文。
 - macOS launchd 和 Linux systemd 服务脚本。
 - English / 简体中文 UI 语言设置，以及 admin/单用户可管理的站点标题。
+- 6 套经过对比度校验的主题，首次使用默认日光黄，并提供纸白、石墨、北境蓝、
+  森林绿和柔和玫瑰配色。
 
 ## 仓库结构
 
@@ -104,8 +106,10 @@ npm run codex-web -- auth set-password
 npm run serve
 ```
 
-默认监听 `0.0.0.0:43210`，同一局域网内的手机可以访问。打开输出的本机 URL
-或局域网 URL，用刚设置的密码登录。
+默认监听 `0.0.0.0:43210`，同一局域网内的手机可以访问。Mac 本机仅使用
+`http://127.0.0.1:43210`。手机输入密码前，应在服务前接入你自己的 HTTPS 反向
+代理、tunnel 或私有网络 HTTPS 入口；明文局域网 HTTP 无法保护密码和 bearer
+token，Service Worker 也要求安全上下文。
 
 运行检查：
 
@@ -125,7 +129,8 @@ npm test
   目录，再执行 `install.md`。
 - 如果用户在本地 checkout 里说“帮我安装这个项目”，先定位仓库根目录，再执行
   `install.md`。
-- macOS 上先询问 Web 密码，以及是否安装 launchd 开机自启动。
+- macOS 上只询问是否安装 launchd 开机自启动。不要让用户在 agent 对话里发送
+  密码；安装器会直接打开关闭回显的终端密码提示。
 - Windows 上停止安装，并说明当前仓库没有 Windows 安装器。
 
 macOS 自动安装流使用：
@@ -136,7 +141,7 @@ scripts/install/install-codex-web-macos.sh
 ```
 
 安装脚本会处理依赖安装、密码设置、服务启动、可选 launchd 自启动，以及安装仓库
-自带的 report skill。
+自带的两个 skill。
 
 ## 配置
 
@@ -156,11 +161,8 @@ scripts/install/install-codex-web-macos.sh
 `~/.codex-web/auth.json` 只保存加盐密码哈希和哈希后的 session token。浏览器只
 保存不透明 session token。不要把 `CODEX_WEB_PASSWORD` 写入 `service.env`。
 
-非交互首次启动支持一次性环境变量：
-
-```bash
-CODEX_WEB_PASSWORD='choose-a-strong-password' npm run serve
-```
+非交互首次启动支持一次性 `CODEX_WEB_PASSWORD` 环境变量，但只能由本机 secret
+manager 注入。不要把明文密码写进 shell history 或 service env 文件。
 
 生成的 service env 默认类似：
 
@@ -170,6 +172,8 @@ CODEX_WEB_PORT=43210
 CODEX_WEB_DEFAULT_CWD=/Users/you/path/to/codex-web
 CODEX_REAL_BIN=codex
 CODEX_WEB_DEBUG=0
+CODEX_WEB_PUBLIC_SHARES_ENABLED=false
+CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS=86400
 ```
 
 如需修改监听地址、端口、默认工作目录或 Codex 可执行文件，编辑
@@ -178,6 +182,30 @@ CODEX_WEB_DEBUG=0
 ```env
 CODEX_WEB_HOST=127.0.0.1
 ```
+
+除非设置 `CODEX_WEB_PUBLIC_SHARES_ENABLED=true`，分享入口会保持隐藏，所有
+`/api/share/*` 路由也会返回未找到。开启后，新链接默认 TTL 为 24 小时，由
+`CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS` 配置，最长不超过 7 天。链接被撤销或多人模式
+关闭后也会立即失效。分享 URL 本质上是 bearer capability，必须按凭据保护。
+
+### 存储生命周期
+
+Codex Web 只会按受管文件名或报告扩展名清理由自身管理的文件，不跟随符号链接，
+也不会删除项目中的无关文件。清理发生在启动、受管写入前和读取报告前。达到配额
+时先删除过期文件，再从最旧的受管文件开始删除。
+
+| 受管数据 | 默认策略 | 配置项 |
+| --- | --- | --- |
+| 状态目录 upload、turn 快照、报告、runtime context | 总计 2 GiB | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
+| 项目内 upload | 每项目 512 MiB | `CODEX_WEB_PROJECT_UPLOAD_MAX_BYTES` |
+| 上传源文件 | TTL 7 天 | `CODEX_WEB_UPLOAD_TTL_SECONDS` |
+| turn 附件快照 | TTL 30 天 | `CODEX_WEB_TURN_ATTACHMENT_TTL_SECONDS` |
+| 报告 | TTL 365 天 | `CODEX_WEB_REPORT_TTL_SECONDS` |
+| runtime context 文件 | TTL 30 天 | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
+| 应用 timeline | 每 session 500 条、总计 16 MiB | `CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION`、`CODEX_WEB_TIMELINE_MAX_BYTES` |
+
+报告 favorite 只是展示元数据，不是长期归档保证。需要长期保留的材料应移出
+`~/.codex-web/reports/`，或提高对应 retention 与 quota 配置。
 
 ## 附件
 
@@ -205,6 +233,8 @@ turn prompt。
 32 MiB request body
 25 MiB per file
 ```
+
+上传源文件和不可变 turn 快照还会受上面的存储生命周期策略约束。
 
 ## 报告 Skill
 
@@ -310,9 +340,18 @@ scripts/service/status-codex-web-launchd-user.sh
 scripts/service/restart-codex-web-launchd-user.sh
 scripts/service/restart-codex-web-launchd-user-detached.sh
 scripts/service/logs-codex-web-launchd-user.sh
+scripts/service/rotate-codex-web-logs.sh
+scripts/service/stop-codex-web-launchd-user.sh
+scripts/service/uninstall-codex-web-launchd-user.sh
 ```
 
 当需要从 Codex 控制中的运行时重启 Codex Web 自身时，使用 detached 重启脚本。
+卸载脚本会保留 `~/.config/codex-web/service.env` 和 `~/.codex-web/`。部署需要
+自定义服务 label 时可设置 `CODEX_WEB_LAUNCHD_LABEL`。
+安装器还会创建每小时运行一次的 `${CODEX_WEB_LAUNCHD_LABEL}.logrotate`
+LaunchAgent。它通过 copy-truncate 轮转，不重启正在运行的服务；默认每个日志达到
+10 MiB 时轮转并保留 5 代，阈值和代数由 `service.env` 中的
+`CODEX_WEB_LOG_MAX_BYTES`、`CODEX_WEB_LOG_GENERATIONS` 控制。
 
 ### Linux systemd
 
