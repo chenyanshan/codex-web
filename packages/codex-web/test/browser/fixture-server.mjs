@@ -21,6 +21,7 @@ const fixtureSession = {
   archived: false,
   favorite: true,
   activeTurnId: 'turn_browser_active',
+  activityState: 'running',
   settings: {
     model: 'gpt-5.4',
     reasoningEffort: 'xhigh',
@@ -39,6 +40,36 @@ const fixtureSession = {
       status: 'inProgress',
       items: [],
     }],
+  },
+};
+
+const fixtureIdleSession = {
+  id: 'session_browser_idle',
+  cwd: '/Users/test/yanshan_quant',
+  projectName: 'yanshan_quant',
+  title: 'Idle quality gate fixture',
+  preview: 'Archive an idle session',
+  firstUserInput: 'Archive an idle session',
+  lastUserInput: 'Archive an idle session',
+  lastInputAt: Date.parse('2026-07-15T07:00:00.000Z'),
+  updatedAt: Date.parse('2026-07-15T07:01:00.000Z'),
+  archived: false,
+  favorite: false,
+  activeTurnId: null,
+  settings: {
+    model: 'gpt-5.4',
+    reasoningEffort: 'xhigh',
+    metadata: {
+      collaborationMode: 'default',
+      accessPreset: 'full-access',
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+      personality: 'pragmatic',
+    },
+  },
+  thread: {
+    id: 'session_browser_idle',
+    turns: [],
   },
 };
 
@@ -74,8 +105,9 @@ const jsonRoutes = new Map([
       favorite: true,
     }],
   }],
-  ['/api/sessions', { items: [fixtureSession] }],
+  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession] }],
   ['/api/sessions/session_browser_fixture', { session: fixtureSession }],
+  ['/api/sessions/session_browser_idle', { session: fixtureIdleSession }],
   ['/api/reports', { items: [] }],
 ]);
 
@@ -222,6 +254,13 @@ function streamActiveTurn(request, response) {
           deletions: 1,
         }],
       },
+    },
+    {
+      type: 'approval.requested',
+      turnId: 'turn_browser_active',
+      approvalId: 'approval_browser_fixture',
+      approvalKind: 'command',
+      summary: { command: 'npm test' },
     },
   ];
 

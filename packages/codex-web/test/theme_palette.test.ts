@@ -25,6 +25,7 @@ test('every theme meets contrast targets for text, actions, states, and controls
       'panel',
       'border',
       'border-strong',
+      'control-border',
       'text',
       'muted',
       'accent',
@@ -44,7 +45,7 @@ test('every theme meets contrast targets for text, actions, states, and controls
     assertContrast(theme, 'muted/panel', tokens.muted, tokens.panel, 4.5);
     assertContrast(theme, 'accent/panel', tokens.accent, tokens.panel, 4.5);
     assertContrast(theme, 'primary action', tokens['on-accent'], tokens['accent-2'], 4.5);
-    assertContrast(theme, 'emphasized control boundary', tokens['border-strong'], tokens.panel, 3);
+    assertContrast(theme, 'control boundary', resolveThemeToken(tokens, 'control-border'), tokens.panel, 3);
     assertContrast(theme, 'info/panel', tokens.info, tokens.panel, 4.5);
     assertContrast(theme, 'success/panel', tokens.success, tokens.panel, 4.5);
     assertContrast(theme, 'warning/panel', tokens.warn, tokens.panel, 4.5);
@@ -53,13 +54,14 @@ test('every theme meets contrast targets for text, actions, states, and controls
   }
 });
 
-test('sunny keeps everyday dividers and controls visually quiet', async () => {
+test('sunny keeps dividers quiet while controls retain a visible boundary', async () => {
   const css = await readFile(stylesUrl, 'utf8');
   const sunny = parseThemeTokens(css, ':root');
 
   assert.equal(sunny.border, '#dfcfac');
-  assert.equal(sunny['control-border'], 'var(--border)');
+  assert.equal(sunny['control-border'], 'var(--border-strong)');
   assert.ok(contrastRatio(sunny.border, sunny.panel) < 2);
+  assert.ok(contrastRatio(resolveThemeToken(sunny, 'control-border'), sunny.panel) >= 3);
   assert.match(css, /button,\s*select,\s*input,\s*textarea\s*\{[^}]*border:\s*1px solid var\(--control-border\);/su);
   assert.match(css, /\.theme-option\s*\{[^}]*border:\s*1px solid var\(--control-border\);/su);
   assert.match(css, /\.theme-option\[data-app-theme="sunny"\]\s*\{[^}]*--preview-border:\s*#dfcfac;/su);
@@ -102,6 +104,12 @@ function parseThemeTokens(css: string, selector: string): Record<string, string>
 function assertContrast(theme: string, pair: string, foreground: string, background: string, minimum: number): void {
   const ratio = contrastRatio(foreground, background);
   assert.ok(ratio >= minimum, `${theme} ${pair} contrast ${ratio.toFixed(2)} is below ${minimum}:1`);
+}
+
+function resolveThemeToken(tokens: Record<string, string>, token: string): string {
+  const value = tokens[token];
+  const reference = value?.match(/^var\(--([a-z0-9-]+)\)$/iu)?.[1];
+  return reference ? resolveThemeToken(tokens, reference) : value;
 }
 
 function contrastRatio(left: string, right: string): number {

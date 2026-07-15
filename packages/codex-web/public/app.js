@@ -47,7 +47,7 @@ const APP_VERSION_CHECK_COOLDOWN_MS = 15_000;
 const TIMELINE_PERSIST_DEBOUNCE_MS = 750;
 const FIRST_TURN_RECOVERY_DELAY_MS = 10_000;
 const LOCAL_TURN_SYNC_GRACE_MS = 10_000;
-const DESKTOP_WORKSPACE_MIN_WIDTH = 1024;
+const DESKTOP_WORKSPACE_MIN_WIDTH = 1280;
 const EDGE_SWIPE_START_PX = 24;
 const EDGE_SWIPE_TRIGGER_PX = 72;
 const EDGE_SWIPE_MAX_VERTICAL_PX = 48;
@@ -87,6 +87,8 @@ const UI_TRANSLATIONS = {
     Loading: '正在加载',
     'Restoring session': '正在恢复会话',
     'Syncing sessions': '正在同步会话',
+    'Could not update sessions.': '无法更新会话。',
+    Retry: '重试',
     'Logging in': '正在登录',
     'Login required': '需要登录',
     Refreshing: '正在刷新',
@@ -111,6 +113,10 @@ const UI_TRANSLATIONS = {
     'Attachment uploaded': '附件已上传',
     'Upload failed': '上传失败',
     Ready: '就绪',
+    Active: '活动中',
+    'Needs approval': '等待审批',
+    Reconnecting: '正在重连',
+    'Close session menu': '关闭会话菜单',
     'Turn running': '正在运行',
     'Stream paused': '连接流已暂停',
     'Turn failed': '运行失败',
@@ -130,6 +136,7 @@ const UI_TRANSLATIONS = {
     'Log in': '登录',
     Sessions: '会话',
     Reports: '报告',
+    Open: '打开',
     New: '新建',
     Setting: '设置',
     Settings: '设置',
@@ -355,6 +362,7 @@ const state = {
   },
   sessionsLoading: false,
   sessionsLoadingScope: null,
+  sessionsError: '',
   sessionsRequestId: 0,
   reports: [],
   reportsLoading: false,
@@ -496,6 +504,7 @@ function bootstrap() {
   }
   state.authSession = createCachedAuthSession();
   state.sessionsLoading = true;
+  state.sessionsLoadingScope = currentSessionScope();
   state.status = 'Loading';
   state.statusTone = 'warn';
   render();
@@ -648,6 +657,7 @@ function setLoggedOut(message = '') {
   };
   state.sessionsLoading = false;
   state.sessionsLoadingScope = null;
+  state.sessionsError = '';
   state.sessionsRequestId += 1;
   allSessionsPreloadPromise = null;
   state.reports = [];
@@ -1287,7 +1297,7 @@ function renderDesktopSessionPane() {
   return `
     <section class="desktop-session-pane">
       ${renderSessionListHeader({ desktop: true })}
-      <main class="session-list desktop-session-list" data-i18n-skip>${renderSessionCards()}</main>
+      <main class="session-list desktop-session-list" aria-busy="${String(isCurrentSessionScopeLoading())}" data-i18n-skip>${renderSessionCards()}</main>
     </section>
   `;
 }
@@ -1338,9 +1348,11 @@ function isDesktopLayout() {
   const hasDesktopPointer = typeof window?.matchMedia === 'function'
     ? window.matchMedia('(hover: hover) and (pointer: fine)').matches
     : false;
+  const viewportWidth = typeof window?.innerWidth === 'number' ? window.innerWidth : 0;
+  const viewportHeight = typeof window?.innerHeight === 'number' ? window.innerHeight : 0;
   return hasDesktopPointer
-    && typeof window?.innerWidth === 'number'
-    && window.innerWidth >= DESKTOP_WORKSPACE_MIN_WIDTH;
+    && viewportWidth >= DESKTOP_WORKSPACE_MIN_WIDTH
+    && viewportWidth > viewportHeight;
 }
 
 function isDesktopWorkspaceView() {
@@ -1399,7 +1411,7 @@ function renderSessionList() {
     ${renderMobileProjectDrawer()}
     <div class="screen page-screen">
       ${renderSessionListHeader()}
-      <main class="session-list" data-i18n-skip>${renderSessionCards()}</main>
+      <main class="session-list" aria-busy="${String(isCurrentSessionScopeLoading())}" data-i18n-skip>${renderSessionCards()}</main>
     </div>
     ${renderArchiveConfirmModal()}
   `;
@@ -1625,7 +1637,7 @@ function renderAppSettingsSections() {
         </section>
         <section class="settings-section">
           <div class="settings-section-title">Message Size</div>
-          <div class="toggle">
+          <div class="toggle message-size-toggle">
             <button type="button" data-message-font-size="small" aria-pressed="${String(state.messageFontSize === 'small')}">Small</button>
             <button type="button" data-message-font-size="medium" aria-pressed="${String(state.messageFontSize === 'medium')}">Medium</button>
             <button type="button" data-message-font-size="large" aria-pressed="${String(state.messageFontSize === 'large')}">Large</button>
@@ -2022,7 +2034,7 @@ function renderAdminProjects() {
     return `<div class="meta">${escapeHtml(t('No projects configured.'))}</div>`;
   }
   return `
-    <table class="admin-table">
+    <table class="admin-table admin-project-table">
       <thead>
         <tr>
           <th>${escapeHtml(t('CWD'))}</th>
@@ -2033,9 +2045,9 @@ function renderAdminProjects() {
       <tbody>
         ${state.admin.projects.map((project) => `
           <tr>
-            <td data-i18n-skip>${escapeHtml(project.cwd || project.id || '')}</td>
-            <td data-i18n-skip>${escapeHtml(adminProjectVisibleName(project))}</td>
-            <td><button class="ghost compact-button" type="button" data-admin-edit-project="${escapeAttribute(project.id || '')}">${escapeHtml(t('Edit'))}</button></td>
+            <td data-label="${escapeAttribute(t('CWD'))}" data-i18n-skip>${escapeHtml(project.cwd || project.id || '')}</td>
+            <td data-label="${escapeAttribute(t('Display Name'))}" data-i18n-skip>${escapeHtml(adminProjectVisibleName(project))}</td>
+            <td data-label="${escapeAttribute(t('Action'))}"><button class="ghost compact-button" type="button" data-admin-edit-project="${escapeAttribute(project.id || '')}">${escapeHtml(t('Edit'))}</button></td>
           </tr>
         `).join('')}
       </tbody>
@@ -2199,6 +2211,7 @@ function renderChat() {
     <div class="screen">
       ${renderChatContent()}
     </div>
+    ${renderArchiveConfirmModal()}
   `;
   return localizeElement(shell);
 }
@@ -2233,7 +2246,7 @@ function renderChatHeaderActions({ readOnly, sessionReportsProject }) {
           <div class="chat-header-actions">
             ${state.pendingTurn && state.turnId ? '<button class="danger icon-button turn-stop-button" type="button" id="stop-button" aria-label="Stop current turn" title="Stop current turn"><span aria-hidden="true">&#9632;</span></button>' : ''}
             ${canOpenSettings ? `<button class="ghost icon-button settings-toggle-button" type="button" id="settings-toggle" aria-label="Session menu" title="Session menu" aria-expanded="${String(state.settingsOpen)}">${renderMoreButtonIcon()}</button>` : ''}
-            ${sessionReportsProject ? `<button class="ghost compact-button session-report-button" type="button" data-session-reports-project="${escapeAttribute(sessionReportsProject)}">Reports</button>` : ''}
+            ${!canOpenSettings && sessionReportsProject ? `<button class="ghost compact-button session-report-button" type="button" data-session-reports-project="${escapeAttribute(sessionReportsProject)}">Reports</button>` : ''}
           </div>
   `;
 }
@@ -2651,8 +2664,11 @@ function fileNameFromPath(filePath) {
 function renderSessionCards() {
   const sessions = sortedSessions();
   if (!sessions.length) {
-    if (state.sessionsLoading) {
+    if (isCurrentSessionScopeLoading()) {
       return `<div class="empty-state">${escapeHtml(t('Loading sessions...'))}</div>`;
+    }
+    if (state.sessionsError) {
+      return renderSessionsError();
     }
     const message = state.sortMode === 'favorites'
       ? 'No favorites yet.'
@@ -2661,25 +2677,137 @@ function renderSessionCards() {
         : 'No sessions yet.';
     return `<div class="empty-state">${escapeHtml(t(message))}</div>`;
   }
-  return sessions.map((session) => `
-    <article class="session-card${state.sessionId === session.id ? ' is-active' : ''}">
-      <button class="session-card-open" type="button" data-session-id="${escapeAttribute(session.id)}">
-        <span class="session-card-main">
-          <span class="session-project" data-i18n-skip>${escapeHtml(projectNameForSession(session))}</span>
-          <span class="session-preview"${firstInputForSession(session) ? ' data-i18n-skip' : ''}>${escapeHtml(firstInputForSession(session))}</span>
-        </span>
-        <span class="session-card-meta">
-          <span>${escapeHtml(formatShortDateTime(lastInputAtForSession(session)))}</span>
-        </span>
-      </button>
-      <div class="session-card-actions">
-        <button class="ghost compact-button session-favorite" type="button" data-session-favorite-id="${escapeAttribute(session.id)}" aria-pressed="${String(isFavoriteSession(session))}">${escapeHtml(t(isFavoriteSession(session) ? 'Unfavorite' : 'Favorite'))}</button>
-        ${session.archived === true
-          ? `<button class="ghost compact-button session-archive" type="button" data-session-unarchive-id="${escapeAttribute(session.id)}">${escapeHtml(t('Unarchive'))}</button>`
-          : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}">${escapeHtml(t('Archive'))}</button>`}
-      </div>
-    </article>
-  `).join('');
+  const errorBanner = state.sessionsError ? renderSessionsError({ compact: true }) : '';
+  return errorBanner + sessions.map((session) => {
+    const activityState = sessionActivityState(session);
+    const favorite = isFavoriteSession(session);
+    const favoriteLabel = t(favorite ? 'Unfavorite' : 'Favorite');
+    const archiveLabel = t(session.archived === true ? 'Unarchive' : 'Archive');
+    const latestPreview = sessionLatestPreview(session);
+    return `
+      <article class="session-card${state.sessionId === session.id ? ' is-active' : ''}"${activityState ? ` data-activity-state="${escapeAttribute(activityState)}"` : ''}>
+        <button class="session-card-open" type="button" data-session-id="${escapeAttribute(session.id)}">
+          <span class="session-card-main">
+            <span class="session-card-title-row">
+              <span class="session-title" data-i18n-skip>${escapeHtml(sessionDisplayTitle(session))}</span>
+              ${activityState ? `<span class="session-attention-state" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityState === 'waiting_approval' ? 'Needs approval' : 'Active'))}</span>` : ''}
+            </span>
+            ${latestPreview ? `<span class="session-preview" data-i18n-skip>${escapeHtml(latestPreview)}</span>` : ''}
+          </span>
+          <span class="session-card-meta">
+            <span class="session-project" data-i18n-skip>${escapeHtml(projectNameForSession(session))}</span>
+            <span aria-hidden="true">&middot;</span>
+            <span>${escapeHtml(formatShortDateTime(lastInputAtForSession(session)))}</span>
+          </span>
+        </button>
+        <div class="session-card-actions">
+          <button class="ghost compact-button session-favorite" type="button" data-session-favorite-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(favoriteLabel)}" title="${escapeAttribute(favoriteLabel)}" aria-pressed="${String(favorite)}"><span class="session-action-symbol" aria-hidden="true">${favorite ? '&#9733;' : '&#9734;'}</span></button>
+          ${session.archived === true
+            ? `<button class="ghost compact-button session-archive" type="button" data-session-unarchive-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}"><span class="session-action-symbol" aria-hidden="true">&#8638;</span></button>`
+            : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderArchiveActionIcon()}</button>`}
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+function renderSessionsError({ compact = false } = {}) {
+  return `
+    <div class="session-list-error${compact ? ' is-compact' : ''}" role="alert">
+      <span>${escapeHtml(t(state.sessionsError || 'Could not update sessions.'))}</span>
+      <button class="ghost compact-button" type="button" id="retry-sessions-button">${escapeHtml(t('Retry'))}</button>
+    </div>
+  `;
+}
+
+function sessionDisplayTitle(session) {
+  return normalizeSessionCardText(session?.firstUserInput)
+    || normalizeSessionCardText(session?.title)
+    || normalizeSessionCardText(session?.preview)
+    || t('New Session');
+}
+
+function sessionLatestPreview(session) {
+  const latest = normalizeSessionCardText(session?.lastUserInput);
+  if (!latest) {
+    return '';
+  }
+  const identity = normalizeSessionCardText(session?.firstUserInput)
+    || normalizeSessionCardText(session?.title)
+    || normalizeSessionCardText(session?.preview);
+  return latest === identity ? '' : latest;
+}
+
+function normalizeSessionCardText(value) {
+  return String(value || '').replace(/\s+/gu, ' ').trim();
+}
+
+function sessionActivityState(session) {
+  if (session?.id === state.sessionId && state.pendingTurn) {
+    const waitingApproval = [...state.approvals.values()].some((approval) => approval?.resolved === false);
+    if (waitingApproval) {
+      return 'waiting_approval';
+    }
+    return 'running';
+  }
+  return sessionActivityStateFromSummary(session);
+}
+
+function setSessionSummaryActivity(sessionId, activityState, activeTurnId = '') {
+  const normalizedSessionId = String(sessionId || '').trim();
+  if (!normalizedSessionId) {
+    return false;
+  }
+  const normalizedActivity = activityState === 'running' || activityState === 'waiting_approval'
+    ? activityState
+    : null;
+  const normalizedTurnId = String(activeTurnId || '').trim();
+  let changed = false;
+  const update = (session) => {
+    if (!session || session.id !== normalizedSessionId) {
+      return session;
+    }
+    const previousActivity = sessionActivityStateFromSummary(session);
+    const previousTurnId = String(session.activeTurnId || '').trim();
+    const nextTurnId = normalizedActivity ? (normalizedTurnId || previousTurnId) : '';
+    if (previousActivity === normalizedActivity && previousTurnId === nextTurnId) {
+      return session;
+    }
+    changed = true;
+    const next = {
+      ...session,
+      activeTurnId: nextTurnId || null,
+    };
+    if (normalizedActivity) {
+      next.activityState = normalizedActivity;
+    } else {
+      delete next.activityState;
+    }
+    return next;
+  };
+
+  state.sessions = state.sessions.map(update);
+  for (const scope of Object.keys(state.sessionsByScope)) {
+    state.sessionsByScope[scope] = (state.sessionsByScope[scope] || []).map(update);
+  }
+  state.currentSession = update(state.currentSession);
+  return changed;
+}
+
+function sessionActivityStateFromSummary(session) {
+  if (session?.activityState === 'waiting_approval' || session?.activityState === 'running') {
+    return session.activityState;
+  }
+  return String(session?.activeTurnId || '').trim() ? 'running' : null;
+}
+
+function renderArchiveActionIcon() {
+  return `
+    <svg class="session-action-icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+      <path d="M224 322.6h576c16.6 0 30-13.4 30-30s-13.4-30-30-30H224c-16.6 0-30 13.4-30 30s13.5 30 30 30zM290.1 178.4h443.8c16.6 0 30-13.4 30-30s-13.4-30-30-30H290.1c-16.6 0-30 13.4-30 30s13.4 30 30 30zM629.6 613.9H394.4c-16.6 0-30 13.4-30 30s13.4 30 30 30h235.2c16.6 0 30-13.4 30-30s-13.4-30-30-30z"></path>
+      <path d="M850.3 403.9H173.7c-33 0-60 27-60 60v360c0 33 27 60 60 60h676.6c33 0 60-27 60-60v-360c0-33-27-60-60-60zM850.2 823.7l-.1.1H173.9l-.1-.1V464l.1-.1h676.2l.1.1v359.7z"></path>
+    </svg>
+  `;
 }
 
 function renderArchiveConfirmModal() {
@@ -2724,10 +2852,16 @@ function renderPathChoices() {
 function renderSettingsDrawer() {
   return `
     <div class="settings-drawer" role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings">
+      <div class="settings-drawer-header">
+        <span class="settings-section-title">Session</span>
+        <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus><span aria-hidden="true">&times;</span></button>
+      </div>
+      ${renderSessionReportsSettingsControl()}
       ${renderShareSettingsControl()}
+      ${renderSessionManagementControl()}
       <div class="settings-action-row">
         <span class="meta">Runtime</span>
-        <button class="ghost compact-button" type="button" id="runtime-reload-button" data-initial-focus>Reload</button>
+        <button class="ghost compact-button" type="button" id="runtime-reload-button">Reload</button>
       </div>
       <div class="controls">
         <div class="control-group">
@@ -2760,6 +2894,31 @@ function renderSettingsDrawer() {
   `;
 }
 
+function renderSessionReportsSettingsControl() {
+  const project = reportProjectForSession(state.currentSession);
+  if (!project) {
+    return '';
+  }
+  return `
+      <div class="settings-action-row">
+        <span class="meta">Reports</span>
+        <button class="ghost compact-button" type="button" data-session-reports-project="${escapeAttribute(project)}">Open</button>
+      </div>
+  `;
+}
+
+function renderSessionManagementControl() {
+  if (!state.sessionId || state.draftSessionActive || isReadOnlySession(state.currentSession)) {
+    return '';
+  }
+  return `
+      <div class="settings-action-row">
+        <span class="meta">Session</span>
+        <button class="ghost compact-button" type="button" data-session-archive-request-id="${escapeAttribute(state.sessionId)}"${state.pendingTurn ? ' disabled' : ''}>Archive</button>
+      </div>
+  `;
+}
+
 function renderShareSettingsControl() {
   if (!canShareCurrentSession()) {
     return '';
@@ -2785,13 +2944,13 @@ function renderComposerStatus() {
 
 function composerStatusLabel() {
   if (state.pendingTurn) {
-    return state.status === 'Stream paused' ? 'Paused' : 'Running';
+    return state.status === 'Stream paused' ? 'Reconnecting' : 'Running';
   }
   if (state.statusTone === 'danger') {
     return 'Failed';
   }
   if (state.status === 'Ready') {
-    return 'Done';
+    return 'Ready';
   }
   if (state.status === 'Turn stopped') {
     return 'Stopped';
@@ -3539,12 +3698,7 @@ function bindGlobalEvents() {
     });
   }
 
-  for (const button of document.querySelectorAll('[data-session-id]')) {
-    listenRendered(button, 'click', () => {
-      rememberSessionListScroll();
-      void selectSession(button.getAttribute('data-session-id') || '');
-    });
-  }
+  bindSessionCardEvents();
 
   for (const button of document.querySelectorAll('[data-sort-mode]')) {
     listenRendered(button, 'click', () => {
@@ -3552,27 +3706,9 @@ function bindGlobalEvents() {
     });
   }
 
-  for (const button of document.querySelectorAll('[data-session-favorite-id]')) {
-    listenRendered(button, 'click', () => {
-      void toggleSessionFavorite(button.getAttribute('data-session-favorite-id') || '');
-    });
-  }
-
-  for (const button of document.querySelectorAll('[data-session-archive-request-id]')) {
-    listenRendered(button, 'click', () => {
-      requestArchiveSession(button.getAttribute('data-session-archive-request-id') || '');
-    });
-  }
-
   for (const button of document.querySelectorAll('[data-session-archive-confirm-id]')) {
     listenRendered(button, 'click', () => {
       void archiveSession(button.getAttribute('data-session-archive-confirm-id') || '');
-    });
-  }
-
-  for (const button of document.querySelectorAll('[data-session-unarchive-id]')) {
-    listenRendered(button, 'click', () => {
-      void unarchiveSession(button.getAttribute('data-session-unarchive-id') || '');
     });
   }
 
@@ -3750,6 +3886,11 @@ function bindGlobalEvents() {
     listenRendered(settingsToggle, 'click', toggleSettingsDrawer);
   }
 
+  const settingsDrawerClose = document.querySelector('#settings-drawer-close');
+  if (settingsDrawerClose) {
+    listenRendered(settingsDrawerClose, 'click', toggleSettingsDrawer);
+  }
+
   const composerExpandButton = document.querySelector('#composer-expand-button');
   if (composerExpandButton) {
     listenRendered(composerExpandButton, 'click', toggleComposerExpanded);
@@ -3849,6 +3990,45 @@ function bindGlobalEvents() {
     });
   }
 
+}
+
+function bindSessionCardEvents(root = document) {
+  listenRendered(root, 'click', (event) => {
+    const button = event.target?.closest?.([
+      '#retry-sessions-button',
+      '[data-session-id]',
+      '[data-session-favorite-id]',
+      '[data-session-archive-request-id]',
+      '[data-session-unarchive-id]',
+    ].join(','));
+    if (!button || (root !== document && !root.contains?.(button))) {
+      return;
+    }
+    if (button.id === 'retry-sessions-button') {
+      void refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => {});
+      return;
+    }
+    const sessionId = button.getAttribute('data-session-id');
+    if (sessionId) {
+      rememberSessionListScroll();
+      void selectSession(sessionId);
+      return;
+    }
+    const favoriteSessionId = button.getAttribute('data-session-favorite-id');
+    if (favoriteSessionId) {
+      void toggleSessionFavorite(favoriteSessionId);
+      return;
+    }
+    const archiveSessionId = button.getAttribute('data-session-archive-request-id');
+    if (archiveSessionId) {
+      requestArchiveSession(archiveSessionId);
+      return;
+    }
+    const unarchiveSessionId = button.getAttribute('data-session-unarchive-id');
+    if (unarchiveSessionId) {
+      void unarchiveSession(unarchiveSessionId);
+    }
+  });
 }
 
 function openAttachmentPicker() {
@@ -4023,6 +4203,19 @@ function refreshChatDynamicUi() {
   syncComposerStatusDisplay();
   syncComposerErrorDisplay();
   syncComposerOffset();
+  return true;
+}
+
+function refreshVisibleSessionCards() {
+  const sessionList = document.querySelector('.desktop-session-list')
+    || (state.view === 'sessions' ? document.querySelector('.session-list') : null);
+  if (!sessionList) {
+    return false;
+  }
+  const scrollTop = sessionList.scrollTop;
+  sessionList.setAttribute('aria-busy', String(isCurrentSessionScopeLoading()));
+  sessionList.innerHTML = renderSessionCards();
+  sessionList.scrollTop = scrollTop;
   return true;
 }
 
@@ -4618,6 +4811,7 @@ async function onLoginSubmit(event) {
     localStorage.setItem(TOKEN_KEY, payload.token);
     state.authSession = payload.session || createCachedAuthSession();
     state.sessionsLoading = true;
+    state.sessionsLoadingScope = currentSessionScope();
     state.setupRequired = false;
     state.setupMessage = '';
     state.status = 'Syncing sessions';
@@ -4701,6 +4895,7 @@ async function openReportsPage({ project = '', returnView = 'sessions' } = {}) {
   savePromptDraftForCurrentSession();
   const normalizedProject = String(project || '').trim();
   const normalizedReturnView = returnView === 'chat' && state.sessionId ? 'chat' : 'sessions';
+  state.settingsOpen = false;
   state.mobileSidebarOpen = false;
   if (isDesktopLayout()) {
     state.view = 'sessions';
@@ -5751,6 +5946,12 @@ async function resolveApproval(approvalId, action) {
     if (item) {
       item.resolved = true;
     }
+    const hasPendingApproval = [...state.approvals.values()].some((approval) => approval?.resolved === false);
+    setSessionSummaryActivity(
+      state.sessionId,
+      state.pendingTurn ? (hasPendingApproval ? 'waiting_approval' : 'running') : null,
+      state.turnId,
+    );
     state.status = 'Approval sent';
     state.statusTone = 'warn';
     render();
@@ -5766,6 +5967,7 @@ function applyTurnEvent(event, assistantEntry) {
     && event.turnId !== state.turnId) {
     return assistantEntry;
   }
+  let sessionActivityChanged = false;
   switch (event.type) {
     case 'turn.started':
       if (state.turnId !== event.turnId) {
@@ -5774,6 +5976,7 @@ function applyTurnEvent(event, assistantEntry) {
       }
       state.status = 'Turn running';
       state.statusTone = 'warn';
+      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'running', event.turnId);
       break;
     case 'assistant.delta':
       if (!assistantEntry || assistantEntry.id !== `assistant_${event.turnId}`) {
@@ -5836,6 +6039,7 @@ function applyTurnEvent(event, assistantEntry) {
       };
       state.approvals.set(event.approvalId, approval);
       appendOrReplace(approval, (item) => item.id === approval.id);
+      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'waiting_approval', event.turnId);
       break;
     }
     case 'approval.resolved': {
@@ -5850,12 +6054,21 @@ function applyTurnEvent(event, assistantEntry) {
       }
       state.status = 'Approval resolved';
       state.statusTone = 'warn';
+      {
+        const hasPendingApproval = [...state.approvals.values()].some((item) => item?.resolved === false);
+        sessionActivityChanged = setSessionSummaryActivity(
+          state.sessionId,
+          state.pendingTurn ? (hasPendingApproval ? 'waiting_approval' : 'running') : null,
+          event.turnId || state.turnId,
+        );
+      }
       void maybeInterruptRunningTurnForQueuedMessage();
       break;
     }
     case 'turn.completed':
       syncWorkTimelineItem(event.turnId, event.status || 'completed');
       state.pendingTurn = false;
+      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, null);
       state.streamWasBackgrounded = false;
       state.queuedInterruptRequestedTurnId = null;
       state.queuedInterruptEligibleTurnId = null;
@@ -5885,6 +6098,7 @@ function applyTurnEvent(event, assistantEntry) {
     case 'turn.failed':
       syncWorkTimelineItem(event.turnId, 'failed');
       state.pendingTurn = false;
+      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, null);
       state.streamWasBackgrounded = false;
       state.queuedInterruptRequestedTurnId = null;
       state.queuedInterruptEligibleTurnId = null;
@@ -5897,6 +6111,9 @@ function applyTurnEvent(event, assistantEntry) {
   }
   if (!state.pendingTurn && state.sessionId) {
     restoreStaleQueuedMessagesForSession(state.sessionId);
+  }
+  if (sessionActivityChanged) {
+    refreshVisibleSessionCards();
   }
   const shouldCoalesceDynamicUpdate = event.type === 'assistant.delta' || event.type === 'batch.updated';
   if (shouldCoalesceDynamicUpdate) {
@@ -6260,6 +6477,7 @@ async function refreshSessionsList({
   state.sessionsRequestId = requestId;
   state.sessionsLoading = true;
   state.sessionsLoadingScope = normalizedScope;
+  state.sessionsError = '';
   restoreSessionsFromCacheForScope(normalizedScope);
   state.sessionsScope = normalizedScope;
   state.sessions = normalizedScope === currentSessionScope()
@@ -6284,6 +6502,15 @@ async function refreshSessionsList({
     state.sessionsScope = normalizedScope;
     syncCurrentSessionFromList();
     return state.sessions;
+  } catch (error) {
+    if (
+      requestId === state.sessionsRequestId
+      && normalizedScope === currentSessionScope()
+      && isAuthRequestCurrent(requestGeneration)
+    ) {
+      state.sessionsError = 'Could not update sessions.';
+    }
+    throw error;
   } finally {
     if (requestId === state.sessionsRequestId) {
       state.sessionsLoading = false;
@@ -7078,9 +7305,13 @@ function closeReportViewer() {
 }
 
 async function setSessionSortMode(mode) {
+  const previousScope = currentSessionScope();
   const nextMode = normalizeSortMode(mode);
   state.sortMode = nextMode;
   const scope = currentSessionScope();
+  if (scope !== previousScope) {
+    state.sessionsError = '';
+  }
   const cached = state.sessionsByScope[scope] || [];
   const isLoaded = state.sessionsLoadedByScope[scope] === true;
   state.sessions = isLoaded ? [...cached] : [];
@@ -7591,6 +7822,9 @@ function normalizeSessions(payload) {
         lastUserInput: typeof session.lastUserInput === 'string' ? session.lastUserInput : '',
         lastInputAt: typeof session.lastInputAt === 'number' ? session.lastInputAt : null,
         updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : null,
+        activityState: session.activityState === 'running' || session.activityState === 'waiting_approval'
+          ? session.activityState
+          : null,
         settings: session.settings && typeof session.settings === 'object' ? session.settings : null,
       };
       delete normalized.thread;
@@ -7803,6 +8037,10 @@ function currentSessionScope() {
     return 'archived';
   }
   return 'all';
+}
+
+function isCurrentSessionScopeLoading() {
+  return state.sessionsLoading === true && state.sessionsLoadingScope === currentSessionScope();
 }
 
 function upsertSessionInScope(scope, session) {
@@ -9194,12 +9432,23 @@ function lastInputAtForSession(session) {
 }
 
 function compareSessionsForSelection(left, right) {
-  const leftRunning = findActiveTurn(left) ? 1 : 0;
-  const rightRunning = findActiveTurn(right) ? 1 : 0;
-  if (leftRunning !== rightRunning) {
-    return rightRunning - leftRunning;
+  const leftPriority = sessionAttentionPriority(left);
+  const rightPriority = sessionAttentionPriority(right);
+  if (leftPriority !== rightPriority) {
+    return rightPriority - leftPriority;
   }
   return lastInputAtForSession(right) - lastInputAtForSession(left);
+}
+
+function sessionAttentionPriority(session) {
+  const activityState = sessionActivityState(session);
+  if (activityState === 'waiting_approval') {
+    return 2;
+  }
+  if (activityState === 'running' || findActiveTurn(session)) {
+    return 1;
+  }
+  return 0;
 }
 
 function applyPermissionPreset(preset) {

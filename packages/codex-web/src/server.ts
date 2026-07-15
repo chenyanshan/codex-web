@@ -989,6 +989,7 @@ async function handlePublicShareRequest({
       appSession,
       project,
       includeOwnership: false,
+      includeActivity: false,
       forceReadOnly: true,
     }),
   });
@@ -2533,6 +2534,7 @@ function presentSessionForUser({
   project,
   observer = false,
   includeOwnership = true,
+  includeActivity = true,
   forceReadOnly = false,
   includeDetails = true,
 }: {
@@ -2541,11 +2543,13 @@ function presentSessionForUser({
   project: CodexWebProject | null;
   observer?: boolean;
   includeOwnership?: boolean;
+  includeActivity?: boolean;
   forceReadOnly?: boolean;
   includeDetails?: boolean;
 }): Record<string, unknown> {
   const session = runtimeSession ?? {};
   const readOnly = forceReadOnly || observer || appSession.archived === true;
+  const activityState = presentSessionActivityState(session.activityState);
   return {
     id: appSession.id,
     projectId: appSession.projectId,
@@ -2562,6 +2566,7 @@ function presentSessionForUser({
       : null,
     goal: presentSessionGoal(session.goal),
     activeTurnId: typeof session.activeTurnId === 'string' ? session.activeTurnId : null,
+    ...(includeActivity && activityState ? { activityState } : {}),
     settings: presentSessionSettings(session.settings),
     ...(includeDetails ? {
       thread: presentSessionThread(session.thread),
@@ -2583,7 +2588,21 @@ function presentSessionSummary(session: CodexWebSession): Partial<CodexWebSessio
   const summary: Partial<CodexWebSession> = { ...session };
   delete summary.thread;
   delete summary.timeline;
+  const activityState = presentSessionActivityState(session.activityState);
+  if (activityState) {
+    summary.activityState = activityState;
+  } else {
+    delete summary.activityState;
+  }
   return summary;
+}
+
+function presentSessionActivityState(
+  activityState: CodexWebSession['activityState'] | undefined,
+): Exclude<CodexWebSession['activityState'], null> | null {
+  return activityState === 'running' || activityState === 'waiting_approval'
+    ? activityState
+    : null;
 }
 
 function presentSessionGoal(goal: CodexWebSession['goal'] | undefined): Record<string, unknown> | null {

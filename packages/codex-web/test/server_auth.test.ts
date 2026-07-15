@@ -1465,6 +1465,7 @@ test('single-user session list omits conversation details while direct reads ret
   const runtimeSession = {
     id: 'thread_1',
     cwd: '/repo',
+    activityState: 'running',
     thread: {
       turns: [{
         id: 'turn_1',
@@ -1499,6 +1500,7 @@ test('single-user session list omits conversation details while direct reads ret
     assert.equal(listResponse.status, 200);
     const listPayload = await listResponse.json();
     assert.equal(listPayload.items[0].id, 'thread_1');
+    assert.equal(listPayload.items[0].activityState, 'running');
     assert.equal('thread' in listPayload.items[0], false);
     assert.equal('timeline' in listPayload.items[0], false);
 

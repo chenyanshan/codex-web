@@ -135,12 +135,14 @@ test('runtime lists sessions from thread summaries without hydrating every threa
           cwd: '/workspace/one',
           updatedAt: 30,
           preview: 'Fast preview one',
+          runtimeStatus: { type: 'active', activeFlags: ['waitingOnApproval'] },
         },
         {
           ...createThread('thread_fast_2'),
           cwd: '/workspace/two',
           updatedAt: 20,
           preview: 'Fast preview two',
+          runtimeStatus: { type: 'active', activeFlags: [] },
         },
       ],
       nextCursor: null,
@@ -173,6 +175,8 @@ test('runtime lists sessions from thread summaries without hydrating every threa
   assert.equal(readThreadCalls, 0);
   assert.deepEqual(sessions.map((session) => session.id), ['thread_fast_1', 'thread_fast_2']);
   assert.equal(sessions[0]?.firstUserInput, 'Fast preview one');
+  assert.equal(sessions[0]?.activityState, 'waiting_approval');
+  assert.equal(sessions[1]?.activityState, 'running');
 });
 
 test('runtime lists archived sessions from archived thread summaries', async () => {

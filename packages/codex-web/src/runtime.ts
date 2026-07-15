@@ -65,10 +65,13 @@ export interface CodexWebSession {
   favoriteOrder: number | null;
   goal: ProviderThreadGoal | null;
   activeTurnId: string | null;
+  activityState: CodexWebSessionActivityState;
   settings: CodexWebStoredSessionSettings;
   thread: ProviderThreadSummary;
   timeline: CodexWebTimelineMessage[];
 }
+
+export type CodexWebSessionActivityState = 'running' | 'waiting_approval' | null;
 
 export interface CodexWebRuntimeClient {
   stop?(): Promise<void> | void;
@@ -1097,6 +1100,7 @@ export class CodexWebRuntime {
     const current = this.getSessionSettings(thread.threadId);
     const updatedAt = thread.updatedAt ?? null;
     const inputSummary = summarizeSessionInputs(thread);
+    const activeTurnId = this.activeTurnIdForThread(thread.threadId, thread);
     return {
       id: thread.threadId,
       cwd: thread.cwd,
@@ -1110,7 +1114,12 @@ export class CodexWebRuntime {
       favorite: current.favorite === true,
       favoriteOrder: current.favoriteOrder ?? null,
       goal: null,
-      activeTurnId: this.activeTurnIdForThread(thread.threadId, thread),
+      activeTurnId,
+      activityState: sessionActivityState(
+        thread,
+        activeTurnId,
+        Boolean(this.pendingApprovalTurnIdForThread(thread.threadId)),
+      ),
       settings: current,
       thread,
       timeline: composeSessionTimeline(thread, this.timelineStore?.list(thread.threadId) ?? []),
@@ -1144,6 +1153,7 @@ export class CodexWebRuntime {
       favoriteOrder: settings.favoriteOrder ?? null,
       goal: null,
       activeTurnId: null,
+      activityState: null,
       settings,
       thread,
       timeline: this.timelineStore?.list(sessionId) ?? [],
@@ -1802,6 +1812,23 @@ function threadRuntimeStatusType(thread: ProviderThreadSummary | null): string |
   return typeof runtimeStatus?.type === 'string' && runtimeStatus.type.trim()
     ? runtimeStatus.type.trim()
     : null;
+}
+
+function sessionActivityState(
+  thread: ProviderThreadSummary,
+  activeTurnId: string | null,
+  hasPendingApproval: boolean,
+): CodexWebSessionActivityState {
+  const activeFlags = Array.isArray(thread.runtimeStatus?.activeFlags)
+    ? thread.runtimeStatus.activeFlags.map((flag) => normalizeTurnStatus(flag))
+    : [];
+  if (hasPendingApproval || activeFlags.includes('waitingonapproval')) {
+    return 'waiting_approval';
+  }
+  if (activeTurnId || normalizeTurnStatus(threadRuntimeStatusType(thread)) === 'active') {
+    return 'running';
+  }
+  return null;
 }
 
 function createTurnConflictError(sessionId: string, activeTurnId: string): CodexWebTurnConflictError {

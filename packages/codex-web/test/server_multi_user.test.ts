@@ -184,6 +184,7 @@ test('multi-user session list omits conversation details while direct reads reta
     id: 'thread_alice',
     cwd: '/secret/path',
     projectName: 'secret/path',
+    activityState: 'waiting_approval',
     settings: {},
     thread: {
       turns: [{
@@ -212,6 +213,7 @@ test('multi-user session list omits conversation details while direct reads reta
           id: 'thread_bob',
           cwd: '/other/path',
           projectName: 'other/path',
+          activityState: 'running',
           settings: {},
           thread: { turns: [] },
           timeline: [],
@@ -243,6 +245,7 @@ test('multi-user session list omits conversation details while direct reads reta
     const payload = await response.json();
     assert.deepEqual(payload.items.map((item: any) => item.id), ['app_alice']);
     assert.equal(payload.items[0].projectDisplayName, 'Allowed Project');
+    assert.equal(payload.items[0].activityState, 'waiting_approval');
     assert.equal(payload.items[0].cwd, undefined);
     assert.equal('thread' in payload.items[0], false);
     assert.equal('timeline' in payload.items[0], false);
@@ -2505,6 +2508,7 @@ test('session and share DTOs whitelist nested runtime data', async () => {
       cwd: '/Users/alice/private',
       projectName: 'alice/private',
       title: 'Safe title',
+      activityState: 'waiting_approval',
       unknownProviderField: 'secret',
       goal: { threadId: 'thread_alice', objective: 'Ship safely', status: 'active', raw: { secret: true } },
       settings: {
@@ -2577,7 +2581,9 @@ test('session and share DTOs whitelist nested runtime data', async () => {
       }
     }
     assert.equal(workspacePayload.session.ownerUserId, 'user_alice');
+    assert.equal(workspacePayload.session.activityState, 'waiting_approval');
     assert.equal(sharePayload.session.ownerUserId, undefined);
+    assert.equal(sharePayload.session.activityState, undefined);
     assert.equal(sharePayload.session.readOnly, true);
     assert.equal(commandPayload.command.goal.objective, 'Ship safely');
   } finally {

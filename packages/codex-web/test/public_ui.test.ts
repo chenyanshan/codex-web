@@ -435,9 +435,11 @@ test('repeat opens with a stored token render the app shell before auth verifica
 
   assert.match(app, /function createCachedAuthSession\(\)/u);
   assert.match(app, /state\.authSession = createCachedAuthSession\(\);/u);
+  assert.match(app, /state\.authSession = createCachedAuthSession\(\);\s*state\.sessionsLoading = true;\s*state\.sessionsLoadingScope = currentSessionScope\(\);/u);
   assert.match(app, /function bootstrap\(\)[\s\S]*void restoreAuth\(\);/u);
   assert.doesNotMatch(app, /function bootstrap\(\)\s*\{(?:(?!\n\}\n\nasync function restoreAuth).)*await restoreAuth\(\);/su);
   assert.match(app, /function onLoginSubmit\(event\)[\s\S]*state\.authSession = payload\.session \|\| createCachedAuthSession\(\);/u);
+  assert.match(app, /state\.authSession = payload\.session \|\| createCachedAuthSession\(\);\s*state\.sessionsLoading = true;\s*state\.sessionsLoadingScope = currentSessionScope\(\);/u);
   assert.match(app, /function onLoginSubmit\(event\)[\s\S]*void restoreAuth\(\);/u);
   assert.doesNotMatch(app, /function onLoginSubmit\(event\)\s*\{(?:(?!\n\}\n\nasync function onLogout).)*await restoreAuth\(\);/su);
   assert.doesNotMatch(app, /name="deviceName"/u);
@@ -901,7 +903,7 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.doesNotMatch(html, /<th>Internal Name<\/th>/u);
   assert.match(html, /<th>Display Name<\/th>/u);
   assert.match(html, /name="cwd"/u);
-  assert.match(html, /<td data-i18n-skip>a<\/td>/u);
+  assert.match(html, /<td data-label="Display Name" data-i18n-skip>a<\/td>/u);
   assert.match(html, /data-admin-edit-project="project_a"/u);
 
   api.state.admin.editingProjectId = 'project_a';
@@ -1810,13 +1812,20 @@ test('share routes render the full shared session context', async () => {
 });
 
 test('admin console uses dense mobile-safe management rows', async () => {
-  const styles = await readFile(stylesUrl, 'utf8');
+  const [app, styles] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
 
   assert.match(styles, /\.admin-console-screen\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.match(styles, /\.admin-list\s*\{[^}]*display:\s*grid;/su);
   assert.match(styles, /\.admin-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/su);
   assert.match(styles, /\.admin-row-main\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
   assert.match(styles, /\.admin-session-open\s*\{[^}]*text-align:\s*left;/su);
+  assert.match(app, /class="admin-table admin-project-table"/u);
+  assert.match(app, /<td data-label="\$\{escapeAttribute\(t\('CWD'\)\)\}"/u);
+  assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*\.admin-project-table thead\s*\{[^}]*display:\s*none;/u);
+  assert.match(styles, /\.admin-project-table td:first-child\s*\{[^}]*grid-column:\s*1 \/ -1;/su);
 });
 
 
@@ -2295,10 +2304,10 @@ test('Chinese language localization leaves dynamic names and drafts untouched', 
   const sessionListHtml = api.renderSessionList().innerHTML;
   assert.match(sessionListHtml, /<span class="project-rail-item-main" data-i18n-skip>Send<\/span>/u);
   assert.match(sessionListHtml, /<span class="session-project" data-i18n-skip>Send<\/span>/u);
-  assert.match(sessionListHtml, /<span class="session-preview" data-i18n-skip>Send<\/span>/u);
-  assert.match(sessionListHtml, /<button class="ghost compact-button session-archive"[^>]*>归档<\/button>/u);
+  assert.match(sessionListHtml, /<span class="session-title" data-i18n-skip>Send<\/span>/u);
+  assert.match(sessionListHtml, /<button class="ghost compact-button session-archive"[^>]*aria-label="归档"/u);
   assert.doesNotMatch(sessionListHtml, /<span class="session-project">发送<\/span>/u);
-  assert.doesNotMatch(sessionListHtml, /<span class="session-preview">发送<\/span>/u);
+  assert.doesNotMatch(sessionListHtml, /<span class="session-title">发送<\/span>/u);
 
   const chatHtml = api.renderChat().innerHTML;
   assert.match(chatHtml, /<span>Goal active<\/span>/u);
@@ -2373,13 +2382,13 @@ test('Chinese session list skips bulk localization when returning from chat', as
   api.showSessionList();
   const html = context.document.querySelector('#app').innerHTML;
 
-  assert.match(html, /<main class="session-list" data-i18n-skip>/u);
+  assert.match(html, /<main class="session-list" aria-busy="false" data-i18n-skip>/u);
   assert.match(html, /<nav class="project-rail-list" data-i18n-skip>/u);
   assert.match(html, /<span class="project-rail-item-main">所有会话<\/span>/u);
-  assert.match(html, /<button class="ghost compact-button session-archive"[^>]*>归档<\/button>/u);
-  assert.match(html, /<button class="ghost compact-button session-favorite"[^>]*>收藏<\/button>/u);
-  assert.match(html, /<span class="session-preview" data-i18n-skip>Send 0<\/span>/u);
-  assert.doesNotMatch(html, /<span class="session-preview" data-i18n-skip>发送 0<\/span>/u);
+  assert.match(html, /<button class="ghost compact-button session-archive"[^>]*aria-label="归档"/u);
+  assert.match(html, /<button class="ghost compact-button session-favorite"[^>]*aria-label="收藏"/u);
+  assert.match(html, /<span class="session-title" data-i18n-skip>Send 0<\/span>/u);
+  assert.doesNotMatch(html, /<span class="session-title" data-i18n-skip>发送 0<\/span>/u);
 });
 
 test('Chinese chat timeline skips bulk localization for many conversation items', async () => {
@@ -2562,14 +2571,15 @@ test('pull refresh indicator keeps readable themed colors', async () => {
   assert.doesNotMatch(styles, /\.pull-refresh-indicator\s*\{[^}]*background:\s*rgba\(18,\s*23,\s*34/su);
 });
 
-test('session card summaries reserve two lines and clamp overflow', async () => {
+test('session card titles reserve two lines while latest input stays compact', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /\.session-preview\s*\{[^}]*display:\s*-webkit-box;/su);
-  assert.match(styles, /\.session-preview\s*\{[^}]*-webkit-box-orient:\s*vertical;/su);
-  assert.match(styles, /\.session-preview\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
-  assert.match(styles, /\.session-preview\s*\{[^}]*white-space:\s*normal;/su);
-  assert.match(styles, /\.session-preview\s*\{[^}]*min-height:\s*calc\(var\(--session-summary-line-height\)\s*\*\s*2\);/su);
+  assert.match(styles, /\.session-title\s*\{[^}]*display:\s*-webkit-box;/su);
+  assert.match(styles, /\.session-title\s*\{[^}]*-webkit-box-orient:\s*vertical;/su);
+  assert.match(styles, /\.session-title\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
+  assert.match(styles, /\.session-title\s*\{[^}]*min-height:\s*calc\(var\(--session-summary-line-height\)\s*\*\s*2\);/su);
+  assert.match(styles, /\.session-preview\s*\{[^}]*white-space:\s*nowrap;/su);
+  assert.match(styles, /\.session-preview\s*\{[^}]*text-overflow:\s*ellipsis;/su);
 });
 
 test('new session path entry and primary submit buttons are readable on mobile', async () => {
@@ -2894,6 +2904,8 @@ test('dialogs and drawers expose modal semantics, focus scopes, and live status 
   assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="share-dialog-title" data-focus-scope="share-dialog"/u);
   assert.match(html, /id="share-link-input"[^>]*data-initial-focus/u);
   assert.match(html, /role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings"/u);
+  assert.match(html, /id="settings-drawer-close"[^>]*aria-label="Close session menu"[^>]*data-initial-focus/u);
+  assert.doesNotMatch(html, /id="runtime-reload-button"[^>]*data-initial-focus/u);
   assert.match(html, /class="composer-status"[^>]*role="status"[^>]*aria-live="polite"/u);
   assert.match(app, /document\.addEventListener\('keydown', handleFocusScopeKeydown\)/u);
   assert.match(app, /function makeBackgroundInert\(scope\)/u);
@@ -3854,12 +3866,14 @@ test('app settings page exposes message font size controls scoped to chat messag
   ]);
 
   assert.match(app, /const MESSAGE_FONT_SIZE_KEY = 'codexWebMessageFontSize';/u);
+  assert.match(app, /class="toggle message-size-toggle"/u);
   assert.match(app, /function renderAppSettings\(\)[\s\S]*data-message-font-size="small"[\s\S]*data-message-font-size="medium"[\s\S]*data-message-font-size="large"/u);
   assert.doesNotMatch(app, /function renderSettingsDrawer\(\)[\s\S]*data-message-font-size="small"/u);
   assert.match(app, /for \(const button of document\.querySelectorAll\('\[data-message-font-size\]'\)\)/u);
   assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
   assert.match(styles, /\.message-card \.markdown-body h1,\s*\.message-card \.markdown-body h2,\s*\.message-card \.markdown-body h3\s*\{[^}]*font-size:\s*var\(--message-heading-font-size\);/su);
   assert.doesNotMatch(styles, /\.report-document\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
+  assert.match(styles, /\.message-size-toggle\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/su);
 });
 
 test('message font size loads from storage and applies root variables', async () => {
@@ -3983,12 +3997,14 @@ test('report viewer uses its own scroll container instead of the outer document'
 test('desktop workspace CSS waits for enough room before creating three panes', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
+  assert.match(styles, /@media \(min-width:\s*1280px\) and \(orientation:\s*landscape\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
   assert.match(styles, /\.desktop-workspace\s*\{[^}]*display:\s*grid;/su);
-  assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*240px minmax\(320px,\s*380px\) minmax\(0,\s*1fr\);/su);
+  assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*240px minmax\(320px,\s*380px\) minmax\(640px,\s*1fr\);/su);
   assert.match(styles, /\.desktop-project-rail,\s*\.desktop-session-pane\s*\{[^}]*overflow:\s*hidden;/su);
   assert.match(styles, /\.desktop-session-list\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.match(styles, /\.desktop-chat-pane\s*\{[^}]*position:\s*relative;/su);
+  assert.match(styles, /\.desktop-chat-pane \.message-card\.assistant,\s*\.desktop-chat-pane \.message-card\.system\s*\{[^}]*max-width:\s*min\(72ch,\s*88%\);/su);
+  assert.match(styles, /\.desktop-chat-pane \.message-card\.user\s*\{[^}]*max-width:\s*min\(64ch,\s*74%\);/su);
 });
 
 test('desktop sidebars use theme-aware panel backgrounds', async () => {
@@ -4003,10 +4019,10 @@ test('desktop sidebars use theme-aware panel backgrounds', async () => {
 test('desktop composer is anchored inside the right chat pane', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*position:\s*absolute;/su);
-  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*left:\s*0;/su);
-  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*right:\s*0;/su);
-  assert.match(styles, /@media \(min-width:\s*1024px\) and \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.desktop-chat-pane \.timeline\s*\{[^}]*padding-bottom:\s*var\(--composer-offset\);/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*position:\s*absolute;/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*left:\s*0;/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*right:\s*0;/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.timeline\s*\{[^}]*padding-bottom:\s*var\(--composer-offset\);/su);
 });
 
 test('mobile session navigation still clears active session when returning to list', async () => {
@@ -4224,7 +4240,7 @@ test('session list scroll position is restored when returning from chat or refre
   assert.match(app, /function rememberSessionListScroll\(\)/u);
   assert.match(app, /if \(state\.view === 'sessions'\) \{\s*restoreSessionListScroll\(\);/u);
   assert.match(app, /showSessionList\(\) \{\s*savePromptDraftForCurrentSession\(\);\s*saveCurrentTimeline\(\);[\s\S]*rememberSessionListScroll\(\);/u);
-  assert.match(app, /for \(const button of document\.querySelectorAll\('\[data-session-id\]'\)\) \{\s*listenRendered\(button, 'click', \(\) => \{\s*rememberSessionListScroll\(\);/u);
+  assert.match(app, /function bindSessionCardEvents\(root = document\)[\s\S]*listenRendered\(root, 'click',[\s\S]*rememberSessionListScroll\(\);[\s\S]*selectSession\(sessionId\);/u);
   assert.match(app, /function refreshCurrentView\(\)[\s\S]*rememberSessionListScroll\(\);[\s\S]*await refreshSessionsList/u);
 });
 
@@ -4495,7 +4511,7 @@ test('composer status renders a small bottom status separator', async () => {
   api.state.status = 'Ready';
   api.state.statusTone = 'success';
 
-  assert.match(api.renderComposerStatus(), /<span>Done<\/span>/u);
+  assert.match(api.renderComposerStatus(), /<span>Ready<\/span>/u);
 });
 
 test('chat header renders current goal state under the project title', async () => {
@@ -5342,7 +5358,7 @@ test('chat stream updates do not rerender an open report viewer', async () => {
   assert.equal(reportViewer.scrollTop, 480);
 });
 
-test('session cards show the first user message summary instead of cwd metadata', async () => {
+test('session cards use the first task as identity and the latest input for orientation', async () => {
   const { api } = await loadAppHarness();
 
   api.state.sortMode = 'time';
@@ -5357,9 +5373,9 @@ test('session cards show the first user message summary instead of cwd metadata'
 
   const html = api.renderSessionCards();
 
-  assert.match(html, />project-alpha<\/span>/u);
-  assert.match(html, /class="session-preview" data-i18n-skip>First question about project alpha setup and initial constraints<\/span>/u);
-  assert.doesNotMatch(html, /Latest follow-up that should not render in the card summary/u);
+  assert.match(html, /class="session-title" data-i18n-skip>First question about project alpha setup and initial constraints<\/span>/u);
+  assert.match(html, /class="session-preview" data-i18n-skip>Latest follow-up that should not render in the card summary<\/span>/u);
+  assert.match(html, /class="session-project" data-i18n-skip>project-alpha<\/span>/u);
   assert.doesNotMatch(html, /No cwd/u);
   assert.doesNotMatch(html, /Users\/alice\/workspace\/project-alpha/u);
 });
@@ -5386,7 +5402,7 @@ test('session names prefer the last cwd segment over long stored project labels'
   assert.match(chatHtml, /class="project-title" data-i18n-skip>project-beta<\/div>/u);
 });
 
-test('session cards leave the summary area empty when no first message exists', async () => {
+test('session cards use a neutral title when no prompt exists', async () => {
   const { api } = await loadAppHarness();
 
   api.state.sortMode = 'time';
@@ -5400,9 +5416,180 @@ test('session cards leave the summary area empty when no first message exists', 
   const html = api.renderSessionCards();
 
   assert.match(html, /class="session-project" data-i18n-skip>project-gamma<\/span>/u);
-  assert.match(html, /class="session-preview"><\/span>/u);
+  assert.match(html, /class="session-title" data-i18n-skip>New Session<\/span>/u);
+  assert.doesNotMatch(html, /class="session-preview"/u);
   assert.doesNotMatch(html, /No prompt preview/u);
   assert.doesNotMatch(html, /No cwd/u);
+});
+
+test('session cards use the first task as identity when a provider title also exists', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessions = [{
+    id: 'session_identity',
+    title: 'Generated provider title',
+    firstUserInput: 'Original task request',
+    lastUserInput: 'Latest follow-up',
+    cwd: '/repo/example-project',
+    settings: { metadata: {} },
+  }];
+
+  const html = api.renderSessionCards();
+
+  assert.match(html, /class="session-title" data-i18n-skip>Original task request<\/span>/u);
+  assert.match(html, /class="session-preview" data-i18n-skip>Latest follow-up<\/span>/u);
+  assert.doesNotMatch(html, /Generated provider title/u);
+});
+
+test('session cards surface lightweight activity states and prioritize approvals', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sortMode = 'time';
+  api.state.sessions = [
+    { id: 'session_recent', firstUserInput: 'Recent idle task', updatedAt: 300, settings: { metadata: {} } },
+    { id: 'session_running', firstUserInput: 'Background task', updatedAt: 100, activityState: 'running', settings: { metadata: {} } },
+    { id: 'session_approval', firstUserInput: 'Approval task', updatedAt: 50, activityState: 'waiting_approval', settings: { metadata: {} } },
+  ];
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(api.sortedSessions().map((session) => session.id))),
+    ['session_approval', 'session_running', 'session_recent'],
+  );
+  const html = api.renderSessionCards();
+  assert.match(html, /data-activity-state="waiting_approval"[\s\S]*data-state="waiting_approval">Needs approval<\/span>/u);
+  assert.match(html, /data-activity-state="running"[\s\S]*data-state="running">Active<\/span>/u);
+  assert.match(html, /data-session-favorite-id="session_approval"[^>]*aria-label="Favorite"[^>]*title="Favorite"/u);
+  assert.match(html, /data-session-archive-request-id="session_approval"[^>]*aria-label="Archive"[^>]*title="Archive"/u);
+
+  api.state.sessionId = 'session_running';
+  api.state.pendingTurn = false;
+  assert.match(api.renderSessionCards(), /data-session-id="session_running"[\s\S]*data-state="running">Active<\/span>/u);
+});
+
+test('session summaries follow local approval and terminal events without another request', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessionId = 'session_current';
+  api.state.currentSession = {
+    id: 'session_current',
+    firstUserInput: 'Current task',
+    activityState: 'running',
+    activeTurnId: 'turn_stale',
+    settings: { metadata: {} },
+  };
+  api.state.sessions = [api.state.currentSession];
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_stale';
+  api.applyTurnEvent({
+    type: 'approval.requested',
+    turnId: 'turn_stale',
+    threadId: 'session_current',
+    approvalId: 'approval_stale',
+    approvalKind: 'command',
+    summary: {},
+  }, null);
+
+  assert.match(api.renderSessionCards(), /data-state="waiting_approval">Needs approval<\/span>/u);
+
+  api.applyTurnEvent({
+    type: 'turn.failed',
+    turnId: 'turn_stale',
+    threadId: 'session_current',
+    message: 'Connection lost',
+  }, null);
+
+  assert.equal(api.state.pendingTurn, false);
+  assert.doesNotMatch(api.renderSessionCards(), /data-activity-state=/u);
+});
+
+test('weak-network session failures keep cached sessions and require a manual retry', async () => {
+  let requests = 0;
+  let online = false;
+  const cachedSession = {
+    id: 'session_cached',
+    firstUserInput: 'Cached task remains visible',
+    updatedAt: 100,
+    settings: { metadata: {} },
+  };
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions');
+      requests += 1;
+      return online
+        ? { ok: true, status: 200, json: async () => ({ items: [cachedSession] }) }
+        : { ok: false, status: 503, json: async () => ({ message: 'host unreachable' }) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [cachedSession];
+  api.state.sessionsByScope.all = [cachedSession];
+
+  await assert.rejects(() => api.refreshSessionsList({ renderAfter: false, scope: 'all' }));
+  assert.equal(requests, 1);
+  assert.equal(api.state.sessionsError, 'Could not update sessions.');
+  assert.match(api.renderSessionCards(), /role="alert"[\s\S]*Could not update sessions\.[\s\S]*id="retry-sessions-button"/u);
+  assert.match(api.renderSessionCards(), /Cached task remains visible/u);
+
+  online = true;
+  await api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+  assert.equal(requests, 2);
+  assert.equal(api.state.sessionsError, '');
+});
+
+test('a failed stale list request does not mark the newly selected cached scope as failed', async () => {
+  let resolveAllRequest: ((response: {
+    ok: boolean;
+    status: number;
+    json: () => Promise<unknown>;
+  }) => void) | null = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions');
+      return new Promise((resolve) => {
+        resolveAllRequest = resolve;
+      });
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sortMode = 'time';
+  api.state.sessionsByScope.favorites = [{
+    id: 'session_favorite',
+    favorite: true,
+    settings: { metadata: {} },
+  }];
+  api.state.sessionsLoadedByScope.favorites = true;
+
+  const staleAllRequest = api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+  await api.setSessionSortMode('favorites');
+  assert.ok(resolveAllRequest);
+  resolveAllRequest({
+    ok: false,
+    status: 503,
+    json: async () => ({ message: 'host unreachable' }),
+  });
+  await assert.rejects(() => staleAllRequest);
+
+  assert.equal(api.state.sortMode, 'favorites');
+  assert.equal(api.state.sessionsError, '');
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_favorite']));
+  assert.doesNotMatch(api.renderSessionCards(), /Loading sessions/u);
+});
+
+test('switching to a cached session scope clears an error from the previous scope', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sortMode = 'time';
+  api.state.sessionsError = 'Could not update sessions.';
+  api.state.sessionsByScope.favorites = [{
+    id: 'session_favorite',
+    favorite: true,
+    settings: { metadata: {} },
+  }];
+  api.state.sessionsLoadedByScope.favorites = true;
+
+  await api.setSessionSortMode('favorites');
+
+  assert.equal(api.state.sessionsError, '');
+  assert.doesNotMatch(api.renderSessionCards(), /Could not update sessions/u);
 });
 
 test('chat reports button falls back to the top-level report project when only nested metadata matches', async () => {
@@ -5424,7 +5611,7 @@ test('chat reports button falls back to the top-level report project when only n
     },
   ];
 
-  const html = api.renderChat().innerHTML;
+  const html = api.renderSettingsDrawer();
 
   assert.match(html, /data-session-reports-project="project-alpha"/u);
   assert.doesNotMatch(html, /data-session-reports-project="project-alpha\/docs"/u);
@@ -5449,7 +5636,7 @@ test('chat reports button keeps the nested report project path when the session 
     },
   ];
 
-  const html = api.renderChat().innerHTML;
+  const html = api.renderSettingsDrawer();
 
   assert.match(html, /data-session-reports-project="project-alpha\/docs"/u);
 });
@@ -5473,7 +5660,7 @@ test('chat reports button does not prepend parent workspace segments from cwd', 
     },
   ];
 
-  const html = api.renderChat().innerHTML;
+  const html = api.renderSettingsDrawer();
 
   assert.match(html, /data-session-reports-project="codex-mobile-web-app"/u);
   assert.doesNotMatch(html, /data-session-reports-project="vibecoding\/codex-mobile-web-app"/u);
@@ -5490,7 +5677,7 @@ test('chat reports button falls back to cwd leaf before reports load so workspac
   api.state.reports = [];
   api.state.reportsLoaded = false;
 
-  const html = api.renderChat().innerHTML;
+  const html = api.renderSettingsDrawer();
 
   assert.match(html, /data-session-reports-project="codex-mobile-web-app"/u);
   assert.doesNotMatch(html, /data-session-reports-project="vibecoding\/codex-mobile-web-app"/u);
@@ -6093,7 +6280,7 @@ test('session status ignores stale in-progress history when activeTurnId is miss
   assert.equal(result.activeTurnId, null);
   assert.equal(api.state.pendingTurn, false);
   assert.equal(api.state.turnId, null);
-  assert.equal(api.composerStatusLabel(), 'Done');
+  assert.equal(api.composerStatusLabel(), 'Ready');
 });
 
 test('a stale terminal event cannot finish the current running turn', async () => {
@@ -7025,21 +7212,25 @@ test('opening a read-only session from the session list starts at the earliest m
 });
 
 test('layout mode uses desktop workspace only on sufficiently wide pointer-based windows', async () => {
-  const { api, context } = await loadAppHarness({ viewportWidth: 1200, desktopPointer: true });
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, viewportHeight: 844, desktopPointer: true });
 
-  assert.equal(api.DESKTOP_WORKSPACE_MIN_WIDTH, 1024);
+  assert.equal(api.DESKTOP_WORKSPACE_MIN_WIDTH, 1280);
   assert.equal(api.isDesktopLayout(), true);
 
-  context.window.innerWidth = 1023;
+  context.window.innerWidth = 1279;
   assert.equal(api.isDesktopLayout(), false);
 
-  context.window.innerWidth = 1200;
+  context.window.innerWidth = 1440;
+  context.window.innerHeight = 1920;
+  assert.equal(api.isDesktopLayout(), false);
+
+  context.window.innerHeight = 844;
   context.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   assert.equal(api.isDesktopLayout(), false);
 });
 
-test('desktop resize preserves active session while mobile resize maps back to chat', async () => {
-  const { api, context } = await loadAppHarness({ viewportWidth: 1200, desktopPointer: true });
+test('desktop resize preserves active session while narrow or portrait resize maps back to chat', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, viewportHeight: 844, desktopPointer: true });
 
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'sessions';
@@ -7050,7 +7241,8 @@ test('desktop resize preserves active session while mobile resize maps back to c
   assert.equal(api.state.view, 'sessions');
   assert.equal(api.state.sessionId, 'session_1');
 
-  context.window.innerWidth = 390;
+  context.window.innerWidth = 1200;
+  context.window.innerHeight = 1920;
   api.handleLayoutResize();
 
   assert.equal(api.state.view, 'chat');
@@ -7545,10 +7737,10 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
     readFile(appUrl, 'utf8'),
   ]);
 
-  assert.match(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*960px\);/su);
-  assert.match(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
-  assert.match(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
-  assert.doesNotMatch(styles, /@media \(min-width:\s*1024px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*960px\);/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
+  assert.doesNotMatch(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
   assert.match(app, /if \(!isDesktopLayout\(\)\) \{[\s\S]*id="composer-expand-button"/u);
   assert.match(app, /id="composer-refresh-button"/u);
   assert.match(app, /class="composer-action-buttons"/u);
@@ -7559,7 +7751,7 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
 
 test('desktop prompt Enter does not submit the form', async () => {
   let submitCount = 0;
-  const { api, context } = await loadAppHarness({ viewportWidth: 1200, desktopPointer: true });
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, viewportHeight: 844, desktopPointer: true });
 
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'sessions';
@@ -8564,7 +8756,7 @@ test('assistant local markdown paths outside codex-web reports stay as plain tex
   assert.match(plainHtml, /render-test\.md/u);
 });
 
-test('chat header opens reports for the current project when available', async () => {
+test('session menu opens reports without crowding the chat header', async () => {
   const { api } = await loadAppHarness();
 
   api.state.sessionId = 'session_a';
@@ -8583,14 +8775,45 @@ test('chat header opens reports for the current project when available', async (
       updatedAt: '2026-05-19T10:00:00.000Z',
     },
   ];
+  api.state.settingsOpen = true;
 
   const html = api.renderChat().innerHTML;
 
-  assert.match(html, /class="ghost compact-button session-report-button"/u);
+  assert.doesNotMatch(html, /class="ghost compact-button session-report-button"/u);
   assert.match(html, /data-session-reports-project="project-a"/u);
+  assert.match(html, /data-session-reports-project="project-a"[^>]*>Open<\/button>/u);
   assert.doesNotMatch(html, /data-session-report-id/u);
   assert.match(html, /id="settings-toggle"/u);
   assert.match(html, /<textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">/u);
+});
+
+test('opening reports from the session menu closes its focus scope', async () => {
+  const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_a';
+  api.state.currentSession = {
+    id: 'session_a',
+    cwd: '/Users/alice/work/project-a',
+    projectName: 'Project A',
+    settings: { metadata: {} },
+  };
+  api.state.sessions = [api.state.currentSession];
+  api.state.reports = [{
+    id: 'project-a/2026-05-19/summary.md',
+    project: 'project-a',
+    title: 'summary',
+    kind: 'markdown',
+  }];
+  api.state.reportsLoaded = true;
+  api.state.settingsOpen = true;
+  api.state.composerExpanded = false;
+
+  await api.openReportsPage({ project: 'project-a', returnView: 'chat' });
+
+  assert.equal(api.state.settingsOpen, false);
+  assert.equal(api.state.desktopOverlay, 'reports');
+  assert.equal(api.state.view, 'sessions');
 });
 
 test('favorite filter shows only favorite sessions and all shows every session', async () => {
@@ -8994,10 +9217,12 @@ test('session list shows loading state while sessions are still syncing', async 
   api.state.sessions = [];
   api.state.sortMode = 'time';
   api.state.sessionsLoading = true;
+  api.state.sessionsLoadingScope = 'all';
 
   assert.match(api.renderSessionCards(), /Loading sessions/u);
 
   api.state.sessionsLoading = false;
+  api.state.sessionsLoadingScope = null;
   assert.match(api.renderSessionCards(), /No sessions yet/u);
 });
 
@@ -9388,7 +9613,7 @@ test('archive action requires a confirmation dialog before deleting a session', 
   assert.match(app, /data-session-archive-request-id/u);
   assert.match(app, /data-session-archive-confirm-id/u);
   assert.match(app, /function requestArchiveSession\(sessionId\)/u);
-  assert.match(app, /requestArchiveSession\(button\.getAttribute\('data-session-archive-request-id'\) \|\| ''\)/u);
+  assert.match(app, /const archiveSessionId = button\.getAttribute\('data-session-archive-request-id'\);[\s\S]*requestArchiveSession\(archiveSessionId\);/u);
   assert.match(app, /archiveSession\(button\.getAttribute\('data-session-archive-confirm-id'\) \|\| ''\)/u);
   assert.doesNotMatch(app, /archiveSession\(button\.getAttribute\('data-session-archive-id'\) \|\| ''\)/u);
   assert.match(app, /<button class="ghost compact-button" type="button" id="archive-cancel-button" data-initial-focus>Cancel<\/button>/u);
@@ -9866,7 +10091,7 @@ test('PWA stream network failures keep the active turn recoverable when visibili
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, true);
   assert.equal(api.state.status, 'Stream paused');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Paused</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Reconnecting</span></div>');
 });
 
 test('PWA stream ending without a terminal event keeps the active turn recoverable', async () => {
@@ -9903,7 +10128,7 @@ test('PWA stream ending without a terminal event keeps the active turn recoverab
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, true);
   assert.equal(api.state.status, 'Stream paused');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Paused</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Reconnecting</span></div>');
 });
 
 test('PWA stream recovery reconnects a paused active turn while the page stays visible', async () => {
@@ -10387,7 +10612,7 @@ test('PWA history refresh clears stale running state from the latest terminal tu
   assert.equal(api.state.streamWasBackgrounded, false);
   assert.equal(api.state.status, 'Ready');
   assert.equal(api.state.statusTone, 'success');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success" role="status" aria-live="polite" aria-atomic="true"><span>Done</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success" role="status" aria-live="polite" aria-atomic="true"><span>Ready</span></div>');
 });
 
 test('PWA history refresh sends queued follow-up once the backgrounded turn is done', async () => {
@@ -10658,7 +10883,7 @@ test('session refresh ignores in-progress history without an active marker after
   assert.equal(api.state.turnId, null);
   assert.equal(api.state.status, 'Ready');
   assert.equal(api.state.statusTone, 'success');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success" role="status" aria-live="polite" aria-atomic="true"><span>Done</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="success" role="status" aria-live="polite" aria-atomic="true"><span>Ready</span></div>');
   assert.equal(fetchCalls.includes('/api/turns/turn_stale/events'), false);
 });
 

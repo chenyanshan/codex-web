@@ -4,7 +4,7 @@
   --panel-2: #f1e7cc;
   --border: #dfcfac;
   --border-strong: #9a8150;
-  --control-border: var(--border);
+  --control-border: var(--border-strong);
   --text: #292419;
   --muted: #675d48;
   --accent: #0f766e;
@@ -767,6 +767,26 @@ button:disabled {
   align-content: start;
 }
 
+.session-list-error {
+  min-height: 120px;
+  padding: 24px 12px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--danger);
+  text-align: center;
+}
+
+.session-list-error.is-compact {
+  min-height: 0;
+  padding: 8px 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  place-items: center stretch;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border));
+  text-align: left;
+}
+
 .report-list {
   display: grid;
   gap: 8px;
@@ -1364,6 +1384,7 @@ button:disabled {
 .session-card {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  column-gap: 10px;
 }
 
 .session-card-open {
@@ -1377,14 +1398,18 @@ button:disabled {
 }
 
 .session-card-actions {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 6px;
 }
 
 .session-card-actions .compact-button {
+  width: 34px;
+  min-width: 34px;
   min-height: 34px;
-  padding: 0 8px;
-  font-size: 11px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
 }
 
 .session-archive,
@@ -1408,11 +1433,29 @@ button:disabled {
   gap: 4px;
 }
 
-.session-project,
+.session-card-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.session-title,
 .path-choice span {
   font-size: 14px;
   font-weight: 650;
   color: var(--text);
+}
+
+.session-title {
+  min-width: 0;
+  min-height: calc(var(--session-summary-line-height) * 2);
+  line-height: var(--session-summary-line-height);
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .session-preview,
@@ -1430,18 +1473,57 @@ button:disabled {
 }
 
 .session-preview {
-  min-height: calc(var(--session-summary-line-height) * 2);
   line-height: var(--session-summary-line-height);
-  white-space: normal;
+  white-space: nowrap;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
 }
 
 .session-card-meta {
-  display: grid;
-  gap: 3px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.session-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-attention-state {
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 2px 7px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--success) 44%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--success) 10%, var(--panel));
+  color: var(--success);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.session-attention-state[data-state="waiting_approval"] {
+  border-color: color-mix(in srgb, var(--warn) 48%, var(--border));
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  color: var(--warn);
+}
+
+.session-action-symbol {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.session-action-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: currentColor;
 }
 
 .report-card {
@@ -2157,6 +2239,10 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.message-size-toggle {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .toggle button {
   min-height: 36px;
   padding: 0 10px;
@@ -2308,6 +2394,28 @@ button:disabled {
   border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
+}
+
+.settings-drawer-header {
+  min-height: 40px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-drawer-close {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  font-size: 21px;
+  line-height: 1;
 }
 
 .settings-stop-row {
@@ -2575,6 +2683,51 @@ pre.command {
 }
 
 @media (max-width: 719px) {
+  .session-card [data-session-archive-request-id] {
+    display: none;
+  }
+
+  .admin-project-table,
+  .admin-project-table tbody {
+    display: block;
+  }
+
+  .admin-project-table thead {
+    display: none;
+  }
+
+  .admin-project-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .admin-project-table td {
+    min-width: 0;
+    padding: 0;
+    display: grid;
+    gap: 3px;
+    border: 0;
+  }
+
+  .admin-project-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .admin-project-table td:first-child {
+    grid-column: 1 / -1;
+    font-size: 11px;
+  }
+
+  .admin-project-table td:last-child {
+    justify-items: end;
+  }
+
   .admin-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2593,7 +2746,29 @@ pre.command {
   }
 }
 
-@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+@media (max-width: 900px) {
+  .compact-button,
+  .toggle button,
+  .chat-back-button,
+  .page-back-button,
+  .settings-toggle-button,
+  .settings-drawer-close,
+  .turn-stop-button,
+  .attach-button,
+  .compact-send,
+  .mobile-new-session-button,
+  .toggle.mobile-session-sort-toggle button,
+  .session-card-actions .compact-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .session-card-actions .compact-button {
+    width: 44px;
+  }
+}
+
+@media (min-width: 1280px) and (orientation: landscape) and (hover: hover) and (pointer: fine) {
   .admin-layout:has(.admin-observed-panel) {
     grid-template-columns: 172px minmax(280px, 0.8fr) minmax(360px, 1.2fr);
   }
@@ -2609,7 +2784,7 @@ pre.command {
     height: 100dvh;
     min-height: 0;
     display: grid;
-    grid-template-columns: 240px minmax(320px, 380px) minmax(0, 1fr);
+    grid-template-columns: 240px minmax(320px, 380px) minmax(640px, 1fr);
     overflow: hidden;
   }
 
@@ -2674,8 +2849,13 @@ pre.command {
     scroll-padding-bottom: var(--composer-offset);
   }
 
-  .desktop-chat-pane .message-card {
-    max-width: min(72ch, 74%);
+  .desktop-chat-pane .message-card.assistant,
+  .desktop-chat-pane .message-card.system {
+    max-width: min(72ch, 88%);
+  }
+
+  .desktop-chat-pane .message-card.user {
+    max-width: min(64ch, 74%);
   }
 
   .desktop-chat-pane .composer-wrap {
