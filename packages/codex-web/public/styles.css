@@ -1427,6 +1427,7 @@ button:disabled {
   display: grid;
   gap: 7px;
   text-align: left;
+  font-weight: 400;
   border: 0;
   background: transparent;
 }
@@ -1746,6 +1747,7 @@ button:disabled {
 .message-card .message-text,
 .message-card .markdown-body {
   font-size: var(--message-font-size);
+  font-weight: 400;
 }
 
 .muted {
@@ -2402,6 +2404,7 @@ button:disabled {
   padding: 8px 10px;
   overflow-y: auto;
   line-height: 1.45;
+  font-weight: 400;
 }
 
 .icon-button,
@@ -2878,12 +2881,6 @@ pre.command {
   .compact-composer-row textarea {
     min-height: 96px;
     max-height: 220px;
-  }
-
-  .message-card .message-text,
-  .message-card .markdown-body,
-  .compact-composer-row textarea {
-    font-weight: 400;
   }
 }
 

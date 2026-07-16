@@ -2852,6 +2852,7 @@ test('session card titles reserve two lines while latest input stays compact', a
   assert.match(styles, /\.session-title\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
   assert.match(styles, /\.session-title\s*\{[^}]*min-height:\s*calc\(var\(--session-summary-line-height\)\s*\*\s*2\);/su);
   assert.doesNotMatch(styles, /\.session-title\s*\{[^}]*font-weight:\s*(?:600|650|700|bold);/su);
+  assert.match(styles, /\.session-card-open\s*\{[^}]*font-weight:\s*400;/su);
   assert.match(styles, /body\s*\{[^}]*font-weight:\s*450;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*white-space:\s*nowrap;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*text-overflow:\s*ellipsis;/su);
@@ -8615,7 +8616,8 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
   assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*960px\);/su);
   assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
   assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
-  assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.message-card \.message-text,\s*\.message-card \.markdown-body,\s*\.compact-composer-row textarea\s*\{[^}]*font-weight:\s*400;/su);
+  assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*font-weight:\s*400;/su);
+  assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*font-weight:\s*400;/su);
   assert.match(app, /const maxHeight = hasDesktopPointer\(\) \? DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT : PROMPT_TEXTAREA_MAX_HEIGHT;/u);
   assert.doesNotMatch(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
   assert.match(app, /if \(!isDesktopLayout\(\)\) \{[\s\S]*id="composer-expand-button"/u);
@@ -10445,6 +10447,124 @@ test('archived session scope requests the archived sessions endpoint and marks r
   assert.equal(api.state.sessions[0]?.archived, true);
   assert.equal(api.state.sessions[0]?.readOnly, true);
   assert.equal(api.filteredSessions()[0]?.id, 'session_archived');
+});
+
+test('opening archived session details never writes them back into recents or favorites', async () => {
+  const { api, storage } = await loadAppHarness();
+  const archivedSession = {
+    id: 'session_archived',
+    cwd: '/repo',
+    archived: true,
+    readOnly: true,
+    favorite: true,
+    updatedAt: 1,
+    settings: { metadata: {} },
+  };
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sortMode = 'archived';
+  api.state.sessionsScope = 'archived';
+  api.state.sessions = [archivedSession];
+  api.state.sessionsByScope.archived = [archivedSession];
+
+  api.upsertSession({
+    id: archivedSession.id,
+    cwd: '/repo',
+    favorite: true,
+    updatedAt: 2,
+    settings: { metadata: {} },
+  });
+
+  assert.equal(api.state.sessionsByScope.all.length, 0);
+  assert.equal(api.state.sessionsByScope.favorites.length, 0);
+  assert.equal(api.state.sessionsByScope.archived.length, 1);
+  api.state.sortMode = 'time';
+  assert.equal(api.filteredSessions().length, 0);
+  api.state.sortMode = 'favorites';
+  assert.equal(api.filteredSessions().length, 0);
+  const cached = JSON.parse(storage.get('codexWebSessionsCache'));
+  assert.equal(cached.scopes.all.length, 0);
+  assert.equal(cached.scopes.favorites.length, 0);
+  assert.equal(cached.scopes.archived.length, 1);
+});
+
+test('recents cache restore drops archived summaries before a weak-network refresh', async () => {
+  let resolveFetch: ((value: unknown) => void) | null = null;
+  const activeSession = { id: 'session_active', updatedAt: 2, settings: { metadata: {} } };
+  const archivedSession = { id: 'session_archived', archived: true, updatedAt: 1, settings: { metadata: {} } };
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions') {
+        return await new Promise((resolve) => {
+          resolveFetch = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  storage.set('codexWebSessionsCache', JSON.stringify({
+    scopes: {
+      all: [activeSession, archivedSession],
+      favorites: [archivedSession],
+      archived: [archivedSession],
+    },
+  }));
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+
+  const refresh = api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_active']));
+  assert.equal(JSON.stringify(api.state.sessionsByScope.all.map((session) => session.id)), JSON.stringify(['session_active']));
+  assert.equal(api.state.sessionsByScope.favorites.length, 0);
+  resolveFetch?.({
+    ok: true,
+    status: 200,
+    json: async () => ({ items: [activeSession] }),
+  });
+  await refresh;
+});
+
+test('archive action blocks a delayed active-list response from restoring the session', async () => {
+  let releaseList: (() => void) | null = null;
+  const session = { id: 'session_1', updatedAt: 1, settings: { metadata: {} } };
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions') {
+        return await new Promise((resolve) => {
+          releaseList = () => resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ items: [session] }),
+          });
+        });
+      }
+      if (path === '/api/sessions/session_1/archive') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [session];
+  api.state.sessionsByScope.all = [session];
+
+  const refresh = api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+  await flushMicrotasks();
+  assert.equal(typeof releaseList, 'function');
+  await api.archiveSession(session.id);
+  releaseList?.();
+  await refresh;
+
+  assert.equal(api.state.sessions.length, 0);
+  assert.equal(api.state.sessionsByScope.all.length, 0);
+  assert.equal(api.filteredSessions().length, 0);
+  const cached = JSON.parse(storage.get('codexWebSessionsCache'));
+  assert.equal(cached.scopes.all.length, 0);
 });
 
 test('favorite action patches session favorite state without opening the session', async () => {

@@ -379,6 +379,7 @@ const state = {
     all: false,
     archived: false,
   },
+  sessionArchiveOverrides: new Map(),
   sessionsLoading: false,
   sessionsLoadingScope: null,
   sessionsError: '',
@@ -673,6 +674,7 @@ function setLoggedOut(message = '') {
     all: false,
     archived: false,
   };
+  state.sessionArchiveOverrides = new Map();
   state.sessionsLoading = false;
   state.sessionsLoadingScope = null;
   state.sessionsError = '';
@@ -5696,6 +5698,7 @@ async function archiveSession(sessionId) {
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
+    state.sessionArchiveOverrides.set(sessionId, true);
     removeSession(sessionId);
     state.sessionsLoadedByScope.archived = false;
     state.timelineCache.delete(sessionId);
@@ -5737,6 +5740,7 @@ async function unarchiveSession(sessionId) {
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
+    state.sessionArchiveOverrides.set(sessionId, false);
     removeSession(sessionId);
     if (payload?.session) {
       upsertSession(payload.session);
@@ -8086,15 +8090,12 @@ function normalizeSessions(payload) {
 }
 
 function normalizeSessionsForScope(payload, scope) {
-  const sessions = normalizeSessions(payload);
-  if (scope !== 'archived') {
-    return sessions;
-  }
-  return sessions.map((session) => ({
-    ...session,
-    archived: true,
-    readOnly: true,
-  }));
+  const sessions = normalizeSessions(payload)
+    .map((session) => scope === 'archived'
+      ? { ...session, archived: true, readOnly: true }
+      : session)
+    .map(applySessionArchiveOverride);
+  return sessions.filter((session) => sessionBelongsToScope(session, scope));
 }
 
 function restoreSessionsFromCacheForScope(scope) {
@@ -8120,8 +8121,8 @@ function loadSessionsCacheScopes() {
       ? parsed.scopes
       : {};
     return {
-      all: normalizeSessions({ items: scopes.all }),
-      favorites: normalizeSessions({ items: scopes.favorites }),
+      all: normalizeSessionsForScope({ items: scopes.all }, 'all'),
+      favorites: normalizeSessionsForScope({ items: scopes.favorites }, 'favorites'),
       archived: normalizeSessionsForScope({ items: scopes.archived }, 'archived'),
     };
   } catch (_error) {
@@ -8136,9 +8137,9 @@ function loadSessionsCacheScopes() {
 
 function persistSessionsCache() {
   const scopes = {
-    all: (state.sessionsByScope.all || []).map(serializeSessionSummaryForCache).filter(Boolean),
-    favorites: (state.sessionsByScope.favorites || []).map(serializeSessionSummaryForCache).filter(Boolean),
-    archived: (state.sessionsByScope.archived || []).map(serializeSessionSummaryForCache).filter(Boolean),
+    all: (state.sessionsByScope.all || []).filter((session) => sessionBelongsToScope(session, 'all')).map(serializeSessionSummaryForCache).filter(Boolean),
+    favorites: (state.sessionsByScope.favorites || []).filter((session) => sessionBelongsToScope(session, 'favorites')).map(serializeSessionSummaryForCache).filter(Boolean),
+    archived: (state.sessionsByScope.archived || []).filter((session) => sessionBelongsToScope(session, 'archived')).map(serializeSessionSummaryForCache).filter(Boolean),
   };
   try {
     localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify({ scopes, savedAt: Date.now() }));
@@ -8227,28 +8228,64 @@ function upsertSession(session) {
   if (!session?.id) {
     return;
   }
-  const [normalized] = normalizeSessions({ items: [session] });
+  const [normalizedSession] = normalizeSessions({ items: [session] });
+  const normalized = applySessionArchiveOverride(normalizedSession);
   if (!normalized) {
     return;
   }
   const currentDetail = state.currentSession?.id === session.id ? state.currentSession : null;
   const index = state.sessions.findIndex((item) => item.id === normalized.id);
-  const next = sessionSummaryOnly(mergeSessionSummary(index >= 0 ? state.sessions[index] : null, normalized));
-  if (index >= 0) {
-    state.sessions[index] = next;
-  } else {
-    state.sessions.unshift(next);
+  const previous = index >= 0 ? state.sessions[index] : currentDetail;
+  const next = applySessionArchiveOverride(sessionSummaryOnly(mergeSessionSummary(previous, normalized)));
+  const currentScope = currentSessionScope();
+  if (sessionBelongsToScope(next, currentScope)) {
+    if (index >= 0) {
+      state.sessions[index] = next;
+    } else {
+      state.sessions.unshift(next);
+    }
+  } else if (index >= 0) {
+    state.sessions.splice(index, 1);
   }
-  upsertSessionInScope('all', next);
-  if (isFavoriteSession(next)) {
-    upsertSessionInScope('favorites', next);
-  } else {
-    removeSessionFromScope('favorites', next.id);
+  for (const scope of ['all', 'favorites', 'archived']) {
+    if (sessionBelongsToScope(next, scope)) {
+      upsertSessionInScope(scope, next);
+    } else {
+      removeSessionFromScope(scope, next.id);
+    }
   }
   if (state.sessionId === next.id) {
-    state.currentSession = mergeSessionSummary(currentDetail, session);
+    state.currentSession = applySessionArchiveOverride(mergeSessionSummary(currentDetail, session));
   }
   persistSessionsCache();
+}
+
+function applySessionArchiveOverride(session) {
+  if (!session?.id || !state.sessionArchiveOverrides.has(session.id)) {
+    return session;
+  }
+  if (state.sessionArchiveOverrides.get(session.id) === true) {
+    return { ...session, archived: true, readOnly: true };
+  }
+  return { ...session, archived: false };
+}
+
+function isSessionArchived(session) {
+  if (session?.id && state.sessionArchiveOverrides.has(session.id)) {
+    return state.sessionArchiveOverrides.get(session.id) === true;
+  }
+  return session?.archived === true;
+}
+
+function sessionBelongsToScope(session, scope) {
+  const archived = isSessionArchived(session);
+  if (scope === 'archived') {
+    return archived;
+  }
+  if (archived) {
+    return false;
+  }
+  return scope !== 'favorites' || isFavoriteSession(session);
 }
 
 function currentSessionScope() {
@@ -8918,17 +8955,17 @@ function sortedSessions() {
 function filteredSessions() {
   const sessions = projectScopedSessions();
   if (state.sortMode === 'favorites') {
-    return sessions.filter(isFavoriteSession);
+    return sessions.filter((session) => sessionBelongsToScope(session, 'favorites'));
   }
   if (state.sortMode === 'archived') {
-    return sessions.filter((session) => session?.archived === true);
+    return sessions.filter((session) => sessionBelongsToScope(session, 'archived'));
   }
-  return sessions;
+  return sessions.filter((session) => sessionBelongsToScope(session, 'all'));
 }
 
 function sortedFavoriteSessions() {
   return projectScopedSessions()
-    .filter(isFavoriteSession)
+    .filter((session) => sessionBelongsToScope(session, 'favorites'))
     .sort(compareSessionsForSelection);
 }
 

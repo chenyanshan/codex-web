@@ -166,6 +166,7 @@ const jsonRoutes = new Map([
   ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureHistorySession] }],
   ['/api/sessions/session_browser_fixture', { session: fixtureSession }],
   ['/api/sessions/session_browser_idle', { session: fixtureIdleSession }],
+  ['/api/sessions/session_browser_archived', { session: fixtureArchivedSession }],
   ['/api/sessions/session_browser_history', { session: fixtureHistorySession }],
   ['/api/reports', { items: [] }],
 ]);

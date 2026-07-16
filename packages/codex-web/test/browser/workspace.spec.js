@@ -72,6 +72,11 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(sessionButton).toBeVisible();
   await expect(sessionButton).toContainText('yanshan_quant');
   await expect(sessionButton).toContainText('Active');
+  for (const selector of ['.session-title', '.session-card-meta']) {
+    await expect(sessionButton.locator(selector)).toHaveCSS('font-weight', '400');
+  }
+  await expect(page.locator('[data-session-id="session_browser_history"] .session-preview'))
+    .toHaveCSS('font-weight', '400');
   if (testInfo.project.name.startsWith('mobile-')) {
     for (const locator of [
       page.locator('#mobile-sidebar-toggle-button'),
@@ -140,14 +145,17 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(page.getByRole('button', { name: 'Stop current turn' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Session menu' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+  const promptInput = page.locator('#prompt-input');
+  await expect(promptInput).toHaveCSS('font-weight', '400');
+  await expect(page.locator('.message-card .message-text, .message-card .markdown-body').first())
+    .toHaveCSS('font-weight', '400');
+  if (testInfo.project.name.startsWith('mobile-')) {
+    await expect(page.locator('.project-title')).toHaveCSS('font-weight', '650');
+  }
   if (testInfo.project.name.startsWith('desktop')) {
-    const promptInput = page.locator('#prompt-input');
     const promptBox = await promptInput.boundingBox();
     expect(promptBox).not.toBeNull();
     expect(promptBox.height).toBeGreaterThanOrEqual(96);
-    await expect(promptInput).toHaveCSS('font-weight', '400');
-    await expect(page.locator('.message-card .message-text, .message-card .markdown-body').first())
-      .toHaveCSS('font-weight', '400');
   }
   if (testInfo.project.name === 'desktop') {
     await expect(sessionButton).toContainText('Needs approval');
@@ -216,6 +224,21 @@ test('archived sessions use a compact filter and a clear restore icon', async ({
     path: '/tmp/codex-web-browser-mobile-compact-archived.png',
     fullPage: true,
   });
+});
+
+test('opening an archived session never restores it to recents', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-portrait', 'One phone viewport covers archive scope isolation.');
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Archived sessions' }).click();
+  await page.locator('[data-session-id="session_browser_archived"]').click();
+  await expect(page.locator('.read-only-composer-wrap')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.locator('[data-sort-mode="time"]').click();
+
+  await expect(page.locator('[data-session-id="session_browser_archived"]')).toHaveCount(0);
+  await expect(page.locator('[data-session-id="session_browser_idle"]')).toBeVisible();
 });
 
 test('desktop prompt accepts pasted files as uploaded attachments', async ({ page }, testInfo) => {
