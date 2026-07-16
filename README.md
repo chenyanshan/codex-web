@@ -11,7 +11,7 @@ commands, and stores app state. Tunnel and reverse-proxy setup are intentionally
 outside this repository.
 
 > Ask Codex to install it:
-> `Help me install https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
+> `Help me install https://github.com/chenyanshan/codex-web/blob/main/README.md`
 
 ## Core Highlights
 
@@ -54,21 +54,31 @@ Untrusted users must be separated with distinct OS users, containers, or hosts.
 
 - Password-protected single-host Codex web console.
 - PWA-friendly mobile UI with persistent per-device browser sessions.
-- Project-first workspace: desktop uses a project rail, session list, and chat
-  pane; mobile uses a project drawer.
+- Project-first responsive workspace: wide landscape desktops use a project
+  rail, session list, and chat pane; narrow or portrait desktops use a focused
+  single-session layout with a desktop-sized composer; phones use a project
+  drawer.
+- Weak-network resilience with cached session summaries, bounded conversation
+  histories for the five most recently used sessions, and locally persisted
+  optimistic and queued text messages.
+- Earlier exchanges expand when you scroll upward at the top of a desktop
+  conversation or pull down at the top of the timeline in the installed PWA.
 - Live Codex turn stream with assistant deltas, final answers, command batches,
   file-change batches, approval requests, and runtime errors.
 - Multi-user/RBAC facade for fully trusted users, project access, admin
   management, and observer mode.
 - Optional read-only share links open a dedicated conversation page. Public
   sharing is disabled by default and must be explicitly enabled by the operator.
-- File and image attachments for turns. The backend stores files locally and
-  passes safe local paths to Codex.
+- File and image attachments for turns, including direct clipboard paste on
+  desktop browsers. The backend stores files locally and passes safe local
+  paths to Codex.
+- Model and reasoning choices from the active Codex CLI, with current-session
+  controls kept separate from per-browser defaults for new sessions.
 - Authenticated report index and report viewer, plus the bundled
   `codex-mobile-report` skill.
 - A bundled `codex-web-user-context` skill for discovering the current Codex
   Web user/project context from a server-projected runtime file.
-- macOS launchd and Linux systemd service helpers.
+- macOS launchd service helpers and Linux systemd setup instructions.
 - English and Simplified Chinese UI language setting, plus a backend-managed
   site title for admins/single-user installs.
 - Six contrast-checked themes with Sunlit yellow as the first-run default,
@@ -118,16 +128,26 @@ npm run serve
 ```
 
 By default the service listens on `0.0.0.0:43210`, so phones on the same LAN can
-reach it. Use `http://127.0.0.1:43210` only on the Mac. Before entering a
-password from a phone, put the service behind your own HTTPS reverse proxy,
-tunnel, or private-network HTTPS endpoint; bearer tokens and passwords are not
-protected on plain LAN HTTP, and Service Workers require a secure context.
+reach it. `http://127.0.0.1:43210` is reachable only from the host machine.
+Before entering a password from another device, put the service behind your own
+HTTPS reverse proxy, tunnel, or private-network HTTPS endpoint; bearer tokens
+and passwords are not protected on plain LAN HTTP, and Service Workers require
+a secure context.
 
 Run checks:
 
 ```bash
+npm run build
 npm run typecheck
 npm test
+npm run lint
+```
+
+The browser suite uses Playwright and its local fixture server:
+
+```bash
+npx playwright install chromium
+npm run test:browser
 ```
 
 ## AI Install
@@ -138,7 +158,7 @@ to install this project from a GitHub blob link or local checkout.
 Example Codex request:
 
 ```text
-Help me install https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md
+Help me install https://github.com/chenyanshan/codex-web/blob/main/README.md
 ```
 
 Expected agent behavior:
@@ -172,21 +192,28 @@ Default paths:
 ```text
 ~/.config/codex-web/service.env
 ~/.codex-web/auth.json
+~/.codex-web/identity.json
+~/.codex-web/session-settings.json
+~/.codex-web/session-timeline.json
 ~/.codex-web/logs/
 ~/.codex-web/reports/
 ~/.codex-web/report-index.json
 ~/.codex-web/uploads/
+~/.codex-web/tasks/
 ```
 
-`~/.codex-web/auth.json` stores only salted password hashes and hashed session
-tokens. The browser stores only an opaque session token. Do not store
-`CODEX_WEB_PASSWORD` in `service.env`.
+`auth.json` stores single-user password and session-token hashes.
+`identity.json` stores multi-user password, session-token, and share-capability
+hashes together with Web-layer authorization metadata. Neither file stores
+plaintext passwords or bearer tokens. For authentication, the browser stores
+only an opaque session token. Do not store `CODEX_WEB_PASSWORD` in
+`service.env`.
 
 For non-interactive first setup, the one-time `CODEX_WEB_PASSWORD` environment
 variable is supported, but it should only be injected by a local secret manager.
 Do not put a literal password in shell history or a service env file.
 
-The generated service env defaults to:
+The generated service env includes these core defaults:
 
 ```env
 CODEX_WEB_HOST=0.0.0.0
@@ -211,6 +238,25 @@ default to a 24-hour TTL set by `CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS` and are
 capped at seven days. A share is also invalid after revocation or after
 multi-user mode is disabled. Treat a share URL as a bearer capability.
 
+### Browser cache and weak networks
+
+Codex Web shows cached session summaries immediately and then refreshes them
+from the host in the background. It also keeps bounded conversation data for up
+to five recently used sessions in browser-local storage. Stable sessions can
+therefore reopen quickly on a slow link, while newer server state is still
+reconciled when connectivity allows.
+
+An optimistic user message is persisted before its turn request completes.
+Plain-text follow-up messages queued while a turn is running also survive a
+reload and are retried after the active turn is reconciled. Attachments cannot
+be queued while a turn is running.
+
+This is weak-network recovery, not a fully offline Codex runtime. Starting
+turns, uploading files, and refreshing server state still require connectivity
+to the host; the Service Worker caches only the static application shell. The
+browser cache can contain conversation text, so use trusted browser profiles
+and clear site data when retiring a device.
+
 ### Storage lifecycle
 
 Codex Web cleans only files it owns by managed filename or report extension;
@@ -234,8 +280,9 @@ retention and quota.
 
 ## Attachments
 
-The composer can upload files and images for the next Codex turn. All upload
-routes require authentication.
+The composer can upload files and images for the next Codex turn. On desktop
+browsers, clipboard files and images can also be pasted directly into the
+composer. All upload routes require authentication.
 
 Writable project directory:
 
@@ -325,10 +372,13 @@ The status above the composer is the runtime state, not a request spinner. It is
 reconciled from live turn events and refreshed session history.
 
 - Active turns show `Running`.
-- Successful terminal turns show `Done`.
+- A recoverable stream interruption shows `Reconnecting` while the turn remains
+  active.
+- Idle sessions and successful terminal turns show `Ready`.
 - Interrupted, cancelled, or aborted turns show `Stopped`.
-- Provider/runtime failures such as `401`, `403`, `429`, or unexpected provider
-  statuses are rendered as red system messages in the conversation timeline.
+- Provider/runtime failures show `Failed`; details such as `401`, `403`, `429`,
+  or unexpected provider statuses are rendered as red system messages in the
+  conversation timeline.
 
 If the Codex Web service restarts while a turn is in progress, Codex may mark
 that turn as `interrupted` without an error payload. The UI shows `Stopped`
@@ -350,10 +400,12 @@ scripts/service/restart-codex-web-launchd-user.sh
 
 After the restart, reopen or refresh the installed PWA.
 
-The reasoning choices shown by Codex Web come dynamically from the Codex CLI
-selected by `CODEX_REAL_BIN`. The selected model must advertise `ultra` for
-that choice to appear. Pulling this repository does not upgrade the Codex CLI
-or add capabilities to the selected runtime.
+The model catalog, configuration defaults, and advertised reasoning choices
+shown by Codex Web come from the Codex CLI selected by `CODEX_REAL_BIN`. Unless
+the browser has an explicit override for new sessions, the UI follows those
+defaults instead of a fixed legacy `gpt-5.4` / `xhigh` pair. The selected model
+must advertise `ultra` for that choice to appear. Pulling this repository does
+not upgrade the Codex CLI or add capabilities to the selected runtime.
 
 ## Service Install
 

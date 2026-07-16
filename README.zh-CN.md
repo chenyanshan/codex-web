@@ -10,7 +10,7 @@ runtime、读写本地项目文件、执行 shell 命令，以及保存应用状
 tunnel、反向代理不属于本仓库范围。
 
 > 让 Codex 直接安装：
-> `帮我安装 https://github.com/chenyanshan/codex-mobile-web-app/blob/main/README.md`
+> `帮我安装 https://github.com/chenyanshan/codex-web/blob/main/README.md`
 
 ## 核心亮点
 
@@ -28,11 +28,11 @@ Codex Web 把 Codex 凭据、shell 执行能力和本地文件访问能力保留
 - project-first workspace，实时展示会话列表、聊天和 turn 状态。
 - 既适合局域网内访问，也适合接在你自己的远程访问入口之后使用。
 
-### 2. 面向完全互信团队的多人 facade
+### 2. 面向完全互信团队的多人访问控制层
 
-Codex Web 提供 Web 层多用户 facade，只适用于成员彼此完全信任的团队。RBAC 仅控制
-Web UI 和 HTTP API 暴露的内容，不提供 tenant、OS 用户、进程、Codex runtime 或
-文件系统隔离。所有 turn 仍以同一个宿主机用户身份执行，并继承该 Codex runtime
+Codex Web 提供 Web 层多人访问控制 facade，只适用于成员彼此完全信任的团队。RBAC
+仅控制 Web UI 和 HTTP API 暴露的内容，不提供租户、OS 用户、进程、Codex runtime
+或文件系统隔离。所有 turn 仍以同一个宿主机用户身份执行，并继承该 Codex runtime
 允许的访问能力。不受信任用户必须拆分到独立 OS 用户、容器或主机。
 
 | 手机管理审计 | 桌面用户管理 |
@@ -47,18 +47,25 @@ Web UI 和 HTTP API 暴露的内容，不提供 tenant、OS 用户、进程、Co
 
 - 密码保护的单主机 Codex Web 控制台。
 - 适合手机安装的 PWA，按设备持久保存浏览器 session。
-- project-first workspace：桌面端是项目栏、session 列表、chat 三栏；移动端是
-  项目 drawer。
+- 以项目为中心的响应式工作区：宽横屏桌面使用项目栏、会话列表、聊天三栏；窄窗口
+  和竖屏桌面自动切换为单会话布局，并保留桌面尺寸的输入框；手机通过项目抽屉导航。
+- 弱网恢复：设备端缓存会话摘要和最近使用的 5 个会话的有界对话记录，并持久化尚未
+  完成同步的乐观消息和排队中的纯文本消息。
+- 桌面端在对话顶部继续向上滚动、已安装 PWA 在时间线顶部下拉时，可逐步展开更早
+  的对话。
 - Codex turn 实时流：assistant delta、最终回答、命令批次、文件改动批次、
   approval 请求和 runtime 报错。
 - 面向完全互信用户的多用户/RBAC facade：项目授权、admin 管理和 observer mode。
 - 可选只读分享链接会打开独立对话页；公开分享默认关闭，必须由部署者显式开启。
-- turn 文件和图片附件。后端在本机保存文件，并把安全 local path 交给 Codex。
+- turn 文件和图片附件，桌面浏览器还可把剪贴板中的文件或图片直接粘贴到输入框。
+  后端在本机保存文件，并把安全 local path 交给 Codex。
+- 模型和推理选项来自当前 Codex CLI；当前 session 配置与本浏览器的新会话默认值
+  分开管理。
 - 已鉴权 reports 列表和报告查看器，以及仓库自带的 `codex-mobile-report`
   skill。
 - 仓库自带 `codex-web-user-context` skill，可在需要时读取当前 Codex Web
   登录用户和项目上下文。
-- macOS launchd 和 Linux systemd 服务脚本。
+- macOS launchd 服务脚本和 Linux systemd 配置说明。
 - English / 简体中文 UI 语言设置，以及 admin/单用户可管理的站点标题。
 - 6 套经过对比度校验的主题，首次使用默认日光黄，并提供纸白、石墨、北境蓝、
   森林绿和柔和玫瑰配色。
@@ -106,16 +113,25 @@ npm run codex-web -- auth set-password
 npm run serve
 ```
 
-默认监听 `0.0.0.0:43210`，同一局域网内的手机可以访问。Mac 本机仅使用
-`http://127.0.0.1:43210`。手机输入密码前，应在服务前接入你自己的 HTTPS 反向
-代理、tunnel 或私有网络 HTTPS 入口；明文局域网 HTTP 无法保护密码和 bearer
-token，Service Worker 也要求安全上下文。
+默认监听 `0.0.0.0:43210`，同一局域网内的手机可以访问。
+`http://127.0.0.1:43210` 只能从宿主机本机访问。其他设备输入密码前，应在服务前
+接入你自己的 HTTPS 反向代理、tunnel 或私有网络 HTTPS 入口；明文局域网 HTTP
+无法保护密码和 bearer token，Service Worker 也要求安全上下文。
 
 运行检查：
 
 ```bash
+npm run build
 npm run typecheck
 npm test
+npm run lint
+```
+
+浏览器测试使用 Playwright 和仓库自带的本地 fixture server：
+
+```bash
+npx playwright install chromium
+npm run test:browser
 ```
 
 ## AI 安装入口
@@ -152,19 +168,25 @@ scripts/install/install-codex-web-macos.sh
 ```text
 ~/.config/codex-web/service.env
 ~/.codex-web/auth.json
+~/.codex-web/identity.json
+~/.codex-web/session-settings.json
+~/.codex-web/session-timeline.json
 ~/.codex-web/logs/
 ~/.codex-web/reports/
 ~/.codex-web/report-index.json
 ~/.codex-web/uploads/
+~/.codex-web/tasks/
 ```
 
-`~/.codex-web/auth.json` 只保存加盐密码哈希和哈希后的 session token。浏览器只
-保存不透明 session token。不要把 `CODEX_WEB_PASSWORD` 写入 `service.env`。
+`auth.json` 保存单用户密码和 session token 的哈希；`identity.json` 保存多人模式
+的密码、session token、分享 capability 的哈希，以及 Web 层授权元数据。两者都不
+保存明文密码或 bearer token。就认证凭据而言，浏览器只保存不透明 session token。
+不要把 `CODEX_WEB_PASSWORD` 写入 `service.env`。
 
 非交互首次启动支持一次性 `CODEX_WEB_PASSWORD` 环境变量，但只能由本机 secret
 manager 注入。不要把明文密码写进 shell history 或 service env 文件。
 
-生成的 service env 默认类似：
+生成的 service env 包含以下核心默认项：
 
 ```env
 CODEX_WEB_HOST=0.0.0.0
@@ -188,6 +210,19 @@ CODEX_WEB_HOST=127.0.0.1
 `CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS` 配置，最长不超过 7 天。链接被撤销或多人模式
 关闭后也会立即失效。分享 URL 本质上是 bearer capability，必须按凭据保护。
 
+### 浏览器缓存与弱网
+
+Codex Web 会先显示本机浏览器缓存的会话摘要，再在后台向宿主机刷新。浏览器还会
+为最近使用的最多 5 个会话保存有界对话数据，因此稳定会话在弱网下可以更快打开，
+并在网络允许时继续与服务端的新状态校准。
+
+用户消息会在 turn 请求完成前先以乐观状态持久化。当前 turn 运行期间排队的纯文本
+消息也能跨刷新保留，并在活动 turn 状态校准后重试；turn 运行期间不能排队附件。
+
+这属于弱网恢复，不是完整离线运行。启动 turn、上传文件和刷新服务端状态仍需要
+连接宿主机，Service Worker 只缓存静态应用外壳。浏览器缓存可能包含对话文本，因此
+应使用可信的浏览器 profile，并在停用设备时清除该站点的数据。
+
 ### 存储生命周期
 
 Codex Web 只会按受管文件名或报告扩展名清理由自身管理的文件，不跟随符号链接，
@@ -209,7 +244,8 @@ Codex Web 只会按受管文件名或报告扩展名清理由自身管理的文�
 
 ## 附件
 
-消息输入框可以为下一次 Codex turn 上传文件和图片。所有上传接口都需要鉴权。
+消息输入框可以为下一次 Codex turn 上传文件和图片。桌面浏览器还可以把剪贴板中的
+文件或图片直接粘贴到输入框。所有上传接口都需要鉴权。
 
 项目目录可写时：
 
@@ -297,10 +333,11 @@ runtime context 文件路径注入到 turn 指令中，skill 再通过这个文�
 和刷新后的 session history 校准。
 
 - 活跃 turn 显示 `Running`。
-- 成功结束显示 `Done`。
+- 可恢复的流中断会在 turn 仍活动时显示 `Reconnecting`。
+- 空闲 session 和成功结束的 turn 显示 `Ready`。
 - `interrupted`、`cancelled`、`aborted` 显示 `Stopped`。
-- `401`、`403`、`429` 或 unexpected provider status 等 provider/runtime 报错
-  会作为红色 system 消息展示在时间线中。
+- provider/runtime 报错显示 `Failed`；`401`、`403`、`429` 或 unexpected
+  provider status 等详情会作为红色 system 消息展示在时间线中。
 
 如果 Codex Web 服务在 turn 运行中重启，Codex 可能把该 turn 标为
 `interrupted` 且没有 error payload。此时 UI 显示 `Stopped`，不显示红色报错，
@@ -319,9 +356,11 @@ scripts/service/restart-codex-web-launchd-user.sh
 
 重启后，请重新打开或刷新已安装的 PWA。
 
-Codex Web 中显示的推理选项由 `CODEX_REAL_BIN` 所选择的 Codex CLI 动态提供。
-只有当所选模型声明支持 `ultra` 时，界面才会显示该选项。仅拉取本仓库不会升级
-Codex CLI，也不会为所选运行时增加新能力。
+Codex Web 中显示的模型目录、配置默认值和模型声明的推理选项来自
+`CODEX_REAL_BIN` 所选择的 Codex CLI。除非本浏览器显式覆盖新会话默认值，界面会
+继承这些配置，而不是固定使用旧的 `gpt-5.4` / `xhigh`。只有当所选模型声明支持
+`ultra` 时，界面才会显示该选项。仅拉取本仓库不会升级 Codex CLI，也不会为所选
+运行时增加新能力。
 
 ## 服务安装
 

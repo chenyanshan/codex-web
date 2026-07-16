@@ -58,7 +58,8 @@ test('README files point AI installers to install.md and include PWA setup guida
 
   assert.match(readme, /install\.md/u);
   assert.match(readme, /AI install/i);
-  assert.match(readme, /Help me install https:\/\/github\.com\/chenyanshan\/codex-mobile-web-app\/blob\/main\/README\.md/u);
+  assert.match(readme, /Help me install https:\/\/github\.com\/chenyanshan\/codex-web\/blob\/main\/README\.md/u);
+  assert.doesNotMatch(readme, /chenyanshan\/codex-mobile-web-app\/blob\/main/u);
   assert.match(readme, /codex-mobile-report/u);
   assert.match(readme, /codex-web-user-context/u);
   assert.match(readme, /~\/\.codex\/skills\//u);
@@ -77,13 +78,14 @@ test('README files point AI installers to install.md and include PWA setup guida
 
   assert.match(readmeZh, /install\.md/u);
   assert.match(readmeZh, /AI 安装/u);
-  assert.match(readmeZh, /帮我安装 https:\/\/github\.com\/chenyanshan\/codex-mobile-web-app\/blob\/main\/README\.md/u);
+  assert.match(readmeZh, /帮我安装 https:\/\/github\.com\/chenyanshan\/codex-web\/blob\/main\/README\.md/u);
+  assert.doesNotMatch(readmeZh, /chenyanshan\/codex-mobile-web-app\/blob\/main/u);
   assert.match(readmeZh, /codex-mobile-report/u);
   assert.match(readmeZh, /codex-web-user-context/u);
   assert.match(readmeZh, /~\/\.codex\/skills\//u);
   assert.match(readmeZh, /添加到主屏幕/u);
   assert.match(readmeZh, /Android/u);
-  assert.match(readmeZh, /不提供 tenant、OS 用户、进程、Codex runtime 或/u);
+  assert.match(readmeZh, /不提供租户、OS 用户、进程、Codex runtime/u);
   assert.match(readmeZh, /CODEX_WEB_PUBLIC_SHARES_ENABLED=true/u);
   assert.match(readmeZh, /存储生命周期/u);
   assert.match(readmeZh, /CODEX_WEB_LOG_GENERATIONS/u);
