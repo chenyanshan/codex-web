@@ -6,9 +6,11 @@ const QUEUED_MESSAGES_KEY = 'codexWebQueuedMessages';
 const THEME_KEY = 'codexWebTheme';
 const SITE_TITLE_KEY = 'codexWebSiteTitle';
 const DEFAULT_THREAD_SETTINGS_KEY = 'codexWebDefaultThreadSettings';
+const DEFAULT_THREAD_SETTINGS_VERSION_KEY = 'codexWebDefaultThreadSettingsVersion';
+const DEFAULT_THREAD_SETTINGS_VERSION = '2';
 const MESSAGE_FONT_SIZE_KEY = 'codexWebMessageFontSize';
 const LANGUAGE_KEY = 'codexWebLanguage';
-const MAX_TIMELINE_CACHE_SESSIONS = 16;
+const MAX_TIMELINE_CACHE_SESSIONS = 5;
 const MAX_TIMELINE_CACHE_ITEMS = 80;
 const MAX_TIMELINE_CACHE_MAP_ITEMS = 24;
 const MAX_TIMELINE_ITEM_TEXT = 12000;
@@ -17,8 +19,10 @@ const MAX_TIMELINE_SUMMARY_ARRAY_ITEMS = 24;
 const MAX_TIMELINE_SUMMARY_OBJECT_KEYS = 32;
 const MAX_TIMELINE_SUMMARY_DEPTH = 4;
 const MIN_HYDRATED_COMPLETE_EXCHANGES = 2;
-const DEFAULT_MODEL = 'gpt-5.4';
-const DEFAULT_REASONING_EFFORT = 'xhigh';
+const DEFAULT_MODEL = '';
+const DEFAULT_REASONING_EFFORT = '';
+const LEGACY_DEFAULT_MODEL = 'gpt-5.4';
+const LEGACY_DEFAULT_REASONING_EFFORT = 'xhigh';
 const FALLBACK_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const DEFAULT_COLLABORATION_MODE = 'default';
 const DEFAULT_PERMISSION_PRESET = 'full-access';
@@ -47,6 +51,7 @@ const APP_VERSION_CHECK_COOLDOWN_MS = 15_000;
 const TIMELINE_PERSIST_DEBOUNCE_MS = 750;
 const FIRST_TURN_RECOVERY_DELAY_MS = 10_000;
 const LOCAL_TURN_SYNC_GRACE_MS = 10_000;
+const SESSION_DETAIL_CACHE_FRESH_MS = 3 * 60_000;
 const DESKTOP_WORKSPACE_MIN_WIDTH = 1280;
 const EDGE_SWIPE_START_PX = 24;
 const EDGE_SWIPE_TRIGGER_PX = 72;
@@ -140,6 +145,14 @@ const UI_TRANSLATIONS = {
     New: '新建',
     Setting: '设置',
     Settings: '设置',
+    Appearance: '外观',
+    Advanced: '高级',
+    Account: '账户',
+    Administration: '管理',
+    'Current session': '当前会话',
+    'Model and reasoning': '模型与推理',
+    Behavior: '行为',
+    Actions: '操作',
     Language: '语言',
     English: 'English',
     'Chinese (Simplified)': '中文',
@@ -171,6 +184,8 @@ const UI_TRANSLATIONS = {
     Medium: '中',
     Large: '大',
     'New Thread': '默认新会话',
+    'New sessions on this device': '此设备的新会话',
+    'Use Codex default': '跟随 Codex 配置',
     Model: '模型',
     Reasoning: '推理',
     Mode: '模式',
@@ -180,6 +195,8 @@ const UI_TRANSLATIONS = {
     Read: '只读',
     Ask: '询问',
     Full: '完全',
+    'Ask before changes': '修改前询问',
+    'Full access': '完全访问',
     Admin: '管理',
     'Log out': '退出登录',
     System: '系统',
@@ -312,6 +329,7 @@ const UI_TRANSLATIONS = {
     'Remove failed uploads before sending.': '发送前请移除上传失败的附件。',
     'Wait for uploads to finish before sending.': '请等待附件上传完成后再发送。',
     'Wait for the current turn to finish before attaching files.': '请等待当前任务结束后再添加附件。',
+    'Wait for the current attachment upload to finish.': '请等待当前附件上传完成。',
     'Attachments cannot be queued while a turn is running.': '任务运行中不能排队发送附件。',
     'No projects are available for this account.': '此账号暂无可用项目。',
     'Selected session was unavailable. Choose another session or create a new one.': '所选会话不可用。请选择其他会话或新建会话。',
@@ -329,6 +347,7 @@ const state = {
   token: localStorage.getItem(TOKEN_KEY) || '',
   authSession: null,
   models: [],
+  codexConfigDefaults: { model: '', reasoningEffort: '' },
   projects: [],
   projectsLoaded: false,
   newProjectId: '',
@@ -599,7 +618,7 @@ async function restoreAuth() {
     render();
     const [settingsPayload, modelsPayload] = await Promise.all([
       refreshGlobalSettings({ renderAfter: false }).catch(() => null),
-      apiFetch('/api/models').catch(() => ({ items: [] })),
+      apiFetch('/api/models').catch(() => ({ items: [], defaults: null })),
       refreshProjectsList({ renderAfter: false }).catch(() => []),
       refreshSessionsList({ renderAfter: false, scope: 'all' }).catch(() => null),
       refreshReportsList({ renderAfter: false }).catch(() => null),
@@ -610,12 +629,11 @@ async function restoreAuth() {
     state.authSession = session;
     applyGlobalSettingsPayload(settingsPayload, { renderAfter: false });
     state.models = Array.isArray(modelsPayload.items) ? modelsPayload.items : [];
-    initializeDefaultThreadSettingsFromCodexModels();
-    if (!state.sessionId) {
-      applyDefaultSettings();
+    initializeDefaultThreadSettingsFromCodex(modelsPayload.defaults);
+    if (state.sessionId && state.currentSession) {
+      applySessionSettings(state.currentSession);
     } else {
-      state.model = pickModel(state.models, state.model || DEFAULT_MODEL);
-      state.reasoningEffort = reasoningEffortForModel(state.model, state.reasoningEffort);
+      applyDefaultSettings();
     }
     state.status = 'Ready';
     state.statusTone = 'success';
@@ -1344,13 +1362,16 @@ function ensureDesktopActiveSession() {
   syncRuntimeStatusFromSession(firstSession, { source: 'stale' });
 }
 
-function isDesktopLayout() {
-  const hasDesktopPointer = typeof window?.matchMedia === 'function'
+function hasDesktopPointer() {
+  return typeof window?.matchMedia === 'function'
     ? window.matchMedia('(hover: hover) and (pointer: fine)').matches
     : false;
+}
+
+function isDesktopLayout() {
   const viewportWidth = typeof window?.innerWidth === 'number' ? window.innerWidth : 0;
   const viewportHeight = typeof window?.innerHeight === 'number' ? window.innerHeight : 0;
-  return hasDesktopPointer
+  return hasDesktopPointer()
     && viewportWidth >= DESKTOP_WORKSPACE_MIN_WIDTH
     && viewportWidth > viewportHeight;
 }
@@ -1614,68 +1635,74 @@ function renderDesktopSettingsPanel() {
 function renderAppSettingsSections() {
   return `
         ${renderSiteTitleSettingsSection()}
+        ${renderAppearanceSettingsSection()}
+        ${renderDefaultThreadSettingsSection()}
+        ${renderAdminSettingsSection({ title: 'Administration', showLoadingNote: true })}
+        ${renderRuntimeSettingsSection()}
         <section class="settings-section">
-          <div class="settings-section-title">Language</div>
-          <div class="toggle language-toggle">
-            <button type="button" data-app-language="en" aria-pressed="${String(state.language === 'en')}">English</button>
-            <button type="button" data-app-language="zh-CN" aria-pressed="${String(state.language === 'zh-CN')}">中文</button>
-          </div>
-        </section>
-        <section class="settings-section">
-          <div class="settings-section-title">Theme</div>
-          <div class="theme-picker" role="group" aria-label="Theme">
-            ${THEMES.map((theme) => `
-              <button class="theme-option" type="button" data-app-theme="${escapeAttribute(theme.id)}" aria-pressed="${String(state.theme === theme.id)}">
-                <span class="theme-swatch" aria-hidden="true">
-                  <span class="theme-swatch-surface"></span>
-                  <span class="theme-swatch-accent"></span>
-                </span>
-                <span class="theme-option-name">${escapeHtml(theme.label)}</span>
-              </button>
-            `).join('')}
-          </div>
-        </section>
-        <section class="settings-section">
-          <div class="settings-section-title">Message Size</div>
-          <div class="toggle message-size-toggle">
-            <button type="button" data-message-font-size="small" aria-pressed="${String(state.messageFontSize === 'small')}">Small</button>
-            <button type="button" data-message-font-size="medium" aria-pressed="${String(state.messageFontSize === 'medium')}">Medium</button>
-            <button type="button" data-message-font-size="large" aria-pressed="${String(state.messageFontSize === 'large')}">Large</button>
-          </div>
-        </section>
-        <section class="settings-section">
-          <div class="settings-section-title">New Thread</div>
-          <div class="controls">
-            <div class="control-group">
-              <label for="default-model-select">Model</label>
-              <select id="default-model-select" name="defaultModel" data-i18n-skip>${renderModelOptions(state.defaultThreadSettings.model)}</select>
-            </div>
-            <div class="control-group">
-              <label for="default-reasoning-select">Reasoning</label>
-              <select id="default-reasoning-select" name="defaultReasoningEffort" data-i18n-skip>
-                ${renderReasoningOptions(state.defaultThreadSettings.reasoningEffort, state.defaultThreadSettings.model)}
-              </select>
-            </div>
-            <div class="control-group">
-              <label>Mode</label>
-              <div class="toggle">
-                <button type="button" data-default-mode="default" aria-pressed="${String(state.defaultThreadSettings.collaborationMode === 'default')}">Default</button>
-                <button type="button" data-default-mode="plan" aria-pressed="${String(state.defaultThreadSettings.collaborationMode === 'plan')}">Plan</button>
-              </div>
-            </div>
-            <div class="control-group">
-              <label>Permissions</label>
-              <div class="toggle permission-toggle">
-                <button type="button" data-default-permission-preset="read-only" aria-pressed="${String(defaultThreadAccessPreset() === 'read-only')}">Read</button>
-                <button type="button" data-default-permission-preset="default" aria-pressed="${String(defaultThreadAccessPreset() === 'default')}">Ask</button>
-                ${isManagedMultiUserPrincipal() ? '' : `<button type="button" data-default-permission-preset="full-access" aria-pressed="${String(defaultThreadAccessPreset() === 'full-access')}">Full</button>`}
-              </div>
-            </div>
-          </div>
-        </section>
-        ${renderAdminSettingsSection({ title: 'Admin', showLoadingNote: true })}
-        <section class="settings-section">
+          <div class="settings-section-title">Account</div>
           <button class="danger compact-button full-width-button" type="button" id="settings-logout-button">Log out</button>
+        </section>
+  `;
+}
+
+function renderAppearanceSettingsSection() {
+  return `
+        <section class="settings-section">
+          <div class="settings-section-title">Appearance</div>
+          <div class="settings-field">
+            <div class="settings-field-label">Language</div>
+            <div class="toggle language-toggle" role="group" aria-label="Language">
+              <button type="button" data-app-language="en" aria-pressed="${String(state.language === 'en')}">English</button>
+              <button type="button" data-app-language="zh-CN" aria-pressed="${String(state.language === 'zh-CN')}">中文</button>
+            </div>
+          </div>
+          <div class="settings-field">
+            <div class="settings-field-label">Theme</div>
+            <div class="theme-picker" role="group" aria-label="Theme">
+              ${THEMES.map((theme) => `
+                <button class="theme-option" type="button" data-app-theme="${escapeAttribute(theme.id)}" aria-pressed="${String(state.theme === theme.id)}">
+                  <span class="theme-swatch" aria-hidden="true">
+                    <span class="theme-swatch-surface"></span>
+                    <span class="theme-swatch-accent"></span>
+                  </span>
+                  <span class="theme-option-name">${escapeHtml(theme.label)}</span>
+                </button>
+              `).join('')}
+            </div>
+          </div>
+          <div class="settings-field">
+            <div class="settings-field-label">Message Size</div>
+            <div class="toggle message-size-toggle" role="group" aria-label="Message Size">
+              <button type="button" data-message-font-size="small" aria-pressed="${String(state.messageFontSize === 'small')}">Small</button>
+              <button type="button" data-message-font-size="medium" aria-pressed="${String(state.messageFontSize === 'medium')}">Medium</button>
+              <button type="button" data-message-font-size="large" aria-pressed="${String(state.messageFontSize === 'large')}">Large</button>
+            </div>
+          </div>
+        </section>
+  `;
+}
+
+function renderDefaultThreadSettingsSection() {
+  return `
+        <section class="settings-section default-thread-settings-section">
+          <div class="settings-section-title">New sessions on this device</div>
+          ${renderThreadSettingsControls({ defaults: true })}
+        </section>
+  `;
+}
+
+function renderRuntimeSettingsSection() {
+  if (isManagedMultiUserPrincipal()) {
+    return '';
+  }
+  return `
+        <section class="settings-section">
+          <div class="settings-section-title">Advanced</div>
+          <div class="settings-action-row">
+            <span class="meta">Runtime</span>
+            <button class="ghost compact-button" type="button" id="runtime-reload-button">Reload</button>
+          </div>
         </section>
   `;
 }
@@ -2244,7 +2271,7 @@ function renderChatHeaderActions({ readOnly, sessionReportsProject }) {
   }
   return `
           <div class="chat-header-actions">
-            ${state.pendingTurn && state.turnId ? '<button class="danger icon-button turn-stop-button" type="button" id="stop-button" aria-label="Stop current turn" title="Stop current turn"><span aria-hidden="true">&#9632;</span></button>' : ''}
+            ${state.pendingTurn && state.turnId ? '<button class="danger icon-button turn-stop-button" type="button" id="stop-button" aria-label="Stop current turn" title="Stop current turn"><span aria-hidden="true">■</span></button>' : ''}
             ${canOpenSettings ? `<button class="ghost icon-button settings-toggle-button" type="button" id="settings-toggle" aria-label="Session menu" title="Session menu" aria-expanded="${String(state.settingsOpen)}">${renderMoreButtonIcon()}</button>` : ''}
             ${!canOpenSettings && sessionReportsProject ? `<button class="ghost compact-button session-report-button" type="button" data-session-reports-project="${escapeAttribute(sessionReportsProject)}">Reports</button>` : ''}
           </div>
@@ -2703,7 +2730,7 @@ function renderSessionCards() {
         <div class="session-card-actions">
           <button class="ghost compact-button session-favorite" type="button" data-session-favorite-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(favoriteLabel)}" title="${escapeAttribute(favoriteLabel)}" aria-pressed="${String(favorite)}"><span class="session-action-symbol" aria-hidden="true">${favorite ? '&#9733;' : '&#9734;'}</span></button>
           ${session.archived === true
-            ? `<button class="ghost compact-button session-archive" type="button" data-session-unarchive-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}"><span class="session-action-symbol" aria-hidden="true">&#8638;</span></button>`
+            ? `<button class="ghost compact-button session-archive" type="button" data-session-unarchive-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderUnarchiveActionIcon()}</button>`
             : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderArchiveActionIcon()}</button>`}
         </div>
       </article>
@@ -2810,6 +2837,17 @@ function renderArchiveActionIcon() {
   `;
 }
 
+function renderUnarchiveActionIcon() {
+  return `
+    <svg class="session-action-icon session-action-icon-stroke" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3" y="4" width="18" height="4" rx="1"></rect>
+      <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"></path>
+      <path d="m9 14 3-3 3 3"></path>
+      <path d="M12 11v7"></path>
+    </svg>
+  `;
+}
+
 function renderArchiveConfirmModal() {
   const session = state.sessions.find((item) => item.id === state.archiveConfirmSessionId);
   if (!session) {
@@ -2853,44 +2891,74 @@ function renderSettingsDrawer() {
   return `
     <div class="settings-drawer" role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings">
       <div class="settings-drawer-header">
-        <span class="settings-section-title">Session</span>
-        <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus><span aria-hidden="true">&times;</span></button>
+        <span class="settings-section-title">Current session</span>
+        <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus><span aria-hidden="true">×</span></button>
       </div>
-      ${renderSessionReportsSettingsControl()}
-      ${renderShareSettingsControl()}
-      ${renderSessionManagementControl()}
-      <div class="settings-action-row">
-        <span class="meta">Runtime</span>
-        <button class="ghost compact-button" type="button" id="runtime-reload-button">Reload</button>
+      <div class="settings-drawer-section">
+        <div class="settings-drawer-section-title">Model and reasoning</div>
+        ${renderThreadSettingsControls({ modelOnly: true })}
       </div>
-      <div class="controls">
+      <div class="settings-drawer-section">
+        <div class="settings-drawer-section-title">Behavior</div>
+        ${renderThreadSettingsControls({ behaviorOnly: true })}
+      </div>
+      ${renderSessionActionsSettingsSection()}
+    </div>
+  `;
+}
+
+function renderThreadSettingsControls({ defaults = false, modelOnly = false, behaviorOnly = false } = {}) {
+  const prefix = defaults ? 'default-' : '';
+  const settings = defaults ? state.defaultThreadSettings : state;
+  const accessPreset = defaults ? defaultThreadAccessPreset() : state.permissionPreset;
+  const modelControls = `
         <div class="control-group">
-          <label for="model-select">Model</label>
-          <select id="model-select" name="model" data-i18n-skip>${renderModelOptions()}</select>
+          <label for="${prefix}model-select">Model</label>
+          <select id="${prefix}model-select" name="${defaults ? 'defaultModel' : 'model'}" data-i18n-skip>${renderModelOptions(settings.model)}</select>
         </div>
         <div class="control-group">
-          <label for="reasoning-select">Reasoning</label>
-          <select id="reasoning-select" name="reasoningEffort" data-i18n-skip>
-            ${renderReasoningOptions(state.reasoningEffort, state.model)}
+          <label for="${prefix}reasoning-select">Reasoning</label>
+          <select id="${prefix}reasoning-select" name="${defaults ? 'defaultReasoningEffort' : 'reasoningEffort'}" data-i18n-skip>
+            ${renderReasoningOptions(settings.reasoningEffort, settings.model)}
           </select>
         </div>
-        <div class="control-group">
-          <label>Mode</label>
-          <div class="toggle">
-            <button type="button" data-mode="default" aria-pressed="${String(state.collaborationMode === 'default')}">Default</button>
-            <button type="button" data-mode="plan" aria-pressed="${String(state.collaborationMode === 'plan')}">Plan</button>
+  `;
+  const modeAttribute = defaults ? 'data-default-mode' : 'data-mode';
+  const permissionAttribute = defaults ? 'data-default-permission-preset' : 'data-permission-preset';
+  const behaviorControls = `
+        <div class="control-group thread-setting-wide">
+          <label id="${prefix}mode-label">Mode</label>
+          <div class="toggle" role="group" aria-labelledby="${prefix}mode-label">
+            <button type="button" ${modeAttribute}="default" aria-pressed="${String(settings.collaborationMode === 'default')}">Default</button>
+            <button type="button" ${modeAttribute}="plan" aria-pressed="${String(settings.collaborationMode === 'plan')}">Plan</button>
           </div>
         </div>
-        <div class="control-group">
-          <label>Permissions</label>
-          <div class="toggle permission-toggle">
-            <button type="button" data-permission-preset="read-only" aria-pressed="${String(state.permissionPreset === 'read-only')}">Read</button>
-            <button type="button" data-permission-preset="default" aria-pressed="${String(state.permissionPreset === 'default')}">Ask</button>
-            ${isManagedMultiUserPrincipal() ? '' : `<button type="button" data-permission-preset="full-access" aria-pressed="${String(state.permissionPreset === 'full-access')}">Full</button>`}
+        <div class="control-group thread-setting-wide">
+          <label id="${prefix}permissions-label">Permissions</label>
+          <div class="toggle permission-toggle" role="group" aria-labelledby="${prefix}permissions-label">
+            <button type="button" ${permissionAttribute}="read-only" aria-pressed="${String(accessPreset === 'read-only')}">Read only</button>
+            <button type="button" ${permissionAttribute}="default" aria-pressed="${String(accessPreset === 'default')}">Ask before changes</button>
+            ${isManagedMultiUserPrincipal() ? '' : `<button type="button" ${permissionAttribute}="full-access" aria-pressed="${String(accessPreset === 'full-access')}">Full access</button>`}
           </div>
         </div>
+  `;
+  return `<div class="thread-settings-grid">${behaviorOnly ? behaviorControls : modelOnly ? modelControls : `${modelControls}${behaviorControls}`}</div>`;
+}
+
+function renderSessionActionsSettingsSection() {
+  const controls = [
+    renderSessionReportsSettingsControl(),
+    renderShareSettingsControl(),
+    renderSessionManagementControl(),
+  ].filter(Boolean).join('');
+  if (!controls) {
+    return '';
+  }
+  return `
+      <div class="settings-drawer-section settings-drawer-actions">
+        <div class="settings-drawer-section-title">Actions</div>
+        ${controls}
       </div>
-    </div>
   `;
 }
 
@@ -3304,9 +3372,11 @@ function renderSummary(summary) {
 
 function renderModelOptions(currentValue = state.model) {
   const current = currentValue || '';
-  const options = [];
+  const options = [{ id: '', label: t('Use Codex default') }];
   if (!state.models.length) {
-    options.push({ id: current, label: current || 'Default model' });
+    if (current) {
+      options.push({ id: current, label: current });
+    }
   } else {
     for (const model of state.models) {
       options.push({
@@ -3332,7 +3402,8 @@ function renderReasoningOptions(currentValue = state.reasoningEffort, modelValue
     ...reasoningEffortsForModel(modelValue),
     selected,
   ]);
-  return renderOptions(options, selected);
+  const inherited = selected ? '' : ' selected';
+  return `<option value=""${inherited} data-i18n-skip>${escapeHtml(t('Use Codex default'))}</option>${renderOptions(options, selected)}`;
 }
 
 function renderOptions(values, current) {
@@ -3391,6 +3462,9 @@ function reasoningEffortsForModel(modelValue) {
 function reasoningEffortForModel(modelValue, effortValue) {
   const model = findModelInfo(modelValue);
   const requested = normalizeNonEmptyString(effortValue);
+  if (!requested) {
+    return '';
+  }
   const supported = normalizeReasoningEffortList(model?.supportedReasoningEfforts);
   if (!supported.length) {
     return requested || normalizeNonEmptyString(model?.defaultReasoningEffort) || DEFAULT_REASONING_EFFORT;
@@ -3872,6 +3946,9 @@ function bindGlobalEvents() {
     listenRendered(promptInput, 'touchstart', syncPromptFocusLayout, { passive: true });
     listenRendered(promptInput, 'focus', syncPromptFocusLayout);
     listenRendered(promptInput, 'keydown', handlePromptKeydown);
+    listenRendered(promptInput, 'paste', (event) => {
+      void handlePromptPaste(event);
+    });
     listenRendered(promptInput, 'input', (event) => {
       state.prompt = event.target.value;
       savePromptDraftForCurrentSession();
@@ -3913,7 +3990,9 @@ function bindGlobalEvents() {
   if (modelSelect) {
     listenRendered(modelSelect, 'change', (event) => {
       state.model = event.target.value;
-      state.reasoningEffort = reasoningEffortForModel(state.model, state.reasoningEffort);
+      state.reasoningEffort = state.model
+        ? reasoningEffortForModel(state.model, state.reasoningEffort)
+        : '';
       withTimelineScrollPreserved(() => render());
       void updateSessionSettings();
     });
@@ -3948,7 +4027,9 @@ function bindGlobalEvents() {
     listenRendered(defaultModelSelect, 'change', (event) => {
       applyDefaultThreadSettings({
         model: event.target.value,
-        reasoningEffort: reasoningEffortForModel(event.target.value, state.defaultThreadSettings.reasoningEffort),
+        reasoningEffort: event.target.value
+          ? reasoningEffortForModel(event.target.value, state.defaultThreadSettings.reasoningEffort)
+          : '',
       });
       render();
     });
@@ -4281,14 +4362,61 @@ async function handleAttachmentInputChange(event) {
   if (!files.length) {
     return;
   }
+  await handleComposerAttachmentFiles(files);
+}
+
+async function handlePromptPaste(event) {
+  if (!hasDesktopPointer()) {
+    return false;
+  }
+  const files = clipboardFilesFromPasteEvent(event);
+  if (!files.length) {
+    return false;
+  }
+  event?.preventDefault?.();
+  await handleComposerAttachmentFiles(files);
+  return true;
+}
+
+function clipboardFilesFromPasteEvent(event) {
+  const directFiles = Array.from(event?.clipboardData?.files || []).filter(Boolean);
+  if (directFiles.length) {
+    return directFiles;
+  }
+  const files = [];
+  for (const item of Array.from(event?.clipboardData?.items || [])) {
+    if (item?.kind !== 'file') {
+      continue;
+    }
+    const file = item.getAsFile?.();
+    if (file) {
+      files.push(file);
+    }
+  }
+  return files;
+}
+
+async function handleComposerAttachmentFiles(files) {
+  const normalizedFiles = Array.from(files || []).filter(Boolean);
+  if (!normalizedFiles.length) {
+    return false;
+  }
   if (state.pendingTurn) {
     state.error = 'Wait for the current turn to finish before attaching files.';
     state.status = 'Turn running';
     state.statusTone = 'warn';
     renderChatAtLatestIfFollowing(() => {});
-    return;
+    return false;
   }
-  await uploadComposerAttachments(files);
+  if (hasUploadingComposerAttachments()) {
+    state.error = 'Wait for the current attachment upload to finish.';
+    state.status = 'Uploading attachment';
+    state.statusTone = 'warn';
+    renderChatAtLatestIfFollowing(() => {});
+    return false;
+  }
+  await uploadComposerAttachments(normalizedFiles);
+  return true;
 }
 
 async function uploadComposerAttachments(files) {
@@ -4674,7 +4802,7 @@ function autoGrowPromptInput(textarea) {
     return;
   }
   textarea.style.height = 'auto';
-  const maxHeight = isDesktopLayout() ? DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT : PROMPT_TEXTAREA_MAX_HEIGHT;
+  const maxHeight = hasDesktopPointer() ? DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT : PROMPT_TEXTAREA_MAX_HEIGHT;
   const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
   textarea.style.height = `${Math.max(38, nextHeight)}px`;
 }
@@ -4759,7 +4887,9 @@ function detachTimelineScrollTracking() {
 }
 
 function handleTimelineWheel(event) {
-  if (!isDesktopWorkspaceView() || !state.sessionId || Number(event?.deltaY || 0) >= 0) {
+  const isVisibleDesktopChat = hasDesktopPointer()
+    && (state.view === 'chat' || isDesktopWorkspaceView());
+  if (!isVisibleDesktopChat || !state.sessionId || Number(event?.deltaY || 0) >= 0) {
     return;
   }
   const timeline = document.querySelector('#timeline');
@@ -5133,6 +5263,9 @@ async function selectSession(sessionId) {
   restorePromptDraftForSession(nextSession.id);
   applySessionSettings(nextSession);
   restoreTimelineForSession(nextSession, readOnlyTimelineRestoreOptions(nextSession));
+  const cachedTimeline = state.timelineCache.get(nextSession.id);
+  const hasCachedTimeline = Boolean(cachedTimeline?.timeline?.length);
+  const useFreshDetailCache = canUseFreshSessionDetailCache(nextSession, cachedTimeline);
   const restoredRuntimeStatus = syncRuntimeStatusFromSession(nextSession, { source: 'stale' });
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
   state.chatReturnView = 'sessions';
@@ -5143,22 +5276,40 @@ async function selectSession(sessionId) {
   state.settingsOpen = false;
   state.composerAttachments = [];
   state.error = '';
-  state.status = restoredRuntimeStatus.changed && restoredRuntimeStatus.activeTurnId ? 'Turn running' : 'Loading session';
-  state.statusTone = 'warn';
+  state.status = restoredRuntimeStatus.changed && restoredRuntimeStatus.activeTurnId
+    ? 'Turn running'
+    : useFreshDetailCache
+      ? 'Ready'
+      : hasCachedTimeline
+        ? 'Refreshing'
+        : 'Loading session';
+  state.statusTone = useFreshDetailCache ? 'success' : 'warn';
   setTimelineOpenPositionForSession(nextSession);
   render();
   scrollTimelineToOpenPositionForSession(nextSession);
+  if (useFreshDetailCache) {
+    return;
+  }
+  let detailSession = null;
   try {
     const payload = await apiFetch(`/api/sessions/${encodeURIComponent(nextSession.id)}`);
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
-    upsertSession(payload.session);
+    detailSession = payload.session;
+    upsertSession(detailSession);
   } catch (error) {
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
     if (handleMissingSession(error, '')) {
+      return;
+    }
+    if (hasCachedTimeline && state.sessionId === sessionId) {
+      state.error = '';
+      state.status = 'Ready';
+      state.statusTone = 'warn';
+      render();
       return;
     }
     handleApiError(error);
@@ -5173,7 +5324,13 @@ async function selectSession(sessionId) {
   state.cwd = refreshedSession.cwd || '';
   restorePromptDraftForSession(refreshedSession.id);
   applySessionSettings(refreshedSession);
-  restoreTimelineForSession(refreshedSession, readOnlyTimelineRestoreOptions(refreshedSession));
+  if (isReadOnlySession(refreshedSession)) {
+    restoreTimelineForSession(refreshedSession, { fullHistory: true });
+  } else {
+    hydrateCurrentTimelineFromSession(refreshedSession);
+  }
+  saveCurrentTimeline();
+  markTimelineCacheValidated(detailSession || refreshedSession);
   const refreshedRuntimeStatus = syncRuntimeStatusFromSession(refreshedSession);
   state.error = '';
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
@@ -5263,6 +5420,9 @@ async function sendComposerMessage(text, { queuedMessageId = '', sessionId: pref
     ...(attachments.length ? { attachments } : {}),
   };
   appendMessage(optimisticUserEntry);
+  if (state.sessionId) {
+    saveCurrentTimeline();
+  }
   const promptToSend = text;
   clearPromptDraftForCurrentSession();
   renderChatAtLatest(() => {});
@@ -5302,16 +5462,25 @@ async function sendComposerMessage(text, { queuedMessageId = '', sessionId: pref
       removeQueuedMessage(sessionId, queuedMessageId);
     }
     if (turn?.type === 'command') {
-      handleCommandResult(turn);
+      if (state.sessionId === sessionId) {
+        handleCommandResult(turn);
+      } else if (turn.session) {
+        upsertSession(turn.session);
+      }
       return;
     }
     if (turn.session) {
       upsertSession(turn.session);
-      state.sessionId = turn.session.id;
-      state.currentSession = turn.session;
-      state.cwd = turn.session.cwd || state.cwd;
-      resetSessionHistoryWindow();
-      optimisticallyUpdateSessionInput(promptToSend);
+      if (state.sessionId === sessionId) {
+        state.currentSession = state.currentSession?.id === sessionId ? state.currentSession : turn.session;
+        state.cwd = turn.session.cwd || state.cwd;
+        resetSessionHistoryWindow();
+        optimisticallyUpdateSessionInput(promptToSend);
+      }
+    }
+    if (state.sessionId !== sessionId) {
+      setSessionSummaryActivity(sessionId, 'running', turn.turnId);
+      return;
     }
     state.turnId = turn.turnId;
     markLocallyStartedTurn(turn.turnId);
@@ -5476,6 +5645,7 @@ async function ensureSession() {
   state.draftSessionActive = false;
   state.cwd = payload.session.cwd || state.cwd;
   upsertSession(payload.session);
+  applySessionSettings(payload.session);
   return state.sessionId;
 }
 
@@ -7442,7 +7612,7 @@ function hydrateCurrentTimelineFromSession(session) {
   if (!fullHistory.length) {
     return false;
   }
-  const previousStart = state.sessionHistoryItems.length
+  const previousStart = state.sessionHistoryItems.length && !isPreviewOnlySessionHistory()
     ? Math.min(state.sessionHistoryStartIndex, fullHistory.length)
     : visibleHydratedStartIndex(fullHistory);
   setSessionHistoryWindow(fullHistory, previousStart);
@@ -7456,14 +7626,32 @@ function hydrateCurrentTimelineFromSession(session) {
   const hydratedDisplay = timelineMessageDisplaySignature(visibleHydrated);
   const sameMessageText = hydratedText === currentText;
   const sameMessageDisplay = sameMessageText && hydratedDisplay === currentDisplay;
-  if (!hydratedText || sameMessageDisplay || (!sameMessageText && currentText.includes(hydratedText))) {
+  if (!hydratedText || sameMessageDisplay) {
     return false;
+  }
+  if (!sameMessageText && currentText.includes(hydratedText)) {
+    const pendingMessages = state.timeline.filter((item) => item?.kind === 'message' && item?.meta === 'pending');
+    const unmatchedPendingMessages = pendingTimelineMessagesMissingFromHistory(fullHistory, state.timeline);
+    if (unmatchedPendingMessages.length) {
+      const historyWithPending = [...fullHistory, ...unmatchedPendingMessages.map((item) => ({ ...item }))];
+      setSessionHistoryWindow(historyWithPending, Math.min(previousStart, fullHistory.length));
+      return false;
+    }
+    if (!pendingMessages.length) {
+      return false;
+    }
   }
   state.timeline = visibleHydrated.map((item) => ({ ...item }));
   state.batches = new Map();
   state.approvals = new Map();
   saveCurrentTimeline();
   return true;
+}
+
+function isPreviewOnlySessionHistory() {
+  return state.sessionHistoryItems.length === 1
+    && state.sessionHistoryItems[0]?.kind === 'message'
+    && state.sessionHistoryItems[0]?.meta === 'preview';
 }
 
 function timelineMessageSignature(items) {
@@ -7495,6 +7683,40 @@ function timelineMessageDisplaySignature(items) {
       ].join('\u0000');
     })
     .join('\n');
+}
+
+function pendingTimelineMessagesMissingFromHistory(historyItems, timelineItems) {
+  const historyMessages = (Array.isArray(historyItems) ? historyItems : [])
+    .filter((item) => item?.kind === 'message');
+  const localMessages = (Array.isArray(timelineItems) ? timelineItems : [])
+    .filter((item) => item?.kind === 'message');
+  return localMessages.filter((item, index) => {
+    if (item?.meta !== 'pending') {
+      return false;
+    }
+    const identity = timelineMessageIdentity(item);
+    const priorOccurrences = localMessages
+      .slice(0, index)
+      .filter((candidate) => timelineMessageIdentity(candidate) === identity)
+      .length;
+    const historyOccurrences = historyMessages
+      .filter((candidate) => timelineMessageIdentity(candidate) === identity)
+      .length;
+    return historyOccurrences <= priorOccurrences;
+  });
+}
+
+function timelineMessageIdentity(item) {
+  const attachments = normalizeTimelineAttachments(item?.attachments)
+    .map((attachment) => [
+      attachment.kind || '',
+      attachment.localPath || '',
+      attachment.fileName || '',
+      attachment.mimeType || '',
+      typeof attachment.sizeBytes === 'number' ? attachment.sizeBytes : '',
+    ].join(':'))
+    .join('|');
+  return [item?.role || '', item?.text || '', attachments].join('\u0000');
 }
 
 function syncRuntimeStatusFromSession(session, { source = 'detail' } = {}) {
@@ -8065,6 +8287,10 @@ function mergeSessionSummary(previous, next) {
   }
   const previousUpdatedAt = previous.updatedAt || 0;
   const nextUpdatedAt = next.updatedAt || 0;
+  const previousInputAt = previous.lastInputAt || previousUpdatedAt;
+  const nextInputAt = next.lastInputAt || nextUpdatedAt;
+  const latestInput = nextInputAt >= previousInputAt ? next : previous;
+  const olderInput = latestInput === next ? previous : next;
   return {
     ...previous,
     ...next,
@@ -8073,8 +8299,8 @@ function mergeSessionSummary(previous, next) {
     title: next.title || previous.title,
     preview: next.preview || previous.preview,
     firstUserInput: next.firstUserInput || previous.firstUserInput,
-    lastUserInput: next.lastUserInput || previous.lastUserInput,
-    lastInputAt: next.lastInputAt || previous.lastInputAt,
+    lastUserInput: latestInput.lastUserInput || olderInput.lastUserInput,
+    lastInputAt: Math.max(previousInputAt, nextInputAt) || null,
     updatedAt: Math.max(previousUpdatedAt, nextUpdatedAt) || null,
   };
 }
@@ -8097,13 +8323,39 @@ function saveCurrentTimeline() {
     persistTimelineCache();
     return;
   }
+  const previous = state.timelineCache.get(state.sessionId);
+  const historySnapshot = timelineHistorySnapshotForCache(previous);
   state.timelineCache.set(state.sessionId, {
     savedAt: Date.now(),
+    validatedAt: previous?.validatedAt || 0,
+    sessionUpdatedAt: previous?.sessionUpdatedAt || 0,
     timeline,
+    ...historySnapshot,
     batches: cloneCacheMap(state.batches),
     approvals: cloneCacheMap(state.approvals),
   });
   persistTimelineCache();
+}
+
+function timelineHistorySnapshotForCache(previous) {
+  const hasAuthoritativeHistory = hasAuthoritativeSessionHistory(state.currentSession)
+    && state.sessionHistoryItems.length > 0;
+  const baseHistory = hasAuthoritativeHistory
+    ? state.sessionHistoryItems
+    : Array.isArray(previous?.history)
+      ? previous.history
+      : [];
+  const pendingMessages = pendingTimelineMessagesMissingFromHistory(baseHistory, state.timeline);
+  const combinedHistory = [
+    ...baseHistory,
+    ...pendingMessages.map((item) => ({ ...item })),
+  ];
+  const history = cloneTimelineEntries(combinedHistory);
+  const baseHistoryComplete = hasAuthoritativeHistory || previous?.historyComplete === true;
+  return {
+    history,
+    historyComplete: Boolean(baseHistoryComplete && history.length === combinedHistory.length),
+  };
 }
 
 function scheduleCurrentTimelineSave() {
@@ -8146,12 +8398,16 @@ function restoreTimelineForSession(session, options = {}) {
   if (cached) {
     state.batches = new Map(cached.batches);
     state.approvals = new Map(cached.approvals);
-    if (fullHistory.length) {
-      const currentStart = visibleStartIndexForTimeline(fullHistory, cached.timeline);
-      setSessionHistoryWindow(fullHistory, currentStart);
-      state.timeline = state.sessionHistoryItems.slice(currentStart).map((item) => ({ ...item }));
-    } else {
-      state.timeline = cached.timeline.map((item) => ({ ...item }));
+    state.timeline = cached.timeline.map((item) => ({ ...item }));
+    const cachedHistory = Array.isArray(cached.history) ? cached.history : [];
+    const historyItems = cachedHistory.length
+      ? cachedHistory
+      : hasAuthoritativeSessionHistory(session)
+        ? fullHistory
+        : [];
+    if (historyItems.length) {
+      const currentStart = visibleStartIndexForTimeline(historyItems, cached.timeline);
+      setSessionHistoryWindow(historyItems, currentStart);
     }
     return;
   }
@@ -8159,6 +8415,59 @@ function restoreTimelineForSession(session, options = {}) {
   setSessionHistoryWindow(fullHistory, visibleHydratedStartIndex(fullHistory));
   state.batches = new Map();
   state.approvals = new Map();
+}
+
+function hasAuthoritativeSessionHistory(session) {
+  return Object.prototype.hasOwnProperty.call(session || {}, 'timeline')
+    || Array.isArray(session?.thread?.turns);
+}
+
+function canUseFreshSessionDetailCache(session, cached = state.timelineCache.get(session?.id)) {
+  if (!session?.id
+    || !cached?.timeline?.length
+    || !cached?.history?.length
+    || cached?.historyComplete !== true
+    || isReadOnlySession(session)) {
+    return false;
+  }
+  if (sessionActivityStateFromSummary(session) || findActiveTurn(session)) {
+    return false;
+  }
+  if (cached.timeline.some((item) => item?.kind === 'message' && (
+    item?.meta === 'pending'
+    || (item?.role === 'assistant' && ['analysis', 'commentary', 'streaming'].includes(item?.meta))
+  ))) {
+    return false;
+  }
+  const approvals = cached.approvals instanceof Map ? cached.approvals : new Map();
+  if ([...approvals.values()].some((approval) => approval?.resolved === false)) {
+    return false;
+  }
+  const validatedAt = Number(cached.validatedAt) || 0;
+  if (!validatedAt || Date.now() - validatedAt > SESSION_DETAIL_CACHE_FRESH_MS) {
+    return false;
+  }
+  return sessionRevision(session) <= (Number(cached.sessionUpdatedAt) || 0);
+}
+
+function sessionRevision(session) {
+  return Math.max(Number(session?.updatedAt) || 0, Number(session?.lastInputAt) || 0);
+}
+
+function markTimelineCacheValidated(session) {
+  if (!session?.id) {
+    return;
+  }
+  const cached = state.timelineCache.get(session.id);
+  if (!cached?.timeline?.length) {
+    return;
+  }
+  state.timelineCache.set(session.id, {
+    ...cached,
+    validatedAt: Date.now(),
+    sessionUpdatedAt: sessionRevision(session),
+  });
+  persistTimelineCache();
 }
 
 function loadTimelineCache() {
@@ -8170,10 +8479,16 @@ function loadTimelineCache() {
       : Array.isArray(parsed)
         ? parsed
         : [];
-    for (const entry of entries) {
-      const cacheEntry = deserializeTimelineCacheEntry(entry);
-      if (cacheEntry) {
+    const cacheEntries = entries
+      .map((entry) => deserializeTimelineCacheEntry(entry))
+      .filter(Boolean)
+      .sort((left, right) => right.value.savedAt - left.value.savedAt);
+    for (const cacheEntry of cacheEntries) {
+      if (!cache.has(cacheEntry.sessionId)) {
         cache.set(cacheEntry.sessionId, cacheEntry.value);
+      }
+      if (cache.size >= MAX_TIMELINE_CACHE_SESSIONS) {
+        break;
       }
     }
   } catch (_error) {
@@ -8264,7 +8579,11 @@ function serializeTimelineCacheEntry(sessionId, value) {
   return {
     sessionId,
     savedAt: typeof value.savedAt === 'number' ? value.savedAt : 0,
+    validatedAt: typeof value.validatedAt === 'number' ? value.validatedAt : 0,
+    sessionUpdatedAt: typeof value.sessionUpdatedAt === 'number' ? value.sessionUpdatedAt : 0,
     timeline: cloneTimelineEntries(value.timeline || []),
+    history: cloneTimelineEntries(value.history || []),
+    historyComplete: value.historyComplete === true,
     batches: [...cloneCacheMap(value.batches).entries()],
     approvals: [...cloneCacheMap(value.approvals).entries()],
   };
@@ -8284,7 +8603,11 @@ function deserializeTimelineCacheEntry(entry) {
     sessionId: entry.sessionId,
     value: {
       savedAt: typeof entry.savedAt === 'number' ? entry.savedAt : 0,
+      validatedAt: typeof entry.validatedAt === 'number' ? entry.validatedAt : 0,
+      sessionUpdatedAt: typeof entry.sessionUpdatedAt === 'number' ? entry.sessionUpdatedAt : 0,
       timeline: cloneTimelineEntries(Array.isArray(entry.timeline) ? entry.timeline : []),
+      history: cloneTimelineEntries(Array.isArray(entry.history) ? entry.history : []),
+      historyComplete: entry.historyComplete === true,
       batches: new Map(batches),
       approvals: new Map(approvals),
     },
@@ -9492,8 +9815,14 @@ function applyDefaultThreadPermissionPreset(settings, preset) {
 
 function applyDefaultSettings() {
   const defaults = state.defaultThreadSettings || createDefaultThreadSettings();
-  state.model = defaults.model || DEFAULT_MODEL;
-  state.reasoningEffort = reasoningEffortForModel(state.model, defaults.reasoningEffort || DEFAULT_REASONING_EFFORT);
+  state.model = defaults.model || state.codexConfigDefaults.model || DEFAULT_MODEL;
+  const inheritedReasoningEffort = state.model === state.codexConfigDefaults.model
+    ? state.codexConfigDefaults.reasoningEffort
+    : DEFAULT_REASONING_EFFORT;
+  state.reasoningEffort = reasoningEffortForModel(
+    state.model,
+    defaults.reasoningEffort || inheritedReasoningEffort,
+  );
   state.collaborationMode = defaults.collaborationMode || DEFAULT_COLLABORATION_MODE;
   applyPermissionPreset(defaults.accessPreset || DEFAULT_PERMISSION_PRESET);
 }
@@ -9512,14 +9841,22 @@ function applySessionSettings(session) {
     applyDefaultSettings();
     return;
   }
-  state.model = typeof settings.model === 'string' && settings.model
-    ? settings.model
-    : DEFAULT_MODEL;
+  const savedModel = typeof settings.model === 'string' ? settings.model : '';
+  const savedReasoningEffort = typeof settings.reasoningEffort === 'string' ? settings.reasoningEffort : '';
+  const isLegacyDefault = savedModel === LEGACY_DEFAULT_MODEL
+    && savedReasoningEffort === LEGACY_DEFAULT_REASONING_EFFORT
+    && (Number(settings.modelDefaultsVersion) || 0) < Number(DEFAULT_THREAD_SETTINGS_VERSION)
+    && state.codexConfigDefaults.model
+    && state.codexConfigDefaults.model !== LEGACY_DEFAULT_MODEL;
+  state.model = isLegacyDefault
+    ? state.codexConfigDefaults.model
+    : savedModel || state.codexConfigDefaults.model || DEFAULT_MODEL;
+  const inheritedReasoningEffort = state.model === state.codexConfigDefaults.model
+    ? state.codexConfigDefaults.reasoningEffort
+    : DEFAULT_REASONING_EFFORT;
   state.reasoningEffort = reasoningEffortForModel(
     state.model,
-    typeof settings.reasoningEffort === 'string' && settings.reasoningEffort
-      ? settings.reasoningEffort
-      : DEFAULT_REASONING_EFFORT,
+    isLegacyDefault ? state.codexConfigDefaults.reasoningEffort : savedReasoningEffort || inheritedReasoningEffort,
   );
   state.collaborationMode = typeof settings.collaborationMode === 'string' && settings.collaborationMode
     ? settings.collaborationMode
@@ -9565,23 +9902,42 @@ function loadDefaultThreadSettings() {
   }
 }
 
-function initializeDefaultThreadSettingsFromCodexModels() {
-  if (hasSavedDefaultThreadSettings()) {
-    return;
-  }
+function initializeDefaultThreadSettingsFromCodex(defaults = null) {
   const defaultModel = codexDefaultModelInfo();
-  const defaultModelId = modelId(defaultModel);
-  if (!defaultModelId) {
+  const configModel = normalizeNonEmptyString(defaults?.model);
+  const configReasoningEffort = normalizeNonEmptyString(defaults?.reasoningEffort);
+  const codexDefaults = {
+    model: configModel || modelId(defaultModel),
+    reasoningEffort: configReasoningEffort || normalizeNonEmptyString(defaultModel?.defaultReasoningEffort),
+  };
+  state.codexConfigDefaults = codexDefaults;
+  if (!hasSavedDefaultThreadSettings()) {
+    state.defaultThreadSettings = normalizeThreadSettings({
+      ...createDefaultThreadSettings(),
+      ...codexDefaults,
+    });
     return;
   }
-  const next = createDefaultThreadSettings();
-  next.model = defaultModelId;
-  next.reasoningEffort = reasoningEffortForModel(
-    defaultModelId,
-    normalizeNonEmptyString(defaultModel?.defaultReasoningEffort) || next.reasoningEffort,
-  );
-  state.defaultThreadSettings = next;
-  localStorage.setItem(DEFAULT_THREAD_SETTINGS_KEY, JSON.stringify(next));
+  if (localStorage.getItem(DEFAULT_THREAD_SETTINGS_VERSION_KEY) === DEFAULT_THREAD_SETTINGS_VERSION) {
+    return;
+  }
+  if (!configModel) {
+    return;
+  }
+  const saved = state.defaultThreadSettings;
+  if (
+    saved.model === LEGACY_DEFAULT_MODEL
+    && saved.reasoningEffort === LEGACY_DEFAULT_REASONING_EFFORT
+    && codexDefaults.model
+    && codexDefaults.model !== LEGACY_DEFAULT_MODEL
+  ) {
+    state.defaultThreadSettings = normalizeThreadSettings({
+      ...saved,
+      ...codexDefaults,
+    });
+    localStorage.setItem(DEFAULT_THREAD_SETTINGS_KEY, JSON.stringify(state.defaultThreadSettings));
+  }
+  localStorage.setItem(DEFAULT_THREAD_SETTINGS_VERSION_KEY, DEFAULT_THREAD_SETTINGS_VERSION);
 }
 
 function hasSavedDefaultThreadSettings() {
@@ -9611,6 +9967,7 @@ function applyDefaultThreadSettings(patch = {}) {
   }
   state.defaultThreadSettings = next;
   localStorage.setItem(DEFAULT_THREAD_SETTINGS_KEY, JSON.stringify(next));
+  localStorage.setItem(DEFAULT_THREAD_SETTINGS_VERSION_KEY, DEFAULT_THREAD_SETTINGS_VERSION);
   if (!state.sessionId) {
     applyDefaultSettings();
   }
@@ -9945,7 +10302,7 @@ async function updateSessionSettings(patch = {}) {
     ...collectSettings(),
     ...patch,
   };
-  settings.reasoningEffort = reasoningEffortForModel(settings.model, settings.reasoningEffort);
+  settings.reasoningEffort = reasoningEffortForModel(settings.model, settings.reasoningEffort) || null;
   if (!state.sessionId) {
     return null;
   }
@@ -10057,10 +10414,16 @@ function currentHydratedHistoryLength() {
 }
 
 function collectSettings() {
-  const model = state.model || DEFAULT_MODEL;
+  const model = state.model || state.codexConfigDefaults.model || null;
+  const configuredReasoningEffort = model && model === state.codexConfigDefaults.model
+    ? state.codexConfigDefaults.reasoningEffort
+    : '';
   const settings = {
     model,
-    reasoningEffort: reasoningEffortForModel(model, state.reasoningEffort || DEFAULT_REASONING_EFFORT),
+    reasoningEffort: reasoningEffortForModel(
+      model,
+      state.reasoningEffort || configuredReasoningEffort || DEFAULT_REASONING_EFFORT,
+    ) || null,
     collaborationMode: state.collaborationMode || DEFAULT_COLLABORATION_MODE,
     accessPreset: state.permissionPreset || DEFAULT_PERMISSION_PRESET,
     approvalPolicy: state.approvalPolicy || DEFAULT_APPROVAL_POLICY,
@@ -10414,14 +10777,6 @@ function handleApiError(error, options = {}) {
     state.statusTone = 'danger';
   }
   render();
-}
-
-function pickModel(models, current) {
-  if (current) {
-    return current;
-  }
-  const first = models.find((model) => model?.id || model?.name);
-  return first?.id || first?.name || '';
 }
 
 function inferDeviceName() {

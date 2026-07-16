@@ -467,7 +467,7 @@ async function handleRequest({
   }
 
   if (pathname === '/api/models' && method === 'GET') {
-    writeJson(response, 200, { items: await runtime.listModels() });
+    writeJson(response, 200, await readModelSettingsPayload(runtime));
     return;
   }
 
@@ -1076,7 +1076,7 @@ async function handleMultiUserRequest({
   }
 
   if (pathname === '/api/models' && method === 'GET') {
-    writeJson(response, 200, { items: await runtime.listModels() });
+    writeJson(response, 200, await readModelSettingsPayload(runtime));
     return true;
   }
 
@@ -2620,6 +2620,16 @@ function presentSessionGoal(goal: CodexWebSession['goal'] | undefined): Record<s
   };
 }
 
+async function readModelSettingsPayload(runtime: CodexWebRuntime): Promise<Record<string, unknown>> {
+  const [items, defaults] = await Promise.all([
+    runtime.listModels(),
+    typeof runtime.readConfigDefaults === 'function'
+      ? runtime.readConfigDefaults()
+      : Promise.resolve(null),
+  ]);
+  return { items, defaults };
+}
+
 function presentSessionSettings(settings: CodexWebSession['settings'] | undefined): Record<string, unknown> {
   const value = settings ?? {} as CodexWebSession['settings'];
   return {
@@ -2634,6 +2644,9 @@ function presentSessionSettings(settings: CodexWebSession['settings'] | undefine
     approvalPolicy: typeof value.approvalPolicy === 'string' ? value.approvalPolicy : null,
     sandboxMode: typeof value.sandboxMode === 'string' ? value.sandboxMode : null,
     locale: typeof value.locale === 'string' ? value.locale : null,
+    modelDefaultsVersion: Number.isFinite(value.metadata?.codexWebModelDefaultsVersion)
+      ? Number(value.metadata?.codexWebModelDefaultsVersion)
+      : null,
     updatedAt: Number.isFinite(value.updatedAt) ? Number(value.updatedAt) : null,
     favorite: value.favorite === true,
     favoriteOrder: Number.isFinite(value.favoriteOrder) ? Number(value.favoriteOrder) : null,

@@ -17,6 +17,7 @@ import type {
   ProviderPluginMarketplace,
   ProviderPluginsListResult,
   ProviderPluginSummary,
+  ProviderConfigDefaults,
   ProviderSkillError,
   ProviderSkillInfo,
   ProviderPluginAppSummary,
@@ -369,6 +370,8 @@ export class CodexAppClient extends EventEmitter {
 
   childStderrSequence: number;
 
+  threadConfigDefaults: Map<string, ProviderConfigDefaults>;
+
   constructor({
     codexCliBin,
     codexCliArgs = [],
@@ -417,6 +420,7 @@ export class CodexAppClient extends EventEmitter {
     this.childStartError = null;
     this.childStderrTail = [];
     this.childStderrSequence = 0;
+    this.threadConfigDefaults = new Map();
   }
 
   logDebug(event: string, payload: unknown = null): void {
@@ -462,6 +466,7 @@ export class CodexAppClient extends EventEmitter {
     this.child = null;
     this.pendingApprovals.clear();
     this.approvedExecutions.clear();
+    this.threadConfigDefaults.clear();
     this.rejectPending(new Error('Codex app client stopped'));
   }
 
@@ -537,10 +542,15 @@ export class CodexAppClient extends EventEmitter {
       experimentalRawEvents: true,
       persistExtendedHistory: false,
     }, { timeoutMs: 30_000 });
+    const threadId = String(result.thread.id);
+    const effectiveSettings = normalizeConfigDefaults(result);
+    this.threadConfigDefaults.set(threadId, effectiveSettings);
     return {
-      threadId: String(result.thread.id),
+      threadId,
       cwd: result.cwd ? String(result.cwd) : null,
       title: result.thread?.name ? String(result.thread.name) : null,
+      model: effectiveSettings.model,
+      reasoningEffort: effectiveSettings.reasoningEffort,
     };
   }
 
@@ -552,8 +562,8 @@ export class CodexAppClient extends EventEmitter {
     threadId: string;
     approvalPolicy?: string | null;
     sandboxMode?: string | null;
-  }): Promise<unknown> {
-    return this.request('thread/resume', {
+  }): Promise<ProviderConfigDefaults> {
+    const result: any = await this.request('thread/resume', {
       threadId,
       cwd: null,
       approvalPolicy,
@@ -567,6 +577,9 @@ export class CodexAppClient extends EventEmitter {
       experimentalRawEvents: true,
       persistExtendedHistory: false,
     }, { timeoutMs: 30_000 });
+    const effectiveSettings = normalizeConfigDefaults(result);
+    this.threadConfigDefaults.set(threadId, effectiveSettings);
+    return effectiveSettings;
   }
 
   async getThreadGoal(threadId: string): Promise<ProviderThreadGoal | null> {
@@ -654,11 +667,26 @@ export class CodexAppClient extends EventEmitter {
     onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
     timeoutMs?: number;
   }): Promise<ProviderTurnResult> {
+    const requestedModel = normalizeNullableString(model);
+    const requestedEffort = normalizeNullableString(effort);
+    let rememberedSettings = this.threadConfigDefaults.get(threadId) ?? null;
+    if (!requestedModel && !rememberedSettings?.model) {
+      rememberedSettings = await this.readConfigDefaults({ cwd });
+      this.threadConfigDefaults.set(threadId, rememberedSettings);
+    }
+    const effectiveModel = requestedModel ?? rememberedSettings?.model ?? null;
+    const effectiveEffort = requestedEffort
+      ?? (requestedModel && requestedModel !== rememberedSettings?.model
+        ? null
+        : rememberedSettings?.reasoningEffort ?? null);
+    if (!effectiveModel) {
+      throw new Error('Codex did not return an effective model for turn/start');
+    }
     this.logDebug('turn_start_requested', {
       threadId,
       cwd,
-      model,
-      effort,
+      model: effectiveModel,
+      effort: effectiveEffort,
       serviceTier,
       personality,
       approvalPolicy,
@@ -689,16 +717,16 @@ export class CodexAppClient extends EventEmitter {
       cwd,
       approvalPolicy,
       sandboxPolicy: mapSandboxPolicy(sandboxMode),
-      model,
+      model: effectiveModel,
       serviceTier,
-      effort,
+      effort: effectiveEffort,
       summary: null,
       personality,
       outputSchema: null,
       collaborationMode: serializeCollaborationMode({
         collaborationMode,
-        model,
-        effort,
+        model: effectiveModel,
+        effort: effectiveEffort,
         developerInstructions,
       }),
     }, { timeoutMs: 30_000 });
@@ -826,6 +854,25 @@ export class CodexAppClient extends EventEmitter {
       return this.modelCatalog;
     }
     return mergeModelCatalog(models, this.modelCatalog);
+  }
+
+  async readConfigDefaults({
+    cwd = null,
+  }: {
+    cwd?: string | null;
+  } = {}): Promise<ProviderConfigDefaults> {
+    const result: any = await this.request('config/read', {
+      includeLayers: false,
+      cwd,
+    }, { timeoutMs: 30_000 });
+    const config = result?.config && typeof result.config === 'object'
+      ? result.config
+      : result;
+    return {
+      model: normalizeNullableString(config?.model),
+      reasoningEffort: normalizeNullableString(config?.modelReasoningEffort)
+        ?? normalizeNullableString(config?.model_reasoning_effort),
+    };
   }
 
   async readUsage(): Promise<ProviderUsageReport | null> {
@@ -2443,6 +2490,17 @@ function normalizeNullableString(value: unknown): string | null {
   return normalized || null;
 }
 
+function normalizeConfigDefaults(value: any): ProviderConfigDefaults {
+  const config = value?.config && typeof value.config === 'object' ? value.config : value;
+  return {
+    model: normalizeNullableString(config?.model) ?? normalizeNullableString(config?.thread?.model),
+    reasoningEffort: normalizeNullableString(config?.reasoningEffort)
+      ?? normalizeNullableString(config?.modelReasoningEffort)
+      ?? normalizeNullableString(config?.model_reasoning_effort)
+      ?? normalizeNullableString(config?.thread?.reasoningEffort),
+  };
+}
+
 function normalizeStringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((entry) => String(entry ?? '').trim()).filter(Boolean)
@@ -2466,16 +2524,15 @@ export function formatConfigKeyPath(segments: string[]): string {
 }
 
 function serializeCollaborationMode({ collaborationMode, model, effort, developerInstructions = '' }: any) {
-  if (!collaborationMode) {
+  const effectiveModel = normalizeNullableString(model);
+  if (!collaborationMode || !effectiveModel) {
     return null;
   }
-  const settings: any = {
-    model,
-    developer_instructions: developerInstructions,
+  const settings = {
+    model: effectiveModel,
+    reasoning_effort: normalizeNullableString(effort),
+    developer_instructions: normalizeNullableString(developerInstructions),
   };
-  if (effort) {
-    settings.reasoning_effort = effort;
-  }
   if (collaborationMode === 'default') {
     return {
       mode: 'default',

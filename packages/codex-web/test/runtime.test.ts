@@ -428,8 +428,8 @@ test('runtime falls back from includeTurns reads and updates settings without le
   const sessions = await runtime.listSessions();
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0]?.id, 'thread-native-tools-1');
-  assert.equal(sessions[0]?.settings.model, 'gpt-5.4');
-  assert.equal(sessions[0]?.settings.reasoningEffort, 'xhigh');
+  assert.equal(sessions[0]?.settings.model, null);
+  assert.equal(sessions[0]?.settings.reasoningEffort, null);
   assert.equal(sessions[0]?.settings.accessPreset, 'full-access');
   assert.equal(sessions[0]?.settings.approvalPolicy, 'never');
   assert.equal(sessions[0]?.settings.sandboxMode, 'danger-full-access');
@@ -498,7 +498,7 @@ test('runtime persists updated session settings locally without touching legacy 
   assert.equal(storedSettings[0]?.sessionId, 'thread_profile_config');
   assert.equal(storedSettings[0]?.settings.model, 'gpt-5');
   assert.equal(storedSettings[0]?.settings.reasoningEffort, 'high');
-  assert.deepEqual(storedSettings[0]?.settings.metadata, {});
+  assert.deepEqual(storedSettings[0]?.settings.metadata, { codexWebModelDefaultsVersion: 2 });
 });
 
 test('runtime switches session models without writing legacy Codex profiles config', async () => {
@@ -621,7 +621,7 @@ test('runtime passes requested cwd and settings when creating a session', async 
   }]);
 });
 
-test('runtime uses full-access gpt-5.4 xhigh defaults and persists turn settings', async () => {
+test('runtime inherits Codex model defaults while preserving full-access and turn overrides', async () => {
   const storedSettings: Array<{ sessionId: string; settings: any }> = [];
   const startThreadCalls: Array<{
     model?: string | null;
@@ -640,7 +640,13 @@ test('runtime uses full-access gpt-5.4 xhigh defaults and persists turn settings
     listThreads: async () => ({ items: [createThread('thread_defaults')], nextCursor: null }),
     startThread: async (args): Promise<ProviderThreadStartResult> => {
       startThreadCalls.push(args ?? {});
-      return { threadId: 'thread_defaults', cwd: '/workspace', title: 'Thread' };
+      return {
+        threadId: 'thread_defaults',
+        cwd: '/workspace',
+        title: 'Thread',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'ultra',
+      };
     },
     readThread: async () => createThread('thread_defaults'),
     writeConfigValue: async () => {},
@@ -673,15 +679,15 @@ test('runtime uses full-access gpt-5.4 xhigh defaults and persists turn settings
   });
 
   const created = await runtime.createSession();
-  assert.equal(created.settings.model, 'gpt-5.4');
-  assert.equal(created.settings.reasoningEffort, 'xhigh');
+  assert.equal(created.settings.model, 'gpt-5.6-sol');
+  assert.equal(created.settings.reasoningEffort, 'ultra');
   assert.equal(created.settings.accessPreset, 'full-access');
   assert.equal(created.settings.approvalPolicy, 'never');
   assert.equal(created.settings.sandboxMode, 'danger-full-access');
   assert.deepEqual(startThreadCalls, [{
     cwd: '/workspace',
     title: null,
-    model: 'gpt-5.4',
+    model: null,
     serviceTier: null,
     sandboxMode: 'danger-full-access',
     approvalPolicy: 'never',
@@ -705,6 +711,108 @@ test('runtime uses full-access gpt-5.4 xhigh defaults and persists turn settings
   assert.equal(storedSettings.at(-1)?.sessionId, 'thread_defaults');
   assert.equal(storedSettings.at(-1)?.settings.model, 'gpt-5.5');
   assert.equal(storedSettings.at(-1)?.settings.reasoningEffort, 'high');
+});
+
+test('runtime migrates the former hard-coded model defaults but preserves versioned explicit choices', async () => {
+  const stored = new Map<string, any>([
+    ['thread_legacy', {
+      bridgeSessionId: 'thread_legacy',
+      model: 'gpt-5.4',
+      reasoningEffort: 'xhigh',
+      collaborationMode: 'default',
+      accessPreset: 'full-access',
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+      metadata: {},
+    }],
+    ['thread_explicit', {
+      bridgeSessionId: 'thread_explicit',
+      model: 'gpt-5.4',
+      reasoningEffort: 'xhigh',
+      collaborationMode: 'default',
+      accessPreset: 'full-access',
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+      metadata: { codexWebModelDefaultsVersion: 2 },
+    }],
+  ]);
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId: 'unused', cwd: '/workspace', title: null }),
+    readThread: async (threadId) => createThread(threadId),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({ outputText: '', status: 'completed', turnId: 'unused', threadId: 'unused' }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    settingsStore: {
+      get: (sessionId) => stored.get(sessionId) ?? null,
+      set: (sessionId, settings) => stored.set(sessionId, settings),
+      delete: (sessionId) => stored.delete(sessionId),
+    },
+  });
+
+  const legacy = await runtime.readSession('thread_legacy');
+  const explicit = await runtime.readSession('thread_explicit');
+
+  assert.equal(legacy?.settings.model, null);
+  assert.equal(legacy?.settings.reasoningEffort, null);
+  assert.equal(legacy?.settings.metadata?.codexWebModelDefaultsVersion, 2);
+  assert.equal(explicit?.settings.model, 'gpt-5.4');
+  assert.equal(explicit?.settings.reasoningEffort, 'xhigh');
+});
+
+test('runtime fills inherited session settings from thread resume before a plan turn', async () => {
+  const startTurnCalls: any[] = [];
+  const storedSettings: any[] = [];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_resume_defaults', cwd: '/workspace', title: null }),
+    readThread: async () => createThread('thread_resume_defaults'),
+    resumeThread: async () => ({ model: 'gpt-5.6-sol', reasoningEffort: 'ultra' }),
+    writeConfigValue: async () => {},
+    startTurn: async (args) => {
+      startTurnCalls.push(args);
+      await args.onTurnStarted?.({ turnId: 'turn_resume_defaults', threadId: 'thread_resume_defaults' });
+      return {
+        outputText: 'done',
+        status: 'completed',
+        turnId: 'turn_resume_defaults',
+        threadId: 'thread_resume_defaults',
+      };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    settingsStore: {
+      get: () => null,
+      set: (_sessionId, settings) => storedSettings.push(settings),
+      delete: () => {},
+    },
+  });
+
+  await runtime.startTurn('thread_resume_defaults', {
+    text: 'plan this',
+    settings: { model: null, reasoningEffort: null, collaborationMode: 'plan' },
+  });
+
+  assert.equal(startTurnCalls[0]?.model, 'gpt-5.6-sol');
+  assert.equal(startTurnCalls[0]?.effort, 'ultra');
+  assert.equal(startTurnCalls[0]?.collaborationMode, 'plan');
+  assert.equal(storedSettings.at(-1)?.model, 'gpt-5.6-sol');
+  assert.equal(storedSettings.at(-1)?.reasoningEffort, 'ultra');
 });
 
 test('runtime passes uploaded files as local paths and images as localImage input', async () => {

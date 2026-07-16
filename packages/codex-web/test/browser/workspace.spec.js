@@ -81,6 +81,39 @@ test('workspace is usable without overflow and exposes work and status semantics
     ]) {
       await expectTouchTarget(locator);
     }
+    const filterButtons = page.locator('.mobile-session-sort-toggle [data-sort-mode]');
+    await expect(filterButtons).toHaveCount(3);
+    await expect(page.locator('[data-sort-mode="archived"]')).toHaveAttribute('aria-label', 'Archived sessions');
+    await expect(page.locator('[data-sort-mode="archived"] .archive-sort-icon')).toBeVisible();
+    const filterBoxes = await filterButtons.evaluateAll((buttons) => buttons.map((button) => {
+      const box = button.getBoundingClientRect();
+      return {
+        mode: button.getAttribute('data-sort-mode'),
+        width: box.width,
+        height: box.height,
+        scrollWidth: button.scrollWidth,
+        clientWidth: button.clientWidth,
+      };
+    }));
+    const favoritesBox = filterBoxes.find((box) => box.mode === 'favorites');
+    const recentsBox = filterBoxes.find((box) => box.mode === 'time');
+    const archivedBox = filterBoxes.find((box) => box.mode === 'archived');
+    expect(Math.abs(favoritesBox.width - recentsBox.width)).toBeLessThanOrEqual(1);
+    expect(archivedBox.width).toBeLessThan(favoritesBox.width);
+    expect(archivedBox.width).toBeGreaterThanOrEqual(44);
+    expect(filterBoxes.every((box) => box.height >= 44)).toBe(true);
+    expect(filterBoxes.every((box) => box.scrollWidth <= box.clientWidth + 1)).toBe(true);
+    const topbarGeometry = await page.evaluate(() => {
+      const menu = document.querySelector('#mobile-sidebar-toggle-button')?.getBoundingClientRect();
+      const filters = document.querySelector('.mobile-session-sort-toggle')?.getBoundingClientRect();
+      const create = document.querySelector('#open-new-session-button')?.getBoundingClientRect();
+      return menu && filters && create
+        ? { menuRight: menu.right, filtersLeft: filters.left, filtersRight: filters.right, createLeft: create.left }
+        : null;
+    });
+    expect(topbarGeometry).not.toBeNull();
+    expect(topbarGeometry.filtersLeft).toBeGreaterThanOrEqual(topbarGeometry.menuRight);
+    expect(topbarGeometry.filtersRight).toBeLessThanOrEqual(topbarGeometry.createLeft);
   }
 
   const sessionListLayout = await page.evaluate(() => ({
@@ -107,6 +140,15 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(page.getByRole('button', { name: 'Stop current turn' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Session menu' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+  if (testInfo.project.name.startsWith('desktop')) {
+    const promptInput = page.locator('#prompt-input');
+    const promptBox = await promptInput.boundingBox();
+    expect(promptBox).not.toBeNull();
+    expect(promptBox.height).toBeGreaterThanOrEqual(96);
+    await expect(promptInput).toHaveCSS('font-weight', '400');
+    await expect(page.locator('.message-card .message-text, .message-card .markdown-body').first())
+      .toHaveCSS('font-weight', '400');
+  }
   if (testInfo.project.name === 'desktop') {
     await expect(sessionButton).toContainText('Needs approval');
   }
@@ -139,6 +181,8 @@ test('workspace is usable without overflow and exposes work and status semantics
   const menuCloseButton = page.getByRole('button', { name: 'Close session menu' });
   await expect(menuCloseButton).toBeVisible();
   await expect(menuCloseButton).toBeFocused();
+  await expect(page.locator('#model-select')).toHaveValue('gpt-5.6-sol');
+  await expect(page.locator('#reasoning-select')).toHaveValue('ultra');
   const openReportsButton = page.locator('[data-session-reports-project="yanshan_quant"]');
   await expect(openReportsButton).toBeVisible();
   if (testInfo.project.name.startsWith('mobile-')) {
@@ -155,6 +199,106 @@ test('workspace is usable without overflow and exposes work and status semantics
   } else {
     await expect(page.locator('.page-title')).toHaveText('Reports');
   }
+});
+
+test('archived sessions use a compact filter and a clear restore icon', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-compact', 'The compact mobile viewport covers archive controls.');
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Archived sessions' }).click();
+
+  await expect(page.locator('[data-session-id="session_browser_archived"]')).toBeVisible();
+  const restoreButton = page.getByRole('button', { name: 'Unarchive' });
+  await expect(restoreButton).toBeVisible();
+  await expect(restoreButton.locator('.session-action-icon-stroke')).toBeVisible();
+  await expect(restoreButton).toHaveText('');
+  await page.screenshot({
+    path: '/tmp/codex-web-browser-mobile-compact-archived.png',
+    fullPage: true,
+  });
+});
+
+test('desktop prompt accepts pasted files as uploaded attachments', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith('desktop'), 'Desktop and portrait desktop cover paste uploads.');
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_idle"]').click();
+  await expect(page.locator('#prompt-input')).toBeVisible();
+
+  const defaultPrevented = await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['paste-image'], 'pasted-image.png', { type: 'image/png' }));
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: transfer,
+    });
+    document.querySelector('#prompt-input').dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+
+  expect(defaultPrevented).toBe(true);
+  const attachment = page.locator('.attachment-chip');
+  await expect(attachment).toContainText('pasted-image.png');
+  await expect(attachment.locator('.attachment-status')).toHaveText('Saved');
+  await page.screenshot({
+    path: `/tmp/codex-web-browser-${testInfo.project.name}-pasted-attachment.png`,
+    fullPage: true,
+  });
+});
+
+test('desktop wheel at the top reveals earlier session exchanges', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith('desktop'), 'Desktop and portrait desktop cover wheel history expansion.');
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_history"]').click();
+
+  const timeline = page.locator('#timeline');
+  await expect(timeline).toContainText('Latest browser answer');
+  await expect(timeline).not.toContainText('Oldest browser answer');
+  await timeline.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await timeline.hover();
+  await page.mouse.wheel(0, -240);
+
+  await expect(timeline).toContainText('Oldest browser answer');
+  await page.screenshot({
+    path: `/tmp/codex-web-browser-${testInfo.project.name}-expanded-history.png`,
+    fullPage: true,
+  });
+});
+
+test('settings keep appearance and new-session defaults separated without overflow', async ({ page }, testInfo) => {
+  test.skip(!['mobile-compact', 'desktop'].includes(testInfo.project.name), 'One mobile and one desktop viewport cover settings.');
+
+  await page.goto('/');
+  if (testInfo.project.name === 'mobile-compact') {
+    await page.locator('#mobile-sidebar-toggle-button').click();
+  }
+  await page.locator('#open-app-settings-button').click();
+
+  const settings = testInfo.project.name === 'desktop'
+    ? page.locator('.desktop-settings-panel')
+    : page.locator('.app-settings-page');
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText('Appearance', { exact: true })).toBeVisible();
+  await expect(settings.getByText('New sessions on this device', { exact: true })).toBeVisible();
+  await expect(settings.locator('#default-model-select')).toHaveValue('gpt-5.6-sol');
+  await expect(settings.locator('#default-reasoning-select')).toHaveValue('ultra');
+
+  const geometry = await settings.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  expect(geometry.scrollHeight).toBeGreaterThanOrEqual(geometry.clientHeight);
+  await page.screenshot({
+    path: `/tmp/codex-web-browser-${testInfo.project.name}-settings.png`,
+    fullPage: true,
+  });
 });
 
 test('mobile session menu opens archive confirmation for an idle session', async ({ page }, testInfo) => {
@@ -234,6 +378,7 @@ test('repeated chat renders release detached DOM and listeners', async ({ page, 
 
   await page.goto('/');
   await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await expect(page.getByText('Approval requested', { exact: true })).toBeVisible();
   const settingsButton = page.locator('#settings-toggle');
   await expect(settingsButton).toBeVisible();
   const bounds = await settingsButton.boundingBox();

@@ -160,6 +160,7 @@ body {
 
 body {
   min-height: 100vh;
+  font-weight: 450;
 }
 
 ::-webkit-scrollbar {
@@ -677,6 +678,7 @@ button:disabled {
 }
 
 .mobile-session-actions {
+  flex: 1 1 0;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -795,7 +797,7 @@ button:disabled {
 
 .app-settings-page {
   display: grid;
-  gap: 10px;
+  gap: 0;
   align-content: start;
 }
 
@@ -834,9 +836,41 @@ button:disabled {
   background: var(--panel);
 }
 
+.app-settings-page > .settings-section {
+  gap: 12px;
+  padding: 14px 4px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.app-settings-page > .settings-section:first-child {
+  padding-top: 4px;
+}
+
+.app-settings-page > .settings-section:last-child {
+  border-bottom: 0;
+}
+
 .settings-section-title {
   font-size: 13px;
   font-weight: 650;
+}
+
+.settings-field {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-field + .settings-field {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.settings-field-label {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .theme-picker {
@@ -1443,7 +1477,6 @@ button:disabled {
 .session-title,
 .path-choice span {
   font-size: 14px;
-  font-weight: 650;
   color: var(--text);
 }
 
@@ -1456,6 +1489,10 @@ button:disabled {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.path-choice span {
+  font-weight: 650;
 }
 
 .session-preview,
@@ -1524,6 +1561,14 @@ button:disabled {
   height: 16px;
   display: block;
   fill: currentColor;
+}
+
+.session-action-icon-stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .report-card {
@@ -2183,11 +2228,10 @@ button:disabled {
   white-space: nowrap;
 }
 
-.controls {
+.thread-settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 10px;
 }
 
 .control-group {
@@ -2205,6 +2249,10 @@ button:disabled {
   min-height: 36px;
   padding: 7px 9px;
   font-size: 12px;
+}
+
+.thread-setting-wide {
+  grid-column: 1 / -1;
 }
 
 .toggle {
@@ -2225,11 +2273,13 @@ button:disabled {
 .mobile-session-sort-toggle {
   width: auto;
   flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
   border-radius: 10px;
 }
 
 .toggle.mobile-session-sort-toggle button {
+  min-width: 0;
   min-height: 32px;
   padding: 0 8px;
   font-size: 11px;
@@ -2237,6 +2287,13 @@ button:disabled {
 
 .permission-toggle {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.permission-toggle button {
+  min-width: 0;
+  padding: 4px 7px;
+  white-space: normal;
+  line-height: 1.15;
 }
 
 .message-size-toggle {
@@ -2386,7 +2443,7 @@ button:disabled {
   left: 0;
   right: 0;
   bottom: calc(100% + 8px);
-  max-height: min(52dvh, 420px);
+  max-height: min(68dvh, 520px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 8px;
@@ -2405,6 +2462,32 @@ button:disabled {
   justify-content: space-between;
   gap: 8px;
   border-bottom: 1px solid var(--border);
+}
+
+.settings-drawer-section {
+  display: grid;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-drawer-section:last-child {
+  padding-bottom: 2px;
+  border-bottom: 0;
+}
+
+.settings-drawer-section-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.settings-drawer-actions {
+  gap: 4px;
+}
+
+.settings-drawer-actions .settings-action-row {
+  margin-bottom: 0;
 }
 
 .settings-drawer-close {
@@ -2677,8 +2760,27 @@ pre.command {
     padding-right: max(18px, env(safe-area-inset-right, 0px));
   }
 
-  .controls {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 420px) {
+  .thread-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 360px) {
+  .theme-option {
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .theme-swatch {
+    width: 24px;
+    height: 24px;
+  }
+
+  .theme-option-name {
+    font-size: 11px;
   }
 }
 
@@ -2765,6 +2867,23 @@ pre.command {
 
   .session-card-actions .compact-button {
     width: 44px;
+  }
+
+  .toggle.mobile-session-sort-toggle button {
+    min-width: 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .compact-composer-row textarea {
+    min-height: 96px;
+    max-height: 220px;
+  }
+
+  .message-card .message-text,
+  .message-card .markdown-body,
+  .compact-composer-row textarea {
+    font-weight: 400;
   }
 }
 
@@ -2870,11 +2989,6 @@ pre.command {
     width: min(100%, 960px);
   }
 
-  .desktop-chat-pane .compact-composer-row textarea {
-    min-height: 96px;
-    max-height: 220px;
-  }
-
   .desktop-new-pane .new-session-page {
     display: grid;
     place-items: start center;
@@ -2915,7 +3029,7 @@ pre.command {
     left: 18px;
     bottom: 18px;
     z-index: 30;
-    width: min(420px, calc(100vw - 36px));
+    width: min(460px, calc(100vw - 36px));
     max-height: calc(100dvh - 36px);
     display: flex;
     flex-direction: column;
@@ -2942,10 +3056,6 @@ pre.command {
 
   .desktop-settings-body {
     padding: 12px;
-  }
-
-  .desktop-settings-panel .controls {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .desktop-overlay {

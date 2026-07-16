@@ -168,6 +168,8 @@ export interface ProviderThreadStartResult {
   threadId: string;
   cwd: string | null;
   title: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export interface ProviderThreadListResult {
@@ -183,6 +185,11 @@ export interface ProviderModelInfo {
   isDefault: boolean;
   supportedReasoningEfforts: string[];
   defaultReasoningEffort: string | null;
+}
+
+export interface ProviderConfigDefaults {
+  model: string | null;
+  reasoningEffort: string | null;
 }
 
 export interface ProviderUsageWindow {

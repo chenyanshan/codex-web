@@ -191,6 +191,110 @@ test('app client preserves string and snake_case model reasoning efforts', async
   assert.equal(models[1]?.defaultReasoningEffort, 'medium');
 });
 
+test('app client reads effective model and reasoning defaults from Codex config', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    assert.equal(method, 'config/read');
+    assert.deepEqual(params, {
+      includeLayers: false,
+      cwd: '/workspace/project',
+    });
+    return {
+      config: {
+        model: 'gpt-5.6-sol',
+        model_reasoning_effort: 'ultra',
+      },
+    };
+  };
+
+  assert.deepEqual(await client.readConfigDefaults({ cwd: '/workspace/project' }), {
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'ultra',
+  });
+});
+
+test('app client keeps effective model settings returned by thread start', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    assert.equal(method, 'thread/start');
+    assert.equal(params.model, null);
+    return {
+      thread: { id: 'thread_effective', name: 'Effective thread' },
+      cwd: '/workspace/project',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+    };
+  };
+
+  const started = await client.startThread({ cwd: '/workspace/project', model: null });
+
+  assert.deepEqual(started, {
+    threadId: 'thread_effective',
+    cwd: '/workspace/project',
+    title: 'Effective thread',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'ultra',
+  });
+});
+
+test('app client keeps effective model settings returned by thread resume', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async (method: string) => {
+    assert.equal(method, 'thread/resume');
+    return { model: 'gpt-5.6-sol', reasoningEffort: 'ultra' };
+  };
+
+  assert.deepEqual(await client.resumeThread({ threadId: 'thread_existing' }), {
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'ultra',
+  });
+});
+
+test('app client sends complete collaboration settings for inherited plan turns', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  let turnParams: Record<string, any> | null = null;
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/start') {
+      return {
+        thread: { id: 'thread_inherited', name: 'Inherited thread' },
+        cwd: '/workspace/project',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'ultra',
+      };
+    }
+    assert.equal(method, 'turn/start');
+    turnParams = params as Record<string, any>;
+    return { turn: { id: 'turn_inherited', status: 'inProgress' } };
+  };
+  client.waitForTurnResult = async () => ({
+    outputText: 'done',
+    status: 'completed',
+    turnId: 'turn_inherited',
+    threadId: 'thread_inherited',
+  });
+
+  await client.startThread({ cwd: '/workspace/project', model: null });
+  await client.startTurn({
+    threadId: 'thread_inherited',
+    inputText: 'Plan this',
+    model: null,
+    effort: null,
+    collaborationMode: 'plan',
+    developerInstructions: '',
+  });
+
+  assert.equal(turnParams?.model, 'gpt-5.6-sol');
+  assert.equal(turnParams?.effort, 'ultra');
+  assert.deepEqual(turnParams?.collaborationMode, {
+    mode: 'plan',
+    settings: {
+      model: 'gpt-5.6-sol',
+      reasoning_effort: 'ultra',
+      developer_instructions: null,
+    },
+  });
+});
+
 test('app client extracts work details from function call notifications', async () => {
   const client = new CodexAppClient({
     codexCliBin: 'codex',

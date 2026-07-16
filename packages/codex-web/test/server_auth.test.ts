@@ -179,6 +179,45 @@ test('authenticated settings expose the server-side public-share feature flag', 
   }
 });
 
+test('GET /api/models includes effective Codex config defaults in the existing response', async () => {
+  const runtime = {
+    ...createRuntimeStub(),
+    listModels: async () => [{
+      id: 'gpt-5.6-sol',
+      model: 'gpt-5.6-sol',
+      displayName: 'GPT-5.6-Sol',
+      isDefault: true,
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'low',
+    }],
+    readConfigDefaults: async () => ({
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+    }),
+  };
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/models`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as any;
+    assert.equal(payload.items[0]?.defaultReasoningEffort, 'low');
+    assert.deepEqual(payload.defaults, {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+    });
+  } finally {
+    await server.stop();
+  }
+});
+
 test('POST /api/sessions/:sessionId/attachments stores uploads in the session project', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-upload-state-'));
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-upload-project-'));

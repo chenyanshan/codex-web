@@ -118,6 +118,7 @@ export type {
   OutputArtifactKind,
   ProviderAppInfo,
   ProviderApprovalRequest,
+  ProviderConfigDefaults,
   ProviderInboundAttachmentKind,
   ProviderMcpOauthLoginResult,
   ProviderMcpServerStatus,

@@ -84,11 +84,12 @@ test('pre-style theme initialization restores saved themes and defaults to sunny
   });
 });
 
-test('theme picker and narrow desktop settings panel use stable responsive grids', async () => {
+test('theme picker and thread settings use stable responsive grids', async () => {
   const css = await readFile(stylesUrl, 'utf8');
 
   assert.match(css, /\.theme-picker\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/su);
-  assert.match(css, /\.desktop-settings-panel \.controls\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/su);
+  assert.match(css, /\.thread-settings-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/su);
+  assert.match(css, /@media \(max-width:\s*420px\)\s*\{[\s\S]*?\.thread-settings-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/su);
 });
 
 function parseThemeTokens(css: string, selector: string): Record<string, string> {

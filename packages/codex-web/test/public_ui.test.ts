@@ -157,19 +157,19 @@ test('mobile landscape remains supported without a fallback screen', async () =>
   assert.doesNotMatch(styles, /orientation-lock-panel/u);
 });
 
-test('new sessions default to gpt-5.4 xhigh full access settings', async () => {
+test('new sessions inherit Codex model settings until this device overrides them', async () => {
   const { api } = await loadAppHarness();
 
-  assert.equal(api.state.model, 'gpt-5.4');
-  assert.equal(api.state.reasoningEffort, 'xhigh');
+  assert.equal(api.state.model, '');
+  assert.equal(api.state.reasoningEffort, '');
   assert.equal(api.state.permissionPreset, 'full-access');
   assert.equal(api.state.approvalPolicy, 'never');
   assert.equal(api.state.sandboxMode, 'danger-full-access');
   assert.equal(
     JSON.stringify(api.collectSettings()),
     JSON.stringify({
-      model: 'gpt-5.4',
-      reasoningEffort: 'xhigh',
+      model: null,
+      reasoningEffort: null,
       collaborationMode: 'default',
       accessPreset: 'full-access',
       approvalPolicy: 'never',
@@ -192,8 +192,8 @@ test('ordinary multi-user UI matches the server-managed runtime policy', async (
   api.state.sandboxMode = 'danger-full-access';
 
   assert.deepEqual(JSON.parse(JSON.stringify(api.collectSettings())), {
-    model: 'gpt-5.4',
-    reasoningEffort: 'xhigh',
+    model: null,
+    reasoningEffort: null,
     collaborationMode: 'default',
     accessPreset: 'default',
     approvalPolicy: 'on-request',
@@ -205,7 +205,7 @@ test('ordinary multi-user UI matches the server-managed runtime policy', async (
   assert.match(api.renderAppSettings().innerHTML, /data-default-permission-preset="default" aria-pressed="true"/u);
 });
 
-test('first-run default thread settings initialize from Codex model defaults', async () => {
+test('first-run default thread settings initialize from effective Codex config defaults', async () => {
   const { api, storage } = await loadAppHarness({
     fetch: async (path: string) => {
       if (path === '/api/auth/me') {
@@ -219,14 +219,18 @@ test('first-run default thread settings initialize from Codex model defaults', a
           ok: true,
           status: 200,
           json: async () => ({
+            defaults: {
+              model: 'gpt-5.6-sol',
+              reasoningEffort: 'ultra',
+            },
             items: [
               {
-                id: 'gpt-5.5',
-                model: 'gpt-5.5',
-                displayName: 'GPT 5.5',
+                id: 'gpt-5.6-sol',
+                model: 'gpt-5.6-sol',
+                displayName: 'GPT-5.6-Sol',
                 isDefault: true,
-                supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
-                defaultReasoningEffort: 'xhigh',
+                supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+                defaultReasoningEffort: 'low',
               },
               {
                 id: 'gpt-5.5-mini',
@@ -250,18 +254,158 @@ test('first-run default thread settings initialize from Codex model defaults', a
   api.state.token = 'token';
   await api.restoreAuth();
 
-  assert.equal(api.state.defaultThreadSettings.model, 'gpt-5.5');
-  assert.equal(api.state.defaultThreadSettings.reasoningEffort, 'xhigh');
-  assert.equal(api.state.model, 'gpt-5.5');
-  assert.deepEqual(JSON.parse(storage.get('codexWebDefaultThreadSettings') || '{}'), {
-    model: 'gpt-5.5',
+  assert.equal(api.state.defaultThreadSettings.model, 'gpt-5.6-sol');
+  assert.equal(api.state.defaultThreadSettings.reasoningEffort, 'ultra');
+  assert.equal(api.state.model, 'gpt-5.6-sol');
+  assert.equal(api.state.reasoningEffort, 'ultra');
+  assert.equal(storage.get('codexWebDefaultThreadSettings'), undefined);
+});
+
+test('legacy gpt-5.4 browser defaults migrate once to effective Codex config defaults', async () => {
+  const legacyDefaults = {
+    model: 'gpt-5.4',
     reasoningEffort: 'xhigh',
     collaborationMode: 'default',
     accessPreset: 'full-access',
     approvalPolicy: 'never',
     sandboxMode: 'danger-full-access',
     personality: 'pragmatic',
+  };
+  const { api, storage } = await loadAppHarness({
+    storage: { codexWebDefaultThreadSettings: JSON.stringify(legacyDefaults) },
+    fetch: createRestoreAuthFetch({
+      models: [{
+        id: 'gpt-5.6-sol',
+        model: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6-Sol',
+        isDefault: true,
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'low',
+      }],
+      defaults: { model: 'gpt-5.6-sol', reasoningEffort: 'ultra' },
+    }),
   });
+
+  api.state.token = 'token';
+  await api.restoreAuth();
+
+  assert.equal(api.state.defaultThreadSettings.model, 'gpt-5.6-sol');
+  assert.equal(api.state.defaultThreadSettings.reasoningEffort, 'ultra');
+  assert.equal(storage.get('codexWebDefaultThreadSettingsVersion'), '2');
+});
+
+test('failed model-default reads do not permanently skip the legacy browser migration', async () => {
+  const legacyDefaults = {
+    model: 'gpt-5.4',
+    reasoningEffort: 'xhigh',
+    collaborationMode: 'default',
+    accessPreset: 'full-access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    personality: 'pragmatic',
+  };
+  const { api, storage } = await loadAppHarness({
+    storage: { codexWebDefaultThreadSettings: JSON.stringify(legacyDefaults) },
+    fetch: createRestoreAuthFetch({ models: [], defaults: null }),
+  });
+  api.state.token = 'token';
+
+  await api.restoreAuth();
+
+  assert.equal(api.state.defaultThreadSettings.model, 'gpt-5.4');
+  assert.equal(storage.get('codexWebDefaultThreadSettingsVersion'), undefined);
+});
+
+test('legacy active-session defaults follow the effective Codex project model', async () => {
+  const currentSession = {
+    id: 'session_legacy_model',
+    cwd: '/repo',
+    settings: {
+      model: 'gpt-5.4',
+      reasoningEffort: 'xhigh',
+      collaborationMode: 'default',
+      accessPreset: 'full-access',
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+    },
+  };
+  const { api } = await loadAppHarness({
+    fetch: createRestoreAuthFetch({
+      sessions: [currentSession],
+      models: [{
+        id: 'gpt-5.6-sol',
+        model: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6-Sol',
+        isDefault: true,
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'low',
+      }],
+      defaults: { model: 'gpt-5.6-sol', reasoningEffort: 'ultra' },
+    }),
+  });
+  api.state.token = 'token';
+  api.state.sessionId = currentSession.id;
+  api.state.currentSession = currentSession;
+
+  await api.restoreAuth();
+
+  assert.equal(api.state.model, 'gpt-5.6-sol');
+  assert.equal(api.state.reasoningEffort, 'ultra');
+  assert.equal(api.collectSettings().model, 'gpt-5.6-sol');
+  assert.equal(api.collectSettings().reasoningEffort, 'ultra');
+});
+
+test('active session settings stay authoritative over this device new-session defaults', async () => {
+  const deviceDefaults = {
+    model: 'gpt-5.4-mini',
+    reasoningEffort: 'medium',
+    collaborationMode: 'default',
+    accessPreset: 'full-access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    personality: 'pragmatic',
+  };
+  const currentSession = {
+    id: 'session_current',
+    cwd: '/repo',
+    settings: {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+      collaborationMode: 'default',
+      accessPreset: 'full-access',
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+    },
+  };
+  const { api } = await loadAppHarness({
+    storage: {
+      codexWebDefaultThreadSettings: JSON.stringify(deviceDefaults),
+      codexWebDefaultThreadSettingsVersion: '2',
+    },
+    fetch: createRestoreAuthFetch({
+      sessions: [currentSession],
+      models: [{
+        id: 'gpt-5.6-sol',
+        model: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6-Sol',
+        isDefault: true,
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'low',
+      }],
+      defaults: { model: 'gpt-5.6-sol', reasoningEffort: 'ultra' },
+    }),
+  });
+  api.state.token = 'token';
+  api.state.sessionId = currentSession.id;
+  api.state.currentSession = currentSession;
+
+  await api.restoreAuth();
+
+  assert.equal(api.state.defaultThreadSettings.model, 'gpt-5.4-mini');
+  assert.equal(api.state.reasoningEffort, 'ultra');
+  assert.equal(api.state.model, 'gpt-5.6-sol');
+  assert.match(api.renderSettingsDrawer(), /<option value="gpt-5\.6-sol" selected/u);
+  assert.match(api.renderSettingsDrawer(), /<option value="ultra" selected/u);
 });
 
 test('saved Codex Web default thread settings override Codex model defaults', async () => {
@@ -366,6 +510,43 @@ test('saved gpt-5.6-sol ultra defaults seed the new session request', async () =
 
   assert.equal(createBody.settings.model, 'gpt-5.6-sol');
   assert.equal(createBody.settings.reasoningEffort, 'ultra');
+});
+
+test('new sessions apply the effective model returned by the backend before the first turn', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      assert.equal(path, '/api/sessions');
+      assert.equal(options.method, 'POST');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: 'session_effective',
+            cwd: '/repo',
+            settings: {
+              model: 'gpt-5.6-sol',
+              reasoningEffort: 'ultra',
+              collaborationMode: 'default',
+              accessPreset: 'full-access',
+              approvalPolicy: 'never',
+              sandboxMode: 'danger-full-access',
+            },
+          },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.cwd = '/repo';
+  api.state.model = '';
+  api.state.reasoningEffort = '';
+
+  await api.ensureSession();
+
+  assert.equal(api.state.model, 'gpt-5.6-sol');
+  assert.equal(api.state.reasoningEffort, 'ultra');
 });
 
 test('opening a session applies its persisted settings to controls', async () => {
@@ -1838,6 +2019,35 @@ test('session home opens a settings page and keeps logout inside settings', asyn
   assert.doesNotMatch(app, /renderSessionList\(\)[\s\S]{0,900}id="logout-button"/u);
 });
 
+test('settings separate current-session controls from this-device new-session defaults', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1', principal: { mode: 'single', isAdmin: false } };
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.models = [{
+    id: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6-Sol',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    defaultReasoningEffort: 'low',
+  }];
+  api.state.model = 'gpt-5.6-sol';
+  api.state.reasoningEffort = 'ultra';
+
+  const sessionHtml = api.renderSettingsDrawer();
+  const appHtml = api.renderAppSettings().innerHTML;
+
+  assert.match(sessionHtml, />Current session</u);
+  assert.match(sessionHtml, />Model and reasoning</u);
+  assert.match(sessionHtml, />Behavior</u);
+  assert.ok(sessionHtml.indexOf('id="model-select"') < sessionHtml.indexOf('>Actions<'));
+  assert.doesNotMatch(sessionHtml, /id="runtime-reload-button"/u);
+  assert.match(appHtml, />New sessions on this device</u);
+  assert.match(appHtml, />Appearance</u);
+  assert.match(appHtml, />Advanced</u);
+  assert.match(appHtml, /id="runtime-reload-button"/u);
+  assert.match(appHtml, /role="group" aria-labelledby="default-permissions-label"/u);
+});
+
 test('mobile settings page title is centered with back on the left', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 390 });
 
@@ -2009,6 +2219,51 @@ test('changing an active session model refreshes reasoning options immediately',
   assert.equal(savedSettings.reasoningEffort, 'xhigh');
 });
 
+test('choosing Codex defaults resets both model and reasoning while sending effective values', async () => {
+  const fetchCalls = [];
+  const { api, context } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: { id: 'session_inherit', cwd: '/repo', settings: JSON.parse(options.body) },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_inherit';
+  api.state.currentSession = { id: 'session_inherit', cwd: '/repo', settings: {} };
+  api.state.sessions = [api.state.currentSession];
+  api.state.settingsOpen = true;
+  api.state.codexConfigDefaults = { model: 'gpt-5.6-sol', reasoningEffort: 'ultra' };
+  api.state.models = [{
+    id: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6-Sol',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    defaultReasoningEffort: 'low',
+  }];
+  api.state.model = 'gpt-5.6-sol';
+  api.state.reasoningEffort = 'ultra';
+  api.render();
+
+  const modelSelect = context.document.querySelector('#model-select');
+  modelSelect.value = '';
+  modelSelect.__listeners.get('change')?.({ target: modelSelect });
+  await flushMicrotasks();
+
+  assert.equal(api.state.model, '');
+  assert.equal(api.state.reasoningEffort, '');
+  assert.match(context.document.querySelector('#reasoning-select').innerHTML, /value="" selected/u);
+  const savedSettings = JSON.parse(fetchCalls[0]?.options.body);
+  assert.equal(savedSettings.model, 'gpt-5.6-sol');
+  assert.equal(savedSettings.reasoningEffort, 'ultra');
+});
+
 test('global website title is editable only by single-user or admin principals', async () => {
   const { api } = await loadAppHarness();
 
@@ -2151,7 +2406,7 @@ test('Chinese language setting localizes settings, chat, and admin management UI
   assert.match(settingsHtml, /<div class="page-title">设置<\/div>/u);
   assert.match(settingsHtml, /语言/u);
   assert.match(settingsHtml, /网站标题/u);
-  assert.match(settingsHtml, /默认新会话/u);
+  assert.match(settingsHtml, /此设备的新会话/u);
   assert.match(settingsHtml, /退出登录/u);
 
   api.state.view = 'chat';
@@ -2206,6 +2461,24 @@ test('Chinese UI keeps model and reasoning option labels untranslated', async ()
   assert.match(sessionReasoning, />xhigh<\/option>/u);
   assert.match(sessionReasoning, />Ultra<\/option>/u);
   assert.doesNotMatch(sessionReasoning, />中<\/option>|>极高<\/option>/u);
+});
+
+test('Chinese session controls keep close and stop symbols compact', async () => {
+  const { api } = await loadAppHarness();
+  api.applyLanguage('zh-CN');
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_1';
+  api.state.settingsOpen = true;
+
+  const html = api.renderChat().innerHTML;
+
+  assert.match(html, /id="stop-button"[\s\S]*?<span aria-hidden="true">■<\/span>/u);
+  assert.match(html, /id="settings-drawer-close"[\s\S]*?<span aria-hidden="true">×<\/span>/u);
+  assert.doesNotMatch(html, /&amp;#9632;|&amp;times;|&#9632;|&times;/u);
 });
 
 test('Chinese language localization leaves conversation and report markdown content untouched', async () => {
@@ -2578,6 +2851,8 @@ test('session card titles reserve two lines while latest input stays compact', a
   assert.match(styles, /\.session-title\s*\{[^}]*-webkit-box-orient:\s*vertical;/su);
   assert.match(styles, /\.session-title\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
   assert.match(styles, /\.session-title\s*\{[^}]*min-height:\s*calc\(var\(--session-summary-line-height\)\s*\*\s*2\);/su);
+  assert.doesNotMatch(styles, /\.session-title\s*\{[^}]*font-weight:\s*(?:600|650|700|bold);/su);
+  assert.match(styles, /body\s*\{[^}]*font-weight:\s*450;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*white-space:\s*nowrap;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*text-overflow:\s*ellipsis;/su);
 });
@@ -2697,6 +2972,83 @@ test('chat composer renders attachment control and keeps the session menu in the
   assert.doesNotMatch(html, /id="settings-toggle"[^>]*>Set<\/button>/u);
   const composerHtml = html.match(/<form class="composer[\s\S]*?<\/form>/u)?.[0] || '';
   assert.doesNotMatch(composerHtml, /id="settings-toggle"/u);
+});
+
+test('narrow desktop prompt paste uploads clipboard files through the attachment flow', async () => {
+  const uploadRequests = [];
+  const { api } = await loadAppHarness({
+    viewportWidth: 900,
+    viewportHeight: 1200,
+    desktopPointer: true,
+    fetch: async (path, options = {}) => {
+      if (path !== '/api/sessions/session_1/attachments') {
+        throw new Error(`unexpected fetch ${path}`);
+      }
+      const files = options.body.getAll('files');
+      uploadRequests.push(files.map((file) => file.name));
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          items: files.map((file, index) => ({
+            id: `attachment_${index}`,
+            kind: file.type.startsWith('image/') ? 'image' : 'file',
+            fileName: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            storage: 'state',
+            localPath: `/state/${file.name}`,
+          })),
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.prompt = 'Keep this text';
+
+  let textPastePrevented = false;
+  const textHandled = await api.handlePromptPaste({
+    clipboardData: { files: [], items: [{ kind: 'string' }] },
+    preventDefault() {
+      textPastePrevented = true;
+    },
+  });
+  assert.equal(textHandled, false);
+  assert.equal(textPastePrevented, false);
+
+  const pastedFiles = [
+    new File(['image'], 'pasted-image.png', { type: 'image/png' }),
+    new File(['notes'], 'pasted-notes.txt', { type: 'text/plain' }),
+  ];
+  let filePastePrevented = false;
+  const filesHandled = await api.handlePromptPaste({
+    clipboardData: {
+      files: pastedFiles,
+      items: [{ kind: 'string' }],
+    },
+    preventDefault() {
+      filePastePrevented = true;
+    },
+  });
+
+  assert.equal(api.hasDesktopPointer(), true);
+  assert.equal(api.isDesktopLayout(), false);
+  assert.equal(filesHandled, true);
+  assert.equal(filePastePrevented, true);
+  assert.equal(api.state.prompt, 'Keep this text');
+  assert.equal(JSON.stringify(uploadRequests), JSON.stringify([['pasted-image.png', 'pasted-notes.txt']]));
+  assert.equal(JSON.stringify(api.state.composerAttachments.map((attachment) => ({
+    status: attachment.status,
+    kind: attachment.uploaded?.kind,
+    fileName: attachment.uploaded?.fileName,
+  }))), JSON.stringify([
+    { status: 'ready', kind: 'image', fileName: 'pasted-image.png' },
+    { status: 'ready', kind: 'file', fileName: 'pasted-notes.txt' },
+  ]));
 });
 
 test('composer sends ready attachments with the next turn payload', async () => {
@@ -3842,7 +4194,7 @@ test('settings drawer opens without changing chat scroll geometry', async () => 
   assert.match(styles, /\.composer\s*\{[^}]*position:\s*relative;/su);
   assert.match(styles, /\.settings-drawer\s*\{[^}]*position:\s*absolute;/su);
   assert.match(styles, /\.settings-drawer\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);/su);
-  assert.match(styles, /\.settings-drawer\s*\{[^}]*max-height:\s*min\(52dvh,\s*420px\);/su);
+  assert.match(styles, /\.settings-drawer\s*\{[^}]*max-height:\s*min\(68dvh,\s*520px\);/su);
   assert.match(styles, /\.settings-drawer\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.doesNotMatch(styles, /\.settings-drawer\s*\{[^}]*margin-bottom:/su);
 });
@@ -4344,6 +4696,278 @@ test('opening a session renders from the list summary before the detail request 
   await opened;
 
   assert.match(api.state.timeline.map((item) => item.text || '').join('\n'), /Detail answer/u);
+});
+
+test('session summaries preserve cached pending messages while detail is unavailable', async () => {
+  const { api } = await loadAppHarness();
+  api.state.timelineCache.set('session_pending', {
+    savedAt: Date.now(),
+    timeline: [
+      { id: 'history_old_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Earlier question' },
+      { id: 'history_old_assistant', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Earlier answer' },
+      { id: 'local_user_pending', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Weak network message' },
+    ],
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  api.restoreTimelineForSession({
+    id: 'session_pending',
+    firstUserInput: 'Earlier question',
+    updatedAt: 10,
+  });
+
+  assert.equal(JSON.stringify(api.state.timeline.map((item) => item.text)), JSON.stringify([
+    'Earlier question',
+    'Earlier answer',
+    'Weak network message',
+  ]));
+  assert.equal(api.state.timeline.at(-1)?.meta, 'pending');
+});
+
+test('stale session detail does not overwrite a cached pending message', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_pending');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: 'session_pending',
+            cwd: '/repo',
+            updatedAt: 10,
+            settings: { metadata: {} },
+            thread: {
+              turns: [{
+                id: 'turn_old',
+                status: 'completed',
+                items: [
+                  { type: 'message', role: 'user', text: 'Earlier question' },
+                  { type: 'message', role: 'assistant', text: 'Earlier answer' },
+                ],
+              }],
+            },
+          },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_pending', cwd: '/repo', updatedAt: 20, firstUserInput: 'Earlier question', settings: { metadata: {} } }];
+  api.state.timelineCache.set('session_pending', {
+    savedAt: Date.now(),
+    timeline: [
+      { id: 'history_old_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Earlier question' },
+      { id: 'history_old_assistant', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Earlier answer' },
+      { id: 'local_user_pending', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Weak network message' },
+    ],
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  await api.selectSession('session_pending');
+
+  assert.equal(api.state.timeline.some((item) => item.text === 'Weak network message' && item.meta === 'pending'), true);
+});
+
+test('stale detail does not mistake a repeated pending prompt for an earlier occurrence', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        session: {
+          id: 'session_repeat',
+          cwd: '/repo',
+          updatedAt: 10,
+          settings: { metadata: {} },
+          thread: {
+            turns: [{
+              id: 'turn_old',
+              status: 'completed',
+              items: [
+                { type: 'message', role: 'user', text: 'Continue' },
+                { type: 'message', role: 'assistant', text: 'Earlier continuation' },
+              ],
+            }],
+          },
+        },
+      }),
+    }),
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_repeat', cwd: '/repo', updatedAt: 20, firstUserInput: 'Continue', settings: { metadata: {} } }];
+  api.state.timelineCache.set('session_repeat', {
+    savedAt: Date.now(),
+    timeline: [
+      { id: 'history_continue', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Continue' },
+      { id: 'history_answer', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Earlier continuation' },
+      { id: 'local_continue', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Continue' },
+    ],
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  await api.selectSession('session_repeat');
+
+  const repeated = api.state.timeline.filter((item) => item.role === 'user' && item.text === 'Continue');
+  assert.equal(repeated.length, 2);
+  assert.equal(repeated.at(-1)?.meta, 'pending');
+});
+
+test('confirmed session detail replaces a matching cached pending message without duplication', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_confirmed');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: 'session_confirmed',
+            cwd: '/repo',
+            updatedAt: 30,
+            settings: { metadata: {} },
+            thread: {
+              turns: [
+                {
+                  id: 'turn_old',
+                  status: 'completed',
+                  items: [
+                    { type: 'message', role: 'user', text: 'Earlier question' },
+                    { type: 'message', role: 'assistant', text: 'Earlier answer' },
+                  ],
+                },
+                {
+                  id: 'turn_new',
+                  status: 'completed',
+                  items: [
+                    { type: 'message', role: 'user', text: 'Weak network message' },
+                    { type: 'message', role: 'assistant', text: 'Confirmed answer' },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_confirmed', cwd: '/repo', updatedAt: 30, firstUserInput: 'Earlier question', settings: { metadata: {} } }];
+  api.state.timelineCache.set('session_confirmed', {
+    savedAt: Date.now(),
+    timeline: [
+      { id: 'history_old_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Earlier question' },
+      { id: 'history_old_assistant', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Earlier answer' },
+      { id: 'local_user_pending', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Weak network message' },
+    ],
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  await api.selectSession('session_confirmed');
+
+  const confirmedMessages = api.state.timeline.filter((item) => item.text === 'Weak network message');
+  assert.equal(confirmedMessages.length, 1);
+  assert.equal(confirmedMessages[0]?.meta, 'history');
+  assert.equal(api.state.timeline.some((item) => item.text === 'Confirmed answer'), true);
+});
+
+test('fresh inactive session detail cache opens without another network request', async () => {
+  let detailFetches = 0;
+  const { api } = await loadAppHarness({
+    fetch: async () => {
+      detailFetches += 1;
+      throw new Error('fresh cache should not fetch');
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_fresh', cwd: '/repo', updatedAt: 100, settings: { metadata: {} } }];
+  const cachedHistory = [
+    { id: 'old_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Old question' },
+    { id: 'old_assistant', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Old answer' },
+    { id: 'recent_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Recent question' },
+    { id: 'recent_assistant', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Recent answer' },
+    { id: 'latest_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Latest question' },
+    { id: 'latest_assistant', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Cached answer' },
+  ];
+  api.state.timelineCache.set('session_fresh', {
+    savedAt: Date.now(),
+    validatedAt: Date.now(),
+    sessionUpdatedAt: 100,
+    timeline: cachedHistory.slice(2),
+    history: cachedHistory,
+    historyComplete: true,
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  await api.selectSession('session_fresh');
+
+  assert.equal(detailFetches, 0);
+  assert.equal(api.state.status, 'Ready');
+  assert.equal(api.state.timeline.at(-1)?.text, 'Cached answer');
+  assert.equal(api.showMoreSessionHistory(), true);
+  assert.equal(api.state.timeline[0]?.text, 'Old question');
+});
+
+test('expired or active session detail caches still refresh from the backend', async () => {
+  const fetched = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetched.push(path);
+      const sessionId = path.split('/').at(-1);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: sessionId,
+            cwd: '/repo',
+            updatedAt: 100,
+            settings: { metadata: {} },
+            thread: { turns: [] },
+          },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [
+    { id: 'session_expired', cwd: '/repo', updatedAt: 100, settings: { metadata: {} } },
+    { id: 'session_active', cwd: '/repo', updatedAt: 100, activityState: 'waiting_approval', settings: { metadata: {} } },
+    { id: 'session_legacy', cwd: '/repo', updatedAt: 100, settings: { metadata: {} } },
+  ];
+  for (const session of api.state.sessions) {
+    api.state.timelineCache.set(session.id, {
+      savedAt: Date.now(),
+      validatedAt: session.id === 'session_expired'
+        ? Date.now() - api.SESSION_DETAIL_CACHE_FRESH_MS - 1
+        : Date.now(),
+      sessionUpdatedAt: 100,
+      timeline: [{ id: `history_${session.id}`, kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Cached answer' }],
+      ...(session.id === 'session_legacy' ? {} : {
+        history: [{ id: `history_${session.id}`, kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Cached answer' }],
+        historyComplete: true,
+      }),
+      batches: new Map(),
+      approvals: new Map(),
+    });
+  }
+
+  await api.selectSession('session_expired');
+  await api.selectSession('session_active');
+  await api.selectSession('session_legacy');
+
+  assert.deepEqual(fetched, ['/api/sessions/session_expired', '/api/sessions/session_active', '/api/sessions/session_legacy']);
+  assert.ok(api.state.timelineCache.get('session_active')?.validatedAt > 0);
 });
 
 test('switching sessions ignores stale SSE chunks from the previous session turn', async () => {
@@ -5950,6 +6574,106 @@ test('composer API failures render a visible timeline error', async () => {
   assert.match(errorItem?.text || '', /Codex refused the first turn/u);
 });
 
+test('existing-session optimistic messages persist before the turn request can finish', async () => {
+  let resolveTurn;
+  const turnReady = new Promise((resolve) => {
+    resolveTurn = resolve;
+  });
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_weak/turns') {
+        await turnReady;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            type: 'command',
+            command: { name: 'help', action: 'show', message: 'Command complete' },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_weak';
+  api.state.currentSession = { id: 'session_weak', cwd: '/repo', settings: { metadata: {} } };
+  api.state.sessions = [api.state.currentSession];
+  api.state.prompt = 'Persist me before the network returns';
+
+  const sending = api.onComposerSubmit({ preventDefault() {} });
+
+  const persisted = JSON.parse(storage.get('codexWebTimelineCache') || '{"entries":[]}');
+  assert.equal(persisted.entries[0]?.sessionId, 'session_weak');
+  assert.equal(persisted.entries[0]?.timeline.at(-1)?.text, 'Persist me before the network returns');
+  assert.equal(persisted.entries[0]?.timeline.at(-1)?.meta, 'pending');
+
+  resolveTurn();
+  await sending;
+});
+
+test('a delayed turn response cannot attach itself to a newly selected session', async () => {
+  let resolveTurn;
+  const turnReady = new Promise((resolve) => {
+    resolveTurn = resolve;
+  });
+  const streamRequests = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_old/turns') {
+        await turnReady;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ turnId: 'turn_old_delayed' }),
+        };
+      }
+      if (path === '/api/sessions/session_new') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_new',
+              cwd: '/repo/new',
+              settings: { metadata: {} },
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      if (path.includes('/api/turns/')) {
+        streamRequests.push(path);
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessions = [
+    { id: 'session_old', cwd: '/repo/old', firstUserInput: 'Old session', settings: { metadata: {} } },
+    { id: 'session_new', cwd: '/repo/new', firstUserInput: 'New session', settings: { metadata: {} } },
+  ];
+  api.state.sessionId = 'session_old';
+  api.state.currentSession = api.state.sessions[0];
+  api.state.prompt = 'Message for the old session';
+
+  const sending = api.onComposerSubmit({ preventDefault() {} });
+  await flushMicrotasks();
+  await api.selectSession('session_new');
+  resolveTurn();
+  await sending;
+
+  assert.equal(api.state.sessionId, 'session_new');
+  assert.equal(api.state.turnId, null);
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.timeline.some((item) => item.text === 'Message for the old session'), false);
+  assert.deepEqual(streamRequests, []);
+});
+
 test('new first-turn rollout errors wait before showing a timeline error', async () => {
   const fetchCalls = [];
   const timers = [];
@@ -6342,6 +7066,33 @@ test('session cards prefer the latest user input for orientation', async () => {
   assert.equal(api.firstInputForSession(session), 'Original setup question');
 });
 
+test('stale session detail cannot replace a newer optimistic list preview', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessions = [{
+    id: 'session_preview',
+    cwd: '/repo',
+    firstUserInput: 'Original question',
+    lastUserInput: 'Optimistic latest question',
+    lastInputAt: 200,
+    updatedAt: 200,
+    settings: { metadata: {} },
+  }];
+  api.state.sessionsByScope.all = [...api.state.sessions];
+
+  api.upsertSession({
+    id: 'session_preview',
+    cwd: '/repo',
+    firstUserInput: 'Original question',
+    lastUserInput: 'Older backend question',
+    lastInputAt: 100,
+    updatedAt: 100,
+    settings: { metadata: {} },
+  });
+
+  assert.equal(api.state.sessions[0]?.lastUserInput, 'Optimistic latest question');
+  assert.equal(api.state.sessions[0]?.lastInputAt, 200);
+});
+
 test('stale session refresh failures do not clear the active session after switching', async () => {
   let releaseFetch;
   const fetchReady = new Promise((resolve) => {
@@ -6410,6 +7161,103 @@ test('timeline cache bounds persisted batches and approvals', async () => {
   assert.ok(entry.approvals.length <= api.MAX_TIMELINE_CACHE_MAP_ITEMS);
   assert.ok(entry.batches.every(([, item]) => item.summary.output.length <= api.MAX_TIMELINE_SUMMARY_TEXT));
   assert.ok(entry.approvals.every(([, item]) => item.summary.command.length <= api.MAX_TIMELINE_SUMMARY_TEXT));
+});
+
+test('timeline cache keeps only the five most recently saved sessions', async () => {
+  const entries = [2, 7, 1, 6, 3, 5, 4].map((savedAt) => ({
+    sessionId: `session_${savedAt}`,
+    savedAt,
+    validatedAt: 0,
+    sessionUpdatedAt: savedAt,
+    timeline: [{
+      id: `message_${savedAt}`,
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      text: `Question ${savedAt}`,
+    }],
+    batches: [],
+    approvals: [],
+  }));
+  const { api, storage } = await loadAppHarness({
+    storage: {
+      codexWebToken: 'cached-device-token',
+      codexWebTimelineCache: JSON.stringify({ entries }),
+    },
+    fetch: () => new Promise(() => {}),
+  });
+
+  assert.equal(api.MAX_TIMELINE_CACHE_SESSIONS, 5);
+  assert.equal(
+    JSON.stringify([...api.state.timelineCache.keys()]),
+    JSON.stringify(['session_7', 'session_6', 'session_5', 'session_4', 'session_3']),
+  );
+
+  api.state.sessionId = 'session_8';
+  api.state.timeline = [{ id: 'message_8', kind: 'message', role: 'user', label: 'You', text: 'Question 8' }];
+  api.state.batches = new Map();
+  api.state.approvals = new Map();
+  api.saveCurrentTimeline();
+
+  const persisted = JSON.parse(storage.get('codexWebTimelineCache'));
+  assert.equal(persisted.entries.length, 5);
+  assert.equal(
+    JSON.stringify(persisted.entries.map((entry) => entry.sessionId)),
+    JSON.stringify(['session_8', 'session_7', 'session_6', 'session_5', 'session_4']),
+  );
+});
+
+test('timeline cache persists complete history for offline scroll expansion', async () => {
+  const { api, storage } = await loadAppHarness();
+  const session = {
+    id: 'session_history_cache',
+    cwd: '/repo',
+    settings: { metadata: {} },
+    thread: {
+      turns: [
+        {
+          id: 'turn_old',
+          items: [
+            { type: 'message', role: 'user', text: 'Old cached question' },
+            { type: 'message', role: 'assistant', text: 'Old cached answer' },
+          ],
+        },
+        {
+          id: 'turn_recent',
+          items: [
+            { type: 'message', role: 'user', text: 'Recent cached question' },
+            { type: 'message', role: 'assistant', text: 'Recent cached answer' },
+          ],
+        },
+        {
+          id: 'turn_latest',
+          items: [
+            { type: 'message', role: 'user', text: 'Latest cached question' },
+            { type: 'message', role: 'assistant', text: 'Latest cached answer' },
+          ],
+        },
+      ],
+    },
+  };
+  api.state.sessionId = session.id;
+  api.state.currentSession = session;
+  api.restoreTimelineForSession(session);
+  api.saveCurrentTimeline();
+
+  const persisted = JSON.parse(storage.get('codexWebTimelineCache'));
+  assert.equal(persisted.entries[0]?.historyComplete, true);
+  assert.equal(persisted.entries[0]?.history.length, 6);
+
+  api.state.currentSession = { id: session.id, cwd: '/repo', settings: { metadata: {} } };
+  api.state.view = 'chat';
+  api.state.sessionHistoryItems = [];
+  api.state.sessionHistoryStartIndex = 0;
+  api.state.timeline = [];
+  api.restoreTimelineForSession(api.state.currentSession);
+
+  assert.equal(api.state.sessionHistoryItems.length, 6);
+  assert.equal(api.showMoreSessionHistory(), true);
+  assert.equal(api.state.timeline[0]?.text, 'Old cached question');
 });
 
 test('history hydration includes recent assistant app-server messages', async () => {
@@ -7070,6 +7918,7 @@ test('session list defaults to recents and supports favorites plus session actio
   assert.match(app, /data-sort-mode="archived"/u);
   assert.match(app, /class="archive-sort-button"/u);
   assert.match(app, /aria-label="Archived sessions"/u);
+  assert.match(app, /class="archive-sort-icon"/u);
   assert.match(app, /<span class="visually-hidden">Archived<\/span>/u);
   assert.doesNotMatch(app, /data-sort-mode="archived"[^>]*>Archived<\/button>/u);
   assert.match(app, /data-sort-mode="time"[^>]*>Recents<\/button>/u);
@@ -7095,7 +7944,7 @@ test('session list defaults to recents and supports favorites plus session actio
   assert.match(app, /apiFetch\(`\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/archive`,\s*\{\s*method:\s*'POST'/su);
 });
 
-test('session sort toggle keeps archive as a compact third icon in one row', async () => {
+test('mobile session filters keep archive as a compact accessible icon', async () => {
   const [styles, { api }] = await Promise.all([
     readFile(stylesUrl, 'utf8'),
     loadAppHarness(),
@@ -7105,12 +7954,36 @@ test('session sort toggle keeps archive as a compact third icon in one row', asy
 
   assert.match(html, /class="toggle sort-toggle mobile-session-sort-toggle"/u);
   assert.match(html, /data-sort-mode="favorites"[\s\S]*data-sort-mode="time"[\s\S]*data-sort-mode="archived"/u);
-  assert.match(html, /class="archive-sort-button"/u);
-  assert.match(html, /aria-label="Archived sessions"/u);
+  assert.match(html, /data-sort-mode="favorites"[^>]*>Favorites<\/button>/u);
+  assert.match(html, /data-sort-mode="time"[^>]*>Recents<\/button>/u);
+  assert.match(html, /class="archive-sort-button"[^>]*data-sort-mode="archived"[^>]*aria-label="Archived sessions"/u);
+  assert.match(html, /class="archive-sort-icon"/u);
+  assert.match(html, /<span class="visually-hidden">Archived<\/span>/u);
   assert.match(styles, /\.sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+34px;/su);
-  assert.match(styles, /\.mobile-session-sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+32px;/su);
+  assert.match(styles, /\.mobile-session-actions\s*\{[^}]*flex:\s*1 1 0;/su);
+  assert.match(styles, /\.mobile-session-sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+44px;/su);
   assert.match(styles, /\.toggle \.archive-sort-button\s*\{[^}]*padding:\s*0;/su);
   assert.match(styles, /\.archive-sort-icon\s*\{[^}]*width:\s*17px;/su);
+  assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*min-width:\s*0;/su);
+});
+
+test('archived session cards use a clear restore icon instead of a font glyph', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sortMode = 'archived';
+  api.state.sessions = [{
+    id: 'session_archived',
+    archived: true,
+    readOnly: true,
+    firstUserInput: 'Archived work',
+    updatedAt: 1,
+    settings: { metadata: {} },
+  }];
+
+  const html = api.renderSessionCards();
+
+  assert.match(html, /data-session-unarchive-id="session_archived"[^>]*aria-label="Unarchive"/u);
+  assert.match(html, /class="session-action-icon session-action-icon-stroke"/u);
+  assert.doesNotMatch(html, /&#8638;|↾/u);
 });
 
 test('selecting cached archived sessions still rerenders the session list', async () => {
@@ -7135,7 +8008,7 @@ test('selecting cached archived sessions still rerenders the session list', asyn
   assert.doesNotMatch(html, /data-session-id="session_active"/u);
 });
 
-test('clicking the compact archived icon switches to archived sessions', async () => {
+test('clicking the archived filter switches to archived sessions', async () => {
   const fetchCalls = [];
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
@@ -7215,6 +8088,7 @@ test('layout mode uses desktop workspace only on sufficiently wide pointer-based
   const { api, context } = await loadAppHarness({ viewportWidth: 1280, viewportHeight: 844, desktopPointer: true });
 
   assert.equal(api.DESKTOP_WORKSPACE_MIN_WIDTH, 1280);
+  assert.equal(api.hasDesktopPointer(), true);
   assert.equal(api.isDesktopLayout(), true);
 
   context.window.innerWidth = 1279;
@@ -7222,6 +8096,7 @@ test('layout mode uses desktop workspace only on sufficiently wide pointer-based
 
   context.window.innerWidth = 1440;
   context.window.innerHeight = 1920;
+  assert.equal(api.hasDesktopPointer(), true);
   assert.equal(api.isDesktopLayout(), false);
 
   context.window.innerHeight = 844;
@@ -7738,8 +8613,10 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
   ]);
 
   assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*960px\);/su);
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
+  assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
+  assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
+  assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.message-card \.message-text,\s*\.message-card \.markdown-body,\s*\.compact-composer-row textarea\s*\{[^}]*font-weight:\s*400;/su);
+  assert.match(app, /const maxHeight = hasDesktopPointer\(\) \? DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT : PROMPT_TEXTAREA_MAX_HEIGHT;/u);
   assert.doesNotMatch(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
   assert.match(app, /if \(!isDesktopLayout\(\)\) \{[\s\S]*id="composer-expand-button"/u);
   assert.match(app, /id="composer-refresh-button"/u);
@@ -7876,8 +8753,12 @@ test('desktop queued-message rerenders keep the current scroll position when not
   assert.ok(restoredTimeline.scrollTop < restoredTimeline.scrollHeight);
 });
 
-test('desktop timeline wheel at the top expands older session history', async () => {
-  const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+test('single-pane desktop timeline wheel at the top expands older session history', async () => {
+  const { api, context } = await loadAppHarness({
+    viewportWidth: 1000,
+    viewportHeight: 1600,
+    desktopPointer: true,
+  });
   const timeline = {
     scrollTop: 0,
     scrollHeight: 1000,
@@ -7898,7 +8779,7 @@ test('desktop timeline wheel at the top expands older session history', async ()
   };
 
   api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'sessions';
+  api.state.view = 'chat';
   api.state.sessionId = 'session_1';
   api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
   api.state.sessionHistoryItems = [
@@ -7920,6 +8801,7 @@ test('desktop timeline wheel at the top expands older session history', async ()
 
   api.handleTimelineWheel(wheelEvent);
 
+  assert.equal(api.isDesktopLayout(), false);
   assert.equal(wheelEvent.defaultPrevented, true);
   assert.equal(api.state.sessionHistoryStartIndex, 0);
   assert.equal(api.state.timeline[0]?.text, 'Old question');
@@ -11040,6 +11922,27 @@ test('backgrounded PWA stream failures keep the active turn recoverable', async 
   assert.notEqual(api.state.status, 'Stream failed');
 });
 
+function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } = {}) {
+  return async (path: string) => {
+    if (path === '/api/auth/me') {
+      return { ok: true, status: 200, json: async () => ({ session: { id: 'auth_1' } }) };
+    }
+    if (path === '/api/settings') {
+      return { ok: true, status: 200, json: async () => ({ settings: {}, permissions: {} }) };
+    }
+    if (path === '/api/models') {
+      return { ok: true, status: 200, json: async () => ({ items: models, defaults }) };
+    }
+    if (path === '/api/sessions') {
+      return { ok: true, status: 200, json: async () => ({ items: sessions }) };
+    }
+    if (path === '/api/projects' || path === '/api/reports') {
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  };
+}
+
 async function loadAppHarness(overrides = {}) {
   const app = await readFile(appUrl, 'utf8');
   const storage = new Map(Object.entries(overrides.storage || {}));
@@ -11359,6 +12262,8 @@ globalThis.__codexWebTest = {
   context: globalThis,
   render: typeof render === 'function' ? render : null,
   DESKTOP_WORKSPACE_MIN_WIDTH: typeof DESKTOP_WORKSPACE_MIN_WIDTH === 'number' ? DESKTOP_WORKSPACE_MIN_WIDTH : null,
+  MAX_TIMELINE_CACHE_SESSIONS: typeof MAX_TIMELINE_CACHE_SESSIONS === 'number' ? MAX_TIMELINE_CACHE_SESSIONS : null,
+  hasDesktopPointer: typeof hasDesktopPointer === 'function' ? hasDesktopPointer : null,
   isDesktopLayout: typeof isDesktopLayout === 'function' ? isDesktopLayout : null,
   handleLayoutResize: typeof handleLayoutResize === 'function' ? handleLayoutResize : null,
   renderDesktopWorkspace: typeof renderDesktopWorkspace === 'function' ? renderDesktopWorkspace : null,
@@ -11368,6 +12273,7 @@ globalThis.__codexWebTest = {
   ensureDesktopActiveSession: typeof ensureDesktopActiveSession === 'function' ? ensureDesktopActiveSession : null,
   MAX_TIMELINE_CACHE_MAP_ITEMS: typeof MAX_TIMELINE_CACHE_MAP_ITEMS === 'number' ? MAX_TIMELINE_CACHE_MAP_ITEMS : null,
   MAX_TIMELINE_SUMMARY_TEXT: typeof MAX_TIMELINE_SUMMARY_TEXT === 'number' ? MAX_TIMELINE_SUMMARY_TEXT : null,
+  SESSION_DETAIL_CACHE_FRESH_MS: typeof SESSION_DETAIL_CACHE_FRESH_MS === 'number' ? SESSION_DETAIL_CACHE_FRESH_MS : null,
   firstInputForSession,
   previewInputForSession: typeof previewInputForSession === 'function' ? previewInputForSession : null,
   renderSessionCards: typeof renderSessionCards === 'function' ? renderSessionCards : null,
@@ -11420,10 +12326,11 @@ globalThis.__codexWebTest = {
   getActiveScrollContainer: typeof getActiveScrollContainer === 'function' ? getActiveScrollContainer : null,
   setSessionSortMode: typeof setSessionSortMode === 'function' ? setSessionSortMode : null,
   selectSession: typeof selectSession === 'function' ? selectSession : null,
-  onComposerSubmit: typeof onComposerSubmit === 'function' ? onComposerSubmit : null,
-  onNewSessionSubmit: typeof onNewSessionSubmit === 'function' ? onNewSessionSubmit : null,
-  handlePromptKeydown: typeof handlePromptKeydown === 'function' ? handlePromptKeydown : null,
-  attachTimelineScrollTracking: typeof attachTimelineScrollTracking === 'function' ? attachTimelineScrollTracking : null,
+	  onComposerSubmit: typeof onComposerSubmit === 'function' ? onComposerSubmit : null,
+	  onNewSessionSubmit: typeof onNewSessionSubmit === 'function' ? onNewSessionSubmit : null,
+	  handlePromptKeydown: typeof handlePromptKeydown === 'function' ? handlePromptKeydown : null,
+	  handlePromptPaste: typeof handlePromptPaste === 'function' ? handlePromptPaste : null,
+	  attachTimelineScrollTracking: typeof attachTimelineScrollTracking === 'function' ? attachTimelineScrollTracking : null,
   updateTimelineFollowState: typeof updateTimelineFollowState === 'function' ? updateTimelineFollowState : null,
   scrollTimelineToBottomIfFollowingLatest: typeof scrollTimelineToBottomIfFollowingLatest === 'function' ? scrollTimelineToBottomIfFollowingLatest : null,
   handleTimelineWheel: typeof handleTimelineWheel === 'function' ? handleTimelineWheel : null,

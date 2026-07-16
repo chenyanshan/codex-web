@@ -23,15 +23,14 @@ const fixtureSession = {
   activeTurnId: 'turn_browser_active',
   activityState: 'running',
   settings: {
-    model: 'gpt-5.4',
-    reasoningEffort: 'xhigh',
-    metadata: {
-      collaborationMode: 'default',
-      accessPreset: 'full-access',
-      approvalPolicy: 'never',
-      sandboxMode: 'danger-full-access',
-      personality: 'pragmatic',
-    },
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'ultra',
+    collaborationMode: 'default',
+    accessPreset: 'full-access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    personality: 'pragmatic',
+    metadata: {},
   },
   thread: {
     id: 'session_browser_fixture',
@@ -57,19 +56,74 @@ const fixtureIdleSession = {
   favorite: false,
   activeTurnId: null,
   settings: {
-    model: 'gpt-5.4',
-    reasoningEffort: 'xhigh',
-    metadata: {
-      collaborationMode: 'default',
-      accessPreset: 'full-access',
-      approvalPolicy: 'never',
-      sandboxMode: 'danger-full-access',
-      personality: 'pragmatic',
-    },
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'ultra',
+    collaborationMode: 'default',
+    accessPreset: 'full-access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    personality: 'pragmatic',
+    metadata: {},
   },
   thread: {
     id: 'session_browser_idle',
     turns: [],
+  },
+};
+
+const fixtureArchivedSession = {
+  ...fixtureIdleSession,
+  id: 'session_browser_archived',
+  title: 'Archived quality gate fixture',
+  preview: 'Restore an archived session',
+  firstUserInput: 'Restore an archived session',
+  lastUserInput: 'Restore an archived session',
+  archived: true,
+  readOnly: true,
+  activeTurnId: null,
+  thread: {
+    id: 'session_browser_archived',
+    turns: [],
+  },
+};
+
+const fixtureHistorySession = {
+  ...fixtureIdleSession,
+  id: 'session_browser_history',
+  title: 'History scroll fixture',
+  preview: 'Oldest browser question',
+  firstUserInput: 'Oldest browser question',
+  lastUserInput: 'Latest browser question',
+  archived: false,
+  readOnly: false,
+  thread: {
+    id: 'session_browser_history',
+    turns: [
+      {
+        id: 'turn_browser_oldest',
+        status: 'completed',
+        items: [
+          { type: 'message', role: 'user', text: 'Oldest browser question' },
+          { type: 'message', role: 'assistant', text: 'Oldest browser answer' },
+        ],
+      },
+      {
+        id: 'turn_browser_recent',
+        status: 'completed',
+        items: [
+          { type: 'message', role: 'user', text: 'Recent browser question' },
+          { type: 'message', role: 'assistant', text: 'Recent browser answer' },
+        ],
+      },
+      {
+        id: 'turn_browser_latest',
+        status: 'completed',
+        items: [
+          { type: 'message', role: 'user', text: 'Latest browser question' },
+          { type: 'message', role: 'assistant', text: 'Latest browser answer' },
+        ],
+      },
+    ],
   },
 };
 
@@ -87,13 +141,17 @@ const jsonRoutes = new Map([
     permissions: { canSetSiteTitle: true },
   }],
   ['/api/models', {
+    defaults: {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+    },
     items: [{
-      id: 'gpt-5.4',
-      model: 'gpt-5.4',
-      displayName: 'GPT 5.4',
+      id: 'gpt-5.6-sol',
+      model: 'gpt-5.6-sol',
+      displayName: 'GPT-5.6-Sol',
       isDefault: true,
-      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
-      defaultReasoningEffort: 'xhigh',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'low',
     }],
   }],
   ['/api/projects', {
@@ -105,9 +163,10 @@ const jsonRoutes = new Map([
       favorite: true,
     }],
   }],
-  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession] }],
+  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureHistorySession] }],
   ['/api/sessions/session_browser_fixture', { session: fixtureSession }],
   ['/api/sessions/session_browser_idle', { session: fixtureIdleSession }],
+  ['/api/sessions/session_browser_history', { session: fixtureHistorySession }],
   ['/api/reports', { items: [] }],
 ]);
 
@@ -133,6 +192,34 @@ const server = createServer(async (request, response) => {
 
     if (pathname === '/api/turns/turn_browser_active/events') {
       streamActiveTurn(request, response);
+      return;
+    }
+
+    if (pathname === '/api/sessions' && requestUrl.searchParams.get('state') === 'archived') {
+      sendJson(response, 200, { items: [fixtureArchivedSession] });
+      return;
+    }
+
+    if (pathname === '/api/sessions/session_browser_idle/attachments' && request.method === 'POST') {
+      let uploadedBytes = 0;
+      for await (const chunk of request) {
+        uploadedBytes += chunk.length;
+      }
+      if (!uploadedBytes) {
+        sendJson(response, 400, { error: 'empty_upload' });
+        return;
+      }
+      sendJson(response, 201, {
+        items: [{
+          id: 'attachment_browser_paste',
+          kind: 'image',
+          fileName: 'pasted-image.png',
+          mimeType: 'image/png',
+          sizeBytes: 11,
+          storage: 'state',
+          localPath: '/state/pasted-image.png',
+        }],
+      });
       return;
     }
 

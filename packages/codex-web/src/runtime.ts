@@ -6,6 +6,7 @@ import {
   createStderrLogger,
   type CodexTurnInput,
   type ProviderApprovalRequest,
+  type ProviderConfigDefaults,
   type ProviderModelInfo,
   type ProviderThreadGoal,
   type ProviderThreadListResult,
@@ -44,6 +45,10 @@ import type {
   CodexWebTimelineMessage,
 } from './session_timeline_store.js';
 
+const CODEX_WEB_MODEL_DEFAULTS_VERSION = 2;
+const LEGACY_DEFAULT_MODEL = 'gpt-5.4';
+const LEGACY_DEFAULT_REASONING_EFFORT = 'xhigh';
+
 interface CodexWebRuntimeLogger {
   debug?: (message: string) => void;
   info?: (message: string) => void;
@@ -76,6 +81,7 @@ export type CodexWebSessionActivityState = 'running' | 'waiting_approval' | null
 export interface CodexWebRuntimeClient {
   stop?(): Promise<void> | void;
   listModels(): Promise<ProviderModelInfo[]>;
+  readConfigDefaults?(args?: { cwd?: string | null }): Promise<ProviderConfigDefaults>;
   readUsage(): Promise<ProviderUsageReport | null>;
   listThreads(args?: {
     limit?: number;
@@ -286,6 +292,18 @@ export class CodexWebRuntime {
     return this.client.listModels();
   }
 
+  async readConfigDefaults(): Promise<ProviderConfigDefaults | null> {
+    if (typeof this.client.readConfigDefaults !== 'function') {
+      return null;
+    }
+    try {
+      return await this.client.readConfigDefaults({ cwd: this.defaultCwd });
+    } catch (error) {
+      this.logger.warn?.(`Could not read Codex config defaults: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
   async readUsage(): Promise<ProviderUsageReport | null> {
     if (typeof this.client.readUsage !== 'function') {
       return null;
@@ -374,8 +392,9 @@ export class CodexWebRuntime {
       ephemeral: false,
     });
     const thread = await this.requireThread(started.threadId);
+    const effectiveSettings = mergeEffectiveModelSettings(initialSettings, started);
     this.persistSessionSettings(started.threadId, {
-      ...initialSettings,
+      ...effectiveSettings,
       bridgeSessionId: started.threadId,
       updatedAt: Date.now(),
     });
@@ -541,9 +560,10 @@ export class CodexWebRuntime {
     if (conflictingTurnId) {
       throw createTurnConflictError(sessionId, conflictingTurnId);
     }
-    const settings = this.mergeSettings(sessionId, input.settings);
+    let settings = this.mergeSettings(sessionId, input.settings);
     this.persistSessionSettings(sessionId, settings);
     await this.ensureThreadReadyForTurn(sessionId);
+    settings = this.getSessionSettings(sessionId);
     this.logDebug('turn_start_requested', {
       sessionId,
       textLength: input.text.length,
@@ -1088,11 +1108,15 @@ export class CodexWebRuntime {
     }
     const settings = this.getSessionSettings(threadId);
     const permissions = resolveResumePermissions(settings);
-    await this.client.resumeThread({
+    const resumed = await this.client.resumeThread({
       threadId,
       approvalPolicy: permissions.approvalPolicy,
       sandboxMode: permissions.sandboxMode,
     });
+    const effectiveSettings = mergeEffectiveModelSettings(settings, resumed);
+    if (effectiveSettings !== settings) {
+      this.persistSessionSettings(threadId, effectiveSettings);
+    }
   }
 
   private toSession(thread: ProviderThreadSummary): CodexWebSession {
@@ -1268,6 +1292,7 @@ export class CodexWebRuntime {
     const metadata = { ...metadataSource };
     if (patch) {
       delete metadata.codexWebDefaultsOnly;
+      metadata.codexWebModelDefaultsVersion = CODEX_WEB_MODEL_DEFAULTS_VERSION;
     }
     return {
       ...current,
@@ -1284,12 +1309,13 @@ export class CodexWebRuntime {
       return cached;
     }
     const stored = this.settingsStore?.get(sessionId);
-    const settings = stored
+    const migratedStored = migrateLegacyModelDefaults(stored);
+    const settings = migratedStored
       ? {
         ...createDefaultSettings(sessionId),
-        ...stored,
+        ...migratedStored,
         bridgeSessionId: sessionId,
-        metadata: stored.metadata ?? {},
+        metadata: migratedStored.metadata ?? {},
       }
       : {
         ...createDefaultSettings(sessionId),
@@ -2044,11 +2070,65 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function mergeEffectiveModelSettings(
+  settings: CodexWebStoredSessionSettings,
+  source: unknown,
+): CodexWebStoredSessionSettings {
+  const value = source && typeof source === 'object' ? source as Record<string, unknown> : {};
+  const config = value.config && typeof value.config === 'object'
+    ? value.config as Record<string, unknown>
+    : value;
+  const model = normalizeString(config.model);
+  const reasoningEffort = normalizeString(config.reasoningEffort)
+    || normalizeString(config.modelReasoningEffort)
+    || normalizeString(config.model_reasoning_effort);
+  const nextModel = settings.model || model || null;
+  const nextReasoningEffort = settings.reasoningEffort || reasoningEffort || null;
+  if (nextModel === settings.model && nextReasoningEffort === settings.reasoningEffort) {
+    return settings;
+  }
+  return {
+    ...settings,
+    model: nextModel,
+    reasoningEffort: nextReasoningEffort,
+    metadata: {
+      ...(settings.metadata ?? {}),
+      codexWebModelDefaultsVersion: CODEX_WEB_MODEL_DEFAULTS_VERSION,
+    },
+    updatedAt: Date.now(),
+  };
+}
+
+function migrateLegacyModelDefaults(
+  settings: CodexWebStoredSessionSettings | null | undefined,
+): CodexWebStoredSessionSettings | null {
+  if (!settings) {
+    return null;
+  }
+  const metadata = settings.metadata ?? {};
+  if (Number(metadata.codexWebModelDefaultsVersion) >= CODEX_WEB_MODEL_DEFAULTS_VERSION) {
+    return settings;
+  }
+  if (settings.model !== LEGACY_DEFAULT_MODEL || settings.reasoningEffort !== LEGACY_DEFAULT_REASONING_EFFORT) {
+    return settings;
+  }
+  return {
+    ...settings,
+    model: null,
+    reasoningEffort: null,
+    metadata: {
+      ...metadata,
+      codexWebModelDefaultsVersion: CODEX_WEB_MODEL_DEFAULTS_VERSION,
+    },
+    updatedAt: Date.now(),
+  };
+}
+
 function createDefaultSettings(sessionId: string): CodexWebStoredSessionSettings {
   return {
     bridgeSessionId: sessionId,
-    model: 'gpt-5.4',
-    reasoningEffort: 'xhigh',
+    model: null,
+    reasoningEffort: null,
     serviceTier: null,
     collaborationMode: 'default',
     personality: 'pragmatic',
@@ -2056,7 +2136,7 @@ function createDefaultSettings(sessionId: string): CodexWebStoredSessionSettings
     approvalPolicy: 'never',
     sandboxMode: 'danger-full-access',
     locale: null,
-    metadata: {},
+    metadata: { codexWebModelDefaultsVersion: CODEX_WEB_MODEL_DEFAULTS_VERSION },
     updatedAt: Date.now(),
     favorite: false,
     favoriteOrder: null,
