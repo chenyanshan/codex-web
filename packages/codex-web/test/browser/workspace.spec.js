@@ -246,8 +246,20 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(menuCloseButton).toBeFocused();
   await expect(page.locator('#model-select')).toHaveValue('gpt-5.6-sol');
   await expect(page.locator('#reasoning-select')).toHaveValue('ultra');
+  await expect(page.locator('.settings-stop-row')).toHaveAttribute('data-session-state', 'running');
+  await expect(page.locator('.settings-drawer .settings-card')).toHaveCount(4);
+  await expect(page.locator('.settings-options-card').first()).toContainText('Model');
+  await expect(page.locator('.settings-behavior-card')).toContainText('Permissions');
   await expect(page.locator('[data-session-reports-project], #open-reports-button')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Reports', exact: true })).toHaveCount(0);
+  const settingsGeometry = await page.locator('.settings-drawer').evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(settingsGeometry.scrollWidth).toBeLessThanOrEqual(settingsGeometry.clientWidth + 1);
+  expect(settingsGeometry.scrollHeight).toBeGreaterThanOrEqual(settingsGeometry.clientHeight);
   if (testInfo.project.name.startsWith('mobile-')) {
     await expectTouchTarget(menuCloseButton);
     await expectTouchTarget(stopButton);
@@ -335,7 +347,8 @@ test('lost new-session responses recover from the durable outbox after reload', 
   await page.locator('#prompt-input').fill('Recover this weak-network session');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 
-  await expect(page.locator('#timeline')).toContainText('Send failed');
+  await expect(page.locator('#timeline [data-submission-retry-id]')).toBeVisible();
+  await expect(page.locator('#timeline [data-submission-retry-id]')).toHaveAccessibleName('Send failed. Retry send');
   const storedBeforeReload = await page.evaluate(() => {
     const prefix = 'codexWebSubmissionOutbox:';
     return Array.from({ length: window.localStorage.length }, (_item, index) => (

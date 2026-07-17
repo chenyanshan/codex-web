@@ -177,8 +177,11 @@ const UI_TRANSLATIONS = {
     Account: '账户',
     Administration: '管理',
     'Current session': '当前会话',
+    'Current session is running': '当前会话正在运行',
+    'Current session is idle': '当前会话已空闲',
     'Model and reasoning': '模型与推理',
     Behavior: '行为',
+    'Behavior and permissions': '行为与权限',
     Actions: '操作',
     Language: '语言',
     English: 'English',
@@ -2862,7 +2865,7 @@ function renderSessionCards() {
           <span class="session-card-main">
             <span class="session-card-title-row">
               <span class="session-title" data-i18n-skip>${escapeHtml(sessionDisplayTitle(session))}</span>
-              ${deliveryState
+              ${deliveryState === 'failed'
                 ? `<span class="session-attention-state" data-state="${escapeAttribute(deliveryState)}">${escapeHtml(t(submissionDeliveryLabel(deliveryState)))}</span>`
                 : activityState ? `<span class="session-attention-state" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityState === 'waiting_approval' ? 'Needs approval' : 'Active'))}</span>` : ''}
             </span>
@@ -3045,18 +3048,22 @@ function renderSettingsDrawer() {
   return `
     <div class="settings-drawer" role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings">
       <div class="settings-drawer-header">
-        <span class="settings-section-title">Current session</span>
+        <span class="settings-drawer-title">Current session</span>
         <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus><span aria-hidden="true">×</span></button>
       </div>
       ${renderStopTurnSettingsControl()}
       ${renderSessionActionsSettingsSection()}
       <div class="settings-drawer-section">
         <div class="settings-drawer-section-title">Model and reasoning</div>
-        ${renderThreadSettingsControls({ modelOnly: true })}
+        <div class="settings-card settings-options-card">
+          ${renderThreadSettingsControls({ modelOnly: true })}
+        </div>
       </div>
       <div class="settings-drawer-section">
-        <div class="settings-drawer-section-title">Behavior</div>
-        ${renderThreadSettingsControls({ behaviorOnly: true })}
+        <div class="settings-drawer-section-title">Behavior and permissions</div>
+        <div class="settings-card settings-options-card settings-behavior-card">
+          ${renderThreadSettingsControls({ behaviorOnly: true })}
+        </div>
       </div>
     </div>
   `;
@@ -3066,7 +3073,7 @@ function renderThreadSettingsControls({ defaults = false, modelOnly = false, beh
   const prefix = defaults ? 'default-' : '';
   const settings = defaults ? state.defaultThreadSettings : state;
   const accessPreset = defaults ? defaultThreadAccessPreset() : state.permissionPreset;
-  const modelControls = `
+  const defaultModelControls = `
         <div class="control-group">
           <label for="${prefix}model-select">Model</label>
           <select id="${prefix}model-select" name="${defaults ? 'defaultModel' : 'model'}" data-i18n-skip>${renderModelOptions(settings.model)}</select>
@@ -3078,18 +3085,35 @@ function renderThreadSettingsControls({ defaults = false, modelOnly = false, beh
           </select>
         </div>
   `;
+  const sessionModelControls = `
+        <label class="settings-option-row" for="model-select">
+          <span class="settings-option-label">Model</span>
+          <span class="settings-select-shell">
+            <select id="model-select" name="model" data-i18n-skip>${renderModelOptions(settings.model)}</select>
+          </span>
+        </label>
+        <label class="settings-option-row" for="reasoning-select">
+          <span class="settings-option-label">Reasoning</span>
+          <span class="settings-select-shell">
+            <select id="reasoning-select" name="reasoningEffort" data-i18n-skip>
+              ${renderReasoningOptions(settings.reasoningEffort, settings.model)}
+            </select>
+          </span>
+        </label>
+  `;
+  const modelControls = defaults ? defaultModelControls : sessionModelControls;
   const modeAttribute = defaults ? 'data-default-mode' : 'data-mode';
   const permissionAttribute = defaults ? 'data-default-permission-preset' : 'data-permission-preset';
   const behaviorControls = `
-        <div class="control-group thread-setting-wide">
-          <label id="${prefix}mode-label">Mode</label>
+        <div class="control-group thread-setting-wide${defaults ? '' : ' settings-option-row'}">
+          <label class="settings-option-label" id="${prefix}mode-label">Mode</label>
           <div class="toggle" role="group" aria-labelledby="${prefix}mode-label">
             <button type="button" ${modeAttribute}="default" aria-pressed="${String(settings.collaborationMode === 'default')}">Default</button>
             <button type="button" ${modeAttribute}="plan" aria-pressed="${String(settings.collaborationMode === 'plan')}">Plan</button>
           </div>
         </div>
-        <div class="control-group thread-setting-wide">
-          <label id="${prefix}permissions-label">Permissions</label>
+        <div class="control-group thread-setting-wide${defaults ? '' : ' settings-option-row'}">
+          <label class="settings-option-label" id="${prefix}permissions-label">Permissions</label>
           <div class="toggle permission-toggle" role="group" aria-labelledby="${prefix}permissions-label">
             <button type="button" ${permissionAttribute}="read-only" aria-pressed="${String(accessPreset === 'read-only')}">Read only</button>
             <button type="button" ${permissionAttribute}="default" aria-pressed="${String(accessPreset === 'default')}">Ask before changes</button>
@@ -3109,21 +3133,21 @@ function renderSessionActionsSettingsSection() {
     return '';
   }
   return `
-      <div class="settings-drawer-section settings-drawer-actions">
-        <div class="settings-drawer-section-title">Actions</div>
+      <div class="settings-card settings-drawer-actions">
         ${controls}
       </div>
   `;
 }
 
 function renderStopTurnSettingsControl() {
-  if (!state.pendingTurn || !state.turnId) {
-    return '';
-  }
+  const running = Boolean(state.pendingTurn && state.turnId);
   return `
-      <div class="settings-stop-row">
-        <span class="meta">Turn running</span>
-        <button class="danger compact-button" type="button" id="stop-button" aria-label="Stop current turn">Stop</button>
+      <div class="settings-card settings-stop-row" data-session-state="${running ? 'running' : 'idle'}">
+        <span class="settings-session-state">
+          <span class="settings-session-state-dot" aria-hidden="true"></span>
+          <strong>${running ? 'Current session is running' : 'Current session is idle'}</strong>
+        </span>
+        ${running ? '<button class="danger compact-button" type="button" id="stop-button" aria-label="Stop current turn">Stop</button>' : ''}
       </div>
   `;
 }
@@ -3134,7 +3158,7 @@ function renderSessionManagementControl() {
   }
   return `
       <div class="settings-action-row">
-        <span class="meta">Session</span>
+        <strong>Session</strong>
         <button class="ghost compact-button" type="button" data-session-archive-request-id="${escapeAttribute(state.sessionId)}"${state.pendingTurn ? ' disabled' : ''}>Archive</button>
       </div>
   `;
@@ -3147,11 +3171,8 @@ function renderShareSettingsControl() {
   const unavailableReason = shareUnavailableReason();
   return `
       <div class="settings-action-row">
-        <span class="settings-action-copy">
-          <span class="meta">Share</span>
-          ${unavailableReason ? `<small>${escapeHtml(t(unavailableReason))}</small>` : ''}
-        </span>
-        <button class="ghost compact-button" type="button" id="share-session-button"${unavailableReason ? ` disabled aria-describedby="share-unavailable-reason"` : ''}>Share</button>
+        <strong>Share</strong>
+        <button class="ghost compact-button" type="button" id="share-session-button"${unavailableReason ? ` disabled aria-describedby="share-unavailable-reason" title="${escapeAttribute(t(unavailableReason))}"` : ''}>Share</button>
         ${unavailableReason ? `<span class="visually-hidden" id="share-unavailable-reason">${escapeHtml(t(unavailableReason))}</span>` : ''}
       </div>
   `;
@@ -3235,9 +3256,13 @@ function renderTimelineItem(item) {
         : '';
     const attachments = renderMessageAttachments(display.attachments);
     const submission = item.submissionId ? state.submissionOutbox.get(item.submissionId) : null;
-    const meta = submission ? submissionDeliveryLabel(submission.status) : item.deliveryLabel || item.meta || '';
+    const meta = item.meta || '';
+    const deliveryFailed = item.role === 'user' && (
+      submission?.status === 'failed'
+      || (!submission && item.deliveryLabel === 'Send failed')
+    );
     return `
-      <article class="card message-card ${escapeHtml(item.role)}${item.severity === 'error' ? ' error-message' : ''}${item.meta === 'reasoning-summary' ? ' reasoning-summary' : ''}" data-timeline-id="${escapeAttribute(item.id || '')}">
+      <article class="card message-card ${escapeHtml(item.role)}${item.severity === 'error' ? ' error-message' : ''}${item.meta === 'reasoning-summary' ? ' reasoning-summary' : ''}${deliveryFailed ? ' delivery-failed' : ''}" data-timeline-id="${escapeAttribute(item.id || '')}">
         <div class="card-header">
           <span class="card-title">${escapeHtml(t(item.label))}</span>
           <span class="card-kind">${escapeHtml(t(meta))}</span>
@@ -3245,7 +3270,7 @@ function renderTimelineItem(item) {
         ${item.severity === 'error' ? `<span class="error-badge">${escapeHtml(t('Error'))}</span>` : ''}
         ${body}
         ${attachments}
-        ${renderSubmissionDeliveryActions(item, submission, meta)}
+        ${renderSubmissionDeliveryActions(item, submission)}
       </article>
     `;
   }
@@ -3303,21 +3328,19 @@ function submissionDeliveryLabel(status) {
   return 'Saved on this device';
 }
 
-function renderSubmissionDeliveryActions(item, submission, label) {
-  if (item?.role !== 'user' || (!submission && !item?.deliveryLabel)) {
+function renderSubmissionDeliveryActions(item, submission) {
+  const failed = submission?.status === 'failed'
+    || (!submission && item?.deliveryLabel === 'Send failed');
+  if (item?.role !== 'user' || !failed) {
     return '';
   }
-  const retry = submission && submission.status !== 'sending' && submission.retryable !== false
-    ? `<button class="ghost compact-button" type="button" data-submission-retry-id="${escapeAttribute(submission.id)}">${escapeHtml(t('Retry send'))}</button>`
-    : '';
-  const cancel = submission && submission.status !== 'sending'
-    ? `<button class="ghost compact-button" type="button" data-submission-cancel-id="${escapeAttribute(submission.id)}">${escapeHtml(t('Cancel send'))}</button>`
-    : '';
+  const retryLabel = `${t('Send failed')}. ${t('Retry send')}`;
+  const indicator = submission && submission.retryable !== false
+    ? `<button class="submission-retry-button" type="button" data-submission-retry-id="${escapeAttribute(submission.id)}" aria-label="${escapeAttribute(retryLabel)}" title="${escapeAttribute(t('Retry send'))}"><span aria-hidden="true">&#8635;</span></button>`
+    : `<span class="submission-failed-indicator" role="img" aria-label="${escapeAttribute(t('Send failed'))}" title="${escapeAttribute(t('Send failed'))}"><span aria-hidden="true">!</span></span>`;
   return `
         <div class="submission-delivery-actions">
-          <span class="submission-delivery-status">${escapeHtml(t(label))}</span>
-          ${retry}
-          ${cancel}
+          ${indicator}
         </div>
   `;
 }

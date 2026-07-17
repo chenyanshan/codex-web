@@ -2155,10 +2155,12 @@ test('settings separate current-session controls from this-device new-session de
   const sessionHtml = api.renderSettingsDrawer();
   const appHtml = api.renderAppSettings().innerHTML;
 
-  assert.match(sessionHtml, />Current session</u);
+  assert.match(sessionHtml, /class="settings-card settings-stop-row" data-session-state="idle"/u);
+  assert.match(sessionHtml, />Current session is idle</u);
   assert.match(sessionHtml, />Model and reasoning</u);
-  assert.match(sessionHtml, />Behavior</u);
-  assert.ok(sessionHtml.indexOf('>Actions<') < sessionHtml.indexOf('id="model-select"'));
+  assert.match(sessionHtml, />Behavior and permissions</u);
+  assert.match(sessionHtml, /class="settings-card settings-options-card"[\s\S]*id="model-select"/u);
+  assert.doesNotMatch(sessionHtml, />Reports?</u);
   assert.doesNotMatch(sessionHtml, /id="runtime-reload-button"/u);
   assert.match(appHtml, />New sessions on this device</u);
   assert.match(appHtml, />Appearance</u);
@@ -2581,7 +2583,7 @@ test('Chinese UI keeps model and reasoning option labels untranslated', async ()
   assert.doesNotMatch(sessionReasoning, />中<\/option>|>极高<\/option>/u);
 });
 
-test('Chinese session settings localize Stop and keep the close symbol compact', async () => {
+test('Chinese session settings localize the running-state card and keep the close symbol compact', async () => {
   const { api } = await loadAppHarness();
   api.applyLanguage('zh-CN');
   api.state.authSession = { id: 'auth_1' };
@@ -2594,6 +2596,7 @@ test('Chinese session settings localize Stop and keep the close symbol compact',
 
   const html = api.renderChat().innerHTML;
 
+  assert.match(html, /data-session-state="running"[\s\S]*当前会话正在运行/u);
   assert.match(html, /id="stop-button"[^>]*>停止<\/button>/u);
   assert.match(html, /id="settings-drawer-close"[\s\S]*?<span aria-hidden="true">×<\/span>/u);
   assert.doesNotMatch(html, /&amp;times;|&times;/u);
@@ -3504,7 +3507,7 @@ test('running turns keep message sending available and expose Stop only in sessi
 
   api.state.settingsOpen = true;
   const openHtml = api.renderChat().innerHTML;
-  assert.match(openHtml, /class="settings-stop-row"[\s\S]*class="danger compact-button"[^>]*id="stop-button"[^>]*aria-label="Stop current turn"[^>]*>Stop<\/button>/u);
+  assert.match(openHtml, /class="settings-card settings-stop-row"[\s\S]*class="danger compact-button"[^>]*id="stop-button"[^>]*aria-label="Stop current turn"[^>]*>Stop<\/button>/u);
   assert.equal((openHtml.match(/id="stop-button"/gu) || []).length, 1);
   assert.doesNotMatch(openHtml, /turn-stop-button/u);
   assert.match(app, /function onComposerSubmit\(event\)[\s\S]*const text = state\.prompt\.trim\(\);/u);
@@ -4324,7 +4327,7 @@ test('settings drawer exposes runtime reload and posts to the runtime endpoint',
   assert.equal(api.state.statusTone, 'success');
 });
 
-test('settings drawer opens without changing chat scroll geometry', async () => {
+test('settings drawer opens as a scrollable card panel without changing chat scroll geometry', async () => {
   const [app, styles] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(stylesUrl, 'utf8'),
@@ -4335,9 +4338,10 @@ test('settings drawer opens without changing chat scroll geometry', async () => 
   assert.match(app, /listenRendered\(settingsToggle, 'click', toggleSettingsDrawer\)/u);
   assert.match(styles, /\.composer\s*\{[^}]*position:\s*relative;/su);
   assert.match(styles, /\.settings-drawer\s*\{[^}]*position:\s*absolute;/su);
-  assert.match(styles, /\.settings-drawer\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);/su);
-  assert.match(styles, /\.settings-drawer\s*\{[^}]*max-height:\s*min\(68dvh,\s*520px\);/su);
+  assert.match(styles, /\.settings-drawer\s*\{[^}]*bottom:\s*calc\(100% \+ 6px\);/su);
+  assert.match(styles, /\.settings-drawer\s*\{[^}]*max-height:\s*min\(78dvh,\s*700px\);/su);
   assert.match(styles, /\.settings-drawer\s*\{[^}]*overflow-y:\s*auto;/su);
+  assert.match(styles, /\.settings-card\s*\{[^}]*background:\s*var\(--panel\);/su);
   assert.doesNotMatch(styles, /\.settings-drawer\s*\{[^}]*margin-bottom:/su);
 });
 
@@ -7656,7 +7660,11 @@ test('new-session API failures keep a visible retryable outbox message', async (
   assert.equal(submission?.retryable, true);
   assert.equal(userItem?.role, 'user');
   assert.equal(api.state.timeline.some((item) => item.role === 'system'), false);
-  assert.match(api.renderTimelineItem(userItem), /Send failed/u);
+  const failedHtml = api.renderTimelineItem(userItem);
+  assert.match(failedHtml, /delivery-failed/u);
+  assert.match(failedHtml, /data-submission-retry-id=/u);
+  assert.match(failedHtml, /aria-label="Send failed\. Retry send"/u);
+  assert.doesNotMatch(failedHtml, /submission-delivery-status|data-submission-cancel-id/u);
 });
 
 test('existing-session optimistic messages persist before the turn request can finish', async () => {
@@ -7803,7 +7811,10 @@ test('new-session submission persists before the network request can finish', as
   assert.equal(persisted.status, 'sending');
   assert.equal(persisted.id, requestBody.submissionId);
   assert.equal(fetchCalls[0].path, '/api/session-submissions');
-  assert.match(api.renderTimelineItem(api.state.timeline[0]), /Sending to server/u);
+  const sendingHtml = api.renderTimelineItem(api.state.timeline[0]);
+  assert.doesNotMatch(sendingHtml, /Sending to server|Server received|Saved on this device/u);
+  assert.doesNotMatch(sendingHtml, /submission-delivery-actions/u);
+  assert.doesNotMatch(api.renderSessionCards(), /Sending to server|Server received|Saved on this device/u);
 
   resolveSubmission();
   await sending;
