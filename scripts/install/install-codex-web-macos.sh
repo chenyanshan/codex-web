@@ -187,7 +187,6 @@ install_bundled_skill() {
   echo "installed skill: ${target_dir}"
 }
 
-install_bundled_skill "codex-mobile-report"
 install_bundled_skill "codex-web-user-context"
 
 mkdir -p "${MANUAL_LOG_DIR}"

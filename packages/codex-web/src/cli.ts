@@ -26,51 +26,6 @@ import {
 import { FileScheduledTaskStore, type FileScheduledTaskStore as FileScheduledTaskStoreType } from './task_store.js';
 import { runScheduledTask, type RunScheduledTaskInput, type RunScheduledTaskResult } from './task_runner.js';
 
-const HELP_REPORT_PROJECT = 'codex-mobile-web-app';
-const HELP_REPORT_DATE = '2026-05-22';
-const HELP_REPORT_FILENAME = 'codex-web-help.md';
-const HELP_REPORT_CONTENT = `# Codex Web 帮助
-
-Codex Web 会在启动正常的 Codex turn 之前，先处理少量应用层 slash 命令。命令只作用于当前会话。每个会话维护一个目标。
-
-## 支持的命令
-
-| 命令 | 作用 | 会启动 Codex turn |
-| :--- | :--- | :---: |
-| \`/help\` | 显示支持的命令列表，并返回本说明链接。 | 否 |
-| \`/goal\` | 显示当前会话的目标和状态。 | 否 |
-| \`/goal <objective>\` | 设置或替换当前会话目标。 | 否 |
-| \`/goal set <objective>\` | 显式设置或替换当前会话目标。 | 否 |
-| \`/goal edit <objective>\` | 与 \`/goal set <objective>\` 相同；适合以编辑目标的方式思考时使用。 | 否 |
-| \`/goal pause\` | 将当前目标标记为已暂停。 | 否 |
-| \`/goal resume\` | 将当前目标重新标记为进行中。 | 否 |
-| \`/goal clear\` | 清除当前会话目标。 | 否 |
-
-## 工作方式
-
-- 移动端应用通过正常的输入框接口发送 slash 命令文本。
-- Web 后端会在调用 Codex turn start 之前识别这些受支持的命令。
-- 已处理的命令会以系统消息的形式写入时间线。
-- 已处理的命令不会打开 \`/api/turns/<turnId>/events\`，也不会创建原生 Codex turn。
-- 看起来像 slash 命令但不受支持的输入，会按普通用户文本处理。
-
-## 目标行为
-
-| 操作 | 结果 |
-| :--- | :--- |
-| 设置 | 在当前 Codex 线程上保存一个目标。 |
-| 查看 | 从原生 Codex app-server 读取线程目标。 |
-| 暂停 | 保留目标内容，但把状态改为 paused。 |
-| 恢复 | 把状态改回 active。 |
-| 清除 | 从线程中移除目标。 |
-
-## 说明
-
-- 目标状态由 Codex 原生 app-server RPC 提供：\`thread/goal/get\`、\`thread/goal/set\` 和 \`thread/goal/clear\`。
-- Codex Web 不会额外保存一份浏览器侧目标状态。
-- UI 故意保留为文本命令方式，而不是再做一个复杂的目标编辑器。
-`;
-
 export type ParsedCliArgs =
   | {
     command: 'auth-set-password';
@@ -311,7 +266,6 @@ export async function startServeCommand(
   };
   const bootstrapPassword = takeOneTimePassword(env);
   await ensureRuntimeDirectories(config);
-  await ensureBundledReports(config);
   await maintainManagedStateStorage(config);
   const identityStore = new FileIdentityStore({
     identityPath: path.join(config.stateDir, 'identity.json'),
@@ -349,22 +303,6 @@ export async function startServeCommand(
 async function ensureRuntimeDirectories(config: CodexWebConfig): Promise<void> {
   await fs.promises.mkdir(config.stateDir, { recursive: true, mode: 0o700 });
   await fs.promises.mkdir(path.join(config.stateDir, 'logs'), { recursive: true, mode: 0o700 });
-  await fs.promises.mkdir(config.reportsDir, { recursive: true, mode: 0o700 });
-}
-
-async function ensureBundledReports(config: CodexWebConfig): Promise<void> {
-  const reportPath = helpReportPath(config);
-  await fs.promises.mkdir(path.dirname(reportPath), { recursive: true, mode: 0o700 });
-  await fs.promises.writeFile(reportPath, HELP_REPORT_CONTENT, { mode: 0o600 });
-}
-
-function helpReportPath(config: CodexWebConfig): string {
-  return path.join(
-    config.reportsDir,
-    HELP_REPORT_PROJECT,
-    HELP_REPORT_DATE,
-    HELP_REPORT_FILENAME,
-  );
 }
 
 async function readPasswordFromStdin({
@@ -434,7 +372,6 @@ function createDefaultRuntime({ config: runtimeConfig }: { config: CodexWebConfi
   return new CodexWebRuntime({
     codexBin: runtimeConfig.codexBin,
     defaultCwd: runtimeConfig.defaultCwd,
-    helpReportPath: helpReportPath(runtimeConfig),
     logger: runtimeConfig.debug
       ? {
         debug: writeDebugStderrLine,

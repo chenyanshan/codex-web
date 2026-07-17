@@ -7,6 +7,7 @@ import path from 'node:path';
 import {
   CodexAppClient,
   type ProviderApprovalRequest,
+  type ProviderTurnProgress,
   type ProviderTurnWorkEvent,
 } from '../src/index.js';
 
@@ -151,6 +152,44 @@ test('app client maps thread runtime status and turn timestamps', async () => {
   assert.equal(read?.turns?.[1]?.completedAt, null);
 });
 
+test('app client maps stable turn item ids and exposes only reasoning summaries', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async (method: string) => {
+    assert.equal(method, 'thread/read');
+    return {
+      thread: {
+        id: 'thread_reasoning_history',
+        status: { type: 'idle' },
+        turns: [{
+          id: 'turn_reasoning_history',
+          status: 'completed',
+          items: [{
+            type: 'reasoning',
+            id: 'reasoning_history_1',
+            summary: ['Checked the implementation.', 'Verified the tests.'],
+            content: ['private raw reasoning'],
+          }, {
+            type: 'agentMessage',
+            id: 'answer_history_1',
+            phase: 'final_answer',
+            text: 'Done.',
+          }],
+        }],
+      },
+    };
+  };
+
+  const thread = await client.readThread('thread_reasoning_history', true);
+  const reasoning = thread?.turns?.[0]?.items[0];
+  const answer = thread?.turns?.[0]?.items[1];
+
+  assert.equal(reasoning?.id, 'reasoning_history_1');
+  assert.equal(reasoning?.text, 'Checked the implementation.\n\nVerified the tests.');
+  assert.equal(Object.hasOwn(reasoning?.raw ?? {}, 'content'), false);
+  assert.equal(JSON.stringify(reasoning).includes('private raw reasoning'), false);
+  assert.equal(answer?.id, 'answer_history_1');
+});
+
 test('app client preserves string and snake_case model reasoning efforts', async () => {
   const client = new CodexAppClient({
     codexCliBin: 'codex',
@@ -250,6 +289,591 @@ test('app client keeps effective model settings returned by thread resume', asyn
   });
 });
 
+test('app client streams assistant and reasoning lifecycle by stable item id', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  const progressEvents: ProviderTurnProgress[] = [];
+  let emitted = false;
+  const emit = (method: string, itemId: string, extra: Record<string, unknown> = {}) => {
+    client.emit('notification', {
+      method,
+      params: {
+        threadId: 'thread_progress_items',
+        turnId: 'turn_progress_items',
+        itemId,
+        ...extra,
+      },
+    });
+  };
+
+  client.readThread = async () => {
+    if (!emitted) {
+      emitted = true;
+      emit('item/started', 'commentary_1', {
+        item: { type: 'agentMessage', id: 'commentary_1', phase: 'commentary', text: '' },
+      });
+      emit('item/agentMessage/delta', 'commentary_1', { delta: 'First note.' });
+      emit('item/completed', 'commentary_1', {
+        item: { type: 'agentMessage', id: 'commentary_1', phase: 'commentary', text: 'First note.' },
+      });
+      emit('item/started', 'reasoning_1', {
+        item: { type: 'reasoning', id: 'reasoning_1', summary: [], content: [] },
+      });
+      emit('item/reasoning/summaryTextDelta', 'reasoning_1', {
+        delta: 'Checked one path.',
+        summaryIndex: 0,
+      });
+      emit('item/reasoning/textDelta', 'reasoning_1', {
+        delta: 'private raw reasoning',
+      });
+      emit('item/reasoning/summaryTextDelta', 'reasoning_1', {
+        delta: 'Checked another path.',
+        summaryIndex: 1,
+      });
+      emit('item/completed', 'reasoning_1', {
+        item: {
+          type: 'reasoning',
+          id: 'reasoning_1',
+          summary: ['Checked one path.', 'Checked another path.'],
+          content: ['private raw reasoning'],
+        },
+      });
+      emit('item/started', 'commentary_2', {
+        item: { type: 'agentMessage', id: 'commentary_2', phase: 'commentary', text: '' },
+      });
+      emit('item/agentMessage/delta', 'commentary_2', { delta: 'Second note.' });
+      emit('item/completed', 'commentary_2', {
+        item: { type: 'agentMessage', id: 'commentary_2', phase: 'commentary', text: 'Second note.' },
+      });
+      emit('item/started', 'answer_1', {
+        item: { type: 'agentMessage', id: 'answer_1', phase: 'final_answer', text: '' },
+      });
+      emit('item/agentMessage/delta', 'answer_1', { delta: 'Done.' });
+      emit('item/completed', 'answer_1', {
+        item: { type: 'agentMessage', id: 'answer_1', phase: 'final_answer', text: 'Done.' },
+      });
+    }
+    return {
+      threadId: 'thread_progress_items',
+      turns: [{
+        id: 'turn_progress_items',
+        status: 'completed',
+        items: [{
+          id: 'answer_1',
+          type: 'agentMessage',
+          role: 'assistant',
+          phase: 'final_answer',
+          text: 'Done.',
+        }],
+      }],
+    } as any;
+  };
+
+  const result = await client.waitForTurnResult({
+    threadId: 'thread_progress_items',
+    turnId: 'turn_progress_items',
+    timeoutMs: 1000,
+    onProgress: (progress) => {
+      progressEvents.push(progress);
+    },
+  });
+
+  assert.equal(result.outputText, 'Done.');
+  assert.deepEqual(
+    progressEvents.map(({ itemId, eventType, outputKind, text, delta }) => ({
+      itemId,
+      eventType,
+      outputKind,
+      text,
+      delta,
+    })),
+    [
+      { itemId: 'commentary_1', eventType: 'started', outputKind: 'commentary', text: '', delta: '' },
+      { itemId: 'commentary_1', eventType: 'delta', outputKind: 'commentary', text: 'First note.', delta: 'First note.' },
+      { itemId: 'commentary_1', eventType: 'completed', outputKind: 'commentary', text: 'First note.', delta: '' },
+      { itemId: 'reasoning_1', eventType: 'started', outputKind: 'reasoning_summary', text: '', delta: '' },
+      { itemId: 'reasoning_1', eventType: 'delta', outputKind: 'reasoning_summary', text: 'Checked one path.', delta: 'Checked one path.' },
+      {
+        itemId: 'reasoning_1',
+        eventType: 'delta',
+        outputKind: 'reasoning_summary',
+        text: 'Checked one path.\n\nChecked another path.',
+        delta: '\n\nChecked another path.',
+      },
+      {
+        itemId: 'reasoning_1',
+        eventType: 'completed',
+        outputKind: 'reasoning_summary',
+        text: 'Checked one path.\n\nChecked another path.',
+        delta: '',
+      },
+      { itemId: 'commentary_2', eventType: 'started', outputKind: 'commentary', text: '', delta: '' },
+      { itemId: 'commentary_2', eventType: 'delta', outputKind: 'commentary', text: 'Second note.', delta: 'Second note.' },
+      { itemId: 'commentary_2', eventType: 'completed', outputKind: 'commentary', text: 'Second note.', delta: '' },
+      { itemId: 'answer_1', eventType: 'started', outputKind: 'final_answer', text: '', delta: '' },
+      { itemId: 'answer_1', eventType: 'delta', outputKind: 'final_answer', text: 'Done.', delta: 'Done.' },
+      { itemId: 'answer_1', eventType: 'completed', outputKind: 'final_answer', text: 'Done.', delta: '' },
+    ],
+  );
+  assert.equal(JSON.stringify(progressEvents).includes('private raw reasoning'), false);
+});
+
+test('app client preserves reasoning summary as a terminal preview without commentary', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  const progressEvents: ProviderTurnProgress[] = [];
+  let emitted = false;
+  client.readThread = async () => {
+    if (!emitted) {
+      emitted = true;
+      client.emit('notification', {
+        method: 'item/started',
+        params: {
+          threadId: 'thread_reasoning_preview',
+          turnId: 'turn_reasoning_preview',
+          item: { type: 'reasoning', id: 'reasoning_preview', summary: [], content: [] },
+        },
+      });
+      client.emit('notification', {
+        method: 'item/reasoning/summaryTextDelta',
+        params: {
+          threadId: 'thread_reasoning_preview',
+          turnId: 'turn_reasoning_preview',
+          itemId: 'reasoning_preview',
+          summaryIndex: 0,
+          delta: 'Safe summary only.',
+        },
+      });
+      client.emit('notification', {
+        method: 'item/completed',
+        params: {
+          threadId: 'thread_reasoning_preview',
+          turnId: 'turn_reasoning_preview',
+          item: {
+            type: 'reasoning',
+            id: 'reasoning_preview',
+            summary: ['Safe summary only.'],
+            content: ['private raw reasoning'],
+          },
+        },
+      });
+    }
+    return {
+      threadId: 'thread_reasoning_preview',
+      turns: [{
+        id: 'turn_reasoning_preview',
+        status: 'completed',
+        items: [{
+          type: 'reasoning',
+          id: 'reasoning_preview',
+          text: 'Safe summary only.',
+        }],
+      }],
+    } as any;
+  };
+
+  const result = await client.waitForTurnResult({
+    threadId: 'thread_reasoning_preview',
+    turnId: 'turn_reasoning_preview',
+    timeoutMs: 1000,
+    onProgress: (progress) => progressEvents.push(progress),
+  });
+
+  assert.deepEqual(progressEvents.map((event) => event.outputKind), [
+    'reasoning_summary',
+    'reasoning_summary',
+    'reasoning_summary',
+  ]);
+  assert.equal(result.previewText, 'Safe summary only.');
+  assert.equal(result.finalSource, 'reasoning_summary_only');
+  assert.equal(JSON.stringify(progressEvents).includes('private raw reasoning'), false);
+});
+
+test('app client replays turn events emitted before turn start acknowledgement', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  const deliveries: string[] = [];
+  const progressEvents: ProviderTurnProgress[] = [];
+  const workEvents: ProviderTurnWorkEvent[] = [];
+  const approvals: ProviderApprovalRequest[] = [];
+  const emitNotification = (
+    threadId: string,
+    turnId: string,
+    method: string,
+    extra: Record<string, unknown>,
+  ) => {
+    const notification = {
+      method,
+      params: { threadId, turnId, ...extra },
+    };
+    client.emit('notification', notification);
+    return notification;
+  };
+
+  client.request = async (method: string) => {
+    assert.equal(method, 'turn/start');
+    emitNotification('thread_other', 'turn_other_thread', 'item/agentMessage/delta', {
+      itemId: 'other_thread_message',
+      delta: 'must not leak',
+    });
+    emitNotification('thread_early', 'turn_other', 'item/agentMessage/delta', {
+      itemId: 'other_turn_message',
+      delta: 'must not leak',
+    });
+    emitNotification('thread_early', 'turn_other', 'item/started', {
+      item: {
+        type: 'commandExecution',
+        id: 'other_turn_command',
+        command: 'must not leak',
+        cwd: '/workspace',
+        status: 'inProgress',
+      },
+    });
+    emitNotification('thread_early', 'turn_early', 'item/started', {
+      item: {
+        type: 'agentMessage',
+        id: 'message_early',
+        phase: 'commentary',
+        text: '',
+      },
+    });
+    const earlyDelta = emitNotification('thread_early', 'turn_early', 'item/agentMessage/delta', {
+      itemId: 'message_early',
+      delta: 'Early',
+    });
+    client.emit('notification', earlyDelta);
+    emitNotification('thread_early', 'turn_early', 'item/started', {
+      item: {
+        type: 'commandExecution',
+        id: 'command_early',
+        command: 'npm test',
+        cwd: '/workspace',
+        status: 'inProgress',
+        aggregatedOutput: null,
+      },
+    });
+    emitNotification('thread_early', 'turn_early', 'item/commandExecution/outputDelta', {
+      itemId: 'command_early',
+      delta: 'running\n',
+    });
+    client.emit('approval_request', {
+      requestId: 'approval_other_thread',
+      kind: 'command',
+      threadId: 'thread_other',
+      turnId: 'turn_other_thread',
+      itemId: 'command_other_thread',
+      reason: null,
+    } satisfies ProviderApprovalRequest);
+    client.emit('approval_request', {
+      requestId: 'approval_other_turn',
+      kind: 'command',
+      threadId: 'thread_early',
+      turnId: 'turn_other',
+      itemId: 'command_other_turn',
+      reason: null,
+    } satisfies ProviderApprovalRequest);
+    client.emit('approval_request', {
+      requestId: 'approval_early',
+      kind: 'command',
+      threadId: 'thread_early',
+      turnId: 'turn_early',
+      itemId: 'command_early',
+      reason: null,
+    } satisfies ProviderApprovalRequest);
+    return { turn: { id: 'turn_early', status: 'inProgress' } };
+  };
+
+  let readCount = 0;
+  client.readThread = async () => {
+    readCount += 1;
+    emitNotification('thread_early', 'turn_early', 'item/completed', {
+      item: {
+        type: 'agentMessage',
+        id: 'message_early',
+        phase: 'commentary',
+        text: 'Early after ack.',
+      },
+    });
+    return {
+      threadId: 'thread_early',
+      turns: [{
+        id: 'turn_early',
+        status: 'completed',
+        items: [{
+          type: 'agentMessage',
+          id: 'answer_early',
+          role: 'assistant',
+          phase: 'final_answer',
+          text: 'Done.',
+        }],
+      }],
+    } as any;
+  };
+
+  const result = await client.startTurn({
+    threadId: 'thread_early',
+    inputText: 'Run it',
+    model: 'gpt-5.6-sol',
+    timeoutMs: 1000,
+    onTurnStarted: () => {
+      client.emit('notification', {
+        method: 'turn/completed',
+        params: {
+          threadId: 'thread_early',
+          turn: { id: 'turn_other', status: 'completed' },
+        },
+      });
+      emitNotification('thread_early', 'turn_early', 'item/agentMessage/delta', {
+        itemId: 'message_early',
+        delta: ' after ack.',
+      });
+    },
+    onProgress: (progress) => {
+      progressEvents.push(progress);
+      deliveries.push(`progress:${progress.eventType}:${progress.itemId}`);
+    },
+    onWorkEvent: (event) => {
+      workEvents.push(event);
+      deliveries.push(`work:${event.type}:${event.itemId}`);
+    },
+    onApprovalRequest: (request) => {
+      approvals.push(request);
+      deliveries.push(`approval:${request.requestId}`);
+    },
+  });
+
+  assert.equal(readCount, 1);
+  assert.equal(result.outputText, 'Done.');
+  assert.deepEqual(deliveries, [
+    'progress:started:message_early',
+    'progress:delta:message_early',
+    'work:started:command_early',
+    'work:updated:command_early',
+    'approval:approval_early',
+    'progress:delta:message_early',
+    'progress:completed:message_early',
+  ]);
+  assert.deepEqual(progressEvents.map((event) => event.text), [
+    '',
+    'Early',
+    'Early after ack.',
+    'Early after ack.',
+  ]);
+  assert.equal(workEvents[1]?.summary?.output, 'running\n');
+  assert.deepEqual(approvals.map((request) => request.requestId), ['approval_early']);
+  assert.equal(JSON.stringify({ progressEvents, workEvents, approvals }).includes('must not leak'), false);
+  assert.equal(client.listenerCount('notification'), 0);
+  assert.equal(client.listenerCount('approval_request'), 0);
+});
+
+test('app client accumulates current command execution output deltas', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  const workEvents: ProviderTurnWorkEvent[] = [];
+  let emitted = false;
+
+  client.readThread = async () => {
+    if (!emitted) {
+      emitted = true;
+      client.emit('notification', {
+        method: 'item/started',
+        params: {
+          threadId: 'thread_command_delta',
+          turnId: 'turn_command_delta',
+          item: {
+            type: 'commandExecution',
+            id: 'command_1',
+            command: 'npm test',
+            cwd: '/workspace',
+            status: 'inProgress',
+            aggregatedOutput: null,
+          },
+        },
+      });
+      for (const delta of ['first line\n', 'second line\n']) {
+        client.emit('notification', {
+          method: 'item/commandExecution/outputDelta',
+          params: {
+            threadId: 'thread_command_delta',
+            turnId: 'turn_command_delta',
+            itemId: 'command_1',
+            delta,
+          },
+        });
+      }
+      client.emit('notification', {
+        method: 'item/completed',
+        params: {
+          threadId: 'thread_command_delta',
+          turnId: 'turn_command_delta',
+          item: {
+            type: 'commandExecution',
+            id: 'command_1',
+            command: 'npm test',
+            cwd: '/workspace',
+            status: 'completed',
+            aggregatedOutput: 'first line\nsecond line\n',
+            exitCode: 0,
+          },
+        },
+      });
+    }
+    return {
+      threadId: 'thread_command_delta',
+      turns: [{
+        id: 'turn_command_delta',
+        status: 'completed',
+        items: [{
+          type: 'agentMessage',
+          role: 'assistant',
+          phase: 'final_answer',
+          text: 'Tests passed.',
+        }],
+      }],
+    } as any;
+  };
+
+  await client.waitForTurnResult({
+    threadId: 'thread_command_delta',
+    turnId: 'turn_command_delta',
+    timeoutMs: 1000,
+    onWorkEvent: (event) => {
+      workEvents.push(event);
+    },
+  });
+
+  assert.deepEqual(workEvents.map((event) => event.type), [
+    'started',
+    'updated',
+    'updated',
+    'completed',
+  ]);
+  assert.equal(workEvents[1]?.summary?.output, 'first line\n');
+  assert.equal(workEvents[1]?.summary?.outputDelta, 'first line\n');
+  assert.equal(workEvents[2]?.summary?.output, 'first line\nsecond line\n');
+  assert.equal(workEvents[2]?.summary?.outputDelta, 'second line\n');
+  assert.equal(workEvents[3]?.summary?.output, 'first line\nsecond line\n');
+  assert.equal(workEvents[3]?.summary?.exitCode, 0);
+});
+
+test('app client maps file change patch updates with nested change kinds', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  const workEvents: ProviderTurnWorkEvent[] = [];
+  let emitted = false;
+  client.readThread = async () => {
+    if (!emitted) {
+      emitted = true;
+      client.emit('notification', {
+        method: 'item/fileChange/patchUpdated',
+        params: {
+          threadId: 'thread_patch_update',
+          turnId: 'turn_patch_update',
+          itemId: 'file-change-1',
+          changes: [{
+            path: 'src/new.ts',
+            kind: { type: 'add' },
+            diff: '@@ +1 @@',
+          }, {
+            path: 'src/old.ts',
+            kind: { type: 'delete' },
+            diff: '@@ -1 @@',
+          }],
+        },
+      });
+    }
+    return {
+      threadId: 'thread_patch_update',
+      turns: [{
+        id: 'turn_patch_update',
+        status: 'completed',
+        items: [{
+          type: 'agentMessage',
+          role: 'assistant',
+          phase: 'final_answer',
+          text: 'Done',
+        }],
+      }],
+    } as any;
+  };
+
+  await client.waitForTurnResult({
+    threadId: 'thread_patch_update',
+    turnId: 'turn_patch_update',
+    timeoutMs: 1000,
+    onWorkEvent: (event) => workEvents.push(event),
+  });
+
+  assert.equal(workEvents.length, 1);
+  assert.equal(workEvents[0]?.type, 'updated');
+  assert.equal(workEvents[0]?.itemId, 'file-change-1');
+  assert.equal(workEvents[0]?.kind, 'file_change');
+  assert.equal(workEvents[0]?.title, 'Edited 2 files');
+  assert.deepEqual(workEvents[0]?.summary?.fileChanges, [{
+    path: 'src/new.ts',
+    action: 'added',
+    kind: 'add',
+    diff: '@@ +1 @@',
+  }, {
+    path: 'src/old.ts',
+    action: 'deleted',
+    kind: 'delete',
+    diff: '@@ -1 @@',
+  }]);
+});
+
+test('app client renews an active observer lease until the turn is terminal', async () => {
+  let now = 0;
+  let readCount = 0;
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollNow: () => now,
+    turnPollSleep: async (ms) => {
+      now += ms;
+    },
+  });
+  client.readThread = async () => {
+    readCount += 1;
+    const completed = readCount >= 3;
+    return {
+      threadId: 'thread_long_turn',
+      runtimeStatus: { type: completed ? 'idle' : 'active', activeFlags: [] },
+      turns: [{
+        id: 'turn_long_turn',
+        status: completed ? 'completed' : 'inProgress',
+        items: completed
+          ? [{
+            type: 'agentMessage',
+            role: 'assistant',
+            phase: 'final_answer',
+            text: 'Finished after renewal.',
+          }]
+          : [],
+      }],
+    } as any;
+  };
+
+  const result = await client.waitForTurnResult({
+    threadId: 'thread_long_turn',
+    turnId: 'turn_long_turn',
+    timeoutMs: 1000,
+  });
+
+  assert.equal(readCount, 3);
+  assert.equal(result.outputState, 'complete');
+  assert.equal(result.outputText, 'Finished after renewal.');
+});
+
 test('app client sends complete collaboration settings for inherited plan turns', async () => {
   const client = new CodexAppClient({ codexCliBin: 'codex' });
   let turnParams: Record<string, any> | null = null;
@@ -312,6 +936,7 @@ test('app client extracts work details from function call notifications', async 
           threadId: 'thread_1',
           item: {
             type: 'function_call',
+            id: 'fc_exec_1',
             call_id: 'call_exec_1',
             name: 'exec_command',
             arguments: JSON.stringify({
@@ -327,6 +952,7 @@ test('app client extracts work details from function call notifications', async 
           threadId: 'thread_1',
           item: {
             type: 'function_call_output',
+            id: 'fco_exec_1',
             call_id: 'call_exec_1',
             output: 'const TOKEN_KEY = "codexWebToken";',
           },
@@ -337,10 +963,11 @@ test('app client extracts work details from function call notifications', async 
         params: {
           threadId: 'thread_1',
           item: {
-            type: 'function_call',
+            type: 'custom_tool_call',
+            id: 'ctc_patch_1',
             call_id: 'call_patch_1',
             name: 'apply_patch',
-            arguments: [
+            input: [
               '*** Begin Patch',
               '*** Update File: packages/codex-web/public/app.js',
               '@@',
@@ -348,6 +975,18 @@ test('app client extracts work details from function call notifications', async 
               '+new',
               '*** End Patch',
             ].join('\n'),
+          },
+        },
+      });
+      client.emit('notification', {
+        method: 'item/completed',
+        params: {
+          threadId: 'thread_1',
+          item: {
+            type: 'custom_tool_call_output',
+            id: 'ctco_patch_1',
+            call_id: 'call_patch_1',
+            output: 'Success. Updated the following files:\nM packages/codex-web/public/app.js',
           },
         },
       });
@@ -376,6 +1015,12 @@ test('app client extracts work details from function call notifications', async 
     },
   });
 
+  assert.deepEqual(workEvents.map((event) => `${event.type}:${event.itemId}:${event.kind}`), [
+    'started:call_exec_1:command',
+    'completed:call_exec_1:command',
+    'started:call_patch_1:file_change',
+    'completed:call_patch_1:file_change',
+  ]);
   assert.equal(workEvents[0]?.itemId, 'call_exec_1');
   assert.equal(workEvents[0]?.kind, 'command');
   assert.equal(workEvents[0]?.summary?.command, 'sed -n "1,80p" packages/codex-web/public/app.js');
@@ -388,6 +1033,8 @@ test('app client extracts work details from function call notifications', async 
     { path: 'packages/codex-web/public/app.js', action: 'modified' },
   ]);
   assert.match(String(workEvents[2]?.summary?.diff), /Update File: packages\/codex-web\/public\/app\.js/u);
+  assert.equal(workEvents[3]?.itemId, 'call_patch_1');
+  assert.match(String(workEvents[3]?.summary?.output), /Success/u);
 });
 
 test('app client extracts work details from polled turn items when notifications are unavailable', async () => {
@@ -404,6 +1051,7 @@ test('app client extracts work details from polled turn items when notifications
       status: 'completed',
       items: [{
         type: 'function_call',
+        id: 'fc_exec_1',
         call_id: 'call_exec_1',
         name: 'exec_command',
         arguments: JSON.stringify({
@@ -416,6 +1064,7 @@ test('app client extracts work details from polled turn items when notifications
         output: 'const TOKEN_KEY = "codexWebToken";',
       }, {
         type: 'custom_tool_call',
+        id: 'ctc_patch_1',
         call_id: 'call_patch_1',
         name: 'apply_patch',
         input: [
@@ -468,6 +1117,154 @@ test('app client extracts work details from polled turn items when notifications
   assert.match(String(workEvents[3]?.summary?.output), /Success/u);
 });
 
+test('app client upserts native command and file change snapshots with stable ids', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  const workEvents: ProviderTurnWorkEvent[] = [];
+  client.readThread = async () => ({
+    threadId: 'thread_native_work',
+    turns: [{
+      id: 'turn_native_work',
+      status: 'completed',
+      items: [{
+        type: 'commandExecution',
+        id: 'exec-native-1',
+        command: 'npm test',
+        cwd: '/workspace',
+        status: 'completed',
+        aggregatedOutput: 'ok\n',
+        exitCode: 0,
+        text: '',
+      }, {
+        type: 'fileChange',
+        id: 'file-native-1',
+        status: 'completed',
+        changes: [{
+          path: 'src/old.ts',
+          kind: { type: 'update', move_path: 'src/new.ts' },
+          diff: '@@ -1 +1 @@',
+        }],
+        text: '',
+      }, {
+        type: 'agentMessage',
+        id: 'answer-native-1',
+        role: 'assistant',
+        phase: 'final_answer',
+        text: 'Done',
+      }],
+    }],
+  } as any);
+
+  await client.waitForTurnResult({
+    threadId: 'thread_native_work',
+    turnId: 'turn_native_work',
+    timeoutMs: 1000,
+    onWorkEvent: (event) => workEvents.push(event),
+  });
+
+  assert.deepEqual(
+    workEvents.map((event) => `${event.type}:${event.itemId}:${event.kind}`),
+    [
+      'started:exec-native-1:command',
+      'updated:exec-native-1:command',
+      'completed:exec-native-1:command',
+      'started:file-native-1:file_change',
+      'updated:file-native-1:file_change',
+      'completed:file-native-1:file_change',
+    ],
+  );
+  assert.equal(workEvents[0]?.title, 'npm test');
+  assert.deepEqual(workEvents[0]?.summary, {});
+  assert.equal(workEvents[1]?.title, 'npm test');
+  assert.equal(workEvents[1]?.summary?.output, 'ok\n');
+  assert.equal(workEvents[1]?.summary?.exitCode, 0);
+  assert.equal(workEvents[3]?.title, 'Edited src/old.ts');
+  assert.deepEqual(workEvents[4]?.summary?.fileChanges, [{
+    path: 'src/old.ts',
+    action: 'modified',
+    kind: 'update',
+    movePath: 'src/new.ts',
+    diff: '@@ -1 +1 @@',
+  }]);
+  assert.deepEqual(workEvents[5]?.summary, workEvents[4]?.summary);
+});
+
+test('app client extracts nested apply_patch work and structured output from exec custom tools', async () => {
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async () => {},
+  });
+  const workEvents: ProviderTurnWorkEvent[] = [];
+  const toolInput = [
+    'const patch = "*** Begin Patch\\n',
+    '*** Update File: packages/codex-web/public/app.js\\n',
+    '@@\\n-old\\n+new\\n',
+    '*** Add File: packages/codex-web/public/work-status.js\\n',
+    '+export const status = \\\"ready\\\";\\n',
+    '*** End Patch";',
+    'text(await tools.apply_patch(patch));',
+  ].join('');
+
+  client.readThread = async () => ({
+    threadId: 'thread_nested_patch',
+    turns: [{
+      id: 'turn_nested_patch',
+      status: 'completed',
+      items: [{
+        type: 'custom_tool_call',
+        id: 'ctc_nested_patch',
+        call_id: 'call_nested_patch',
+        name: 'exec',
+        input: toolInput,
+      }, {
+        type: 'custom_tool_call_output',
+        call_id: 'call_nested_patch',
+        output: [{
+          type: 'input_text',
+          text: 'Script completed\nOutput:',
+        }, {
+          type: 'input_text',
+          text: 'Done!',
+        }],
+      }, {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        text: 'Done',
+      }],
+    }],
+  } as any);
+
+  await client.waitForTurnResult({
+    threadId: 'thread_nested_patch',
+    turnId: 'turn_nested_patch',
+    timeoutMs: 1000,
+    onWorkEvent: (event) => {
+      workEvents.push(event);
+    },
+  });
+
+  assert.equal(workEvents.length, 2);
+  assert.equal(workEvents[0]?.type, 'started');
+  assert.equal(workEvents[0]?.kind, 'file_change');
+  assert.equal(workEvents[0]?.title, 'Edited 2 files');
+  assert.deepEqual(workEvents[0]?.summary?.fileChanges, [{
+    path: 'packages/codex-web/public/app.js',
+    action: 'modified',
+  }, {
+    path: 'packages/codex-web/public/work-status.js',
+    action: 'added',
+  }]);
+  assert.match(String(workEvents[0]?.summary?.diff), /\*\*\* Update File: packages\/codex-web\/public\/app\.js\n/u);
+  assert.doesNotMatch(String(workEvents[0]?.summary?.diff), /\\n/u);
+  assert.equal(workEvents[1]?.type, 'completed');
+  assert.equal(workEvents[1]?.kind, 'file_change');
+  assert.equal(workEvents[1]?.summary?.output, 'Script completed\nOutput:\nDone!');
+  assert.doesNotMatch(String(workEvents[1]?.summary?.output), /\[object Object\]/u);
+});
+
 test('app client extracts work details from session jsonl response items when turn snapshots omit tools', async () => {
   const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-api-work-jsonl-'));
   const sessionPath = path.join(sessionDir, 'rollout.jsonl');
@@ -484,6 +1281,7 @@ test('app client extracts work details from session jsonl response items when tu
       type: 'response_item',
       payload: {
         type: 'function_call',
+        id: 'fc_jsonl_exec_1',
         call_id: 'call_exec_1',
         name: 'exec_command',
         arguments: JSON.stringify({
@@ -504,6 +1302,7 @@ test('app client extracts work details from session jsonl response items when tu
       type: 'response_item',
       payload: {
         type: 'custom_tool_call',
+        id: 'ctc_jsonl_patch_1',
         call_id: 'call_patch_1',
         name: 'apply_patch',
         input: [
@@ -522,6 +1321,26 @@ test('app client extracts work details from session jsonl response items when tu
         type: 'custom_tool_call_output',
         call_id: 'call_patch_1',
         output: 'Success. Updated the following files:\nM packages/codex-web/public/app.js',
+      },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'reasoning',
+        id: 'reasoning_jsonl_1',
+        summary: ['Safe summary.'],
+        content: ['private raw reasoning'],
+        encrypted_content: 'private encrypted reasoning',
+      },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        id: 'message_jsonl_1',
+        role: 'assistant',
+        phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'Done' }],
       },
     },
     {
@@ -555,7 +1374,7 @@ test('app client extracts work details from session jsonl response items when tu
     }],
   } as any);
 
-  await client.waitForTurnResult({
+  const result = await client.waitForTurnResult({
     threadId: 'thread_1',
     turnId,
     timeoutMs: 1000,
@@ -576,6 +1395,13 @@ test('app client extracts work details from session jsonl response items when tu
     { path: 'packages/codex-web/public/app.js', action: 'modified' },
   ]);
   assert.match(String(workEvents[3]?.summary?.output), /Success/u);
+  const reasoningItem = result.responseItems?.find((item) => item.id === 'reasoning_jsonl_1');
+  assert.deepEqual(reasoningItem?.summary, ['Safe summary.']);
+  assert.equal(Object.hasOwn(reasoningItem ?? {}, 'content'), false);
+  assert.equal(Object.hasOwn(reasoningItem ?? {}, 'encrypted_content'), false);
+  assert.equal(JSON.stringify(result.responseItems).includes('private raw reasoning'), false);
+  assert.equal(JSON.stringify(result.responseItems).includes('private encrypted reasoning'), false);
+  assert.equal(result.responseItems?.some((item) => item.id === 'message_jsonl_1'), true);
 });
 
 test('app client fails open turns from session jsonl runtime errors without task complete', async () => {

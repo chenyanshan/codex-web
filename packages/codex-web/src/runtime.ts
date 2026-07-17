@@ -15,6 +15,7 @@ import {
   type ProviderThreadTurn,
   type ProviderThreadTurnItem,
   type ProviderTurnAttachment,
+  type ProviderTurnProgress,
   type ProviderTurnResult,
   type ProviderTurnSessionSettings,
   type ProviderTurnWorkEvent,
@@ -168,7 +169,6 @@ export interface CodexWebRuntimeOptions {
   eventBus?: CodexWebEventBus;
   settingsStore?: CodexWebSessionSettingsStore;
   timelineStore?: CodexWebSessionTimelineStore;
-  helpReportPath?: string | null;
   logger?: CodexWebRuntimeLogger;
 }
 
@@ -255,9 +255,11 @@ export class CodexWebRuntime {
 
   private readonly workSummaries = new Map<string, Map<string, Record<string, unknown>>>();
 
-  private unsubscribeApprovalRequests: (() => void) | null = null;
+  private readonly finalAnswerItemIds = new Map<string, string>();
 
-  private readonly helpReportPath: string | null;
+  private readonly terminalTurns = new Set<string>();
+
+  private unsubscribeApprovalRequests: (() => void) | null = null;
 
   private readonly logger: CodexWebRuntimeLogger;
 
@@ -269,14 +271,12 @@ export class CodexWebRuntime {
     eventBus = new CodexWebEventBus(),
     settingsStore,
     timelineStore,
-    helpReportPath = null,
   }: CodexWebRuntimeOptions) {
     this.client = client;
     this.eventBus = eventBus;
     this.defaultCwd = defaultCwd;
     this.settingsStore = settingsStore ?? null;
     this.timelineStore = timelineStore ?? null;
-    this.helpReportPath = helpReportPath;
     this.logger = logger;
     if (typeof this.client.subscribeToApprovalRequests === 'function') {
       this.unsubscribeApprovalRequests = this.client.subscribeToApprovalRequests(
@@ -320,6 +320,8 @@ export class CodexWebRuntime {
     this.approvalToBatch.clear();
     this.activeTurns.clear();
     this.workSummaries.clear();
+    this.finalAnswerItemIds.clear();
+    this.terminalTurns.clear();
     if (typeof this.client.stop === 'function') {
       await this.client.stop();
     }
@@ -539,7 +541,7 @@ export class CodexWebRuntime {
     const helpCommand = parseHelpSlashCommand(input.text);
     if (helpCommand) {
       await this.ensureThreadReadyForTurn(sessionId);
-      const result = createHelpCommandResult(this.helpReportPath);
+      const result = createHelpCommandResult();
       this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread).length);
       return {
         ...result,
@@ -624,11 +626,7 @@ export class CodexWebRuntime {
         if (!startedTurnId) {
           return;
         }
-        this.append(startedTurnId, normalizeProgressEvent({
-          turnId: startedTurnId,
-          threadId: sessionId,
-          progress,
-        }));
+        this.captureTurnProgress(startedTurnId, sessionId, progress);
       },
       onWorkEvent: async (event) => {
         if (!startedTurnId) {
@@ -654,6 +652,7 @@ export class CodexWebRuntime {
         turnId: startedTurnId,
         threadId: sessionId,
         result,
+        itemId: finalAnswerItemIdFromResult(result) ?? this.finalAnswerItemIds.get(startedTurnId),
       });
       this.logDebug('turn_normalized_events', {
         sessionId,
@@ -861,6 +860,18 @@ export class CodexWebRuntime {
     return this.eventBus.list(turnId, afterId);
   }
 
+  getTurnEventReplay(
+    turnId: string,
+    afterId?: string | number | null,
+    requestedEpoch?: string | null,
+  ) {
+    return this.eventBus.replay(turnId, afterId, requestedEpoch);
+  }
+
+  getTurnEventSnapshot(turnId: string) {
+    return this.eventBus.snapshot(turnId);
+  }
+
   hasActiveTurn(turnId: string): boolean {
     return this.activeTurns.has(turnId);
   }
@@ -915,7 +926,7 @@ export class CodexWebRuntime {
     const turnWorkSummaries = this.workSummaries.get(turnId) ?? new Map<string, Record<string, unknown>>();
     this.workSummaries.set(turnId, turnWorkSummaries);
     const existing = turnWorkSummaries.get(event.itemId) ?? {};
-    Object.assign(existing, event.summary ?? {});
+    mergeWorkSummary(existing, event.summary ?? {});
     turnWorkSummaries.set(event.itemId, existing);
     for (const normalized of normalizeWorkBatchEvents({
       turnId,
@@ -926,6 +937,18 @@ export class CodexWebRuntime {
     })) {
       this.append(turnId, normalized);
     }
+  }
+
+  private captureTurnProgress(
+    turnId: string,
+    threadId: string,
+    progress: ProviderTurnProgress,
+  ): void {
+    const event = normalizeProgressEvent({ turnId, threadId, progress });
+    if (event.type === 'assistant.delta' && event.phase === 'final_answer' && event.itemId) {
+      this.finalAnswerItemIds.set(turnId, event.itemId);
+    }
+    this.append(turnId, event);
   }
 
   private observeRecoveredTurn(session: CodexWebSession): void {
@@ -951,11 +974,7 @@ export class CodexWebRuntime {
       turnId,
       timeoutMs: 15 * 60 * 1000,
       onProgress: async (progress) => {
-        this.append(turnId, normalizeProgressEvent({
-          turnId,
-          threadId: session.id,
-          progress,
-        }));
+        this.captureTurnProgress(turnId, session.id, progress);
       },
       onWorkEvent: async (event) => {
         this.captureTurnWorkEvent(turnId, event);
@@ -970,6 +989,7 @@ export class CodexWebRuntime {
         turnId,
         threadId: session.id,
         result,
+        itemId: finalAnswerItemIdFromResult(result) ?? this.finalAnswerItemIds.get(turnId),
       })) {
         this.append(turnId, event);
       }
@@ -991,6 +1011,13 @@ export class CodexWebRuntime {
   }
 
   private append(turnId: string, event: CodexWebEvent): void {
+    if (
+      this.terminalTurns.has(turnId)
+      && event.type !== 'approval.resolved'
+      && event.type !== 'batch.completed'
+    ) {
+      return;
+    }
     if (event.type === 'turn.completed' || event.type === 'turn.failed') {
       this.logDebug('event_append', {
         turnId,
@@ -998,6 +1025,16 @@ export class CodexWebRuntime {
       });
     }
     this.eventBus.append(turnId, event);
+    if (event.type === 'turn.completed' || event.type === 'turn.failed') {
+      this.terminalTurns.add(turnId);
+      while (this.terminalTurns.size > MAX_TURN_THREAD_MAPPINGS) {
+        const oldestTurnId = this.terminalTurns.values().next().value as string | undefined;
+        if (!oldestTurnId) {
+          break;
+        }
+        this.terminalTurns.delete(oldestTurnId);
+      }
+    }
   }
 
   private logDebug(event: string, payload: unknown = null): void {
@@ -1209,6 +1246,7 @@ export class CodexWebRuntime {
 
   private cleanupFinishedTurn(turnId: string): void {
     this.workSummaries.delete(turnId);
+    this.finalAnswerItemIds.delete(turnId);
   }
 
   private activeTurnIdForThread(threadId: string, thread: ProviderThreadSummary | null = null): string | null {
@@ -1447,7 +1485,7 @@ function summarizeSessionInputs(thread: ProviderThreadSummary): {
       if (item.role?.toLowerCase() !== 'user') {
         continue;
       }
-      const text = summarizeSessionInputText(item.text);
+      const text = summarizeCodexWebSessionInputText(item.text);
       if (text) {
         userInputs.push(text);
       }
@@ -1459,14 +1497,14 @@ function summarizeSessionInputs(thread: ProviderThreadSummary): {
       lastUserInput: userInputs[userInputs.length - 1] ?? null,
     };
   }
-  const fallback = summarizeSessionInputText(thread.preview);
+  const fallback = summarizeCodexWebSessionInputText(thread.preview);
   return {
     firstUserInput: fallback,
     lastUserInput: fallback,
   };
 }
 
-function summarizeSessionInputText(text: string | null | undefined): string | null {
+export function summarizeCodexWebSessionInputText(text: string | null | undefined): string | null {
   const normalized = text?.replace(/\s+/gu, ' ').trim();
   if (!normalized) {
     return null;
@@ -1682,7 +1720,7 @@ function timelineMessagesFromThread(thread: ProviderThreadSummary): CodexWebTime
     }
   }
   if (!items.length) {
-    const preview = summarizeSessionInputText(thread.preview);
+    const preview = summarizeCodexWebSessionInputText(thread.preview);
     if (preview) {
       items.push({
         id: `history_preview_${thread.threadId}`,
@@ -1868,10 +1906,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function createHelpCommandResult(helpReportPath: string | null): CodexWebCommandResult {
-  const guideLine = helpReportPath
-    ? `完整说明：[Codex Web 帮助文档](${helpReportPath})`
-    : '完整说明：请在 Reports 页面打开 Codex Web 帮助文档。';
+function createHelpCommandResult(): CodexWebCommandResult {
   return {
     type: 'command',
     command: {
@@ -1886,8 +1921,6 @@ function createHelpCommandResult(helpReportPath: string | null): CodexWebCommand
         '- `/goal pause` - 暂停当前目标。',
         '- `/goal resume` - 恢复当前目标。',
         '- `/goal clear` - 清除当前会话目标。',
-        '',
-        guideLine,
       ].join('\n'),
       goal: null,
     },
@@ -1941,6 +1974,125 @@ function summarizeRuntimeEvent(event: CodexWebEvent): Record<string, unknown> {
     type: event.type,
     turnId: 'turnId' in event ? event.turnId : null,
   };
+}
+
+function mergeWorkSummary(
+  target: Record<string, unknown>,
+  update: Record<string, unknown>,
+): void {
+  const streamKeys = ['output', 'stdout', 'stderr'] as const;
+  const handled = new Set<string>();
+  for (const key of streamKeys) {
+    const deltaKey = `${key}Delta`;
+    const previous = typeof target[key] === 'string' ? target[key] : '';
+    const incoming = typeof update[key] === 'string' ? update[key] : '';
+    const delta = typeof update[deltaKey] === 'string' ? update[deltaKey] : '';
+    if (incoming || delta) {
+      target[key] = mergeStreamText(previous, incoming, delta);
+    }
+    if (delta) {
+      target[deltaKey] = delta;
+    }
+    handled.add(key);
+    handled.add(deltaKey);
+  }
+  for (const [key, value] of Object.entries(update)) {
+    if (!handled.has(key)) {
+      target[key] = value;
+    }
+  }
+}
+
+function finalAnswerItemIdFromResult(result: Partial<ProviderTurnResult>): string | null {
+  const responseItems = Array.isArray(result.responseItems) ? result.responseItems : [];
+  const outputText = normalizeComparableAssistantText(result.outputText ?? result.previewText);
+  let fallbackId: string | null = null;
+  for (let index = responseItems.length - 1; index >= 0; index -= 1) {
+    const item = responseItems[index];
+    if (!isFinalAssistantResponseItem(item)) {
+      continue;
+    }
+    const itemId = responseItemId(item);
+    if (!itemId) {
+      continue;
+    }
+    fallbackId ??= itemId;
+    const itemText = normalizeComparableAssistantText(responseItemText(item));
+    if (
+      itemText
+      && outputText
+      && (itemText === outputText || outputText.endsWith(itemText))
+    ) {
+      return itemId;
+    }
+  }
+  return fallbackId;
+}
+
+function isFinalAssistantResponseItem(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const item = value as Record<string, unknown>;
+  const type = String(item.type ?? '').replace(/[^a-z]/giu, '').toLowerCase();
+  const role = String(item.role ?? '').replace(/[^a-z]/giu, '').toLowerCase();
+  const assistant = type === 'agentmessage'
+    || type === 'assistantmessage'
+    || (type === 'message' && role === 'assistant');
+  if (!assistant) {
+    return false;
+  }
+  const phase = String(item.phase ?? '').replace(/[^a-z]/giu, '').toLowerCase();
+  return !phase || ['answer', 'final', 'finalanswer', 'finalresponse', 'response'].includes(phase);
+}
+
+function responseItemId(item: Record<string, unknown>): string | null {
+  for (const value of [item.itemId, item.item_id, item.id]) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function responseItemText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(responseItemText).join('');
+  }
+  if (!value || typeof value !== 'object') {
+    return '';
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ['text', 'delta', 'value', 'message'] as const) {
+    if (typeof record[key] === 'string') {
+      return record[key];
+    }
+  }
+  return responseItemText(record.content ?? record.parts ?? record.segments);
+}
+
+function normalizeComparableAssistantText(value: unknown): string {
+  return String(value ?? '').trim().replace(/\r\n/gu, '\n');
+}
+
+function mergeStreamText(previous: string, incoming: string, delta: string): string {
+  if (!previous) {
+    return incoming || delta;
+  }
+  if (incoming === previous || (incoming && previous.endsWith(incoming))) {
+    return previous;
+  }
+  if (incoming.startsWith(previous)) {
+    return incoming;
+  }
+  const addition = delta || incoming;
+  if (!addition || previous.endsWith(addition)) {
+    return previous;
+  }
+  return `${previous}${addition}`;
 }
 
 function summarizeRuntimeError(error: unknown): Record<string, unknown> {

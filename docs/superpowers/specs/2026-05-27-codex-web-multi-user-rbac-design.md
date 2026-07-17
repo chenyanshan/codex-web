@@ -90,10 +90,11 @@ Ordinary users may:
 
 Admins bypass project grants for audit and management APIs.
 
-Every ordinary multi-user session and turn is forced server-side to
-`workspace-write` with `on-request` approvals. Browser-supplied full-access or
-never-approve settings are ignored. This reduces accidental host exposure but
-does not turn a shared OS account into tenant isolation.
+Ordinary multi-user session owners may choose the same read-only, approval, or
+full-access runtime presets as the local admin. Full access is the default for
+new sessions. This is intentional because multi-user mode is only for fully
+trusted users sharing the host account; project grants remain an application
+workflow boundary, not a shell or filesystem isolation boundary.
 
 ## Runtime Boundary
 
@@ -142,9 +143,13 @@ bearer login and expose only:
 
 - full session history
 - live read-only event stream
+- report files explicitly referenced by public assistant answers in that
+  session, when the report still belongs to the same project
 
 They never allow turns, approval decisions, settings writes, archive, or
-favorite changes.
+favorite changes. Report reads revalidate the share TTL, revocation state,
+multi-user mode, creator access, project ownership, and session reference on
+every request.
 
 ## Testing
 
@@ -153,7 +158,7 @@ Focused tests cover:
 - legacy single-user routes still work
 - multi-user users cannot list/read/write sessions they do not own
 - unmatched multi-user routes fail closed instead of falling back to legacy routes
-- ordinary users cannot weaken server-enforced sandbox or approval settings
+- ordinary trusted users can persist each of the three runtime access presets
 - project create requests use configured cwd and return display names
 - admin can audit and observe any session but cannot inject via observer
 - disabled, expired, revoked, or no-longer-authorized share links fail closed

@@ -35,11 +35,15 @@ async function expectTouchTarget(locator, minimum = 44) {
   expect(box.height).toBeGreaterThanOrEqual(minimum);
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem('codexWebToken', 'browser-fixture-token');
-    window.localStorage.setItem('codexWebLanguage', 'en');
-  });
+test.beforeEach(async ({ page }, testInfo) => {
+  const browserToken = `browser-fixture-token-${testInfo.project.name}-${testInfo.workerIndex}`;
+  await page.addInitScript((token) => {
+    window.localStorage.setItem('codexWebToken', token);
+    window.localStorage.setItem(
+      'codexWebLanguage',
+      window.localStorage.getItem('codexWebTestLanguage') || 'en',
+    );
+  }, browserToken);
 });
 
 test('workspace is usable without overflow and exposes work and status semantics', async ({ page }, testInfo) => {
@@ -134,15 +138,65 @@ test('workspace is usable without overflow and exposes work and status semantics
   });
   await sessionButton.click();
 
-  const workCard = page.locator('.work-card');
-  await expect(workCard).toBeVisible();
-  await expect(workCard).toContainText('Ran 1');
-  await expect(workCard).toContainText('Edited 1');
-
   const liveStatus = page.locator('.composer-status[role="status"][aria-live="polite"][aria-atomic="true"]');
   await expect(liveStatus).toBeVisible();
-  await expect(liveStatus).toHaveText('Running');
-  await expect(page.getByRole('button', { name: 'Stop current turn' })).toBeVisible();
+  await expect(liveStatus.locator('.composer-status-action > span').first()).toHaveText('Working · Needs approval');
+  await expect(page.locator('[data-timeline-id="assistant_turn_browser_active_commentary_browser_before"]'))
+    .toContainText('Checking the event stream and replay state.');
+  await expect(page.locator('[data-timeline-id="assistant_turn_browser_active_commentary_browser_after"]'))
+    .toContainText('Command output is complete; reviewing the file update.');
+  await expect(page.locator('#timeline .inline-work-row')).toHaveCount(0);
+  await expect(page.locator('#timeline .work-turn')).toHaveCount(0);
+  await expect(page.locator('#timeline')).not.toContainText('Tests are still running');
+  await expect(page.locator('#timeline')).not.toContainText('packages/codex-web/public/styles.css');
+  const projectedTurnOrder = await page.locator('#timeline [data-timeline-id]').evaluateAll((items) => items
+    .map((item) => item.getAttribute('data-timeline-id'))
+    .filter((id) => id?.includes('turn_browser_active')));
+  expect(projectedTurnOrder).toEqual([
+    'assistant_turn_browser_active_commentary_browser_before',
+    'assistant_turn_browser_active_commentary_browser_after',
+  ]);
+  const openWorkDetailsButton = page.locator('#open-work-details-button');
+  await expect(openWorkDetailsButton).toBeVisible();
+  await openWorkDetailsButton.click();
+  const workDialog = page.locator('.work-details-dialog');
+  await expect(workDialog).toBeVisible();
+  const workTurn = workDialog.locator('.work-turn');
+  await expect(workTurn).toHaveCount(1);
+  await expect(workTurn).toContainText('Ran 1');
+  await expect(workTurn).toContainText('Edited 2');
+  await expect(workTurn).not.toContainText('[object Object]');
+  const commandDetail = workTurn.locator('.work-detail[data-work-kind="command"]');
+  await commandDetail.locator('summary').click();
+  await expect(commandDetail).toContainText('Tests are still running');
+  await expect(commandDetail).toContainText('No failures yet');
+  const editDetail = workTurn.locator('.work-detail[data-work-kind="edit"]');
+  await expect(editDetail).toContainText('packages/codex-web/public/styles.css');
+  const workRowGeometry = await workTurn.locator('.work-detail > summary').evaluateAll((summaries) => summaries.map((summary) => {
+    const parent = summary.getBoundingClientRect();
+    const children = [...summary.children].map((child) => child.getBoundingClientRect());
+    return {
+      childrenInside: children.every((child) => child.left >= parent.left - 1
+        && child.right <= parent.right + 1
+        && child.top >= parent.top - 1
+        && child.bottom <= parent.bottom + 1),
+      overlaps: children.some((left, index) => children.slice(index + 1).some((right) => (
+        left.left < right.right - 1
+        && left.right > right.left + 1
+        && left.top < right.bottom - 1
+        && left.bottom > right.top + 1
+      ))),
+    };
+  }));
+  expect(workRowGeometry.every((row) => row.childrenInside && !row.overlaps)).toBe(true);
+  await expectTouchTarget(page.locator('#close-work-details-button'));
+  await page.screenshot({
+    path: `/tmp/codex-web-work-dialog-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+  await page.locator('#close-work-details-button').click();
+  await expect(workDialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop current turn' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Session menu' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
   const promptInput = page.locator('#prompt-input');
@@ -163,7 +217,6 @@ test('workspace is usable without overflow and exposes work and status semantics
   if (testInfo.project.name.startsWith('mobile-')) {
     for (const locator of [
       page.getByRole('button', { name: 'Sessions' }),
-      page.getByRole('button', { name: 'Stop current turn' }),
       page.getByRole('button', { name: 'Session menu' }),
       page.getByRole('button', { name: 'Attach files' }),
       page.getByRole('button', { name: 'Send' }),
@@ -187,26 +240,235 @@ test('workspace is usable without overflow and exposes work and status semantics
 
   await page.getByRole('button', { name: 'Session menu' }).click();
   const menuCloseButton = page.getByRole('button', { name: 'Close session menu' });
+  const stopButton = page.getByRole('button', { name: 'Stop current turn' });
   await expect(menuCloseButton).toBeVisible();
+  await expect(stopButton).toBeVisible();
   await expect(menuCloseButton).toBeFocused();
   await expect(page.locator('#model-select')).toHaveValue('gpt-5.6-sol');
   await expect(page.locator('#reasoning-select')).toHaveValue('ultra');
-  const openReportsButton = page.locator('[data-session-reports-project="yanshan_quant"]');
-  await expect(openReportsButton).toBeVisible();
+  await expect(page.locator('[data-session-reports-project], #open-reports-button')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reports', exact: true })).toHaveCount(0);
   if (testInfo.project.name.startsWith('mobile-')) {
     await expectTouchTarget(menuCloseButton);
-    await expectTouchTarget(openReportsButton);
+    await expectTouchTarget(stopButton);
     await expectTouchTarget(page.getByRole('button', { name: 'Archive', exact: true }));
   }
-  await openReportsButton.click();
+  await page.screenshot({
+    path: `/tmp/codex-web-session-menu-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+  await menuCloseButton.click();
   await expect(page.locator('.settings-drawer')).toHaveCount(0);
-  if (testInfo.project.name === 'desktop') {
-    const reportsOverlay = page.locator('.desktop-overlay');
-    await expect(reportsOverlay).toBeVisible();
-    await expect(reportsOverlay).not.toHaveAttribute('aria-hidden', 'true');
-  } else {
-    await expect(page.locator('.page-title')).toHaveText('Reports');
+});
+
+test('reasoning summaries use plain message borders without timeline ornaments', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-portrait', 'One viewport covers shared message-card styling.');
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  const styles = await page.evaluate(() => {
+    const timeline = document.querySelector('#timeline');
+    const card = document.createElement('article');
+    card.className = 'card message-card assistant reasoning-summary';
+    timeline?.appendChild(card);
+    const result = {
+      borderStyle: getComputedStyle(card).borderTopStyle,
+      cardBefore: getComputedStyle(card, '::before').content,
+      cardAfter: getComputedStyle(card, '::after').content,
+      timelineBefore: timeline ? getComputedStyle(timeline, '::before').content : '',
+      timelineAfter: timeline ? getComputedStyle(timeline, '::after').content : '',
+    };
+    card.remove();
+    return result;
+  });
+
+  expect(styles.borderStyle).toBe('solid');
+  for (const content of [styles.cardBefore, styles.cardAfter, styles.timelineBefore, styles.timelineAfter]) {
+    expect(['none', 'normal']).toContain(content);
   }
+});
+
+test('lost new-session responses recover from the durable outbox after reload', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-portrait', 'One phone viewport covers weak-network recovery.');
+
+  let acceptedSubmissionId = '';
+  const submissionIds = [];
+  await page.route('**/api/session-submissions', async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    submissionIds.push(body.submissionId);
+    if (!acceptedSubmissionId) {
+      acceptedSubmissionId = body.submissionId;
+      await route.abort('failed');
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        submission: {
+          id: acceptedSubmissionId,
+          status: 'submitted',
+          sessionId: 'session_browser_recovered',
+          turnId: 'turn_browser_recovered',
+          error: null,
+        },
+        session: {
+          id: 'session_browser_recovered',
+          cwd: '/Users/test/yanshan_quant',
+          projectName: 'yanshan_quant',
+          firstUserInput: 'Recover this weak-network session',
+          lastUserInput: 'Recover this weak-network session',
+          updatedAt: Date.now(),
+          lastInputAt: Date.now(),
+          settings: {},
+          thread: { id: 'session_browser_recovered', turns: [] },
+        },
+        turnId: 'turn_browser_recovered',
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.locator('#open-new-session-button').click();
+  await page.locator('#new-cwd-input').fill('/Users/test/yanshan_quant');
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  await page.locator('#prompt-input').fill('Recover this weak-network session');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+
+  await expect(page.locator('#timeline')).toContainText('Send failed');
+  const storedBeforeReload = await page.evaluate(() => {
+    const prefix = 'codexWebSubmissionOutbox:';
+    return Array.from({ length: window.localStorage.length }, (_item, index) => (
+      window.localStorage.key(index)
+    ))
+      .filter((key) => key?.startsWith(prefix))
+      .map((key) => JSON.parse(window.localStorage.getItem(key)).entry);
+  });
+  expect(storedBeforeReload).toHaveLength(1);
+  expect(storedBeforeReload[0].id).toBe(acceptedSubmissionId);
+  expect(storedBeforeReload[0].text).toBe('Recover this weak-network session');
+
+  await page.reload();
+
+  await expect.poll(async () => page.evaluate(() => {
+    const prefix = 'codexWebSubmissionOutbox:';
+    return Array.from({ length: window.localStorage.length }, (_item, index) => (
+      window.localStorage.key(index)
+    )).filter((key) => key?.startsWith(prefix)).length;
+  })).toBe(0);
+  await expect(page.locator('[data-session-id="session_browser_recovered"]')).toHaveCount(1);
+  expect(submissionIds).toEqual([acceptedSubmissionId, acceptedSubmissionId]);
+});
+
+test('mobile session opens a relative Markdown file and returns to the same timeline', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-portrait', 'One phone viewport covers the full-screen Markdown viewer.');
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_files"]').click();
+
+  const timeline = page.locator('#timeline');
+  const fileLink = page.getByRole('link', { name: 'Browser session guide' });
+  await expect(fileLink).toBeVisible();
+  const timelineScrollTop = await timeline.evaluate((element) => {
+    element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 24);
+    return element.scrollTop;
+  });
+
+  await fileLink.click();
+
+  const viewer = page.locator('.session-file-screen .session-file-viewer');
+  await expect(viewer).toBeVisible();
+  await expect(page.locator('.desktop-session-file-overlay')).toHaveCount(0);
+  await expect(page.locator('.session-file-topbar .page-title')).toHaveText('browser-session-guide.md');
+  await expect(viewer.locator('.session-file-document')).toContainText('Browser Session Guide');
+  await expect(viewer.locator('.session-file-document')).toContainText('resolved from the current project');
+  const viewerGeometry = await page.locator('.session-file-screen').evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    height: element.getBoundingClientRect().height,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+  }));
+  expect(viewerGeometry.width).toBeGreaterThanOrEqual(viewerGeometry.viewportWidth - 1);
+  expect(viewerGeometry.height).toBeGreaterThanOrEqual(viewerGeometry.viewportHeight - 1);
+  await page.screenshot({
+    path: '/tmp/codex-web-browser-mobile-markdown-viewer.png',
+    fullPage: true,
+  });
+
+  await page.locator('#close-session-file-button').click();
+
+  await expect(timeline).toBeVisible();
+  await expect(fileLink).toBeVisible();
+  await expect(timeline).toContainText('This image was uploaded in an earlier turn.');
+  await expect.poll(async () => timeline.evaluate((element) => element.scrollTop)).toBe(timelineScrollTop);
+});
+
+test('historical image attachment opens in the session viewer and returns to its message', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-compact', 'The compact phone viewport covers retained attachment viewing.');
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_files"]').click();
+
+  const attachment = page.locator('.message-attachment', { hasText: 'history-image.png' });
+  await expect(attachment).toBeVisible();
+  await expect(attachment).toHaveAttribute('data-session-file-path', '/state/turn-attachments/browser/history-image.png');
+  await attachment.click();
+
+  await expect(page.locator('.session-file-topbar .page-title')).toHaveText('history-image.png');
+  const image = page.locator('.session-file-image');
+  await expect(image).toBeVisible();
+  await expect.poll(async () => image.evaluate((element) => ({
+    complete: element.complete,
+    naturalWidth: element.naturalWidth,
+    naturalHeight: element.naturalHeight,
+  }))).toEqual({ complete: true, naturalWidth: 192, naturalHeight: 192 });
+  await page.screenshot({
+    path: '/tmp/codex-web-browser-mobile-image-viewer.png',
+    fullPage: true,
+  });
+
+  await page.locator('#close-session-file-button').click();
+
+  await expect(page.locator('#timeline')).toContainText('This image was uploaded in an earlier turn.');
+  await expect(attachment).toBeVisible();
+});
+
+test('sandboxed HTML preview blocks scripts, remote assets, and refresh navigation', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'One desktop browser covers HTML sandbox enforcement.');
+
+  const previewRequests = [];
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith('/html-probe') || pathname === '/html-refresh-target') {
+      previewRequests.push(pathname);
+    }
+  });
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_files"]').click();
+  const htmlLink = page.getByRole('link', { name: 'sandboxed HTML preview' });
+  await htmlLink.click();
+
+  const iframe = page.locator('.session-file-html');
+  await expect(iframe).toBeVisible();
+  await expect(page.locator('#close-session-file-button')).toBeFocused();
+  await expect(iframe).toHaveAttribute('sandbox', '');
+  await expect(iframe).toHaveAttribute('referrerpolicy', 'no-referrer');
+  const preview = page.frameLocator('.session-file-html');
+  await expect(preview.locator('h1')).toHaveText('Sandboxed HTML');
+  await expect(preview.locator('html')).not.toHaveAttribute('data-script-ran', 'true');
+  await page.waitForTimeout(250);
+  await page.screenshot({
+    path: '/tmp/codex-web-browser-desktop-html-viewer.png',
+    fullPage: true,
+  });
+
+  expect(previewRequests).toEqual([]);
+  const previewFrame = page.frames().find((frame) => frame.parentFrame() === page.mainFrame());
+  expect(previewFrame?.url() || '').not.toContain('/html-refresh-target');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.desktop-session-file-overlay')).toHaveCount(0);
+  await expect(htmlLink).toBeFocused();
 });
 
 test('archived sessions use a compact filter and a clear restore icon', async ({ page }, testInfo) => {
@@ -239,6 +501,130 @@ test('opening an archived session never restores it to recents', async ({ page }
 
   await expect(page.locator('[data-session-id="session_browser_archived"]')).toHaveCount(0);
   await expect(page.locator('[data-session-id="session_browser_idle"]')).toBeVisible();
+});
+
+test('large work details use one stable vertical scroll surface', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'One narrow desktop viewport covers the long-work geometry regression.');
+  await page.setViewportSize({ width: 1060, height: 503 });
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('#open-work-details-button').click();
+  const workDialog = page.locator('.work-details-dialog');
+  const workTurn = workDialog.locator('.work-turn');
+  await expect(workTurn).toBeVisible();
+
+  await workTurn.evaluate((turn) => {
+    const events = turn.querySelector(':scope > .work-events');
+    const detail = events?.querySelector(':scope > .work-detail');
+    if (!events || !detail) {
+      throw new Error('work detail fixture is unavailable');
+    }
+    for (let index = events.children.length; index < 120; index += 1) {
+      events.append(detail.cloneNode(true));
+    }
+  });
+
+  const geometry = await workDialog.evaluate((dialog) => {
+    const list = dialog.querySelector('.work-details-list');
+    const events = dialog.querySelector('.work-events');
+    const outputs = [...dialog.querySelectorAll('.work-output')];
+    const verticalScrollOwners = [list, events, ...outputs].filter((element) => {
+      if (!element) {
+        return false;
+      }
+      const overflowY = getComputedStyle(element).overflowY;
+      return element.scrollHeight > element.clientHeight + 1 && ['auto', 'scroll'].includes(overflowY);
+    });
+    return {
+      dialogHeight: dialog.getBoundingClientRect().height,
+      listClientHeight: list?.clientHeight || 0,
+      listScrollHeight: list?.scrollHeight || 0,
+      listOverflowY: list ? getComputedStyle(list).overflowY : '',
+      eventsOverflowY: events ? getComputedStyle(events).overflowY : '',
+      verticalScrollOwnerClasses: verticalScrollOwners.map((element) => element?.className || ''),
+    };
+  });
+
+  expect(geometry.dialogHeight).toBeLessThanOrEqual(503 * 0.78 + 2);
+  expect(geometry.listScrollHeight).toBeGreaterThan(geometry.listClientHeight);
+  expect(geometry.listOverflowY).toBe('auto');
+  expect(geometry.eventsOverflowY).toBe('visible');
+  expect(geometry.verticalScrollOwnerClasses).toEqual(['work-details-list']);
+});
+
+test('expanded work details pause live following until new activity is requested', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'One desktop viewport covers live Work state preservation.');
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('#open-work-details-button').click();
+
+  const list = page.locator('.work-details-list');
+  const commandDetail = page.locator('.work-detail[data-work-kind="command"]');
+  const commandSummary = commandDetail.locator('summary');
+  await commandSummary.click();
+  await expect(commandDetail).toHaveAttribute('open', '');
+  await expect(commandSummary).toBeFocused();
+  const scrollTop = await list.evaluate((element) => element.scrollTop);
+
+  const delivery = await page.evaluate(async () => {
+    const token = window.localStorage.getItem('codexWebToken') || '';
+    const response = await fetch('/__test/turn-event', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 'batch.started',
+        turnId: 'turn_browser_active',
+        batchId: 'batch_browser_new_activity',
+        kind: 'command',
+        title: 'git status --short',
+      }),
+    });
+    return response.json();
+  });
+  expect(delivery.delivered).toBe(1);
+
+  const newActivityButton = page.locator('[data-work-show-latest]');
+  await expect(newActivityButton).toHaveText('1 new activity');
+  await expect(commandDetail).toHaveAttribute('open', '');
+  await expect(commandSummary).toBeFocused();
+  await expect(page.locator('.work-details-dialog')).not.toContainText('git status --short');
+  expect(await list.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+
+  await newActivityButton.click();
+  await expect(newActivityButton).toHaveCount(0);
+  await expect(page.locator('.work-details-dialog')).toContainText('git status --short');
+  await expect(commandDetail).toHaveAttribute('open', '');
+});
+
+test('Chinese work details render symbols and activity labels without escaped entities', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-compact', 'The compact phone viewport covers Chinese Work glyph rendering.');
+
+  await page.goto('/');
+  await page.evaluate(() => {
+    window.localStorage.setItem('codexWebTestLanguage', 'zh-CN');
+    window.localStorage.setItem('codexWebLanguage', 'zh-CN');
+  });
+  await page.reload();
+  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  const openWorkDetailsButton = page.locator('#open-work-details-button');
+  await expect(openWorkDetailsButton.locator('.composer-status-disclosure')).toHaveText('›');
+  await openWorkDetailsButton.click();
+
+  const dialog = page.locator('.work-details-dialog');
+  await expect(dialog).toContainText('本轮活动');
+  await expect(dialog).toContainText('执行 1 · 修改 2 个文件');
+  await expect(dialog).toContainText('packages/codex-web/public/styles.css +1');
+  await expect(page.locator('#close-work-details-button')).toHaveText('×');
+  await expect(dialog).not.toContainText(/&(?:times|middot|#\d+);/u);
+  await page.screenshot({
+    path: '/tmp/codex-web-work-dialog-zh-mobile-compact.png',
+    fullPage: true,
+  });
 });
 
 test('desktop prompt accepts pasted files as uploaded attachments', async ({ page }, testInfo) => {

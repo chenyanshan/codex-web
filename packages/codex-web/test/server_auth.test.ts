@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { CodexWebEventBus } from '../src/event_bus.js';
 import { FileIdentityStore } from '../src/identity_store.js';
 import { createCodexWebServer } from '../src/server.js';
 
@@ -281,7 +282,7 @@ test('POST /api/sessions/:sessionId/attachments rejects files that exceed the pr
     assert.equal(response.status, 507);
     assert.deepEqual(await response.json(), {
       error: 'storage_quota_exceeded',
-      message: 'Managed storage quota is full. Remove old uploads or reports and try again.',
+      message: 'Managed storage quota is full. Remove old managed files and try again.',
     });
   } finally {
     await server.stop();
@@ -1025,6 +1026,11 @@ test('POST /api/sessions/:id/turns returns 409 when the session already has an a
 });
 
 test('POST /api/sessions/:id/turns returns handled slash command results', async () => {
+  const helpMessage = [
+    '支持的命令：',
+    '- `/help`',
+    '- `/goal`',
+  ].join('\n');
   const server = createCodexWebServer({
     auth: createAcceptingAuth(),
     runtime: {
@@ -1035,7 +1041,7 @@ test('POST /api/sessions/:id/turns returns handled slash command results', async
           name: input.text === '/help' ? 'help' : 'goal',
           action: input.text === '/help' ? 'show' : 'set',
           message: input.text === '/help'
-            ? '支持的命令：/help、/goal。完整说明：/Users/chenyanshan/.codex-web/reports/codex-mobile-web-app/2026-05-22/codex-web-help.md'
+            ? helpMessage
             : `Goal set from ${sessionId}: ${input.text}`,
           goal: input.text === '/help'
             ? null
@@ -1067,7 +1073,7 @@ test('POST /api/sessions/:id/turns returns handled slash command results', async
               label: input.text === '/help' ? '/help' : '/goal',
               meta: input.text === '/help' ? 'show' : 'set',
               text: input.text === '/help'
-                ? '支持的命令：/help、/goal。完整说明：/Users/chenyanshan/.codex-web/reports/codex-mobile-web-app/2026-05-22/codex-web-help.md'
+                ? helpMessage
                 : `Goal set from ${sessionId}: ${input.text}`,
             },
           ],
@@ -1140,7 +1146,7 @@ test('POST /api/sessions/:id/turns returns handled slash command results', async
       command: {
         name: 'help',
         action: 'show',
-        message: '支持的命令：/help、/goal。完整说明：/Users/chenyanshan/.codex-web/reports/codex-mobile-web-app/2026-05-22/codex-web-help.md',
+        message: helpMessage,
         goal: null,
       },
       session: {
@@ -1164,7 +1170,7 @@ test('POST /api/sessions/:id/turns returns handled slash command results', async
             role: 'system',
             label: '/help',
             meta: 'show',
-            text: '支持的命令：/help、/goal。完整说明：/Users/chenyanshan/.codex-web/reports/codex-mobile-web-app/2026-05-22/codex-web-help.md',
+            text: helpMessage,
           },
         ],
       },
@@ -1510,7 +1516,7 @@ test('single-user session list omits conversation details while direct reads ret
         id: 'turn_1',
         status: 'completed',
         error: null,
-        items: [{ type: 'message', role: 'assistant', text: 'Detailed answer' }],
+        items: [{ id: 'item_answer', type: 'message', role: 'assistant', text: 'Detailed answer' }],
       }],
     },
     timeline: [{
@@ -1548,6 +1554,7 @@ test('single-user session list omits conversation details while direct reads ret
     });
     assert.equal(detailResponse.status, 200);
     const detailPayload = await detailResponse.json();
+    assert.equal(detailPayload.session.thread.turns[0].items[0].id, 'item_answer');
     assert.equal(detailPayload.session.thread.turns[0].items[0].text, 'Detailed answer');
     assert.equal(detailPayload.session.timeline[0].text, 'Detailed answer');
   } finally {
@@ -1699,7 +1706,7 @@ test('GET /api/reports/:id/content returns report content', async (t) => {
   }
 });
 
-test('PATCH /api/reports/:id/favorite updates report favorite state', async (t) => {
+test('legacy report compatibility rejects favorite mutations', async (t) => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-reports-'));
   t.after(async () => {
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -1723,9 +1730,8 @@ test('PATCH /api/reports/:id/favorite updates report favorite state', async (t) 
       },
       body: JSON.stringify({ favorite: true }),
     });
-    assert.equal(response.status, 200);
-    const payload = await response.json() as { report: { favorite: boolean } };
-    assert.equal(payload.report.favorite, true);
+    assert.equal(response.status, 404);
+    await assert.rejects(fs.access(path.join(stateDir, 'report-index.json')), /ENOENT/u);
   } finally {
     await server.stop();
   }
@@ -1819,10 +1825,17 @@ test('SSE route accepts bearer auth and streams events', async () => {
     });
     assert.equal(response.status, 200);
     assertSecurityHeaders(response);
+    assert.match(response.headers.get('cache-control') ?? '', /no-transform/u);
+    assert.equal(response.headers.get('x-accel-buffering'), 'no');
+    assert.equal(response.headers.get('x-codex-event-reset'), 'false');
     const reader = response.body?.getReader();
     assert.ok(reader);
-    const firstChunk = await reader!.read();
-    const text = new TextDecoder().decode(firstChunk.value);
+    let text = '';
+    for (let index = 0; index < 4 && !text.includes('turn.started'); index += 1) {
+      const chunk = await reader!.read();
+      text += new TextDecoder().decode(chunk.value);
+    }
+    assert.match(text, /stream\.ready/u);
     assert.match(text, /turn.started/);
     assert.doesNotMatch(text, /threadId|thread_1|raw/u);
     await reader!.cancel();
@@ -1831,6 +1844,162 @@ test('SSE route accepts bearer auth and streams events', async () => {
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('unsubscribe not called')), 1_000)),
     ]);
     assert.equal(unsubscribeCalled, true);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SSE reset advertises its epoch and includes a projection snapshot after history truncation', async () => {
+  const bus = new CodexWebEventBus({ maxEventsPerTurn: 2, epoch: 'epoch_current' });
+  bus.append('turn_snapshot', {
+    id: 'evt_started',
+    type: 'turn.started',
+    turnId: 'turn_snapshot',
+    threadId: 'thread_1',
+  });
+  bus.append('turn_snapshot', {
+    id: 'evt_early',
+    type: 'assistant.delta',
+    turnId: 'turn_snapshot',
+    threadId: 'thread_1',
+    itemId: 'item_early',
+    eventType: 'completed',
+    text: 'Early commentary',
+    delta: 'Early commentary',
+    phase: 'commentary',
+  });
+  bus.append('turn_snapshot', {
+    id: 'evt_late_1',
+    type: 'assistant.delta',
+    turnId: 'turn_snapshot',
+    threadId: 'thread_1',
+    itemId: 'item_late',
+    eventType: 'delta',
+    text: 'Late',
+    delta: 'Late',
+    phase: 'commentary',
+  });
+  bus.append('turn_snapshot', {
+    id: 'evt_late_2',
+    type: 'assistant.delta',
+    turnId: 'turn_snapshot',
+    threadId: 'thread_1',
+    itemId: 'item_late',
+    eventType: 'completed',
+    text: 'Late complete',
+    delta: ' complete',
+    phase: 'commentary',
+  });
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      eventBus: bus,
+      getTurnEvents: (turnId: string, after?: string | number | null) => bus.list(turnId, after),
+      getTurnEventReplay: (turnId: string, after?: string | number | null, epoch?: string | null) => (
+        bus.replay(turnId, after, epoch)
+      ),
+      getTurnEventSnapshot: (turnId: string) => bus.snapshot(turnId),
+      subscribeToTurn: (turnId: string, listener: any) => bus.subscribe(turnId, listener),
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(
+      `${server.baseUrl}/api/turns/turn_snapshot/events?after=1&epoch=epoch_previous`,
+      { headers: { Authorization: 'Bearer cw_token' } },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-codex-event-epoch'), 'epoch_current');
+    assert.equal(response.headers.get('x-codex-event-reset'), 'true');
+    const reader = response.body?.getReader();
+    assert.ok(reader);
+    let text = '';
+    for (let index = 0; index < 4 && !text.includes('Late complete'); index += 1) {
+      const chunk = await reader!.read();
+      text += new TextDecoder().decode(chunk.value);
+    }
+    assert.match(text, /stream\.reset/u);
+    assert.match(text, /epoch_mismatch/u);
+    assert.match(text, /"snapshot":\{"events":/u);
+    assert.match(text, /"complete":false/u);
+    assert.match(text, /Early commentary/u);
+    assert.match(text, /Late complete/u);
+    await reader!.cancel();
+
+    const completeResponse = await fetch(
+      `${server.baseUrl}/api/turns/turn_snapshot/events?after=0&epoch=epoch_current`,
+      { headers: { Authorization: 'Bearer cw_token' } },
+    );
+    assert.equal(completeResponse.headers.get('x-codex-event-reset'), 'true');
+    const completeReader = completeResponse.body?.getReader();
+    assert.ok(completeReader);
+    let completeText = '';
+    for (let index = 0; index < 4 && !completeText.includes('"complete":true'); index += 1) {
+      const chunk = await completeReader!.read();
+      completeText += new TextDecoder().decode(chunk.value);
+    }
+    assert.match(completeText, /cursor_expired/u);
+    assert.match(completeText, /"complete":true/u);
+    await completeReader!.cancel();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SSE subscribes before replay and suppresses replay-live duplicate sequences', async () => {
+  const calls: string[] = [];
+  const entry = {
+    sequence: 7,
+    event: {
+      id: 'evt_race',
+      type: 'turn.started' as const,
+      turnId: 'turn_race',
+      threadId: 'thread_1',
+    },
+  };
+  let listener: ((value: typeof entry) => void) | null = null;
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      subscribeToTurn: (_turnId: string, value: (event: typeof entry) => void) => {
+        calls.push('subscribe');
+        listener = value;
+        return () => {};
+      },
+      getTurnEventReplay: () => {
+        calls.push('replay');
+        listener?.(entry);
+        return {
+          epoch: 'epoch_race',
+          reset: false,
+          resetReason: null,
+          retainedFrom: 7,
+          retainedFloor: 0,
+          latestSequence: 7,
+          events: [entry],
+        };
+      },
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/turns/turn_race/events`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    const reader = response.body?.getReader();
+    assert.ok(reader);
+    let text = '';
+    for (let index = 0; index < 4 && !text.includes('evt_race'); index += 1) {
+      const chunk = await reader!.read();
+      text += new TextDecoder().decode(chunk.value);
+    }
+    assert.deepEqual(calls, ['subscribe', 'replay']);
+    assert.equal(text.match(/"id":"evt_race"/gu)?.length, 1);
+    await reader!.cancel();
   } finally {
     await server.stop();
   }

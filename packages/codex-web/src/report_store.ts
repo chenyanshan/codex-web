@@ -116,27 +116,6 @@ export class FileReportStore {
     return this.readReportWithoutMaintenance(id);
   }
 
-  async setFavorite(reportId: string, favorite: boolean): Promise<CodexWebReport | null> {
-    await this.beforeAccess?.();
-    const report = await this.readReportWithoutMaintenance(reportId);
-    if (!report) {
-      return null;
-    }
-    const index = await this.readIndex();
-    index.reports[report.id] = {
-      ...index.reports[report.id],
-      favorite,
-      title: report.title,
-      project: report.project,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.writeIndex(index);
-    return {
-      ...report,
-      favorite,
-    };
-  }
-
   private async scanDirectory(directory: string): Promise<CodexWebReport[]> {
     let entries: Array<import('node:fs').Dirent>;
     try {
@@ -243,14 +222,6 @@ export class FileReportStore {
       this.indexCache = { version: 1, reports: {} };
     }
     return this.indexCache;
-  }
-
-  private async writeIndex(index: ReportIndexFile): Promise<void> {
-    await fs.mkdir(path.dirname(this.indexPath), { recursive: true, mode: 0o700 });
-    const tmpPath = `${this.indexPath}.${process.pid}.tmp`;
-    await fs.writeFile(tmpPath, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
-    await fs.rename(tmpPath, this.indexPath);
-    this.indexCache = index;
   }
 }
 

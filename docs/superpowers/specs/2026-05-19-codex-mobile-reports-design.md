@@ -1,5 +1,12 @@
 # Codex Mobile Reports Design
 
+> Superseded on 2026-07-17 by
+> `docs/superpowers/specs/2026-07-17-session-file-viewer-design.md`. This
+> document is retained to describe legacy storage and API compatibility.
+> Existing authenticated report links and capability-scoped public-share reads
+> remain supported during the compatibility period; the Reports page, report
+> favorites, and report-generation skill are no longer product features.
+
 ## Goal
 
 Add a first-class reports area to Codex Web so any Codex session on this Mac can
@@ -38,7 +45,10 @@ the source of truth for content.
 
 ## API
 
-All report APIs require the existing bearer token.
+The standard report APIs require the existing bearer token. An enabled public
+share may use its capability token to read only reports explicitly referenced
+by public assistant answers in the shared session and belonging to that
+session's project.
 
 ```text
 GET   /api/reports
@@ -46,6 +56,7 @@ POST  /api/reports/resolve
 GET   /api/reports/:reportId
 PATCH /api/reports/:reportId/favorite
 GET   /api/reports/:reportId/content
+GET   /api/share/:capabilityToken/reports/:reportId/content
 ```
 
 `reportId` is the report path relative to `~/.codex-web/reports/`, encoded as a
@@ -94,7 +105,9 @@ The backend must:
 - reject path traversal
 - reject symlinks that escape the reports root
 - read only `.md`, `.markdown`, `.html`, and `.htm`
-- keep all report APIs authenticated
+- keep standard report APIs bearer-authenticated
+- revalidate capability-scoped report reads against the share and session
+  allowlist on every request
 
 HTML is displayed in a sandboxed iframe without script permissions.
 

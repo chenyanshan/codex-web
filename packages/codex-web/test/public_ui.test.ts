@@ -107,7 +107,8 @@ test('rerendered element listeners use abortable render and timeline lifecycles'
   assert.match(app, /function listenRendered\([\s\S]*renderEventController\?\.signal/u);
   assert.match(app, /function listenTimeline\([\s\S]*timelineEventController\?\.signal/u);
   assert.match(app, /function listenWithSignal\([\s\S]*target\.addEventListener\(type, listener, normalizedOptions\)/u);
-  assert.match(app, /function refreshChatDynamicUi\(\)[\s\S]*beginTimelineEventBindings\(\);\s*timeline\.innerHTML/u);
+  assert.match(app, /function refreshChatDynamicUi\([^)]*\)[\s\S]*beginTimelineEventBindings\(\);[\s\S]*updateTimelineProjectionDom/u);
+  assert.match(app, /if \(!updateTimelineProjectionDom\([\s\S]*timeline\.innerHTML = renderTimeline\(\)/u);
 });
 
 test('mobile UI leaves device orientation under user control', async () => {
@@ -179,30 +180,28 @@ test('new sessions inherit Codex model settings until this device overrides them
   );
 });
 
-test('ordinary multi-user UI matches the server-managed runtime policy', async () => {
+test('ordinary trusted multi-user UI keeps full access available and selected by default', async () => {
   const { api } = await loadAppHarness();
   api.state.authSession = {
     id: 'auth_1',
     principal: { userId: 'user_1', isAdmin: false, mode: 'multi' },
   };
 
-  api.applyDefaultSettings();
-  api.state.permissionPreset = 'full-access';
-  api.state.approvalPolicy = 'never';
-  api.state.sandboxMode = 'danger-full-access';
+  api.applyDefaultThreadSettings({ accessPreset: 'default' });
+  assert.equal(api.state.permissionPreset, 'default');
+  api.applyDefaultThreadSettings({ accessPreset: 'full-access' });
 
   assert.deepEqual(JSON.parse(JSON.stringify(api.collectSettings())), {
     model: null,
     reasoningEffort: null,
     collaborationMode: 'default',
-    accessPreset: 'default',
-    approvalPolicy: 'on-request',
-    sandboxMode: 'workspace-write',
+    accessPreset: 'full-access',
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
     personality: 'pragmatic',
   });
-  assert.doesNotMatch(api.renderSettingsDrawer(), /data-permission-preset="full-access"/u);
-  assert.doesNotMatch(api.renderAppSettings().innerHTML, /data-default-permission-preset="full-access"/u);
-  assert.match(api.renderAppSettings().innerHTML, /data-default-permission-preset="default" aria-pressed="true"/u);
+  assert.match(api.renderSettingsDrawer(), /data-permission-preset="full-access" aria-pressed="true"/u);
+  assert.match(api.renderAppSettings().innerHTML, /data-default-permission-preset="full-access" aria-pressed="true"/u);
 });
 
 test('first-run default thread settings initialize from effective Codex config defaults', async () => {
@@ -244,7 +243,7 @@ test('first-run default thread settings initialize from effective Codex config d
           }),
         };
       }
-      if (path === '/api/projects' || path === '/api/sessions' || path === '/api/reports') {
+      if (path === '/api/projects' || path === '/api/sessions') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -445,7 +444,7 @@ test('saved Codex Web default thread settings override Codex model defaults', as
           }),
         };
       }
-      if (path === '/api/projects' || path === '/api/sessions' || path === '/api/reports') {
+      if (path === '/api/projects' || path === '/api/sessions') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -740,9 +739,6 @@ test('restore auth also loads project display names for new sessions', async () 
       if (path === '/api/sessions') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
-      if (path === '/api/reports') {
-        return { ok: true, status: 200, json: async () => ({ items: [] }) };
-      }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
@@ -992,14 +988,13 @@ test('admin console stays open while restore auth finishes in the background', a
     '/api/models',
     '/api/projects',
     '/api/sessions',
-    '/api/reports',
   ]);
 
   const openAdmin = api.openAdminConsole();
   await flushMicrotasks();
 
   assert.equal(api.state.view, 'admin');
-  assert.deepEqual(pending.slice(6).map((request) => request.path), [
+  assert.deepEqual(pending.slice(5).map((request) => request.path), [
     '/api/admin/settings',
     '/api/admin/projects',
     '/api/admin/users',
@@ -1011,18 +1006,17 @@ test('admin console stays open while restore auth finishes in the background', a
   pending[2]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
   pending[3]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
   pending[4]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
-  pending[5]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
   await restore;
   await flushMicrotasks();
 
   assert.equal(api.state.view, 'admin');
   assert.equal(api.state.admin.loading, true);
 
-  pending[6]?.resolve({ ok: true, status: 200, json: async () => ({ settings: { multiUserEnabled: true } }) });
-  pending[7]?.resolve({ ok: true, status: 200, json: async () => ({ items: [{ id: '/repo/admin', cwd: '/repo/admin', displayName: 'Admin Repo' }] }) });
+  pending[5]?.resolve({ ok: true, status: 200, json: async () => ({ settings: { multiUserEnabled: true } }) });
+  pending[6]?.resolve({ ok: true, status: 200, json: async () => ({ items: [{ id: '/repo/admin', cwd: '/repo/admin', displayName: 'Admin Repo' }] }) });
+  pending[7]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
   pending[8]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
   pending[9]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
-  pending[10]?.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
   await openAdmin;
 
   assert.equal(api.state.view, 'admin');
@@ -1044,7 +1038,7 @@ test('mobile keeps New visible while secondary actions live in the project drawe
   assert.doesNotMatch(topbarMain, /open-reports-button/u);
   assert.match(topbarMain, /open-new-session-button/u);
   assert.doesNotMatch(topbarMain, /open-app-settings-button/u);
-  assert.match(drawerFooter, /id="open-reports-button"[\s\S]*>Reports<\/button>/u);
+  assert.doesNotMatch(drawerFooter, /open-reports-button|>Reports<\/button>/u);
   assert.doesNotMatch(drawerFooter, /open-new-session-button/u);
   assert.match(drawerFooter, /id="open-app-settings-button"[\s\S]*>Setting<\/button>/u);
   assert.match(drawerFooter, /id="open-admin-console-button"[\s\S]*>Admin Console<\/button>/u);
@@ -1083,8 +1077,12 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.match(html, /<th>CWD<\/th>/u);
   assert.doesNotMatch(html, /<th>Internal Name<\/th>/u);
   assert.match(html, /<th>Display Name<\/th>/u);
+  assert.match(html, /<th>Work details<\/th>/u);
   assert.match(html, /name="cwd"/u);
+  assert.match(html, /name="showWorkDetailsToMembers" type="checkbox" checked/u);
+  assert.match(html, /Members can view work details/u);
   assert.match(html, /<td data-label="Display Name" data-i18n-skip>a<\/td>/u);
+  assert.match(html, /<td data-label="Work details">Members<\/td>/u);
   assert.match(html, /data-admin-edit-project="project_a"/u);
 
   api.state.admin.editingProjectId = 'project_a';
@@ -1248,6 +1246,7 @@ test('admin management actions post project, role, and user changes', async () =
     cwd: '/repo/a',
     displayName: '',
     enabled: true,
+    showWorkDetailsToMembers: true,
     activeSessionLimit: 30,
   });
   assert.deepEqual(JSON.parse(posts[1].options.body).projectGrants, [
@@ -1264,13 +1263,16 @@ test('admin management actions post project, role, and user changes', async () =
   });
 });
 
-test('admin project form includes active session limit and saveAdminProject posts it', async () => {
+test('admin project form creates with POST and edits with PATCH while retaining member work visibility', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
       fetchCalls.push({ path, options });
-      if (options.method === 'POST') {
-        return { ok: true, status: 201, json: async () => ({}) };
+      if (options.method === 'POST' && path === '/api/admin/projects') {
+        return { ok: true, status: 201, json: async () => ({ project: { id: '/repo/limited' } }) };
+      }
+      if (options.method === 'PATCH' && path === '/api/admin/projects/project_existing') {
+        return { ok: true, status: 200, json: async () => ({ project: { id: 'project_existing' } }) };
       }
       if (path === '/api/admin/settings') {
         return { ok: true, status: 200, json: async () => ({ settings: { multiUserEnabled: true } }) };
@@ -1296,11 +1298,13 @@ test('admin project form includes active session limit and saveAdminProject post
 
   const html = api.renderAdminConsole().innerHTML;
   assert.match(html, /name="activeSessionLimit"/u);
+  assert.match(html, /name="showWorkDetailsToMembers" type="checkbox" checked/u);
 
   await api.saveAdminProject({
     cwd: '/repo/limited',
     displayName: 'Limited',
     enabled: true,
+    showWorkDetailsToMembers: true,
     activeSessionLimit: 12,
   });
 
@@ -1310,7 +1314,28 @@ test('admin project form includes active session limit and saveAdminProject post
     cwd: '/repo/limited',
     displayName: 'Limited',
     enabled: true,
+    showWorkDetailsToMembers: true,
     activeSessionLimit: 12,
+  });
+
+  await api.saveAdminProject({
+    id: 'project_existing',
+    cwd: '/repo/existing',
+    displayName: 'Existing',
+    enabled: true,
+    showWorkDetailsToMembers: false,
+    activeSessionLimit: 8,
+  });
+
+  const patch = fetchCalls.find((call) => call.options.method === 'PATCH');
+  assert.equal(patch?.path, '/api/admin/projects/project_existing');
+  assert.deepEqual(JSON.parse(patch.options.body), {
+    id: 'project_existing',
+    cwd: '/repo/existing',
+    displayName: 'Existing',
+    enabled: true,
+    showWorkDetailsToMembers: false,
+    activeSessionLimit: 8,
   });
 });
 
@@ -1677,6 +1702,12 @@ test('settings drawer creates and copies share links for writable sessions', asy
         json: async () => ({
           token: 'cws_public_token',
           shareUrl: '/share/cws_public_token',
+          reports: [{
+            id: 'project-alpha/2026-07-16/summary.md',
+            project: 'project-alpha',
+            title: 'Session summary',
+            kind: 'markdown',
+          }],
         }),
       };
     },
@@ -1688,8 +1719,9 @@ test('settings drawer creates and copies share links for writable sessions', asy
     },
   };
   api.state.token = 'token';
-  api.state.authSession = { id: 'auth_1' };
+  api.state.authSession = { id: 'auth_1', principal: { mode: 'multi' } };
   api.state.globalSettings.publicSharesEnabled = true;
+  api.state.globalSettings.loaded = true;
   api.state.view = 'chat';
   api.state.sessionId = 'session_share';
   api.state.currentSession = {
@@ -1718,18 +1750,22 @@ test('settings drawer creates and copies share links for writable sessions', asy
   assert.equal(api.state.shareDialog?.url, 'https://codex.example/share/cws_public_token');
   assert.equal(api.state.status, 'Share link copied');
   assert.match(api.renderChat().innerHTML, /id="share-link-input"/u);
+  assert.doesNotMatch(api.renderChat().innerHTML, /Reports in this share|Session summary/u);
 });
 
-test('share controls stay hidden while public sharing is disabled', async () => {
+test('share control stays visible but disabled while public sharing is unavailable', async () => {
   const { api } = await loadAppHarness();
-  api.state.authSession = { id: 'auth_1' };
+  api.state.authSession = { id: 'auth_1', principal: { mode: 'multi' } };
   api.state.view = 'chat';
   api.state.sessionId = 'session_1';
   api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
   api.state.settingsOpen = true;
   api.state.globalSettings.publicSharesEnabled = false;
+  api.state.globalSettings.loaded = true;
 
-  assert.doesNotMatch(api.renderChat().innerHTML, /id="share-session-button"/u);
+  const html = api.renderChat().innerHTML;
+  assert.match(html, /Public sharing is disabled/u);
+  assert.match(html, /id="share-session-button" disabled/u);
   assert.equal(await api.shareCurrentSession(), null);
 });
 
@@ -1816,6 +1852,89 @@ test('share routes load public session history without auth and render read-only
   assert.match(html, /Shared answer/u);
   assert.match(html, /Shared link/u);
   assert.doesNotMatch(html, /id="prompt-input"/u);
+});
+
+test('share routes keep old report message links compatible without a reports shelf or bearer auth', async () => {
+  const fetchCalls = [];
+  const reportId = 'project-alpha/2026-07-16/session-summary.md';
+  const { api, context } = await loadAppHarness({
+    pathname: '/share/cws_public_token',
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, headers: options.headers || {} });
+      if (path === '/api/share/cws_public_token/session') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'share',
+            reports: [{
+              id: reportId,
+              project: 'project-alpha',
+              title: 'Session summary',
+              kind: 'markdown',
+            }],
+            session: {
+              id: 'session_shared_report',
+              projectDisplayName: 'Project Alpha',
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Create a report' },
+                {
+                  id: 'm2',
+                  kind: 'message',
+                  role: 'assistant',
+                  label: 'Assistant',
+                  meta: 'final',
+                  text: '[Session summary](/Users/alice/.codex-web/reports/project-alpha/2026-07-16/session-summary.md)',
+                },
+                { id: 'm3', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: '[Project file](docs/audit.md)' },
+              ],
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      if (path === `/api/share/cws_public_token/reports/${encodeURIComponent(reportId)}/content`) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            report: {
+              id: reportId,
+              project: 'project-alpha',
+              title: 'Session summary',
+              kind: 'markdown',
+            },
+            content: '# Session summary\n\nShared report body.',
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  await api.loadSharedSessionFromLocation();
+
+  let html = context.document.querySelector('#app').innerHTML;
+  assert.doesNotMatch(html, /class="shared-session-reports"|data-report-id=/u);
+  assert.match(html, /data-session-file-path="\/Users\/alice\/\.codex-web\/reports\/project-alpha\/2026-07-16\/session-summary\.md"/u);
+  assert.doesNotMatch(html, /data-session-file-path="docs\/audit\.md"/u);
+
+  await api.openSessionFileByPath('/Users/alice/.codex-web/reports/project-alpha/2026-07-16/session-summary.md');
+
+  assert.equal(api.state.view, 'file');
+  assert.equal(api.state.currentSessionFileContent, '# Session summary\n\nShared report body.');
+  html = context.document.querySelector('#app').innerHTML;
+  assert.match(html, /class="session-file-viewer"/u);
+  assert.match(html, /<h1>Session summary<\/h1>/u);
+  assert.deepEqual(fetchCalls.map((call) => call.path), [
+    '/api/share/cws_public_token/session',
+    `/api/share/cws_public_token/reports/${encodeURIComponent(reportId)}/content`,
+  ]);
+  assert.equal(fetchCalls.some((call) => Object.hasOwn(call.headers, 'Authorization')), false);
+
+  api.closeSessionFileViewer();
+  assert.equal(api.state.view, 'chat');
+  assert.match(context.document.querySelector('#app').innerHTML, /Create a report/u);
 });
 
 test('share routes do not refresh private session metadata after loading', async () => {
@@ -2039,7 +2158,7 @@ test('settings separate current-session controls from this-device new-session de
   assert.match(sessionHtml, />Current session</u);
   assert.match(sessionHtml, />Model and reasoning</u);
   assert.match(sessionHtml, />Behavior</u);
-  assert.ok(sessionHtml.indexOf('id="model-select"') < sessionHtml.indexOf('>Actions<'));
+  assert.ok(sessionHtml.indexOf('>Actions<') < sessionHtml.indexOf('id="model-select"'));
   assert.doesNotMatch(sessionHtml, /id="runtime-reload-button"/u);
   assert.match(appHtml, />New sessions on this device</u);
   assert.match(appHtml, />Appearance</u);
@@ -2325,7 +2444,7 @@ test('global website title loads from the backend and saves through the settings
       if (path === '/api/models') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
-      if (path === '/api/projects' || path === '/api/sessions' || path === '/api/reports') {
+      if (path === '/api/projects' || path === '/api/sessions') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -2353,10 +2472,9 @@ test('global website title loads from the backend and saves through the settings
     '/api/models',
     '/api/projects',
     '/api/sessions',
-    '/api/reports',
     '/api/settings',
   ]);
-  assert.equal(JSON.parse(fetchCalls[6].options.body).siteTitle, 'New Team Title');
+  assert.equal(JSON.parse(fetchCalls[5].options.body).siteTitle, 'New Team Title');
 });
 
 test('app language defaults to English and keeps send as a localized text control', async () => {
@@ -2463,7 +2581,7 @@ test('Chinese UI keeps model and reasoning option labels untranslated', async ()
   assert.doesNotMatch(sessionReasoning, />中<\/option>|>极高<\/option>/u);
 });
 
-test('Chinese session controls keep close and stop symbols compact', async () => {
+test('Chinese session settings localize Stop and keep the close symbol compact', async () => {
   const { api } = await loadAppHarness();
   api.applyLanguage('zh-CN');
   api.state.authSession = { id: 'auth_1' };
@@ -2476,12 +2594,12 @@ test('Chinese session controls keep close and stop symbols compact', async () =>
 
   const html = api.renderChat().innerHTML;
 
-  assert.match(html, /id="stop-button"[\s\S]*?<span aria-hidden="true">■<\/span>/u);
+  assert.match(html, /id="stop-button"[^>]*>停止<\/button>/u);
   assert.match(html, /id="settings-drawer-close"[\s\S]*?<span aria-hidden="true">×<\/span>/u);
-  assert.doesNotMatch(html, /&amp;#9632;|&amp;times;|&#9632;|&times;/u);
+  assert.doesNotMatch(html, /&amp;times;|&times;/u);
 });
 
-test('Chinese language localization leaves conversation and report markdown content untouched', async () => {
+test('Chinese language localization leaves conversation and session file markdown content untouched', async () => {
   const { api } = await loadAppHarness();
 
   api.applyLanguage('zh-CN');
@@ -2512,14 +2630,12 @@ test('Chinese language localization leaves conversation and report markdown cont
   assert.match(chatHtml, /<div class="message-text markdown-body">[\s\S]*<p>Send Read only<\/p>[\s\S]*<\/div>/u);
   assert.doesNotMatch(chatHtml, /Send 只读/u);
 
-  api.state.currentReport = {
-    id: 'project-a/2026-05-19/summary.md',
-    project: 'project-a',
-    title: 'summary',
+  api.state.currentSessionFile = {
+    id: 'file_summary',
+    name: 'summary.md',
     kind: 'markdown',
-    favorite: false,
   };
-  api.state.currentReportContent = [
+  api.state.currentSessionFileContent = [
     '# Send',
     '',
     '| Action | Status |',
@@ -2530,12 +2646,12 @@ test('Chinese language localization leaves conversation and report markdown cont
     'Read only',
   ].join('\n');
 
-  const reportHtml = api.renderReportViewer().innerHTML;
-  assert.match(reportHtml, /<div class="report-document markdown-body">/u);
-  assert.match(reportHtml, /<h1>Send<\/h1>/u);
-  assert.match(reportHtml, /<p>Send Read only<\/p>/u);
-  assert.doesNotMatch(reportHtml, /发送/u);
-  assert.doesNotMatch(reportHtml, /Send 只读/u);
+  const fileHtml = api.renderSessionFileViewer().innerHTML;
+  assert.match(fileHtml, /<div class="session-file-document markdown-body" data-i18n-skip>/u);
+  assert.match(fileHtml, /<h1>Send<\/h1>/u);
+  assert.match(fileHtml, /<p>Send Read only<\/p>/u);
+  assert.doesNotMatch(fileHtml, /发送/u);
+  assert.doesNotMatch(fileHtml, /Send 只读/u);
 });
 
 test('Chinese language localization leaves dynamic names and drafts untouched', async () => {
@@ -2560,16 +2676,6 @@ test('Chinese language localization leaves dynamic names and drafts untouched', 
   };
   api.state.sessionId = 'session_1';
   api.state.selectedProjectLabel = 'Send';
-  api.state.reports = [{
-    id: 'Send/summary.md',
-    project: 'Send',
-    title: 'Send',
-    kind: 'markdown',
-    favorite: false,
-    updatedAt: '2026-05-19T10:00:00.000Z',
-  }];
-  api.state.reportsLoaded = true;
-  api.state.reportProject = 'Send';
   api.state.queuedMessages = new Map([
     ['session_1', [{ id: 'queued_1', text: 'Send', status: 'pending' }]],
   ]);
@@ -2591,10 +2697,6 @@ test('Chinese language localization leaves dynamic names and drafts untouched', 
   assert.doesNotMatch(chatHtml, /<span class="goal-objective">发送<\/span>/u);
   assert.doesNotMatch(chatHtml, /<span class="queued-message-text">发送<\/span>/u);
 
-  const reportsHtml = api.renderReportsPage().innerHTML;
-  assert.match(reportsHtml, /<span class="report-title" data-i18n-skip>Send<\/span>/u);
-  assert.match(reportsHtml, /<button class="ghost compact-button report-favorite"[^>]*>收藏<\/button>/u);
-  assert.doesNotMatch(reportsHtml, /<span class="report-title">发送<\/span>/u);
 });
 
 test('Chinese mobile project drawer toggles without rerendering the session list', async () => {
@@ -2710,29 +2812,24 @@ test('Chinese bulk localization skips nested protected containers completely', a
   assert.doesNotMatch(html, /<p>只读<\/p>/u);
 });
 
-test('Chinese report lists skip bulk localization for many reports', async () => {
+test('Chinese localization preserves named and numeric UI symbols', async () => {
   const { api } = await loadAppHarness();
 
   api.applyLanguage('zh-CN');
-  api.state.view = 'reports';
-  api.state.reportsLoaded = true;
-  api.state.reportProject = 'project-a';
-  api.state.reports = Array.from({ length: 120 }, (_item, index) => ({
-    id: `project-a/2026-05/report-${index}.md`,
-    project: 'project-a',
-    title: `Send report ${index}`,
-    kind: 'markdown',
-    favorite: index % 2 === 0,
-    updatedAt: `2026-05-19T10:${String(index % 60).padStart(2, '0')}:00.000Z`,
-  }));
+  const html = api.localizeFragment(`
+    <button><span>&times;</span></button>
+    <span>&middot;</span>
+    <span>&#9733;</span>
+    <span>&#9734;</span>
+    <span>&#8250;</span>
+  `);
 
-  const html = api.renderReportsPage().innerHTML;
-
-  assert.match(html, /<main class="report-list" data-i18n-skip>/u);
-  assert.match(html, /<span class="report-title" data-i18n-skip>Send report 0<\/span>/u);
-  assert.match(html, /<button class="ghost compact-button report-favorite"[^>]*>取消收藏<\/button>/u);
-  assert.match(html, /<button class="ghost compact-button report-favorite"[^>]*>收藏<\/button>/u);
-  assert.doesNotMatch(html, /<span class="report-title" data-i18n-skip>发送 report 0<\/span>/u);
+  assert.match(html, /<span>×<\/span>/u);
+  assert.match(html, /<span>·<\/span>/u);
+  assert.match(html, /<span>★<\/span>/u);
+  assert.match(html, /<span>☆<\/span>/u);
+  assert.match(html, /<span>›<\/span>/u);
+  assert.doesNotMatch(html, /&amp;(?:times|middot|#\d+);/u);
 });
 
 test('Chinese admin lists skip bulk localization for many management rows', async () => {
@@ -2854,6 +2951,7 @@ test('session card titles reserve two lines while latest input stays compact', a
   assert.doesNotMatch(styles, /\.session-title\s*\{[^}]*font-weight:\s*(?:600|650|700|bold);/su);
   assert.match(styles, /\.session-card-open\s*\{[^}]*font-weight:\s*400;/su);
   assert.match(styles, /body\s*\{[^}]*font-weight:\s*450;/su);
+  assert.match(styles, /\.session-project\s*\{[^}]*font-weight:\s*650;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*white-space:\s*nowrap;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*text-overflow:\s*ellipsis;/su);
 });
@@ -3052,6 +3150,49 @@ test('narrow desktop prompt paste uploads clipboard files through the attachment
   ]));
 });
 
+test('draft attachments upload without pre-creating a session', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    viewportWidth: 900,
+    desktopPointer: true,
+    fetch: async (path, options = {}) => {
+      fetchCalls.push(path);
+      assert.equal(path, '/api/session-submission-attachments?cwd=%2Frepo');
+      const [file] = options.body.getAll('files');
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          items: [{
+            id: 'draft_attachment_1',
+            kind: 'file',
+            fileName: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            storage: 'state',
+            localPath: `/state/${file.name}`,
+          }],
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo';
+
+  await api.handlePromptPaste({
+    clipboardData: { files: [new File(['draft'], 'draft.txt', { type: 'text/plain' })] },
+    preventDefault() {},
+  });
+
+  assert.deepEqual(fetchCalls, ['/api/session-submission-attachments?cwd=%2Frepo']);
+  assert.equal(api.state.sessionId, null);
+  assert.equal(api.state.draftSessionActive, true);
+  assert.equal(api.state.composerAttachments[0]?.uploaded?.id, 'draft_attachment_1');
+});
+
 test('composer sends ready attachments with the next turn payload', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
@@ -3158,10 +3299,10 @@ test('hydrated user messages hide attachment prompt metadata and render attachme
   assert.match(html, /这是什么猫？/u);
   assert.match(html, /IMG_4683\.jpeg/u);
   assert.match(html, /Image/u);
+  assert.match(html, /<button class="message-attachment is-image"[^>]*data-session-file-path="\/repo\/uploads\/user_admin\/att_1-IMG_4683\.jpeg"/u);
   assert.doesNotMatch(html, /Attachments:/u);
   assert.doesNotMatch(html, /attached_as/u);
   assert.doesNotMatch(html, /localImage/u);
-  assert.doesNotMatch(html, /\/repo\/uploads/u);
 });
 
 test('composer shows external expand above Attach and keeps session menu in the topbar', async () => {
@@ -3340,7 +3481,7 @@ test('expanded composer positions collapse and Send inside a single editor surfa
   assert.doesNotMatch(styles, /\.composer\.is-expanded \.compact-composer-row textarea\s*\{[^}]*max-height:\s*min\(72dvh,\s*560px\);/su);
 });
 
-test('running turns keep message sending available and expose Stop in the chat header', async () => {
+test('running turns keep message sending available and expose Stop only in session settings', async () => {
   const app = await readFile(appUrl, 'utf8');
   const { api } = await loadAppHarness();
 
@@ -3350,17 +3491,22 @@ test('running turns keep message sending available and expose Stop in the chat h
   api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
   api.state.pendingTurn = true;
   api.state.turnId = 'turn_1';
-  api.state.settingsOpen = true;
+  api.state.settingsOpen = false;
 
-  const html = api.renderChat().innerHTML;
+  const closedHtml = api.renderChat().innerHTML;
 
   assert.match(app, /<textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">/u);
   assert.doesNotMatch(app, /<textarea id="prompt-input"[^>]*state\.pendingTurn \? 'disabled'/u);
   assert.match(app, /id="send-button"/u);
   assert.doesNotMatch(app, /id="\$\{state\.pendingTurn \? 'stop-button' : 'send-button'\}"/u);
-  assert.match(html, /class="danger icon-button turn-stop-button"[^>]*id="stop-button"[^>]*aria-label="Stop current turn"/u);
-  assert.equal((html.match(/id="stop-button"/gu) || []).length, 1);
-  assert.doesNotMatch(html, /settings-stop-row/u);
+  assert.doesNotMatch(closedHtml, /id="stop-button"/u);
+  assert.doesNotMatch(closedHtml, /settings-stop-row/u);
+
+  api.state.settingsOpen = true;
+  const openHtml = api.renderChat().innerHTML;
+  assert.match(openHtml, /class="settings-stop-row"[\s\S]*class="danger compact-button"[^>]*id="stop-button"[^>]*aria-label="Stop current turn"[^>]*>Stop<\/button>/u);
+  assert.equal((openHtml.match(/id="stop-button"/gu) || []).length, 1);
+  assert.doesNotMatch(openHtml, /turn-stop-button/u);
   assert.match(app, /function onComposerSubmit\(event\)[\s\S]*const text = state\.prompt\.trim\(\);/u);
   assert.doesNotMatch(app, /function onComposerSubmit\(event\)\s*\{[\s\S]{0,180}if \(state\.pendingTurn\)/u);
 });
@@ -3667,7 +3813,7 @@ test('session refresh keeps a just-started turn running when backend detail temp
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Working</span></div>');
 });
 
 test('session refresh keeps a healthy active stream running when backend detail temporarily regresses to a completed view', async () => {
@@ -3747,7 +3893,7 @@ test('session refresh keeps a healthy active stream running when backend detail 
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_live');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Working</span></div>');
 });
 
 test('stream completion without a terminal event refreshes session state and sends the next queued message', async () => {
@@ -3994,10 +4140,10 @@ test('composer renders handled goal slash command results without streaming a tu
   assert.equal(api.state.pendingTurn, false);
   assert.equal(api.state.turnId, null);
   assert.equal(api.state.status, 'Ready');
-  assert.deepEqual(api.state.timeline.map((item) => item.text), [
-    '/goal resume',
-    'Goal resumed: ship slash goal support',
-  ]);
+  assert.equal(
+    JSON.stringify(api.state.timeline.map((item) => item.text)),
+    JSON.stringify(['/goal resume', 'Goal resumed: ship slash goal support']),
+  );
 });
 
 test('goal command completion ignores stale stream load failures from a previous running turn', async () => {
@@ -4077,9 +4223,13 @@ test('goal command completion ignores stale stream load failures from a previous
   assert.match(api.state.timeline.map((item) => item.text || '').join('\n'), /Goal resumed: ship slash goal support/u);
 });
 
-test('composer renders handled help slash command results with report links', async () => {
+test('composer renders handled help slash command results inline', async () => {
   const fetchCalls = [];
-  const reportPath = '/Users/chenyanshan/.codex-web/reports/codex-mobile-web-app/2026-05-22/codex-web-help.md';
+  const helpMessage = [
+    '支持的命令：',
+    '- `/help`',
+    '- `/goal`',
+  ].join('\n');
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
       fetchCalls.push({ path, options });
@@ -4092,12 +4242,7 @@ test('composer renders handled help slash command results with report links', as
             command: {
               name: 'help',
               action: 'show',
-              message: [
-                '支持的命令：',
-                '- `/help`',
-                '- `/goal`',
-                `完整说明：[Codex Web 帮助文档](${reportPath})`,
-              ].join('\n'),
+              message: helpMessage,
               goal: null,
             },
             session: {
@@ -4112,12 +4257,7 @@ test('composer renders handled help slash command results with report links', as
                   role: 'system',
                   label: '/help',
                   meta: 'show',
-                  text: [
-                    '支持的命令：',
-                    '- `/help`',
-                    '- `/goal`',
-                    `完整说明：[Codex Web 帮助文档](${reportPath})`,
-                  ].join('\n'),
+                  text: helpMessage,
                 },
               ],
               thread: { turns: [] },
@@ -4148,7 +4288,8 @@ test('composer renders handled help slash command results with report links', as
   assert.equal(latest?.role, 'system');
   assert.equal(latest?.label, '/help');
   assert.match(html, /<code>\/help<\/code>/u);
-  assert.match(html, /data-report-path="\/Users\/chenyanshan\/\.codex-web\/reports\/codex-mobile-web-app\/2026-05-22\/codex-web-help\.md"/u);
+  assert.match(html, /<code>\/goal<\/code>/u);
+  assert.doesNotMatch(html, /data-session-file-path|\.codex-web\/reports/u);
 });
 
 test('settings drawer exposes runtime reload and posts to the runtime endpoint', async () => {
@@ -4225,7 +4366,7 @@ test('app settings page exposes message font size controls scoped to chat messag
   assert.match(app, /for \(const button of document\.querySelectorAll\('\[data-message-font-size\]'\)\)/u);
   assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
   assert.match(styles, /\.message-card \.markdown-body h1,\s*\.message-card \.markdown-body h2,\s*\.message-card \.markdown-body h3\s*\{[^}]*font-size:\s*var\(--message-heading-font-size\);/su);
-  assert.doesNotMatch(styles, /\.report-document\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
+  assert.doesNotMatch(styles, /\.session-file-document\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
   assert.match(styles, /\.message-size-toggle\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/su);
 });
 
@@ -4326,17 +4467,17 @@ test('chat and session list use separate scroll containers', async () => {
   assert.match(styles, /\.session-list,\s*\.new-session-page,\s*\.app-settings-page\s*\{[^}]*overscroll-behavior:\s*contain;/su);
 });
 
-test('report viewer uses its own scroll container instead of the outer document', async () => {
+test('session file viewer uses its own scroll container instead of the outer document', async () => {
   const { api, context } = await loadAppHarness();
   const appRoot = { innerHTML: '', appendChild() {} };
-  const reportViewer = { id: 'report-viewer' };
+  const fileViewer = { id: 'session-file-viewer' };
   const documentScroll = { id: 'document-scroll' };
 
-  api.state.view = 'report';
+  api.state.view = 'file';
   context.document.scrollingElement = documentScroll;
   context.document.querySelector = (selector) => {
-    if (selector === '.report-viewer') {
-      return reportViewer;
+    if (selector === '.session-file-viewer') {
+      return fileViewer;
     }
     if (selector === '#app') {
       return appRoot;
@@ -4344,7 +4485,7 @@ test('report viewer uses its own scroll container instead of the outer document'
     return null;
   };
 
-  assert.equal(api.getActiveScrollContainer({}), reportViewer);
+  assert.equal(api.getActiveScrollContainer({}), fileViewer);
 });
 
 test('desktop workspace CSS waits for enough room before creating three panes', async () => {
@@ -4460,7 +4601,7 @@ test('desktop workspace render keeps the chat timeline anchored to latest messag
   assert.equal(timeline.scrollTop, timeline.scrollHeight);
 });
 
-test('desktop workspace applies streamed timeline updates while sessions view stays active', async () => {
+test('desktop workspace keeps streamed work out of the timeline while sessions view stays active', async () => {
   const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
   api.state.authSession = { id: 'auth_1' };
@@ -4470,25 +4611,19 @@ test('desktop workspace applies streamed timeline updates while sessions view st
   api.state.timeline = [{ id: 'm1', kind: 'message', role: 'user', label: 'You', text: 'Run checks' }];
   api.render();
 
-  api.state.timeline.push({
-    id: 'work_turn_1',
-    kind: 'work',
+  api.applyTurnEvent({
+    type: 'batch.started',
     turnId: 'turn_1',
-    status: 'running',
-    batches: [{
-      id: 'batch_1',
-      batchId: 'batch_1',
-      batchKind: 'command',
-      title: 'npm test',
-      status: 'started',
-      summary: {},
-    }],
-    approvals: [],
-  });
+    batchId: 'batch_1',
+    kind: 'command',
+    title: 'npm test',
+  }, null);
 
   assert.equal(api.refreshChatDynamicUi(), true);
-  assert.match(context.document.querySelector('#timeline').innerHTML, /class="card work-card"/u);
-  assert.match(context.document.querySelector('#timeline').innerHTML, /npm test/u);
+  assert.equal(api.state.batches.size, 1);
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.doesNotMatch(context.document.querySelector('#timeline').innerHTML, /class="card work-card"/u);
+  assert.doesNotMatch(context.document.querySelector('#timeline').innerHTML, /npm test/u);
 
   api.state.view = 'new';
   assert.equal(api.refreshChatDynamicUi(), false);
@@ -4879,6 +5014,79 @@ test('confirmed session detail replaces a matching cached pending message withou
   assert.equal(api.state.timeline.some((item) => item.text === 'Confirmed answer'), true);
 });
 
+test('confirmed attachment history replaces an acknowledged upload-path cache entry in turn order', async () => {
+  const promptWithSnapshot = [
+    'Inspect this screenshot',
+    '',
+    'Attachments:',
+    '1. image',
+    '   path: /state/turn-attachments/user/session/snapshot-image.png',
+    '   filename: image.png',
+    '   mime: image/png',
+    '   attached_as: localImage',
+    '',
+    'Use the local file paths above when you inspect these attachments.',
+  ].join('\n');
+  const { api } = await loadAppHarness({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        session: {
+          id: 'session_attachment_confirmed',
+          cwd: '/repo',
+          updatedAt: 30,
+          settings: { metadata: {} },
+          thread: {
+            turns: [{
+              id: 'turn_attachment',
+              status: 'completed',
+              items: [
+                { type: 'message', role: 'user', text: promptWithSnapshot },
+                { type: 'message', role: 'assistant', text: 'Screenshot inspected' },
+              ],
+            }],
+          },
+        },
+      }),
+    }),
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_attachment_confirmed', cwd: '/repo', updatedAt: 30, settings: { metadata: {} } }];
+  api.state.timelineCache.set('session_attachment_confirmed', {
+    savedAt: Date.now(),
+    timeline: [{
+      id: 'local_attachment_pending',
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'pending',
+      deliveryLabel: 'Server received',
+      text: 'Inspect this screenshot',
+      attachments: [{
+        kind: 'image',
+        localPath: '/repo/uploads/user/att-image.png',
+        fileName: 'image.png',
+        mimeType: 'image/png',
+        sizeBytes: 1024,
+      }],
+    }],
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  await api.selectSession('session_attachment_confirmed');
+
+  assert.equal(
+    JSON.stringify(api.state.timeline.map((item) => [item.role, item.text, item.meta])),
+    JSON.stringify([
+      ['user', 'Inspect this screenshot', 'history'],
+      ['assistant', 'Screenshot inspected', 'final'],
+    ]),
+  );
+});
+
 test('fresh inactive session detail cache opens without another network request', async () => {
   let detailFetches = 0;
   const { api } = await loadAppHarness({
@@ -5128,15 +5336,663 @@ test('composer status renders a small bottom status separator', async () => {
   api.state.status = 'Turn running';
   api.state.statusTone = 'warn';
 
-  assert.match(api.renderComposerStatus(), /<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running<\/span><\/div>/u);
-  assert.match(api.renderComposerStatus(), /<span>Running<\/span>/u);
-  assert.doesNotMatch(api.renderComposerStatus(), /----- Running -----/u);
+  assert.match(api.renderComposerStatus(), /<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Working<\/span><\/div>/u);
+  assert.match(api.renderComposerStatus(), /<span>Working<\/span>/u);
+  assert.doesNotMatch(api.renderComposerStatus(), /----- Working -----/u);
 
   api.state.pendingTurn = false;
   api.state.status = 'Ready';
   api.state.statusTone = 'success';
 
   assert.match(api.renderComposerStatus(), /<span>Ready<\/span>/u);
+});
+
+test('hidden-member downgrade clears sensitive work data from live, history, approval, and cached state', async () => {
+  const { api, storage } = await loadAppHarness();
+  const safeUser = {
+    id: 'user_safe',
+    kind: 'message',
+    role: 'user',
+    label: 'You',
+    meta: 'history',
+    text: 'Keep this user request',
+  };
+  const safeAssistant = {
+    id: 'assistant_safe',
+    kind: 'message',
+    role: 'assistant',
+    label: 'Assistant',
+    meta: 'final',
+    text: 'Keep this final answer',
+  };
+  const sensitiveBatch = {
+    id: 'batch_secret',
+    kind: 'batch',
+    turnId: 'turn_secret',
+    batchId: 'batch_secret',
+    batchKind: 'command',
+    title: 'cat packages/private/credentials.txt',
+    status: 'started',
+    summary: {
+      command: 'cat packages/private/credentials.txt',
+      output: 'secret-output-value',
+      fileChanges: [{ path: 'packages/private/credentials.txt', action: 'read' }],
+    },
+  };
+  const sensitiveApproval = {
+    id: 'approval_secret',
+    kind: 'approval',
+    approvalId: 'approval_secret',
+    approvalKind: 'command',
+    summary: {
+      command: 'rm build/private.tmp',
+      reason: 'Clean generated build output',
+      grantRoot: '/repo/build',
+      networkPermission: true,
+      fileReadPermissions: ['/repo/build/input.json'],
+      fileWritePermissions: ['/repo/build/private.tmp'],
+      execPolicyAmendment: ['rm build/private.tmp'],
+      fileChanges: ['build/private.tmp'],
+      availableDecisionKeys: ['accept', 'decline'],
+      output: 'SECRET_APPROVAL_OUTPUT',
+      diff: 'SECRET_APPROVAL_DIFF',
+      patch: 'SECRET_APPROVAL_PATCH',
+      cwd: 'SECRET_APPROVAL_CWD',
+      stderr: 'SECRET_APPROVAL_STDERR',
+      raw: 'SECRET_APPROVAL_RAW',
+      exitCode: 42,
+    },
+    resolved: false,
+  };
+  const cachedWork = {
+    id: 'work_turn_secret',
+    kind: 'work',
+    turnId: 'turn_secret',
+    status: 'running',
+    batches: [sensitiveBatch],
+    approvals: [],
+  };
+  const cachedCommentary = {
+    id: 'assistant_turn_secret',
+    kind: 'message',
+    role: 'assistant',
+    label: 'Assistant',
+    meta: 'commentary',
+    text: 'Reading packages/private/credentials.txt now',
+  };
+  const detailedSystemError = {
+    id: 'error_turn_secret',
+    kind: 'message',
+    role: 'system',
+    label: 'Error',
+    meta: 'failed',
+    severity: 'error',
+    text: 'SECRET_RUNTIME_STACK at packages/private/runtime.ts:42',
+  };
+
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_secret';
+  api.state.currentSession = {
+    id: 'session_secret',
+    cwd: '/repo',
+    projectId: 'project_secret',
+    canViewWorkDetails: true,
+    settings: { metadata: {} },
+  };
+  api.state.projectsLoaded = true;
+  api.state.projects = [{
+    id: 'project_secret',
+    cwd: '/repo',
+    showWorkDetailsToMembers: true,
+    canViewWorkDetails: true,
+  }];
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_secret';
+  api.state.status = 'Turn running';
+  api.state.statusTone = 'warn';
+  api.state.batches.clear();
+  api.state.batches.set('batch_secret', sensitiveBatch);
+  api.state.approvals.clear();
+  api.state.approvals.set('approval_secret', sensitiveApproval);
+  api.state.timeline = [safeUser, cachedWork, cachedCommentary, detailedSystemError, sensitiveApproval, safeAssistant];
+  api.state.sessionHistoryItems = [safeUser, cachedWork, cachedCommentary, detailedSystemError, sensitiveApproval, safeAssistant];
+  api.state.error = 'SECRET_RUNTIME_STACK at packages/private/runtime.ts:42';
+  api.state.timelineCache.set('session_secret', {
+    savedAt: Date.now(),
+    timeline: [safeUser, cachedWork, cachedCommentary, detailedSystemError, sensitiveApproval, safeAssistant],
+    history: [safeUser, cachedWork, cachedCommentary, detailedSystemError, sensitiveApproval, safeAssistant],
+    historyComplete: true,
+    batches: [['batch_secret', sensitiveBatch]],
+    approvals: [['approval_secret', sensitiveApproval]],
+  });
+  api.state.workDetailsOpen = true;
+
+  assert.equal(api.canViewCurrentWorkDetails(), true);
+  assert.match(api.renderComposerStatus(), /id="open-work-details-button"/u);
+  assert.match(api.renderWorkDetailsDialog(), /cat packages\/private\/credentials\.txt/u);
+  assert.match(api.renderWorkDetailsDialog(), /secret-output-value/u);
+
+  api.upsertSession({
+    ...api.state.currentSession,
+    canViewWorkDetails: false,
+  });
+
+  assert.equal(api.canViewCurrentWorkDetails(), false);
+  assert.equal(api.state.workDetailsOpen, false);
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(api.state.timeline.some((item) => item.meta === 'commentary'), false);
+  assert.equal(api.state.timeline.some((item) => item.text === 'Keep this user request'), true);
+  assert.equal(api.state.timeline.some((item) => item.text === 'Keep this final answer'), true);
+  assert.equal(api.state.sessionHistoryItems.some((item) => item.text === 'Keep this user request'), true);
+  assert.equal(api.state.sessionHistoryItems.some((item) => item.text === 'Keep this final answer'), true);
+  assert.match(api.renderComposerStatus(), /<span>Working · Needs approval<\/span>/u);
+  assert.equal(api.renderWorkDetailsDialog(), '');
+
+  const restrictedCache = api.state.timelineCache.get('session_secret');
+  const restrictedSurfaces = [
+    api.renderChatContent(),
+    JSON.stringify(api.state.timeline),
+    JSON.stringify(api.state.sessionHistoryItems),
+    JSON.stringify([...api.state.batches.values()]),
+    JSON.stringify([...api.state.approvals.values()]),
+    JSON.stringify({
+      timeline: restrictedCache?.timeline,
+      history: restrictedCache?.history,
+      batches: [...(restrictedCache?.batches?.values() || [])],
+      approvals: [...(restrictedCache?.approvals?.values() || [])],
+    }),
+    api.state.error,
+    storage.get('codexWebTimelineCache') || '',
+  ];
+  for (const value of restrictedSurfaces) {
+    assert.doesNotMatch(
+      value,
+      /credentials\.txt|secret-output-value|Reading packages\/private|SECRET_RUNTIME_STACK|SECRET_APPROVAL_(?:OUTPUT|DIFF|PATCH|CWD|STDERR|RAW)|"exitCode":42/u,
+    );
+  }
+  assert.match(JSON.stringify([...api.state.batches.values()]), /Running command/u);
+  for (const items of [restrictedCache?.timeline || [], restrictedCache?.history || []]) {
+    assert.equal(items.some((item) => item.text === 'Keep this user request'), true);
+    assert.equal(items.some((item) => item.text === 'Keep this final answer'), true);
+  }
+
+  const approvalSurfaces = [
+    api.state.approvals.get('approval_secret'),
+    api.state.timeline.find((item) => item.kind === 'approval'),
+    restrictedCache?.approvals?.get('approval_secret'),
+    restrictedCache?.timeline?.find((item) => item.kind === 'approval'),
+  ];
+  assert.equal(approvalSurfaces.every(Boolean), true);
+  for (const approval of approvalSurfaces) {
+    assert.equal(approval.resolved, false);
+    assert.equal(approval.summary.command, 'rm build/private.tmp');
+    assert.equal(approval.summary.reason, 'Clean generated build output');
+    assert.equal(approval.summary.grantRoot, '/repo/build');
+    assert.equal(approval.summary.networkPermission, true);
+    assert.equal(JSON.stringify(approval.summary.fileReadPermissions), JSON.stringify(['/repo/build/input.json']));
+    assert.equal(JSON.stringify(approval.summary.fileWritePermissions), JSON.stringify(['/repo/build/private.tmp']));
+    assert.equal(JSON.stringify(approval.summary.execPolicyAmendment), JSON.stringify(['rm build/private.tmp']));
+    assert.equal(JSON.stringify(approval.summary.fileChanges), JSON.stringify(['build/private.tmp']));
+    assert.equal(JSON.stringify(approval.summary.availableDecisionKeys), JSON.stringify(['accept', 'decline']));
+    for (const forbiddenKey of ['output', 'diff', 'patch', 'cwd', 'stderr', 'raw', 'exitCode']) {
+      assert.equal(Object.hasOwn(approval.summary, forbiddenKey), false);
+    }
+  }
+
+  api.state.projects[0] = { ...api.state.projects[0], canViewWorkDetails: true };
+  api.upsertSession({
+    ...api.state.currentSession,
+    canViewWorkDetails: true,
+  });
+  assert.equal(api.canViewCurrentWorkDetails(), true);
+  assert.match(api.renderComposerStatus(), /id="open-work-details-button"/u);
+});
+
+test('multi-user work visibility fails closed until project access is authoritative', async () => {
+  const { api, storage } = await loadAppHarness();
+  const sensitiveBatch = {
+    id: 'batch_fail_closed',
+    kind: 'batch',
+    turnId: 'turn_fail_closed',
+    batchId: 'batch_fail_closed',
+    batchKind: 'command',
+    title: 'cat private/fail-closed.txt',
+    status: 'started',
+    summary: { output: 'FAIL_CLOSED_SECRET' },
+  };
+
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.sessionId = 'session_fail_closed';
+  api.state.currentSession = {
+    id: 'session_fail_closed',
+    cwd: '/repo',
+    projectId: 'project_fail_closed',
+    canViewWorkDetails: true,
+    settings: { metadata: {} },
+  };
+  api.state.projects = [{
+    id: 'project_fail_closed',
+    cwd: '/repo',
+    canViewWorkDetails: true,
+  }];
+  api.state.projectsLoaded = false;
+  api.state.batches.set('batch_fail_closed', sensitiveBatch);
+  api.state.timeline = [{
+    id: 'commentary_fail_closed',
+    kind: 'message',
+    role: 'assistant',
+    meta: 'commentary',
+    text: 'FAIL_CLOSED_SECRET',
+  }];
+  api.state.sessionHistoryItems = api.state.timeline.map((item) => ({ ...item }));
+  api.state.workDetailsOpen = true;
+  api.saveCurrentTimeline();
+  const persistedBeforePolicy = storage.get('codexWebTimelineCache') || '';
+  assert.match(persistedBeforePolicy, /FAIL_CLOSED_SECRET|fail-closed\.txt/u);
+
+  assert.equal(api.canViewCurrentWorkDetails(), false);
+  assert.doesNotMatch(api.renderComposerStatus(), /id="open-work-details-button"/u);
+  assert.equal(api.renderWorkDetailsDialog(), '');
+  api.enforceCurrentWorkDetailsAccess();
+  assert.equal(api.state.workDetailsOpen, false);
+  assert.equal(api.state.workDetailsPolicyPendingSessionId, 'session_fail_closed');
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /FAIL_CLOSED_SECRET/u);
+  assert.doesNotMatch(JSON.stringify([...api.state.batches.values()]), /FAIL_CLOSED_SECRET|fail-closed\.txt/u);
+  assert.match(JSON.stringify(api.state.timelineCache.get('session_fail_closed')), /FAIL_CLOSED_SECRET|fail-closed\.txt/u);
+  assert.equal(storage.get('codexWebTimelineCache'), persistedBeforePolicy);
+  api.saveCurrentTimeline();
+  assert.equal(storage.get('codexWebTimelineCache'), persistedBeforePolicy);
+
+  api.state.projectsLoaded = true;
+  api.state.projects[0].canViewWorkDetails = true;
+  api.resolvePendingWorkDetailsPolicy();
+  assert.equal(api.state.workDetailsPolicyPendingSessionId, '');
+  assert.equal(api.canViewCurrentWorkDetails(), true);
+  assert.match(JSON.stringify(api.state.timeline), /FAIL_CLOSED_SECRET/u);
+  assert.match(JSON.stringify([...api.state.batches.values()]), /fail-closed\.txt/u);
+  assert.equal(storage.get('codexWebTimelineCache'), persistedBeforePolicy);
+
+  api.state.projectsLoaded = false;
+  api.enforceCurrentWorkDetailsAccess();
+  assert.equal(api.state.workDetailsPolicyPendingSessionId, 'session_fail_closed');
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /FAIL_CLOSED_SECRET/u);
+  assert.equal(storage.get('codexWebTimelineCache'), persistedBeforePolicy);
+
+  api.state.projectsLoaded = true;
+  api.state.projects[0].canViewWorkDetails = false;
+  api.state.currentSession.canViewWorkDetails = true;
+  assert.equal(api.canViewCurrentWorkDetails(), false);
+  api.resolvePendingWorkDetailsPolicy();
+  assert.equal(api.state.workDetailsPolicyPendingSessionId, '');
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /FAIL_CLOSED_SECRET/u);
+  assert.doesNotMatch(JSON.stringify([...api.state.batches.values()]), /FAIL_CLOSED_SECRET|fail-closed\.txt/u);
+  assert.doesNotMatch(JSON.stringify(api.state.timelineCache.get('session_fail_closed')), /FAIL_CLOSED_SECRET|fail-closed\.txt/u);
+  assert.doesNotMatch(storage.get('codexWebTimelineCache') || '', /FAIL_CLOSED_SECRET|fail-closed\.txt/u);
+
+  api.state.projects[0].canViewWorkDetails = true;
+  api.state.currentSession.canViewWorkDetails = true;
+  api.state.batches.set('batch_fail_closed', sensitiveBatch);
+  api.state.timeline = [{
+    id: 'commentary_fresh_capability',
+    kind: 'message',
+    role: 'assistant',
+    meta: 'commentary',
+    text: 'FRESH_CAPABILITY_SECRET',
+  }];
+  assert.equal(api.canViewCurrentWorkDetails(), true);
+
+  api.upsertSession({
+    ...api.state.currentSession,
+    canViewWorkDetails: false,
+  });
+
+  assert.equal(api.canViewCurrentWorkDetails(), false);
+  assert.equal(api.state.currentSession.canViewWorkDetails, false);
+  assert.equal(api.state.projects[0].canViewWorkDetails, false);
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /FRESH_CAPABILITY_SECRET/u);
+  assert.doesNotMatch(JSON.stringify([...api.state.batches.values()]), /FAIL_CLOSED_SECRET|fail-closed\.txt/u);
+  assert.match(JSON.stringify([...api.state.batches.values()]), /Running command/u);
+});
+
+test('restricted session hydration keeps successful legacy finals but drops failed commentary', async () => {
+  const { api } = await loadAppHarness();
+  const completedAnswer = 'Legacy completed answer';
+  const failedCommentary = 'FAILED_PHASELESS_COMMENTARY_SECRET';
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.sessionId = 'session_legacy_final';
+  api.state.currentSession = {
+    id: 'session_legacy_final',
+    projectId: 'project_legacy_final',
+    canViewWorkDetails: false,
+    thread: {
+      turns: [
+        {
+          id: 'turn_completed',
+          status: 'completed',
+          items: [{ itemId: 'final_completed', type: 'assistant_message', role: 'assistant', phase: null, text: completedAnswer }],
+        },
+        {
+          id: 'turn_failed',
+          status: 'failed',
+          items: [{ type: 'assistant_message', role: 'assistant', phase: null, text: failedCommentary }],
+        },
+      ],
+    },
+  };
+  api.state.projectsLoaded = true;
+  api.state.projects = [{ id: 'project_legacy_final', canViewWorkDetails: false }];
+  api.state.timeline = [
+    {
+      id: 'assistant_turn_completed_final_completed',
+      kind: 'message',
+      role: 'assistant',
+      meta: 'history',
+      text: completedAnswer,
+      turnId: 'turn_completed',
+      itemId: 'final_completed',
+      projectionKey: 'turn_completed\u0000final_completed',
+    },
+    { id: 'legacy_failed', kind: 'message', role: 'assistant', meta: 'history', text: failedCommentary },
+  ];
+  api.state.sessionHistoryItems = api.state.timeline.map((item) => ({ ...item }));
+
+  api.enforceCurrentWorkDetailsAccess();
+
+  assert.match(JSON.stringify(api.state.timeline), /Legacy completed answer/u);
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /FAILED_PHASELESS_COMMENTARY_SECRET/u);
+  assert.match(JSON.stringify(api.state.sessionHistoryItems), /Legacy completed answer/u);
+  assert.doesNotMatch(JSON.stringify(api.state.sessionHistoryItems), /FAILED_PHASELESS_COMMENTARY_SECRET/u);
+  assert.equal(api.state.timeline[0]?.turnId, 'turn_completed');
+  assert.equal(api.state.timeline[0]?.itemId, 'final_completed');
+  assert.equal(api.state.timeline[0]?.projectionKey, 'turn_completed\u0000final_completed');
+});
+
+test('desktop session-list refresh immediately enforces a work visibility downgrade', async () => {
+  const { api, storage } = await loadAppHarness({
+    viewportWidth: 1280,
+    desktopPointer: true,
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [{
+            id: 'session_desktop_secret',
+            cwd: '/repo',
+            projectId: 'project_desktop',
+            canViewWorkDetails: false,
+            settings: { metadata: {} },
+          }],
+        }),
+      };
+    },
+  });
+  const sensitiveBatch = {
+    id: 'batch_desktop_secret',
+    kind: 'batch',
+    turnId: 'turn_desktop_secret',
+    batchId: 'batch_desktop_secret',
+    batchKind: 'command',
+    title: 'cat private/desktop-secret.txt',
+    status: 'started',
+    summary: { output: 'DESKTOP_REFRESH_SECRET' },
+  };
+  const sensitiveCommentary = {
+    id: 'commentary_desktop_secret',
+    kind: 'message',
+    role: 'assistant',
+    meta: 'commentary',
+    text: 'DESKTOP_REFRESH_SECRET',
+  };
+
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.view = 'sessions';
+  api.state.sortMode = 'time';
+  api.state.sessionId = 'session_desktop_secret';
+  api.state.currentSession = {
+    id: 'session_desktop_secret',
+    cwd: '/repo',
+    projectId: 'project_desktop',
+    canViewWorkDetails: true,
+    settings: { metadata: {} },
+  };
+  api.state.projectsLoaded = true;
+  api.state.projects = [{ id: 'project_desktop', cwd: '/repo', canViewWorkDetails: true }];
+  api.state.sessions = [api.state.currentSession];
+  api.state.sessionsByScope.all = [api.state.currentSession];
+  api.state.sessionsLoadedByScope.all = true;
+  api.state.timeline = [sensitiveCommentary];
+  api.state.sessionHistoryItems = [sensitiveCommentary];
+  api.state.batches.set('batch_desktop_secret', sensitiveBatch);
+  api.state.timelineCache.set('session_desktop_secret', {
+    savedAt: Date.now(),
+    timeline: [sensitiveCommentary],
+    history: [sensitiveCommentary],
+    batches: [['batch_desktop_secret', sensitiveBatch]],
+    approvals: [],
+  });
+  api.state.workDetailsOpen = true;
+
+  assert.equal(api.canViewCurrentWorkDetails(), true);
+  await api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+
+  assert.equal(api.state.currentSession.canViewWorkDetails, false);
+  assert.equal(api.canViewCurrentWorkDetails(), false);
+  assert.equal(api.state.workDetailsOpen, false);
+  const restrictedCache = api.state.timelineCache.get('session_desktop_secret');
+  for (const value of [
+    JSON.stringify(api.state.timeline),
+    JSON.stringify(api.state.sessionHistoryItems),
+    JSON.stringify([...api.state.batches.values()]),
+    JSON.stringify(restrictedCache?.timeline || []),
+    JSON.stringify(restrictedCache?.history || []),
+    JSON.stringify([...(restrictedCache?.batches?.values() || [])]),
+    storage.get('codexWebTimelineCache') || '',
+  ]) {
+    assert.doesNotMatch(value, /DESKTOP_REFRESH_SECRET|desktop-secret\.txt/u);
+  }
+});
+
+test('work visibility downgrade aborts a full stream before buffered detail frames can land', async () => {
+  let releaseRead;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/turns/turn_buffered/events');
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: async () => await new Promise((resolve) => {
+              releaseRead = resolve;
+            }),
+          }),
+        },
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.sessionId = 'session_buffered';
+  api.state.currentSession = {
+    id: 'session_buffered',
+    projectId: 'project_buffered',
+    canViewWorkDetails: true,
+  };
+  api.state.projectsLoaded = true;
+  api.state.projects = [{ id: 'project_buffered', canViewWorkDetails: true }];
+
+  const streamPromise = api.streamTurnEvents('turn_buffered');
+  await flushMicrotasks();
+  assert.equal(api.state.streamIncludesWorkDetails, true);
+  assert.ok(api.state.streamAbortController);
+
+  api.upsertSession({
+    ...api.state.currentSession,
+    canViewWorkDetails: false,
+  });
+  assert.equal(api.state.streamAbortController, null);
+  assert.equal(api.state.streamIncludesWorkDetails, false);
+
+  releaseRead?.({
+    done: false,
+    value: new TextEncoder().encode('data: {"type":"assistant.delta","turnId":"turn_buffered","phase":"commentary","text":"BUFFERED_STREAM_SECRET"}\n\n'),
+  });
+  await streamPromise;
+
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /BUFFERED_STREAM_SECRET/u);
+  assert.doesNotMatch(JSON.stringify(api.state.timelineCache.get('session_buffered') || {}), /BUFFERED_STREAM_SECRET/u);
+});
+
+test('restricted event guard redacts full stream frames that survive a capability change', async () => {
+  const { api, storage } = await loadAppHarness();
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.sessionId = 'session_guarded';
+  api.state.currentSession = {
+    id: 'session_guarded',
+    projectId: 'project_guarded',
+    canViewWorkDetails: false,
+  };
+  api.state.projectsLoaded = true;
+  api.state.projects = [{ id: 'project_guarded', canViewWorkDetails: false }];
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_guarded';
+
+  const rawEvents = [
+    {
+      type: 'assistant.delta',
+      turnId: 'turn_guarded',
+      phase: 'commentary',
+      text: 'BUFFERED_FRAME_SECRET',
+    },
+    {
+      type: 'batch.started',
+      turnId: 'turn_guarded',
+      batchId: 'batch_guarded',
+      kind: 'command',
+      title: 'cat private/buffered-frame.txt',
+    },
+    {
+      type: 'batch.updated',
+      turnId: 'turn_guarded',
+      batchId: 'batch_guarded',
+      summary: { output: 'BUFFERED_FRAME_SECRET', cwd: '/private/runtime' },
+    },
+    {
+      type: 'approval.requested',
+      turnId: 'turn_guarded',
+      approvalId: 'approval_guarded',
+      approvalKind: 'command',
+      summary: {
+        command: 'rm build/generated.tmp',
+        reason: 'Remove generated output',
+        grantRoot: '/repo/build',
+        output: 'BUFFERED_FRAME_SECRET',
+        diff: 'BUFFERED_FRAME_SECRET',
+        cwd: '/private/runtime',
+      },
+    },
+  ];
+  for (const rawEvent of rawEvents) {
+    const event = api.presentTurnEventForCurrentAudience(rawEvent);
+    if (event) {
+      api.applyTurnEvent(event, null);
+    }
+  }
+  api.saveCurrentTimeline();
+
+  const surfaces = [
+    JSON.stringify(api.state.timeline),
+    JSON.stringify([...api.state.batches.values()]),
+    JSON.stringify([...api.state.approvals.values()]),
+    storage.get('codexWebTimelineCache') || '',
+  ];
+  for (const value of surfaces) {
+    assert.doesNotMatch(value, /BUFFERED_FRAME_SECRET|buffered-frame\.txt|\/private\/runtime/u);
+  }
+  assert.match(JSON.stringify([...api.state.batches.values()]), /Running command/u);
+  const approval = api.state.approvals.get('approval_guarded');
+  assert.equal(approval.summary.command, 'rm build/generated.tmp');
+  assert.equal(approval.summary.grantRoot, '/repo/build');
+  assert.equal(Object.hasOwn(approval.summary, 'output'), false);
+  assert.equal(Object.hasOwn(approval.summary, 'diff'), false);
+  assert.equal(Object.hasOwn(approval.summary, 'cwd'), false);
+});
+
+test('SSE keep-alive comments refresh stream activity and prevent a false stale state', async () => {
+  let now = 1_000;
+  let releasePendingRead;
+  let readCount = 0;
+  class TestDate extends Date {
+    static now() {
+      return now;
+    }
+  }
+  const { api } = await loadAppHarness({
+    Date: TestDate,
+    fetch: async (path) => {
+      assert.equal(path, '/api/turns/turn_heartbeat/events');
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              readCount += 1;
+              if (readCount === 1) {
+                now += 31_000;
+                return {
+                  done: false,
+                  value: new TextEncoder().encode(': keep-alive\n\n'),
+                };
+              }
+              return await new Promise((resolve) => {
+                releasePendingRead = resolve;
+              });
+            },
+          }),
+        },
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_heartbeat';
+  api.state.currentSession = { id: 'session_heartbeat', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_heartbeat';
+
+  const streamPromise = api.streamTurnEvents('turn_heartbeat');
+  await flushMicrotasks();
+
+  assert.equal(api.state.lastTurnEventAt, now);
+  assert.equal(api.isTurnStreamHealthy(), true);
+
+  api.state.streamAbortController.abort();
+  releasePendingRead({ done: true });
+  await streamPromise;
 });
 
 test('chat header renders current goal state under the project title', async () => {
@@ -5327,13 +6183,20 @@ test('work batches retain compact recovery metadata without raw transport payloa
     raw: { method: 'item/started', params: { item: { id: 'raw_batch' } } },
   }, assistantEntry);
 
-  const workItem = api.state.timeline.find((item) => item.kind === 'work');
+  const [workItem] = api.currentSessionWorkItems();
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
   assert.equal(workItem?.turnId, 'turn_raw');
   assert.equal(workItem?.batches.length, 1);
   assert.equal(api.state.batches.get('raw_batch')?.batchId, 'raw_batch');
   assert.equal(api.state.batches.get('raw_batch')?.summary?.raw, undefined);
-  const html = api.renderTimelineItem(workItem);
-  assert.match(html, /class="card work-card"/u);
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_raw_work', cwd: '/repo' };
+  api.state.sessionId = 'session_raw_work';
+  api.state.workDetailsOpen = true;
+  api.state.workDetailsTurnId = 'turn_raw';
+  api.state.workDetailsVisibleEndIndex = 1;
+  const html = api.renderWorkDetailsDialog();
+  assert.match(html, /class="work-turn"/u);
   assert.match(html, /Ran 1/u);
   assert.match(html, /npm test/u);
   assert.doesNotMatch(html, /item\/started/u);
@@ -5366,12 +6229,155 @@ test('file-change batches surface changed paths and line counts', async () => {
     status: 'completed',
   }, null);
 
-  const workItem = api.state.timeline.find((item) => item.kind === 'work');
-  const html = api.renderTimelineItem(workItem);
+  const [workItem] = api.currentSessionWorkItems();
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(workItem?.turnId, 'turn_edit');
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_edit_work', cwd: '/repo' };
+  api.state.sessionId = 'session_edit_work';
+  api.state.workDetailsOpen = true;
+  api.state.workDetailsTurnId = 'turn_edit';
+  api.state.workDetailsVisibleEndIndex = 1;
+  const html = api.renderWorkDetailsDialog();
   assert.match(html, /Edited 1/u);
   assert.match(html, /packages\/codex-web\/src\/runtime\.ts/u);
-  assert.match(html, /update/u);
+  assert.match(html, /Modified/u);
   assert.match(html, /\+8 \/ -2/u);
+});
+
+test('work details normalize structured output and heterogeneous file-change shapes', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_structured_work', cwd: '/repo' };
+  api.state.sessionId = 'session_structured_work';
+  api.state.workDetailsOpen = true;
+  api.state.workDetailsTurnId = 'turn_structured';
+  api.state.workDetailsVisibleEndIndex = 1;
+  api.state.batches.set('edit_structured', {
+    id: 'work_structured',
+    turnId: 'turn_structured',
+    batchId: 'edit_structured',
+    batchKind: 'file_change',
+    title: 'exec',
+    status: 'completed',
+    summary: {
+      fileChanges: {
+        'packages/codex-web/public/app.js': { action: 'updated', additions: 4, deletions: 1 },
+        'packages/codex-web/public/styles.css': 'modified',
+      },
+      output: [
+        { type: 'input_text', text: 'Script completed' },
+        { type: 'input_text', text: 'Patch applied' },
+      ],
+    },
+  });
+  const html = api.renderWorkDetailsDialog();
+
+  assert.match(html, /Edited 2/u);
+  assert.match(html, /packages\/codex-web\/public\/app\.js/u);
+  assert.match(html, /packages\/codex-web\/public\/styles\.css/u);
+  assert.match(html, /Modified/u);
+  assert.match(html, /\+4 \/ -1/u);
+  assert.match(html, /Script completed\nPatch applied/u);
+  assert.doesNotMatch(html, /\[object Object\]/u);
+});
+
+test('work dialog scopes activity to the current turn and windows long runs', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_long_work', projectId: 'project_1' };
+  api.state.sessionId = 'session_long_work';
+  api.state.turnId = 'turn_current';
+  api.state.pendingTurn = true;
+  api.state.workDetailsOpen = true;
+  api.state.batches.set('old_secret', {
+    turnId: 'turn_old',
+    batchId: 'old_secret',
+    batchKind: 'command',
+    title: 'OLD_SESSION_WORK_SHOULD_NOT_RENDER',
+    status: 'completed',
+    summary: {},
+  });
+  for (let index = 0; index < 200; index += 1) {
+    api.state.batches.set(`current_${index}`, {
+      turnId: 'turn_current',
+      batchId: `current_${index}`,
+      batchKind: 'command',
+      title: `command-${index}`,
+      status: 'completed',
+      summary: { command: `command-${index}` },
+    });
+  }
+  api.state.workDetailsTurnId = 'turn_current';
+  api.state.workDetailsVisibleEventLimit = 20;
+  api.state.workDetailsVisibleEndIndex = 200;
+  api.state.workDetailsFollowLatest = true;
+
+  const html = api.renderWorkDetailsDialog();
+  assert.doesNotMatch(html, /OLD_SESSION_WORK_SHOULD_NOT_RENDER/u);
+  assert.equal((html.match(/data-work-event-id=/gu) || []).length, 20);
+  assert.match(html, /Show 20 earlier/u);
+  assert.doesNotMatch(html, /command-179</u);
+  assert.match(html, /command-180</u);
+  assert.match(html, /command-199</u);
+
+  api.state.workDetailsVisibleEventLimit = 40;
+  const earlierHtml = api.renderWorkDetailsDialog();
+  assert.equal((earlierHtml.match(/data-work-event-id=/gu) || []).length, 40);
+  assert.match(earlierHtml, /command-160</u);
+
+  api.state.workDetailsFollowLatest = false;
+  api.state.workDetailsVisibleEventLimit = 20;
+  api.state.batches.set('current_200', {
+    turnId: 'turn_current',
+    batchId: 'current_200',
+    batchKind: 'command',
+    title: 'command-200',
+    status: 'running',
+    summary: { command: 'command-200' },
+  });
+  const frozenHtml = api.renderWorkDetailsDialog();
+  assert.match(frozenHtml, /1 new activity/u);
+  assert.doesNotMatch(frozenHtml, /command-200</u);
+
+  api.state.workDetailsFollowLatest = true;
+  api.handleWorkDetailToggle({
+    target: {
+      open: true,
+      matches: (selector) => selector === '.work-detail',
+    },
+  });
+  assert.equal(api.state.workDetailsFollowLatest, false);
+});
+
+test('latest turns without tool activity do not reopen an older turn from the status bar', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = {
+    id: 'session_latest_without_work',
+    thread: {
+      turns: [
+        { id: 'turn_old_with_work', status: 'completed' },
+        { id: 'turn_latest_without_work', status: 'completed' },
+      ],
+    },
+  };
+  api.state.sessionId = 'session_latest_without_work';
+  api.state.pendingTurn = false;
+  api.state.turnId = null;
+  api.state.latestTurnId = '';
+  api.state.batches.set('old_batch', {
+    turnId: 'turn_old_with_work',
+    batchId: 'old_batch',
+    batchKind: 'command',
+    title: 'old command',
+    status: 'completed',
+    summary: { command: 'old command' },
+  });
+
+  assert.doesNotMatch(api.renderComposerStatus(), /id="open-work-details-button"/u);
+  api.state.workDetailsOpen = true;
+  assert.equal(api.renderWorkDetailsDialog(), '');
 });
 
 test('returning to sessions and back keeps the unsent prompt draft', async () => {
@@ -5491,6 +6497,267 @@ test('streaming deltas coalesce timeline rendering and persistence', async () =>
   assert.match(api.context.document.querySelector('#timeline').innerHTML, /0123456789/u);
   timers.shift()?.();
   assert.match(storage.get('codexWebTimelineCache') || '', /0123456789/u);
+});
+
+test('assistant item projections keep commentary reasoning summaries and finals as ordered blocks', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1', principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_items', cwd: '/repo' };
+  api.state.sessionId = 'session_items';
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_items';
+
+  let entry = null;
+  entry = api.applyTurnEvent({
+    type: 'assistant.delta',
+    turnId: 'turn_items',
+    itemId: 'commentary_a',
+    eventType: 'started',
+    phase: 'commentary',
+    text: '',
+    delta: '',
+  }, entry);
+  assert.doesNotMatch(api.renderTimelineItem(entry), />undefined</u);
+  assert.doesNotMatch(api.renderChatContent(), /message-card/u);
+
+  entry = api.applyTurnEvent({
+    type: 'assistant.delta',
+    turnId: 'turn_items',
+    itemId: 'commentary_a',
+    eventType: 'delta',
+    phase: 'commentary',
+    text: 'Checking the parser.',
+    delta: 'Checking the parser.',
+  }, entry);
+  entry = api.applyTurnEvent({
+    type: 'assistant.delta',
+    turnId: 'turn_items',
+    itemId: 'commentary_a',
+    eventType: 'completed',
+    phase: 'commentary',
+    text: 'Checking the parser. Done.',
+    delta: ' Done.',
+  }, entry);
+  api.applyTurnEvent({
+    type: 'assistant.delta',
+    turnId: 'turn_items',
+    itemId: 'reasoning_summary_b',
+    eventType: 'completed',
+    phase: 'reasoning_summary',
+    text: 'Compared both event paths.',
+    delta: 'Compared both event paths.',
+  }, entry);
+  api.applyTurnEvent({
+    type: 'assistant.final',
+    turnId: 'turn_items',
+    itemId: 'final_c',
+    eventType: 'completed',
+    text: 'The fix is complete.',
+    delta: '',
+  }, entry);
+
+  const assistantItems = api.state.timeline.filter((item) => item.role === 'assistant');
+  assert.equal(
+    JSON.stringify(assistantItems.map((item) => [item.itemId, item.meta, item.text])),
+    JSON.stringify([
+      ['commentary_a', 'commentary', 'Checking the parser. Done.'],
+      ['reasoning_summary_b', 'reasoning-summary', 'Compared both event paths.'],
+      ['final_c', 'final', 'The fix is complete.'],
+    ]),
+  );
+  assert.equal(assistantItems[0].text.includes('Checking the parser.Checking the parser.'), false);
+});
+
+test('stream reset snapshot restores a complete projection and ignores retained events below its watermark', async () => {
+  const snapshot = {
+    type: 'stream.reset',
+    epoch: 'epoch_new',
+    reset: true,
+    snapshot: {
+      throughSequence: 600,
+      complete: true,
+      events: [
+        { type: 'assistant.delta', turnId: 'turn_reset', itemId: 'commentary_1', eventType: 'completed', phase: 'commentary', text: 'Snapshot commentary', delta: '', sequence: 10 },
+        { type: 'batch.started', turnId: 'turn_reset', batchId: 'command_1', kind: 'command', title: 'npm test', sequence: 20 },
+        { type: 'batch.updated', turnId: 'turn_reset', batchId: 'command_1', summary: { output: '643 passed' }, sequence: 590 },
+        { type: 'batch.completed', turnId: 'turn_reset', batchId: 'command_1', status: 'completed', sequence: 591 },
+        { type: 'assistant.delta', turnId: 'turn_reset', itemId: 'commentary_2', eventType: 'completed', phase: 'commentary', text: 'Snapshot verification', delta: '', sequence: 600 },
+      ],
+    },
+  };
+  const frames = [
+    `event: control\ndata: ${JSON.stringify(snapshot)}\n\n`,
+    'id: 599\ndata: {"type":"assistant.delta","turnId":"turn_reset","itemId":"commentary_1","eventType":"completed","phase":"commentary","text":"STALE RETAINED TEXT","delta":"","sequence":599}\n\n',
+    'id: 601\ndata: {"type":"assistant.delta","turnId":"turn_reset","itemId":"commentary_2","eventType":"completed","phase":"commentary","text":"Snapshot verification complete","delta":" complete","sequence":601}\n\n',
+  ];
+  let readIndex = 0;
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_reset') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_reset',
+              cwd: '/repo',
+              activeTurnId: 'turn_reset',
+              thread: {
+                turns: [{
+                  id: 'turn_reset',
+                  status: 'in_progress',
+                  items: [
+                    { itemId: 'commentary_1', type: 'agentMessage', role: 'assistant', phase: 'commentary', text: 'Snapshot commentary' },
+                    { itemId: 'commentary_2', type: 'agentMessage', role: 'assistant', phase: 'commentary', text: 'Snapshot verification' },
+                  ],
+                }],
+              },
+            },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get(name) {
+            if (name === 'X-Codex-Event-Epoch') return 'epoch_new';
+            if (name === 'X-Codex-Event-Reset') return 'true';
+            return '';
+          },
+        },
+        body: {
+          getReader: () => ({
+            read: async () => readIndex < frames.length
+              ? { done: false, value: new TextEncoder().encode(frames[readIndex++]) }
+              : { done: true },
+          }),
+        },
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1', principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_reset', cwd: '/repo' };
+  api.state.sessionId = 'session_reset';
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_reset';
+  api.state.lastTurnEventSequence = 12;
+  api.state.lastTurnEventEpoch = 'epoch_old';
+  api.state.timeline = [
+    {
+      id: 'local_user_reset',
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'pending',
+      text: 'Keep this before the snapshot',
+    },
+    {
+      id: 'assistant_turn_reset_partial',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'commentary',
+      text: 'Partial tail only',
+      turnId: 'turn_reset',
+      source: 'stream',
+    },
+  ];
+
+  await api.streamTurnEvents('turn_reset');
+
+  assert.equal(fetchCalls[0], '/api/turns/turn_reset/events?after=12&epoch=epoch_old');
+  assert.equal(api.state.lastTurnEventEpoch, 'epoch_new');
+  assert.equal(api.state.lastTurnEventSequence, 601);
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /Partial tail only|STALE RETAINED TEXT/u);
+  assert.equal(
+    JSON.stringify(api.state.timeline.map((item) => item.kind === 'message' ? item.text : item.id)),
+    JSON.stringify(['Keep this before the snapshot', 'Snapshot commentary', 'Snapshot verification complete']),
+  );
+  assert.equal(api.state.batches.get('command_1')?.summary?.output, '643 passed');
+});
+
+test('incomplete reset snapshots merge onto authoritative session commentary instead of clearing it', async () => {
+  const control = {
+    type: 'stream.reset',
+    epoch: 'epoch_recovered',
+    reset: true,
+    snapshot: {
+      throughSequence: 50,
+      complete: false,
+      events: [
+        { type: 'turn.started', turnId: 'turn_incomplete', sequence: 40 },
+        { type: 'assistant.delta', turnId: 'turn_incomplete', itemId: 'new_commentary', eventType: 'completed', phase: 'commentary', text: 'New process commentary', delta: '', sequence: 50 },
+      ],
+    },
+  };
+  let eventRead = false;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_incomplete') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_incomplete',
+              activeTurnId: 'turn_incomplete',
+              thread: {
+                turns: [{
+                  id: 'turn_incomplete',
+                  status: 'in_progress',
+                  items: [{
+                    itemId: 'old_commentary',
+                    type: 'agentMessage',
+                    role: 'assistant',
+                    phase: 'commentary',
+                    text: 'Commentary from before restart',
+                  }],
+                }],
+              },
+            },
+          }),
+        };
+      }
+      assert.equal(path, '/api/turns/turn_incomplete/events?after=25&epoch=epoch_before');
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (name) => name === 'X-Codex-Event-Epoch' ? 'epoch_recovered' : 'true' },
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (eventRead) return { done: true };
+              eventRead = true;
+              return {
+                done: false,
+                value: new TextEncoder().encode(`event: control\ndata: ${JSON.stringify(control)}\n\n`),
+              };
+            },
+          }),
+        },
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_single', principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_incomplete', cwd: '/repo' };
+  api.state.sessionId = 'session_incomplete';
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_incomplete';
+  api.state.lastTurnEventSequence = 25;
+  api.state.lastTurnEventEpoch = 'epoch_before';
+
+  await api.streamTurnEvents('turn_incomplete');
+
+  assert.equal(
+    JSON.stringify(api.state.timeline.filter((item) => item.role === 'assistant').map((item) => item.text)),
+    JSON.stringify(['Commentary from before restart', 'New process commentary']),
+  );
+  assert.equal(api.state.lastTurnEventSequence, 50);
 });
 
 test('stream completion refreshes chat chrome without replacing the focused composer', async () => {
@@ -5689,145 +6956,151 @@ test('sending a message keeps a following chat timeline at the latest content', 
   assert.equal(nextTimeline.scrollTop, nextTimeline.scrollHeight);
 });
 
-test('opening a report path switches to a report loading view before resolve finishes', async () => {
-  let resolveReportPath;
-  const resolveReady = new Promise((resolve) => {
-    resolveReportPath = resolve;
-  });
+test('opening a session markdown path shows loading then fetches content with bearer auth', async () => {
+  let releaseResolve: (() => void) | null = null;
+  const calls = [];
   const { api, context } = await loadAppHarness({
-    fetch: async (path) => {
-      if (path === '/api/reports/resolve') {
-        await resolveReady;
+    fetch: async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === '/api/sessions/session_1/files/resolve') {
+        await new Promise<void>((resolve) => {
+          releaseResolve = resolve;
+        });
         return {
           ok: true,
           status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-          }),
+          json: async () => ({ file: { id: 'file_audit', name: 'audit.md', kind: 'markdown', mimeType: 'text/markdown', sizeBytes: 18, contentUrl: '/api/sessions/session_1/files/signed-audit/content' } }),
         };
       }
-      if (path === '/api/reports/project-a%2F2026-05-19%2Fsummary.md/content') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-            content: '# Summary',
-          }),
-        };
+      if (path === '/api/sessions/session_1/files/signed-audit/content') {
+        return { ok: true, status: 200, text: async () => '# Audit' };
       }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
-
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'chat';
   api.state.sessionId = 'session_1';
   api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
 
-  const pending = api.openReportByPath('/Users/alice/.codex-web/reports/project-a/2026-05-19/summary.md', { returnView: 'chat' });
-  await Promise.resolve();
+  const pending = api.openSessionFileByPath('docs/My%20audit.md#findings');
+  await flushMicrotasks();
 
-  assert.equal(api.state.view, 'report');
-  assert.equal(api.state.reportReturnView, 'chat');
-  assert.equal(api.state.currentReport?.project, 'project-a');
-  assert.match(context.document.querySelector('.report-viewer')?.innerHTML || '', /Loading report/u);
+  assert.equal(api.state.view, 'file');
+  assert.equal(api.state.currentSessionFileLoading, true);
+  assert.match(context.document.querySelector('.session-file-viewer')?.innerHTML || '', /Loading file/u);
 
-  resolveReportPath();
+  releaseResolve?.();
   await pending;
 
-  assert.match(context.document.querySelector('.report-viewer')?.innerHTML || '', /Summary/u);
+  assert.equal(JSON.parse(calls[0].options.body).path, 'docs/My audit.md');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer token');
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer token');
+  assert.match(context.document.querySelector('.session-file-viewer')?.innerHTML || '', /<h1>Audit<\/h1>/u);
 });
 
-test('closing a report prevents a late content response from retaining the document', async () => {
-  let releaseContent: ((payload: unknown) => void) | null = null;
-  let requestSignal: AbortSignal | null = null;
+test('opening a source link strips its line location before resolving the file', async () => {
+  const calls = [];
   const { api } = await loadAppHarness({
-    fetch: async (path: string, options: { signal?: AbortSignal } = {}) => {
-      assert.equal(path, '/api/reports/project-a%2Fsummary.md/content');
-      requestSignal = options.signal || null;
+    fetch: async (path, options = {}) => {
+      calls.push({ path, options });
+      return { ok: false, status: 404, json: async () => ({ error: 'file_not_found' }) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+
+  await api.openSessionFileByPath('/repo/packages/codex-web/public/app.js:3091');
+
+  assert.equal(calls[0]?.path, '/api/sessions/session_1/files/resolve');
+  assert.equal(JSON.parse(calls[0]?.options.body).path, '/repo/packages/codex-web/public/app.js');
+});
+
+test('closing a session file aborts late content and clears viewer state', async () => {
+  let releaseText: ((value: string) => void) | null = null;
+  let contentSignal: AbortSignal | null = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      if (path === '/api/sessions/session_1/files/resolve') {
+        return { ok: true, status: 200, json: async () => ({ file: { id: 'file_a', name: 'a.md', kind: 'markdown', contentUrl: '/api/sessions/session_1/files/a/content' } }) };
+      }
+      contentSignal = options.signal || null;
       return {
         ok: true,
         status: 200,
-        json: async () => await new Promise((resolve) => {
-          releaseContent = resolve;
+        text: async () => await new Promise<string>((resolve) => {
+          releaseText = resolve;
         }),
       };
     },
   });
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'reports';
-  api.state.reports = [{
-    id: 'project-a/summary.md',
-    project: 'project-a',
-    title: 'Summary',
-    kind: 'markdown',
-  }];
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
 
-  const pending = api.openReportById('project-a/summary.md');
+  const pending = api.openSessionFileByPath('a.md');
   await flushMicrotasks();
-  assert.equal(typeof releaseContent, 'function');
-  api.closeReportViewer();
+  api.closeSessionFileViewer();
 
-  assert.equal(requestSignal?.aborted, true);
-  releaseContent?.({
-    report: api.state.reports[0],
-    content: 'x'.repeat(500_000),
-  });
+  assert.equal(contentSignal?.aborted, true);
+  releaseText?.('late content');
   await pending;
-  assert.equal(api.state.currentReport, null);
-  assert.equal(api.state.currentReportContent, '');
-  assert.equal(api.state.currentReportLoading, false);
+  assert.equal(api.state.currentSessionFile, null);
+  assert.equal(api.state.currentSessionFileContent, '');
+  assert.equal(api.state.currentSessionFileLoading, false);
 });
 
-test('returning from a report restores the chat timeline position', async () => {
+test('session file viewer previews pdf and image blobs and revokes URLs on switch and close', async () => {
+  const created = [];
+  const revoked = [];
   const { api, context } = await loadAppHarness({
+    URL: {
+      createObjectURL: () => {
+        const value = `blob:file-${created.length + 1}`;
+        created.push(value);
+        return value;
+      },
+      revokeObjectURL: (value) => revoked.push(value),
+    },
     fetch: async (path) => {
-      if (path === '/api/reports/resolve') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-          }),
-        };
+      if (path === '/api/sessions/session_1/files/resolve') {
+        const image = created.length > 0;
+        return { ok: true, status: 200, json: async () => ({ file: { id: image ? 'image' : 'pdf', name: image ? 'preview.png' : 'brief.pdf', kind: image ? 'image' : 'pdf', mimeType: image ? 'image/png' : 'application/pdf', contentUrl: image ? '/api/sessions/session_1/files/image/content' : '/api/sessions/session_1/files/pdf/content' } }) };
       }
-      if (path === '/api/reports/project-a%2F2026-05-19%2Fsummary.md/content') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-            content: '# Summary',
-          }),
-        };
-      }
-      throw new Error(`unexpected fetch ${path}`);
+      return { ok: true, status: 200, blob: async () => new Blob(['binary']) };
     },
   });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', activityState: 'waiting_approval', settings: { metadata: {} } };
 
+  await api.openSessionFileByPath('docs/brief.pdf');
+  assert.match(context.document.querySelector('#app').innerHTML, /class="session-file-frame session-file-pdf"[^>]*src="blob:file-1"/u);
+  assert.match(context.document.querySelector('#app').innerHTML, /Needs approval/u);
+  assert.match(context.document.querySelector('#app').innerHTML, /id="session-file-download"[^>]*href="blob:file-1"/u);
+
+  await api.openSessionFileByPath('images/preview.png');
+  assert.deepEqual(revoked, ['blob:file-1']);
+  assert.match(context.document.querySelector('#app').innerHTML, /class="session-file-image"[^>]*src="blob:file-2"/u);
+
+  api.closeSessionFileViewer();
+  assert.deepEqual(revoked, ['blob:file-1', 'blob:file-2']);
+});
+
+test('closing a session file restores the prior chat timeline position', async () => {
+  const { api, context } = await loadAppHarness({
+    fetch: async (path) => path.endsWith('/resolve')
+      ? { ok: true, status: 200, json: async () => ({ file: { id: 'file_a', name: 'a.md', kind: 'markdown', contentUrl: '/api/sessions/session_1/files/a/content' } }) }
+      : { ok: true, status: 200, text: async () => '# A' },
+  });
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'chat';
@@ -5835,152 +7108,73 @@ test('returning from a report restores the chat timeline position', async () => 
   api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
   api.state.timeline = [{ id: 'm1', kind: 'message', role: 'assistant', text: 'hello' }];
   api.render();
-
   const timeline = context.document.querySelector('#timeline');
   timeline.scrollHeight = 1400;
   timeline.clientHeight = 400;
   timeline.scrollTop = 640;
   api.updateTimelineFollowState();
 
-  await api.openReportByPath('/Users/alice/.codex-web/reports/project-a/2026-05-19/summary.md', { returnView: 'chat' });
-  api.closeReportViewer();
+  await api.openSessionFileByPath('a.md');
+  api.closeSessionFileViewer();
 
-  const restoredTimeline = context.document.querySelector('#timeline');
-  assert.equal(restoredTimeline.scrollTop, restoredTimeline.scrollHeight - restoredTimeline.clientHeight - 360);
+  const restored = context.document.querySelector('#timeline');
+  assert.equal(restored.scrollTop, restored.scrollHeight - restored.clientHeight - 360);
 });
 
-test('returning from a report keeps a following chat timeline at the latest content', async () => {
+test('session file viewer renders a focused not-found error with retry', async () => {
   const { api, context } = await loadAppHarness({
-    fetch: async (path) => {
-      if (path === '/api/reports/resolve') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-          }),
-        };
-      }
-      if (path === '/api/reports/project-a%2F2026-05-19%2Fsummary.md/content') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-            content: '# Summary',
-          }),
-        };
-      }
-      throw new Error(`unexpected fetch ${path}`);
-    },
+    fetch: async () => ({ ok: false, status: 404, json: async () => ({ error: 'file_not_found' }) }),
   });
-
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'chat';
   api.state.sessionId = 'session_1';
   api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
-  api.state.timeline = [{ id: 'm1', kind: 'message', role: 'assistant', text: 'hello' }];
-  api.render();
 
-  const timeline = context.document.querySelector('#timeline');
-  timeline.scrollHeight = 1200;
-  timeline.clientHeight = 400;
-  timeline.scrollTop = 800;
-  api.updateTimelineFollowState();
+  await api.openSessionFileByPath('missing.md');
 
-  await api.openReportByPath('/Users/alice/.codex-web/reports/project-a/2026-05-19/summary.md', { returnView: 'chat' });
-  api.closeReportViewer();
-
-  const restoredTimeline = context.document.querySelector('#timeline');
-  assert.equal(restoredTimeline.scrollTop, restoredTimeline.scrollHeight);
+  const html = context.document.querySelector('#app').innerHTML;
+  assert.match(html, /File not found\./u);
+  assert.match(html, /id="retry-session-file-button"/u);
 });
 
-test('report viewer rerenders preserve the report scroll position', async () => {
+test('session file viewer rejects non-content and cross-origin URLs before sending bearer auth', async () => {
+  const calls = [];
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
-      assert.equal(path, '/api/reports/project-a%2F2026-05-19%2Fsummary.md/favorite');
+      calls.push(path);
       return {
         ok: true,
         status: 200,
-        json: async () => ({
-          report: {
-            id: 'project-a/2026-05-19/summary.md',
-            project: 'project-a',
-            title: 'summary',
-            kind: 'markdown',
-            favorite: true,
-          },
-        }),
+        json: async () => ({ file: { id: 'file_bad', name: 'bad.pdf', kind: 'pdf', contentUrl: '/\\evil.example/file' } }),
       };
     },
   });
-
-  api.state.token = 'token';
+  api.state.token = 'secret-token';
   api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'report';
-  api.state.reports = [{
-    id: 'project-a/2026-05-19/summary.md',
-    project: 'project-a',
-    title: 'summary',
-    kind: 'markdown',
-    favorite: false,
-  }];
-  api.state.currentReport = api.state.reports[0];
-  api.state.currentReportContent = '# Summary\n\nLong content';
-  api.render();
-
-  const reportViewer = context.document.querySelector('.report-viewer');
-  reportViewer.scrollHeight = 1800;
-  reportViewer.clientHeight = 500;
-  reportViewer.scrollTop = 520;
-
-  await api.toggleReportFavorite('project-a/2026-05-19/summary.md');
-
-  assert.equal(context.document.querySelector('.report-viewer').scrollTop, 520);
-});
-
-test('chat stream updates do not rerender an open report viewer', async () => {
-  const { api, context } = await loadAppHarness();
-
-  api.state.token = 'token';
-  api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'report';
+  api.state.view = 'chat';
   api.state.sessionId = 'session_1';
   api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
-  api.state.currentReport = {
-    id: 'project-a/2026-05-19/summary.md',
-    project: 'project-a',
-    title: 'summary',
-    kind: 'markdown',
-  };
-  api.state.currentReportContent = '# Summary';
-  api.render();
 
-  const renderCount = context.__appRenderCount;
-  const reportViewer = context.document.querySelector('.report-viewer');
-  reportViewer.scrollTop = 480;
+  await api.openSessionFileByPath('bad.pdf');
 
-  api.applyTurnEvent({
-    type: 'assistant.delta',
-    turnId: 'turn_1',
-    text: 'background update',
-    phase: 'streaming',
-  }, null);
+  assert.deepEqual(calls, ['/api/sessions/session_1/files/resolve']);
+  assert.match(context.document.querySelector('#app').innerHTML, /Could not open this file\./u);
+});
 
-  assert.equal(context.__appRenderCount, renderCount);
-  assert.equal(context.document.querySelector('.report-viewer'), reportViewer);
-  assert.equal(reportViewer.scrollTop, 480);
+test('session file viewer explains oversized files', async () => {
+  const { api, context } = await loadAppHarness({
+    fetch: async () => ({ ok: false, status: 413, json: async () => ({ error: 'file_too_large' }) }),
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+
+  await api.openSessionFileByPath('large.pdf');
+
+  assert.match(context.document.querySelector('#app').innerHTML, /This file is too large to open\./u);
 });
 
 test('session cards use the first task as identity and the latest input for orientation', async () => {
@@ -6217,97 +7411,6 @@ test('switching to a cached session scope clears an error from the previous scop
   assert.doesNotMatch(api.renderSessionCards(), /Could not update sessions/u);
 });
 
-test('chat reports button falls back to the top-level report project when only nested metadata matches', async () => {
-  const { api } = await loadAppHarness();
-
-  api.state.currentSession = {
-    id: 'session_report',
-    cwd: '/Users/alice/work/project-alpha',
-    projectName: 'project-alpha',
-  };
-  api.state.reports = [
-    {
-      id: 'project-alpha/docs/2026-05-20/summary.md',
-      project: 'project-alpha/docs',
-      title: 'summary',
-      kind: 'markdown',
-      favorite: false,
-      updatedAt: '2026-05-20T10:00:00.000Z',
-    },
-  ];
-
-  const html = api.renderSettingsDrawer();
-
-  assert.match(html, /data-session-reports-project="project-alpha"/u);
-  assert.doesNotMatch(html, /data-session-reports-project="project-alpha\/docs"/u);
-});
-
-test('chat reports button keeps the nested report project path when the session cwd matches it exactly', async () => {
-  const { api } = await loadAppHarness();
-
-  api.state.currentSession = {
-    id: 'session_report_nested',
-    cwd: '/Users/alice/work/project-alpha/docs',
-    projectName: 'project-alpha/docs',
-  };
-  api.state.reports = [
-    {
-      id: 'project-alpha/2026-05-20/summary.md',
-      project: 'project-alpha/docs',
-      title: 'summary',
-      kind: 'markdown',
-      favorite: false,
-      updatedAt: '2026-05-20T10:00:00.000Z',
-    },
-  ];
-
-  const html = api.renderSettingsDrawer();
-
-  assert.match(html, /data-session-reports-project="project-alpha\/docs"/u);
-});
-
-test('chat reports button does not prepend parent workspace segments from cwd', async () => {
-  const { api } = await loadAppHarness();
-
-  api.state.currentSession = {
-    id: 'session_workspace_prefix',
-    cwd: '/Users/alice/vibecoding/codex-mobile-web-app',
-    projectName: 'vibecoding/codex-mobile-web-app',
-  };
-  api.state.reports = [
-    {
-      id: 'codex-mobile-web-app/2026-05-20/summary.md',
-      project: 'codex-mobile-web-app',
-      title: 'summary',
-      kind: 'markdown',
-      favorite: false,
-      updatedAt: '2026-05-20T10:00:00.000Z',
-    },
-  ];
-
-  const html = api.renderSettingsDrawer();
-
-  assert.match(html, /data-session-reports-project="codex-mobile-web-app"/u);
-  assert.doesNotMatch(html, /data-session-reports-project="vibecoding\/codex-mobile-web-app"/u);
-});
-
-test('chat reports button falls back to cwd leaf before reports load so workspace prefixes do not leak', async () => {
-  const { api } = await loadAppHarness();
-
-  api.state.currentSession = {
-    id: 'session_reports_not_loaded',
-    cwd: '/Users/alice/vibecoding/codex-mobile-web-app',
-    projectName: 'vibecoding/codex-mobile-web-app',
-  };
-  api.state.reports = [];
-  api.state.reportsLoaded = false;
-
-  const html = api.renderSettingsDrawer();
-
-  assert.match(html, /data-session-reports-project="codex-mobile-web-app"/u);
-  assert.doesNotMatch(html, /data-session-reports-project="vibecoding\/codex-mobile-web-app"/u);
-});
-
 test('turn failures render as visible timeline error messages', async () => {
   const { api } = await loadAppHarness();
 
@@ -6450,6 +7553,9 @@ test('stream failures persist visible errors through the backend session timelin
 
 test('thread work updates render failed command details and a visible error message', async () => {
   const { api } = await loadAppHarness();
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.sessionId = 'session_1';
 
   let assistantEntry = null;
   assistantEntry = api.applyTurnEvent({
@@ -6496,14 +7602,20 @@ test('thread work updates render failed command details and a visible error mess
   }, assistantEntry);
 
   const latest = api.state.timeline.at(-1);
-  const workItem = api.state.timeline.find((item) => item.kind === 'work');
+  const [workItem] = api.currentSessionWorkItems();
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
   assert.equal(workItem?.status, 'failed');
   assert.equal(latest?.kind, 'message');
   assert.equal(latest?.role, 'system');
   assert.equal(latest?.severity, 'error');
 
-  const workHtml = api.renderTimelineItem(workItem);
-  assert.match(workHtml, /work-card work-error" open/u);
+  api.state.workDetailsOpen = true;
+  api.state.workDetailsTurnId = 'turn_work_error';
+  api.state.workDetailsVisibleEndIndex = 1;
+  const workHtml = api.renderWorkDetailsDialog();
+  assert.match(workHtml, /class="work-turn"/u);
+  assert.doesNotMatch(workHtml, /work-error|error-badge/u);
+  assert.match(workHtml, /Exit 1/u);
   assert.match(workHtml, /npm test/u);
   assert.match(workHtml, /1 failing/u);
 
@@ -6512,50 +7624,19 @@ test('thread work updates render failed command details and a visible error mess
   assert.match(errorHtml, /Command failed with exit code 1/u);
 });
 
-test('composer API failures render a visible timeline error', async () => {
+test('new-session API failures keep a visible retryable outbox message', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path) => {
       fetchCalls.push(path);
-      if (path === '/api/sessions') {
-        return {
-          ok: true,
-          status: 201,
-          json: async () => ({
-            session: {
-              id: 'session_new',
-              cwd: '/repo',
-              settings: {},
-              thread: { turns: [] },
-            },
-          }),
-        };
-      }
-      if (path === '/api/sessions/session_new/turns') {
+      if (path === '/api/session-submissions') {
         return {
           ok: false,
           status: 500,
           json: async () => ({ error: 'internal_error', message: 'Codex refused the first turn' }),
         };
       }
-      if (path === '/api/sessions/session_new/timeline') {
-        return {
-          ok: true,
-          status: 201,
-          json: async () => ({
-            entry: {
-              id: 'error_request_session_new',
-              kind: 'message',
-              role: 'system',
-              label: 'Error',
-              meta: 'failed',
-              text: 'Codex refused the first turn',
-              severity: 'error',
-            },
-          }),
-        };
-      }
-      return { ok: true, status: 204, json: async () => ({}) };
+      throw new Error(`unexpected fetch ${path}`);
     },
   });
 
@@ -6567,12 +7648,15 @@ test('composer API failures render a visible timeline error', async () => {
 
   await api.onComposerSubmit({ preventDefault() {} });
 
-  const errorItem = api.state.timeline.find((item) => item.id.startsWith('error_'));
-  assert.deepEqual(fetchCalls, ['/api/sessions', '/api/sessions/session_new/turns', '/api/sessions/session_new/timeline']);
+  const [submission] = [...api.state.submissionOutbox.values()];
+  const userItem = api.state.timeline.find((item) => item.submissionId === submission?.id);
+  assert.deepEqual(fetchCalls, ['/api/session-submissions']);
   assert.equal(api.state.pendingTurn, false);
-  assert.equal(errorItem?.kind, 'message');
-  assert.equal(errorItem?.role, 'system');
-  assert.match(errorItem?.text || '', /Codex refused the first turn/u);
+  assert.equal(submission?.status, 'failed');
+  assert.equal(submission?.retryable, true);
+  assert.equal(userItem?.role, 'user');
+  assert.equal(api.state.timeline.some((item) => item.role === 'system'), false);
+  assert.match(api.renderTimelineItem(userItem), /Send failed/u);
 });
 
 test('existing-session optimistic messages persist before the turn request can finish', async () => {
@@ -6675,225 +7759,486 @@ test('a delayed turn response cannot attach itself to a newly selected session',
   assert.deepEqual(streamRequests, []);
 });
 
-test('new first-turn rollout errors wait before showing a timeline error', async () => {
+test('new-session submission persists before the network request can finish', async () => {
+  let resolveSubmission;
+  const submissionReady = new Promise((resolve) => {
+    resolveSubmission = resolve;
+  });
   const fetchCalls = [];
-  const timers = [];
-  const { api } = await loadAppHarness({
-    setTimeout: (callback, delay) => {
-      timers.push({ callback, delay });
-      return timers.length;
-    },
-    fetch: async (path) => {
-      fetchCalls.push(path);
-      if (path === '/api/sessions') {
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/session-submissions') {
+        await submissionReady;
         return {
           ok: true,
           status: 201,
           json: async () => ({
-            session: {
-              id: 'session_new',
-              cwd: '/repo',
-              settings: {},
-              thread: { turns: [] },
-            },
+            submission: { id: JSON.parse(options.body).submissionId, status: 'submitted', sessionId: 'session_new', turnId: 'turn_new', error: null },
+            session: { id: 'session_new', cwd: '/repo', settings: {}, thread: { turns: [] } },
+            turnId: 'turn_new',
           }),
         };
       }
-      if (path === '/api/sessions/session_new/turns') {
-        return {
-          ok: false,
-          status: 500,
-          json: async () => ({
-            error: 'internal_error',
-            message: 'failed to read thread: thread-store internal error: rollout at /Users/test/.codex/sessions/rollout.jsonl is empty',
-          }),
-        };
+      if (path === '/api/turns/turn_new/events') {
+        return { ok: true, status: 200, body: { getReader: () => ({ read: async () => ({ done: true }) }) } };
       }
-      return { ok: true, status: 200, json: async () => ({ session: { id: 'session_new', cwd: '/repo', thread: { turns: [] } } }) };
+      throw new Error(`unexpected fetch ${path}`);
     },
   });
-
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'chat';
+  api.state.draftSessionActive = true;
   api.state.cwd = '/repo';
-  api.state.prompt = 'hello';
+  api.state.prompt = 'Persist before sending';
 
-  await api.onComposerSubmit({ preventDefault() {} });
+  const sending = api.onComposerSubmit({ preventDefault() {} });
+  await Promise.resolve();
 
-  assert.equal(timers.length, 1);
-  assert.equal(timers[0]?.delay, 10_000);
-  assert.equal(api.state.pendingTurn, true);
-  assert.equal(api.state.timeline.some((item) => item.id.startsWith('error_')), false);
-  assert.deepEqual(fetchCalls, ['/api/sessions', '/api/sessions/session_new/turns']);
+  const [[outboxKey, outboxValue]] = submissionStorageEntries(storage);
+  const persisted = JSON.parse(outboxValue).entry;
+  const requestBody = JSON.parse(fetchCalls[0].options.body);
+  assert.equal(persisted.text, 'Persist before sending');
+  assert.equal(persisted.status, 'sending');
+  assert.equal(persisted.id, requestBody.submissionId);
+  assert.equal(fetchCalls[0].path, '/api/session-submissions');
+  assert.match(api.renderTimelineItem(api.state.timeline[0]), /Sending to server/u);
+
+  resolveSubmission();
+  await sending;
+  assert.equal(storage.has(outboxKey), false);
+  assert.equal(api.state.sessionId, 'session_new');
+  assert.equal(api.state.turnId, 'turn_new');
+  assert.equal(api.state.timeline[0]?.turnId, 'turn_new');
 });
 
-test('new first-turn rollout errors recover from refreshed session history before reporting', async () => {
-  const timers = [];
-  const fetchCalls = [];
-  const { api } = await loadAppHarness({
-    setTimeout: (callback, delay) => {
-      timers.push({ callback, delay });
-      return timers.length;
-    },
-    fetch: async (path) => {
-      fetchCalls.push(path);
-      if (path === '/api/sessions') {
-        return {
-          ok: true,
-          status: 201,
-          json: async () => ({
-            session: {
-              id: 'session_new',
-              cwd: '/repo',
-              settings: {},
-              thread: { turns: [] },
-            },
-          }),
-        };
-      }
-      if (path === '/api/sessions/session_new/turns') {
-        return {
-          ok: false,
-          status: 500,
-          json: async () => ({
-            error: 'internal_error',
-            message: 'failed to read thread: thread-store internal error: rollout at /Users/test/.codex/sessions/rollout.jsonl is empty',
-          }),
-        };
-      }
-      if (path === '/api/sessions/session_new') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            session: {
-              id: 'session_new',
-              cwd: '/repo',
-              settings: {},
-              thread: {
-                turns: [{
-                  id: 'turn_recovered',
-                  status: 'completed',
-                  items: [
-                    { type: 'message', role: 'user', text: 'hello' },
-                    { type: 'message', role: 'assistant', text: 'Recovered answer' },
-                  ],
-                }],
-              },
-            },
-          }),
-        };
-      }
-      return { ok: true, status: 204, json: async () => ({}) };
+test('lost new-session response retries the same submission after reload', async () => {
+  let firstSubmissionId = '';
+  const first = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      assert.equal(path, '/api/session-submissions');
+      firstSubmissionId = JSON.parse(options.body).submissionId;
+      throw new Error('Failed to fetch');
     },
   });
+  first.api.state.token = 'token';
+  first.api.state.authSession = { id: 'auth_1' };
+  first.api.state.view = 'chat';
+  first.api.state.draftSessionActive = true;
+  first.api.state.cwd = '/repo';
+  first.api.state.prompt = 'Recover after reload';
+  await first.api.onComposerSubmit({ preventDefault() {} });
 
+  const storedOutbox = submissionStorageEntries(first.storage);
+  assert.equal(storedOutbox.length, 1);
+  const retryCalls = [];
+  const second = await loadAppHarness({
+    storage: Object.fromEntries(storedOutbox),
+    fetch: async (path, options = {}) => {
+      retryCalls.push({ path, body: JSON.parse(options.body) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          submission: { id: firstSubmissionId, status: 'submitted', sessionId: 'session_recovered', turnId: 'turn_recovered', error: null },
+          session: { id: 'session_recovered', cwd: '/repo', settings: {}, thread: { turns: [] } },
+          turnId: 'turn_recovered',
+        }),
+      };
+    },
+  });
+  second.api.state.token = 'token';
+  second.api.state.authSession = { id: 'auth_2' };
+
+  await second.api.drainSubmissionOutbox({ force: true });
+
+  assert.equal(retryCalls.length, 1);
+  assert.equal(retryCalls[0]?.path, '/api/session-submissions');
+  assert.equal(retryCalls[0]?.body.submissionId, firstSubmissionId);
+  assert.equal(submissionStorageEntries(second.storage).length, 0);
+  assert.equal(second.api.state.sessions.some((session) => session.id === 'session_recovered'), true);
+});
+
+test('failed new-session submissions remain visible in the session list and can be reopened', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async () => {
+      throw new Error('Network offline');
+    },
+  });
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'chat';
+  api.state.draftSessionActive = true;
   api.state.cwd = '/repo';
-  api.state.prompt = 'hello';
+  api.state.prompt = 'Visible pending session';
 
   await api.onComposerSubmit({ preventDefault() {} });
-  timers[0].callback();
-  await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions', '/api/sessions/session_new/turns', '/api/sessions/session_new']);
-  assert.equal(api.state.pendingTurn, false);
-  assert.equal(api.state.status, 'Ready');
-  assert.equal(api.state.timeline.some((item) => item.id.startsWith('error_')), false);
-  assert.equal(api.state.timeline.some((item) => item.role === 'assistant' && item.text === 'Recovered answer'), true);
+  const [pending] = api.sortedSessions();
+  assert.equal(pending?.localSubmission, true);
+  assert.equal(pending?.deliveryState, 'failed');
+  assert.match(api.renderSessionCards(), /Visible pending session/u);
+  assert.match(api.renderSessionCards(), /Send failed/u);
+
+  await api.selectSession(pending.id);
+  assert.equal(api.state.activeSubmissionId, pending.submissionId);
+  assert.equal(api.state.timeline[0]?.text, 'Visible pending session');
+  assert.match(api.renderTimelineItem(api.state.timeline[0]), /Retry send/u);
 });
 
-test('new first-turn rollout errors report after the recovery delay when history is still empty', async () => {
-  const timers = [];
-  const fetchCalls = [];
-  const { api } = await loadAppHarness({
-    setTimeout: (callback, delay) => {
-      timers.push({ callback, delay });
-      return timers.length;
+test('independent submission storage keys prevent stale tabs from overwriting each other', async () => {
+  const sharedStorage = new Map();
+  const first = await loadAppHarness({
+    storage: sharedStorage,
+    fetch: async () => { throw new Error('offline'); },
+  });
+  const second = await loadAppHarness({
+    storage: sharedStorage,
+    fetch: async () => { throw new Error('offline'); },
+  });
+  for (const [harness, prompt] of [[first, 'message from tab A'], [second, 'message from tab B']]) {
+    harness.api.state.token = 'token';
+    harness.api.state.authSession = { id: 'auth_1' };
+    harness.api.state.view = 'chat';
+    harness.api.state.draftSessionActive = true;
+    harness.api.state.cwd = '/repo';
+    harness.api.state.prompt = prompt;
+    await harness.api.onComposerSubmit({ preventDefault() {} });
+  }
+
+  const stored = submissionStorageEntries(sharedStorage).map(([, value]) => JSON.parse(value).entry.text).sort();
+  assert.deepEqual(stored, ['message from tab A', 'message from tab B']);
+});
+
+test('submission storage events synchronize another tab without replacing its entries', async () => {
+  const { api, context } = await loadAppHarness();
+  const entry = {
+    id: 'submission_remote',
+    ownerKey: 'single',
+    text: 'saved in another tab',
+    status: 'failed',
+    sessionId: '',
+    projectId: '',
+    cwd: '/repo',
+    settings: {},
+    attachments: [],
+    createdAt: 1,
+    updatedAt: 2,
+    attempts: 1,
+    nextAttemptAt: 0,
+    error: 'offline',
+    retryable: true,
+    queuedMessageId: '',
+  };
+  const key = api.submissionOutboxEntryStorageKey(entry.id);
+  const value = JSON.stringify({ version: 1, entry });
+
+  context.__dispatchWindowEvent('storage', { key, newValue: value });
+  assert.equal(api.state.submissionOutbox.get(entry.id)?.text, 'saved in another tab');
+
+  context.__dispatchWindowEvent('storage', { key, newValue: null });
+  assert.equal(api.state.submissionOutbox.has(entry.id), false);
+});
+
+test('a full outbox rejects new messages without evicting saved submissions', async () => {
+  const entries = Array.from({ length: 50 }, (_, index) => ({
+    id: `submission_capacity_${index}`,
+    ownerKey: 'single',
+    text: `saved ${index}`,
+    status: 'pending',
+    sessionId: '',
+    projectId: '',
+    cwd: '/repo',
+    settings: {},
+    attachments: [],
+    createdAt: index + 1,
+    updatedAt: index + 1,
+    attempts: 0,
+    nextAttemptAt: 0,
+    error: '',
+    retryable: true,
+    queuedMessageId: '',
+  }));
+  let fetchCount = 0;
+  const { api, storage } = await loadAppHarness({
+    storage: {
+      codexWebSubmissionOutbox: JSON.stringify({ version: 1, entries }),
     },
-    fetch: async (path) => {
-      fetchCalls.push(path);
-      if (path === '/api/sessions') {
-        return {
-          ok: true,
-          status: 201,
-          json: async () => ({
-            session: {
-              id: 'session_new',
-              cwd: '/repo',
-              settings: {},
-              thread: { turns: [] },
-            },
-          }),
-        };
-      }
-      if (path === '/api/sessions/session_new/turns') {
-        return {
-          ok: false,
-          status: 500,
-          json: async () => ({
-            error: 'internal_error',
-            message: 'failed to read thread: thread-store internal error: rollout at /Users/test/.codex/sessions/rollout.jsonl is empty',
-          }),
-        };
-      }
-      if (path === '/api/sessions/session_new') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            session: {
-              id: 'session_new',
-              cwd: '/repo',
-              settings: {},
-              thread: { turns: [] },
-            },
-          }),
-        };
-      }
-      if (path === '/api/sessions/session_new/timeline') {
-        return {
-          ok: true,
-          status: 201,
-          json: async () => ({
-            entry: {
-              id: 'error_request_session_new',
-              kind: 'message',
-              role: 'system',
-              label: 'Error',
-              meta: 'failed',
-              text: 'failed to read thread: thread-store internal error: rollout at /Users/test/.codex/sessions/rollout.jsonl is empty',
-              severity: 'error',
-            },
-          }),
-        };
-      }
-      return { ok: true, status: 204, json: async () => ({}) };
+    fetch: async () => {
+      fetchCount += 1;
+      throw new Error('unexpected fetch');
     },
   });
-
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
   api.state.view = 'chat';
+  api.state.draftSessionActive = true;
   api.state.cwd = '/repo';
-  api.state.prompt = 'hello';
+  api.state.prompt = 'do not evict another message';
 
   await api.onComposerSubmit({ preventDefault() {} });
-  timers[0].callback();
-  await flushMicrotasks();
 
-  const errorItem = api.state.timeline.find((item) => item.id.startsWith('error_'));
-  assert.deepEqual(fetchCalls, ['/api/sessions', '/api/sessions/session_new/turns', '/api/sessions/session_new', '/api/sessions/session_new/timeline']);
-  assert.equal(api.state.pendingTurn, false);
-  assert.equal(errorItem?.kind, 'message');
-  assert.equal(errorItem?.role, 'system');
-  assert.match(errorItem?.text || '', /rollout.*is empty/u);
+  assert.equal(fetchCount, 0);
+  assert.equal(api.state.submissionOutbox.size, 50);
+  assert.equal(submissionStorageEntries(storage).length, 50);
+  assert.match(api.state.error, /Too many messages/u);
 });
 
-test('approval requests remain standalone actionable cards beside work timeline items', async () => {
+test('submission persistence failures roll back memory and do not send', async () => {
+  let fetchCount = 0;
+  const { api, storage } = await loadAppHarness({
+    onLocalStorageSetItem(key) {
+      if (key.startsWith('codexWebSubmissionOutbox:')) {
+        throw new Error('storage quota exceeded');
+      }
+    },
+    fetch: async () => {
+      fetchCount += 1;
+      throw new Error('unexpected fetch');
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo';
+  api.state.prompt = 'must remain unsent';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  assert.equal(fetchCount, 0);
+  assert.equal(api.state.submissionOutbox.size, 0);
+  assert.equal(submissionStorageEntries(storage).length, 0);
+  assert.equal(api.state.prompt, 'must remain unsent');
+  assert.match(api.state.error, /storage quota exceeded/u);
+});
+
+test('permanent submission conflicts are never automatically retried', async () => {
+  let fetchCount = 0;
+  const { api } = await loadAppHarness({
+    fetch: async () => {
+      fetchCount += 1;
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'submission_conflict', message: 'id was reused' }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo';
+  api.state.prompt = 'conflicting payload';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+  const [submission] = api.state.submissionOutbox.values();
+  assert.equal(submission.retryable, false);
+
+  await api.drainSubmissionOutbox({ force: true });
+  assert.equal(fetchCount, 1);
+});
+
+test('turn conflicts remain retryable while other 409 responses do not', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'turn_conflict', message: 'turn already running' }),
+    }),
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.prompt = 'retry after current turn';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+  const [submission] = api.state.submissionOutbox.values();
+  assert.equal(submission.retryable, true);
+});
+
+test('malformed successful responses retain the durable submission', async () => {
+  const { api, storage } = await loadAppHarness({
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo';
+  api.state.prompt = 'require an explicit acknowledgement';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  const [submission] = api.state.submissionOutbox.values();
+  assert.equal(submission.status, 'failed');
+  assert.equal(submission.retryable, true);
+  assert.match(submission.error, /did not acknowledge/u);
+  assert.equal(submissionStorageEntries(storage).length, 1);
+});
+
+test('submission requests time out and remain retryable', async () => {
+  const timeoutHandle = {};
+  const { api } = await loadAppHarness({
+    setTimeout(callback, delay) {
+      if (delay === 30_000) {
+        queueMicrotask(callback);
+        return timeoutHandle;
+      }
+      return setTimeout(callback, delay);
+    },
+    clearTimeout(handle) {
+      if (handle !== timeoutHandle) {
+        clearTimeout(handle);
+      }
+    },
+    fetch: async (_path, options = {}) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    }),
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo';
+  api.state.prompt = 'timeout safely';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  const [submission] = api.state.submissionOutbox.values();
+  assert.equal(api.SUBMISSION_REQUEST_TIMEOUT_MS, 30_000);
+  assert.equal(submission.status, 'failed');
+  assert.equal(submission.retryable, true);
+  assert.match(submission.error, /acknowledgement timed out/u);
+});
+
+test('logout during delivery resets sending state for a later login', async () => {
+  let submissionId = '';
+  let requestCount = 0;
+  const { api } = await loadAppHarness({
+    fetch: async (_path, options = {}) => {
+      requestCount += 1;
+      submissionId = JSON.parse(options.body).submissionId;
+      if (requestCount === 1) {
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          submission: { id: submissionId, status: 'submitted', sessionId: 'session_after_login', turnId: 'turn_after_login', error: null },
+          session: { id: 'session_after_login', cwd: '/repo', settings: {}, thread: { turns: [] } },
+          turnId: 'turn_after_login',
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo';
+  api.state.prompt = 'survive logout';
+
+  const sending = api.onComposerSubmit({ preventDefault() {} });
+  await Promise.resolve();
+  api.handleApiError({ status: 401, payload: { message: 'expired' } });
+  await sending;
+
+  assert.equal(api.state.submissionOutbox.get(submissionId)?.status, 'pending');
+  api.state.token = 'replacement-token';
+  api.state.authSession = { id: 'auth_2' };
+  await api.drainSubmissionOutbox({ force: true });
+  assert.equal(requestCount, 2);
+  assert.equal(api.state.submissionOutbox.has(submissionId), false);
+});
+
+test('network failures during auth restore preserve the cached login and token', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/auth/me');
+      throw new Error('network unavailable');
+    },
+  });
+  const cachedAuth = { id: 'cached' };
+  api.state.token = 'stored-token';
+  api.state.authSession = cachedAuth;
+
+  await api.restoreAuth();
+
+  assert.equal(api.state.token, 'stored-token');
+  assert.equal(api.state.authSession, cachedAuth);
+  assert.equal(api.state.status, 'Offline');
+  assert.match(api.state.error, /network unavailable/u);
+});
+
+test('new-session slash commands use the durable submission endpoint', async () => {
+  const calls = [];
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      calls.push({ path, body: JSON.parse(options.body) });
+      const submissionId = calls[0].body.submissionId;
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          submission: { id: submissionId, status: 'submitted', sessionId: 'session_help', turnId: null, error: null },
+          type: 'command',
+          command: { name: 'help', action: 'show', message: 'Help text' },
+          session: {
+            id: 'session_help',
+            cwd: '/repo',
+            settings: {},
+            timeline: [
+              { id: 'help_user', kind: 'message', role: 'user', label: 'You', meta: 'command', text: '/help' },
+              { id: 'help_result', kind: 'message', role: 'system', label: '/help', meta: 'show', text: 'Help text' },
+            ],
+            thread: { turns: [] },
+          },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo';
+  api.state.prompt = '/help';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  assert.equal(calls[0]?.path, '/api/session-submissions');
+  assert.ok(calls[0]?.body.submissionId);
+  assert.equal(api.state.sessionId, 'session_help');
+  assert.equal(submissionStorageEntries(storage).length, 0);
+});
+
+test('timeline omits every empty message while retaining attachment-only messages', async () => {
+  const { api } = await loadAppHarness();
+  api.state.timeline = [
+    { id: 'empty_user', kind: 'message', role: 'user', label: 'You', text: '   ' },
+    { id: 'empty_assistant', kind: 'message', role: 'assistant', label: 'Assistant', text: '' },
+    {
+      id: 'attachment_user',
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      text: '',
+      attachments: [{ kind: 'file', localPath: '/repo/file.txt', fileName: 'file.txt', mimeType: 'text/plain' }],
+    },
+  ];
+
+  assert.deepEqual(api.visibleTimelineItems().map((item) => item.id), ['attachment_user']);
+});
+
+test('approval requests remain standalone actionable cards while work stays out of the timeline', async () => {
   const { api } = await loadAppHarness();
 
   let assistantEntry = null;
@@ -6929,7 +8274,8 @@ test('approval requests remain standalone actionable cards beside work timeline 
     summary: { command: 'npm install' },
   }, assistantEntry);
 
-  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), true);
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(api.state.batches.size, 1);
   assert.equal(api.state.timeline.some((item) => item.kind === 'batch'), false);
   assert.equal(api.state.timeline.filter((item) => item.kind === 'approval').length, 1);
 
@@ -6942,7 +8288,84 @@ test('approval requests remain standalone actionable cards beside work timeline 
   assert.match(html, /data-approval-action="accept"/u);
 });
 
-test('assistant final messages stay at the bottom after visible work updates complete', async () => {
+test('authorized work batches stay out of the timeline while details remain available in the dialog', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_single', principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_inline', cwd: '/repo' };
+  api.state.sessionId = 'session_inline';
+  api.state.turnId = 'turn_inline';
+  api.state.pendingTurn = true;
+
+  api.applyTurnEvent({
+    type: 'assistant.delta',
+    turnId: 'turn_inline',
+    itemId: 'commentary_before',
+    eventType: 'completed',
+    phase: 'commentary',
+    text: 'I will run the focused test.',
+    delta: '',
+  }, null);
+  api.applyTurnEvent({
+    type: 'batch.started',
+    turnId: 'turn_inline',
+    batchId: 'batch_inline',
+    kind: 'command',
+    title: 'npm test -- --focused',
+  }, null);
+  api.applyTurnEvent({
+    type: 'assistant.delta',
+    turnId: 'turn_inline',
+    itemId: 'commentary_after',
+    eventType: 'completed',
+    phase: 'commentary',
+    text: 'The focused test passed.',
+    delta: '',
+  }, null);
+  api.applyTurnEvent({
+    type: 'batch.updated',
+    turnId: 'turn_inline',
+    batchId: 'batch_inline',
+    summary: { output: '12 passed' },
+  }, null);
+  api.applyTurnEvent({
+    type: 'assistant.final',
+    turnId: 'turn_inline',
+    itemId: 'final_inline',
+    eventType: 'completed',
+    text: 'Everything is green.',
+    delta: '',
+  }, null);
+
+  assert.equal(
+    JSON.stringify(api.state.timeline.map((item) => item.kind === 'message' ? item.text : item.id)),
+    JSON.stringify([
+      'I will run the focused test.',
+      'The focused test passed.',
+      'Everything is green.',
+    ]),
+  );
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(api.renderTimelineItem({
+    id: 'legacy_inline_work',
+    kind: 'work',
+    inline: true,
+    turnId: 'turn_inline',
+    batches: [...api.state.batches.values()],
+  }), '');
+  assert.equal(api.currentSessionWorkItems()[0]?.batches[0]?.summary?.output, '12 passed');
+  const chatHtml = api.renderChat().innerHTML;
+  assert.doesNotMatch(chatHtml, /inline-work-row|class="work-turn"/u);
+  assert.match(chatHtml, /id="open-work-details-button"/u);
+  api.state.workDetailsOpen = true;
+  api.state.workDetailsTurnId = 'turn_inline';
+  api.state.workDetailsVisibleEndIndex = 1;
+  const detailsHtml = api.renderWorkDetailsDialog();
+  assert.match(detailsHtml, /class="work-turn"/u);
+  assert.match(detailsHtml, /npm test -- --focused/u);
+  assert.match(detailsHtml, /12 passed/u);
+});
+
+test('assistant final messages stay at the bottom after hidden timeline work updates complete', async () => {
   const { api } = await loadAppHarness();
 
   let assistantEntry = null;
@@ -6977,7 +8400,8 @@ test('assistant final messages stay at the bottom after visible work updates com
     status: 'completed',
   }, assistantEntry);
 
-  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), true);
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(api.state.batches.size, 1);
   assert.equal(api.state.timeline.at(-1)?.id, 'assistant_turn_bottom_final');
   assert.equal(api.state.timeline.at(-1)?.kind, 'message');
   assert.match(api.renderTimelineItem(api.state.timeline.at(-1)), /Final response/u);
@@ -7039,6 +8463,97 @@ test('mobile UI persists per-browser chat timelines across reloads', async () =>
   assert.match(app, /localStorage\.setItem\(TIMELINE_CACHE_KEY/u);
   assert.match(app, /MAX_TIMELINE_CACHE_SESSIONS/u);
   assert.match(app, /savedAt:\s*Date\.now\(\)/u);
+});
+
+test('v2 timeline cache migration removes inline and aggregate work while retaining dialog batches', async () => {
+  const legacyCache = {
+    version: 2,
+    entries: [{
+      sessionId: 'session_cache_duplicate',
+      savedAt: 10,
+      timeline: [
+        { id: 'history_turn_cache_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: 'One final answer' },
+        { id: 'assistant_turn_cache_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: 'One final answer' },
+        {
+          id: 'work_turn_inline_batch_inline',
+          kind: 'work',
+          inline: true,
+          turnId: 'turn_inline',
+          batches: [{ batchId: 'batch_inline', turnId: 'turn_inline', batchKind: 'command', title: 'inline command', status: 'completed', summary: {} }],
+        },
+        {
+          id: 'work_turn_aggregate',
+          kind: 'work',
+          turnId: 'turn_aggregate',
+          batches: [{ batchId: 'batch_aggregate', turnId: 'turn_aggregate', batchKind: 'command', title: 'aggregate command', status: 'completed', summary: {} }],
+        },
+      ],
+      history: [
+        { id: 'history_turn_cache_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: 'One final answer' },
+        {
+          id: 'work_turn_aggregate',
+          kind: 'work',
+          turnId: 'turn_aggregate',
+          batches: [{ batchId: 'batch_aggregate', turnId: 'turn_aggregate', batchKind: 'command', title: 'aggregate command', status: 'completed', summary: {} }],
+        },
+      ],
+      historyComplete: true,
+      batches: [
+        ['batch_inline', { id: 'batch_batch_inline', kind: 'batch', batchId: 'batch_inline', turnId: 'turn_inline', batchKind: 'command', title: 'inline command', status: 'completed', summary: {} }],
+        ['batch_aggregate', { id: 'batch_batch_aggregate', kind: 'batch', batchId: 'batch_aggregate', turnId: 'turn_aggregate', batchKind: 'command', title: 'aggregate command', status: 'completed', summary: {} }],
+      ],
+      approvals: [],
+    }],
+  };
+  const { api, storage } = await loadAppHarness({
+    storage: {
+      codexWebToken: 'cached-device-token',
+      codexWebTimelineCache: JSON.stringify(legacyCache),
+    },
+    fetch: () => new Promise(() => {}),
+  });
+
+  const migrated = api.state.timelineCache.get('session_cache_duplicate');
+  assert.equal(migrated?.timeline.length, 1);
+  assert.equal(migrated?.timeline[0]?.id, 'assistant_turn_cache_final');
+  assert.equal(migrated?.history.length, 1);
+  assert.equal(migrated?.timeline.some((item) => item.kind === 'work'), false);
+  assert.equal(migrated?.history.some((item) => item.kind === 'work'), false);
+  assert.equal(migrated?.batches.size, 2);
+  const persisted = JSON.parse(storage.get('codexWebTimelineCache'));
+  assert.equal(persisted.version, 3);
+  assert.equal(persisted.entries[0]?.timeline.length, 1);
+  assert.equal(persisted.entries[0]?.history.length, 1);
+  assert.equal(persisted.entries[0]?.batches.length, 2);
+  assert.equal(JSON.stringify(persisted.entries[0]).includes('"kind":"work"'), false);
+
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_cache_duplicate', cwd: '/repo' };
+  api.state.sessionId = 'session_cache_duplicate';
+  api.restoreTimelineForSession(api.state.currentSession);
+  assert.equal(api.state.timeline.some((item) => item.kind === 'work'), false);
+  assert.doesNotMatch(api.renderChat().innerHTML, /inline-work-row|class="work-turn"/u);
+  api.state.workDetailsOpen = true;
+  api.state.workDetailsTurnId = 'turn_aggregate';
+  api.state.workDetailsVisibleEndIndex = 1;
+  const detailsHtml = api.renderWorkDetailsDialog();
+  assert.match(detailsHtml, /class="work-turn"/u);
+  assert.match(detailsHtml, /aggregate command/u);
+});
+
+test('authoritative timeline merges keep approvals but discard work projections', async () => {
+  const { api } = await loadAppHarness();
+  const merged = api.mergeAuthoritativeTimelineAuxiliaryEntries(
+    [{ id: 'message_1', kind: 'message', role: 'assistant', text: 'Authoritative answer' }],
+    [
+      { id: 'work_1', kind: 'work', turnId: 'turn_1', batches: [] },
+      { id: 'approval_1', kind: 'approval', approvalId: 'approval_1', turnId: 'turn_1' },
+    ],
+  );
+
+  assert.equal(merged.some((item) => item.kind === 'work'), false);
+  assert.equal(merged.some((item) => item.kind === 'approval'), true);
+  assert.equal(merged.some((item) => item.id === 'message_1'), true);
 });
 
 test('mobile UI refreshes session metadata after turn completion', async () => {
@@ -7310,6 +8825,34 @@ test('history hydration includes recent assistant app-server messages', async ()
       ['assistant', 'Third assistant answer (part 2)'],
       ['user', 'Newest user question'],
       ['assistant', 'Third assistant answer'],
+    ]),
+  );
+});
+
+test('history hydration restores reasoning summaries as separate safe assistant blocks', async () => {
+  const { api } = await loadAppHarness();
+
+  const timeline = api.hydrateTimelineFromSession({
+    id: 'session_reasoning_history',
+    thread: {
+      turns: [{
+        id: 'turn_reasoning_history',
+        status: 'completed',
+        items: [
+          { id: 'user_reasoning', type: 'message', role: 'user', text: 'Check both paths' },
+          { id: 'reasoning_summary', type: 'reasoning', role: null, text: 'Compared both implementations.' },
+          { id: 'final_reasoning', type: 'agentMessage', role: 'assistant', phase: 'final_answer', text: 'Both paths are covered.' },
+        ],
+      }],
+    },
+  });
+
+  assert.equal(
+    JSON.stringify(timeline.map((item) => [item.itemId || '', item.meta, item.text])),
+    JSON.stringify([
+      ['user_reasoning', 'history', 'Check both paths'],
+      ['reasoning_summary', 'reasoning-summary', 'Compared both implementations.'],
+      ['final_reasoning', 'final', 'Both paths are covered.'],
     ]),
   );
 });
@@ -8417,7 +9960,10 @@ test('mobile project selection filters to project sessions without opening the n
   assert.equal(api.state.sessionId, null);
   assert.equal(api.state.currentSession, null);
   assert.equal(api.state.timeline.length, 0);
-  assert.deepEqual(api.sortedSessions().map((session) => session.id), ['session_alpha_newer', 'session_alpha_older']);
+  assert.equal(
+    JSON.stringify(api.sortedSessions().map((session) => session.id)),
+    JSON.stringify(['session_alpha_newer', 'session_alpha_older']),
+  );
   const html = api.context.document.querySelector('#app').innerHTML;
   assert.match(html, /Newest alpha/u);
   assert.doesNotMatch(html, /Beta work/u);
@@ -8883,7 +10429,7 @@ test('mobile sessions render drawer actions and keep favorites toggle beside the
   assert.match(html, /All Sessions/u);
   assert.match(html, /Project Alpha/u);
   assert.match(html, /open-new-session-button/u);
-  assert.match(html, /open-reports-button/u);
+  assert.doesNotMatch(html, /open-reports-button|>Reports<\/button>/u);
   assert.match(html, /open-app-settings-button/u);
   assert.doesNotMatch(html, /rail-show-sessions-button/u);
   assert.doesNotMatch(html, /rail-open-new-session-button/u);
@@ -8897,7 +10443,8 @@ test('mobile sessions render drawer actions and keep favorites toggle beside the
   assert.doesNotMatch(mobileHeader, />Sessions<\/div>/u);
   assert.doesNotMatch(mobileHeader, /id="open-reports-button"/u);
   assert.match(mobileHeader, /id="open-new-session-button"/u);
-  assert.match(drawerFooter, /id="open-reports-button"[\s\S]*id="open-app-settings-button"/u);
+  assert.match(drawerFooter, /id="open-app-settings-button"/u);
+  assert.doesNotMatch(drawerFooter, /open-reports-button|>Reports<\/button>/u);
   assert.doesNotMatch(drawerFooter, /id="open-new-session-button"/u);
 });
 
@@ -9017,27 +10564,35 @@ test('desktop draft session clears after the first submitted message creates a b
   const { api } = await loadAppHarness({
     viewportWidth: 1280,
     desktopPointer: true,
-    fetch: async (path) => {
+    fetch: async (path, options = {}) => {
       fetchCalls.push(path);
-      if (path === '/api/sessions') {
+      if (path === '/api/session-submissions') {
         return {
           ok: true,
           status: 201,
           json: async () => ({
+            submission: {
+              id: JSON.parse(options.body).submissionId,
+              status: 'submitted',
+              sessionId: 'session_new',
+              turnId: 'turn_new',
+              error: null,
+            },
             session: {
               id: 'session_new',
               cwd: '/repo/new',
               settings: {},
               thread: { turns: [] },
             },
+            turnId: 'turn_new',
           }),
         };
       }
-      if (path === '/api/sessions/session_new/turns') {
+      if (path === '/api/turns/turn_new/events') {
         return {
           ok: true,
-          status: 201,
-          json: async () => ({ turnId: 'turn_new', session: { id: 'session_new', cwd: '/repo/new', settings: {}, thread: { turns: [] } } }),
+          status: 200,
+          body: { getReader: () => ({ read: async () => ({ done: true }) }) },
         };
       }
       return { ok: true, status: 204, json: async () => ({}) };
@@ -9055,7 +10610,7 @@ test('desktop draft session clears after the first submitted message creates a b
 
   assert.equal(api.state.draftSessionActive, false);
   assert.equal(api.state.sessionId, 'session_new');
-  assert.deepEqual(fetchCalls.slice(0, 2), ['/api/sessions', '/api/sessions/session_new/turns']);
+  assert.equal(fetchCalls[0], '/api/session-submissions');
 });
 
 test('desktop app settings opens as a panel without clearing the active session', async () => {
@@ -9076,164 +10631,34 @@ test('desktop app settings opens as a panel without clearing the active session'
   assert.match(api.context.document.querySelector('#app').innerHTML, /Keep me/u);
 });
 
-test('desktop reports open as a right-pane overlay and close back to workspace', async () => {
-  const { api } = await loadAppHarness({
-    viewportWidth: 1280,
-    desktopPointer: true,
-    fetch: async (url) => {
-      if (String(url).startsWith('/api/reports')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ items: [] }),
-        };
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({}),
-      };
-    },
-  });
-
-  api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'sessions';
-  api.state.sessionId = 'session_a';
-  api.state.currentSession = { id: 'session_a', cwd: '/Users/alice/work/project-a', projectName: 'Project A', settings: { metadata: {} } };
-  api.state.timeline = [{ id: 'm1', kind: 'message', role: 'assistant', label: 'Assistant', text: 'Workspace text' }];
-
-  await api.openReportsPage({ project: 'project-a', returnView: 'chat' });
-
-  assert.equal(api.state.view, 'sessions');
-  assert.equal(api.state.desktopOverlay, 'reports');
-  assert.equal(api.state.reportProject, 'project-a');
-  assert.equal(api.state.sessionId, 'session_a');
-  assert.match(api.context.document.querySelector('#app').innerHTML, /desktop-overlay/u);
-
-  api.closeReportsPage();
-
-  assert.equal(api.state.view, 'sessions');
-  assert.equal(api.state.desktopOverlay, null);
-  assert.equal(api.state.sessionId, 'session_a');
-  assert.match(api.context.document.querySelector('#app').innerHTML, /Workspace text/u);
-});
-
-test('desktop report viewer stays in the right pane and returns to reports overlay', async () => {
-  const { api } = await loadAppHarness({
-    viewportWidth: 1280,
-    desktopPointer: true,
-    fetch: async (url) => {
-      if (String(url).startsWith('/api/reports/project-a%2F2026-05-19%2Fsummary.md/content')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-            content: '# Summary',
-          }),
-        };
-      }
-      if (String(url).startsWith('/api/reports')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ items: [] }),
-        };
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({}),
-      };
-    },
-  });
-
-  api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'sessions';
-  api.state.sessionId = 'session_a';
-  api.state.currentSession = { id: 'session_a', cwd: '/Users/alice/work/project-a', projectName: 'Project A', settings: { metadata: {} } };
-  api.state.timeline = [{ id: 'm1', kind: 'message', role: 'assistant', label: 'Assistant', text: 'Workspace text' }];
-  api.state.reports = [{
-    id: 'project-a/2026-05-19/summary.md',
-    project: 'project-a',
-    title: 'summary',
-    kind: 'markdown',
-    favorite: false,
-    updatedAt: '2026-05-19T10:00:00.000Z',
-  }];
-  api.state.reportsLoaded = true;
-
-  await api.openReportsPage({ project: 'project-a', returnView: 'chat' });
-  await api.openReportById('project-a/2026-05-19/summary.md');
-
-  const viewerHtml = api.context.document.querySelector('#app').innerHTML;
-  assert.equal(api.state.view, 'sessions');
-  assert.equal(api.state.desktopOverlay, 'report');
-  assert.equal(api.state.reportReturnView, 'reports');
-  assert.equal(api.state.sessionId, 'session_a');
-  assert.match(viewerHtml, /desktop-workspace/u);
-  assert.match(viewerHtml, /desktop-session-pane/u);
-  assert.match(viewerHtml, /desktop-overlay/u);
-  assert.match(viewerHtml, /report-viewer/u);
-  assert.match(viewerHtml, /<h1>Summary<\/h1>/u);
-
-  api.closeReportViewer();
-
-  const reportsHtml = api.context.document.querySelector('#app').innerHTML;
-  assert.equal(api.state.view, 'sessions');
-  assert.equal(api.state.desktopOverlay, 'reports');
-  assert.equal(api.state.reportProject, 'project-a');
-  assert.equal(api.state.sessionId, 'session_a');
-  assert.match(reportsHtml, /desktop-workspace/u);
-  assert.match(reportsHtml, /desktop-session-pane/u);
-  assert.match(reportsHtml, /data-report-id="project-a\/2026-05-19\/summary\.md"/u);
-});
-
-test('desktop report links open in the right pane and close back to the active session', async () => {
+test('desktop session file links open in the right-pane overlay and close back to the active session', async () => {
   const { api } = await loadAppHarness({
     viewportWidth: 1280,
     desktopPointer: true,
     fetch: async (url, options = {}) => {
-      if (String(url) === '/api/reports/resolve') {
-        assert.equal(JSON.parse(options.body).path, '/Users/alice/.codex-web/reports/project-a/2026-05-19/summary.md');
+      if (String(url) === '/api/sessions/session_a/files/resolve') {
+        assert.equal(JSON.parse(options.body).path, 'docs/summary.md');
         return {
           ok: true,
           status: 200,
           json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
+            file: {
+              id: 'file_summary',
+              name: 'summary.md',
               kind: 'markdown',
+              contentUrl: '/api/sessions/session_a/files/file_summary/content',
             },
           }),
         };
       }
-      if (String(url).startsWith('/api/reports/project-a%2F2026-05-19%2Fsummary.md/content')) {
+      if (String(url) === '/api/sessions/session_a/files/file_summary/content') {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-            content: '# Summary',
-          }),
+          text: async () => '# Summary',
         };
       }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({}),
-      };
+      throw new Error(`unexpected fetch ${url}`);
     },
   });
 
@@ -9243,26 +10668,36 @@ test('desktop report links open in the right pane and close back to the active s
   api.state.currentSession = { id: 'session_a', cwd: '/Users/alice/work/project-a', projectName: 'Project A', settings: { metadata: {} } };
   api.state.timeline = [{ id: 'm1', kind: 'message', role: 'assistant', label: 'Assistant', text: 'Workspace text' }];
 
-  await api.openReportByPath('/Users/alice/.codex-web/reports/project-a/2026-05-19/summary.md', { returnView: 'chat' });
+  await api.openSessionFileByPath('docs/summary.md');
 
   const viewerHtml = api.context.document.querySelector('#app').innerHTML;
   assert.equal(api.state.view, 'sessions');
-  assert.equal(api.state.desktopOverlay, 'report');
-  assert.equal(api.state.reportReturnView, 'chat');
+  assert.equal(api.state.desktopOverlay, 'file');
   assert.equal(api.state.sessionId, 'session_a');
   assert.match(viewerHtml, /desktop-workspace/u);
   assert.match(viewerHtml, /desktop-session-pane/u);
-  assert.match(viewerHtml, /report-viewer/u);
+  assert.match(viewerHtml, /role="dialog" aria-modal="true" aria-label="File preview" data-focus-scope="session-file"/u);
+  assert.match(viewerHtml, /id="close-session-file-button"[^>]*data-initial-focus/u);
+  assert.match(viewerHtml, /session-file-viewer/u);
   assert.match(viewerHtml, /<h1>Summary<\/h1>/u);
 
-  api.closeReportViewer();
+  const escapeEvent = {
+    key: 'Escape',
+    prevented: false,
+    stopped: false,
+    preventDefault() { this.prevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+  api.handleFocusScopeKeydown(escapeEvent);
 
   const chatHtml = api.context.document.querySelector('#app').innerHTML;
+  assert.equal(escapeEvent.prevented, true);
+  assert.equal(escapeEvent.stopped, true);
   assert.equal(api.state.view, 'sessions');
   assert.equal(api.state.desktopOverlay, null);
   assert.equal(api.state.sessionId, 'session_a');
   assert.match(chatHtml, /Workspace text/u);
-  assert.doesNotMatch(chatHtml, /report-viewer/u);
+  assert.doesNotMatch(chatHtml, /session-file-viewer/u);
 });
 
 test('session topbar keeps New visually neutral and Settings in the rail', async () => {
@@ -9273,9 +10708,8 @@ test('session topbar keeps New visually neutral and Settings in the rail', async
   const railHtml = api.renderDesktopProjectRail();
 
   assert.doesNotMatch(favoritesHtml, /id="favorite-sort-button"/u);
-  assert.match(favoritesHtml, /<div class="topbar-actions">[\s\S]*id="open-reports-button"[\s\S]*id="open-new-session-button"/u);
   assert.match(favoritesHtml, /id="open-new-session-button"[\s\S]*>New<\/button>/u);
-  assert.match(favoritesHtml, /class="reports-action compact-button" type="button" id="open-reports-button"/u);
+  assert.doesNotMatch(favoritesHtml, /open-reports-button|>Reports<\/button>/u);
   assert.match(favoritesHtml, /class="ghost compact-button" type="button" id="open-new-session-button"/u);
   assert.match(railHtml, /id="rail-show-sessions-button"[\s\S]*>Sessions<\/button>/u);
   assert.match(railHtml, /class="project-rail-action" type="button" id="open-app-settings-button">Setting<\/button>/u);
@@ -9286,11 +10720,12 @@ test('session topbar keeps New visually neutral and Settings in the rail', async
   const allHtml = api.renderDesktopSessionPane();
 
   assert.doesNotMatch(allHtml, /id="favorite-sort-button"/u);
-  assert.match(allHtml, /<div class="topbar-actions">[\s\S]*id="open-reports-button"[\s\S]*id="open-new-session-button"/u);
+  assert.match(allHtml, /id="open-new-session-button"/u);
+  assert.doesNotMatch(allHtml, /open-reports-button|>Reports<\/button>/u);
   assert.doesNotMatch(allHtml, /id="rail-open-new-session-button"/u);
 });
 
-test('session topbar does not render long project names next to Reports and New', async () => {
+test('session topbar does not render long project names next to New', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
   const longProjectName = 'Very Long Project Name '.repeat(12).trim();
 
@@ -9306,15 +10741,15 @@ test('session topbar does not render long project names next to Reports and New'
 
   assert.match(topbarMain, /<div class="page-title">Sessions<\/div>/u);
   assert.equal(topbarMain.includes(longProjectName), false);
-  assert.match(topbarMain, /id="open-reports-button"[\s\S]*>Reports<\/button>/u);
+  assert.doesNotMatch(topbarMain, /open-reports-button|>Reports<\/button>/u);
   assert.match(topbarMain, /id="open-new-session-button"[\s\S]*>New<\/button>/u);
 });
 
-test('session topbar exposes Reports without replacing Message textarea or session menu', async () => {
+test('session UI omits Reports without replacing Message textarea or session menu', async () => {
   const { api } = await loadAppHarness();
 
   const sessionsHtml = api.renderSessionList().innerHTML;
-  assert.match(sessionsHtml, /id="open-reports-button"[^>]*>Reports<\/button>/u);
+  assert.doesNotMatch(sessionsHtml, /open-reports-button|>Reports<\/button>/u);
   assert.doesNotMatch(sessionsHtml, /data-main-view/u);
   assert.doesNotMatch(sessionsHtml, /main-view-toggle/u);
 
@@ -9326,242 +10761,50 @@ test('session topbar exposes Reports without replacing Message textarea or sessi
   assert.doesNotMatch(chatHtml, /<input class="prompt-input" id="prompt-input"/u);
 });
 
-test('reports page renders report projects before project report cards', async () => {
+test('session file viewer renders markdown and sandboxed html files', async () => {
   const { api } = await loadAppHarness();
 
-  api.state.view = 'reports';
-  api.state.reports = [
-    {
-      id: 'project-a/2026-05-19/summary.md',
-      project: 'project-a',
-      title: 'summary',
-      kind: 'markdown',
-      favorite: true,
-      updatedAt: '2026-05-19T10:00:00.000Z',
-    },
-    {
-      id: 'project-b/2026-05-19/audit.html',
-      project: 'project-b',
-      title: 'audit',
-      kind: 'html',
-      favorite: false,
-      updatedAt: '2026-05-19T09:00:00.000Z',
-    },
-  ];
-  const html = api.renderReportsPage().innerHTML;
-
-  assert.match(html, /Reports/u);
-  assert.match(html, /class="page-nav"/u);
-  assert.match(html, /class="ghost page-back-button" type="button" id="back-to-list-button" aria-label="Back">[\s\S]*class="button-icon button-icon-back"[\s\S]*<\/button>/u);
-  assert.match(html, /data-report-project="project-a"/u);
-  assert.match(html, /data-report-project="project-b"/u);
-  assert.doesNotMatch(html, /data-report-id="project-a\/2026-05-19\/summary\.md"/u);
-  assert.doesNotMatch(html, /data-report-favorite-id="project-a\/2026-05-19\/summary\.md"/u);
-  assert.doesNotMatch(html, /id="report-search-input"/u);
-});
-
-test('reports page renders a selected project report list', async () => {
-  const { api } = await loadAppHarness();
-
-  api.state.view = 'reports';
-  api.state.reportProject = 'project-a';
-  api.state.reports = [
-    {
-      id: 'project-a/2026-05-19/summary.md',
-      project: 'project-a',
-      title: 'summary',
-      kind: 'markdown',
-      favorite: true,
-      updatedAt: '2026-05-19T10:00:00.000Z',
-    },
-    {
-      id: 'project-b/2026-05-19/audit.html',
-      project: 'project-b',
-      title: 'audit',
-      kind: 'html',
-      favorite: false,
-      updatedAt: '2026-05-19T09:00:00.000Z',
-    },
-  ];
-
-  const html = api.renderReportsPage().innerHTML;
-
-  const pageNav = html.match(/<div class="page-nav">[\s\S]*?<\/div>/u)?.[0] || '';
-  assert.match(pageNav, /Reports/u);
-  assert.doesNotMatch(pageNav, /project-a/u);
-  assert.doesNotMatch(html, /report-project-heading/u);
-  assert.match(html, /summary/u);
-  assert.match(html, /data-report-id="project-a\/2026-05-19\/summary\.md"/u);
-  assert.match(html, /data-report-favorite-id="project-a\/2026-05-19\/summary\.md"/u);
-  assert.doesNotMatch(html, /data-report-project="project-b"/u);
-  assert.doesNotMatch(html, /data-report-id="project-b\/2026-05-19\/audit\.html"/u);
-});
-
-test('reports page returns to sessions or chat depending on entry point', async () => {
-  const { api } = await loadAppHarness({
-    fetch: async (url) => {
-      if (String(url).startsWith('/api/reports')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ items: [] }),
-        };
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({}),
-      };
-    },
-  });
-
-  await api.openReportsPage();
-  assert.equal(api.state.view, 'reports');
-  assert.equal(api.state.reportsReturnView, 'sessions');
-  api.closeReportsPage();
-  assert.equal(api.state.view, 'sessions');
-
-  api.state.view = 'chat';
-  api.state.sessionId = 'session_a';
-  api.state.currentSession = { id: 'session_a', cwd: '/Users/alice/work/project-a', projectName: 'Project A' };
-  api.state.timeline = [{ id: 'msg_1', kind: 'message', role: 'assistant', text: 'hello' }];
-
-  await api.openReportsPage({ project: 'project-a', returnView: 'chat' });
-  assert.equal(api.state.view, 'reports');
-  assert.equal(api.state.reportProject, 'project-a');
-  assert.equal(api.state.reportsReturnView, 'chat');
-  assert.equal(api.state.sessionId, 'session_a');
-  assert.equal(api.state.timeline.length, 1);
-
-  api.closeReportsPage();
-  assert.equal(api.state.view, 'chat');
-  assert.equal(api.state.sessionId, 'session_a');
-  assert.equal(api.state.timeline.length, 1);
-});
-
-test('report viewer opened from a session reports page returns to that session', async () => {
-  const { api } = await loadAppHarness({
-    fetch: async (url) => {
-      if (String(url).startsWith('/api/reports/project-a%2F2026-05-19%2Fsummary.md/content')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            report: {
-              id: 'project-a/2026-05-19/summary.md',
-              project: 'project-a',
-              title: 'summary',
-              kind: 'markdown',
-            },
-            content: '# Summary',
-          }),
-        };
-      }
-      if (String(url).startsWith('/api/reports')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ items: [] }),
-        };
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({}),
-      };
-    },
-  });
-
-  api.state.view = 'chat';
-  api.state.sessionId = 'session_a';
-  api.state.currentSession = { id: 'session_a', cwd: '/Users/alice/work/project-a', projectName: 'Project A' };
-  api.state.reports = [{
-    id: 'project-a/2026-05-19/summary.md',
-    project: 'project-a',
-    title: 'summary',
+  api.state.currentSessionFile = {
+    id: 'file_summary',
+    name: 'summary.md',
     kind: 'markdown',
-    favorite: false,
-    updatedAt: '2026-05-19T10:00:00.000Z',
-  }];
-  api.state.reportsLoaded = true;
-
-  await api.openReportsPage({ project: 'project-a', returnView: 'chat' });
-  await api.openReportById('project-a/2026-05-19/summary.md');
-  assert.equal(api.state.view, 'report');
-  assert.equal(api.state.reportReturnView, 'chat');
-
-  api.closeReportViewer();
-
-  assert.equal(api.state.view, 'chat');
-  assert.equal(api.state.sessionId, 'session_a');
-  assert.equal(api.state.currentSession?.id, 'session_a');
-});
-
-test('reports project back navigation returns to the originating session', async () => {
-  const { api } = await loadAppHarness();
-
-  api.state.view = 'reports';
-  api.state.sessionId = 'session_a';
-  api.state.currentSession = { id: 'session_a', cwd: '/Users/alice/work/project-a', projectName: 'Project A' };
-  api.state.reportsReturnView = 'chat';
-  api.state.reportProject = 'project-a';
-
-  api.handleReportsBackNavigation();
-
-  assert.equal(api.state.view, 'chat');
-  assert.equal(api.state.reportProject, '');
-  assert.equal(api.state.sessionId, 'session_a');
-});
-
-test('report viewer renders markdown and sandboxed html reports', async () => {
-  const { api } = await loadAppHarness();
-
-  api.state.currentReport = {
-    id: 'project-a/2026-05-19/summary.md',
-    project: 'project-a',
-    title: 'summary',
-    kind: 'markdown',
-    favorite: false,
   };
-  api.state.currentReportContent = '# Done\n\n- **item**\n\n| Col A | Col B | Col C |\n| :--- | :---: | ---: |\n| A \\| B | `x|y` | Gamma |\n';
-  let html = api.renderReportViewer().innerHTML;
-  assert.match(html, /<div class="report-document markdown-body">/u);
+  api.state.currentSessionFileContent = '# Done\n\n- **item**\n\n| Col A | Col B | Col C |\n| :--- | :---: | ---: |\n| A \\| B | `x|y` | Gamma |\n';
+  let html = api.renderSessionFileViewer().innerHTML;
+  assert.match(html, /<div class="session-file-document markdown-body" data-i18n-skip>/u);
   assert.match(html, /<h1>Done<\/h1>/u);
   assert.match(html, /<strong>item<\/strong>/u);
   assert.match(html, /<table><thead><tr><th style="text-align: left;">Col A<\/th><th style="text-align: center;">Col B<\/th><th style="text-align: right;">Col C<\/th><\/tr><\/thead><tbody><tr><td style="text-align: left;">A \| B<\/td><td style="text-align: center;"><code>x\|y<\/code><\/td><td style="text-align: right;">Gamma<\/td><\/tr><\/tbody><\/table>/u);
 
-  api.state.currentReport = {
-    id: 'project-a/2026-05-19/audit.html',
-    project: 'project-a',
-    title: 'audit',
+  api.state.currentSessionFile = {
+    id: 'file_audit',
+    name: 'audit.html',
     kind: 'html',
-    favorite: false,
   };
-  api.state.currentReportContent = '<h1>Audit</h1>';
-  html = api.renderReportViewer().innerHTML;
-  assert.match(html, /<iframe class="report-frame" sandbox="" srcdoc="&lt;h1&gt;Audit&lt;\/h1&gt;"><\/iframe>/u);
+  api.state.currentSessionFileContent = '<h1>Audit</h1>';
+  html = api.renderSessionFileViewer().innerHTML;
+  assert.match(html, /<iframe class="session-file-frame session-file-html"[^>]*sandbox="" referrerpolicy="no-referrer"/u);
+  assert.match(html, /srcdoc="&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#39;none&#39;;[^>]*&gt;&lt;h1&gt;Audit&lt;\/h1&gt;">/u);
 });
 
-test('markdown reports wrap long text within the mobile viewport', async () => {
+test('markdown session files wrap long text within the mobile viewport', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /\.report-document\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
+  assert.match(styles, /\.session-file-document\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
   assert.match(styles, /\.markdown-body p,\s*\.markdown-body li,\s*\.markdown-body blockquote,\s*\.markdown-body h1,\s*\.markdown-body h2,\s*\.markdown-body h3,\s*\.markdown-body td,\s*\.markdown-body th\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
   assert.match(styles, /\.markdown-body pre,\s*\.markdown-body code\s*\{[^}]*white-space:\s*pre-wrap;/su);
   assert.doesNotMatch(styles, /\.markdown-body\s*\{[^}]*white-space:\s*nowrap;/su);
 });
 
-test('report viewer renders the shipped table verification report as real tables', async () => {
+test('session file viewer renders markdown verification tables as real tables', async () => {
   const { api } = await loadAppHarness();
 
-  api.state.currentReport = {
-    id: 'codex-mobile-web-app/2026-05-21/markdown-table-render-report.md',
-    project: 'codex-mobile-web-app',
-    title: 'markdown-table-render-report',
+  api.state.currentSessionFile = {
+    id: 'file_table',
+    name: 'markdown-table-render.md',
     kind: 'markdown',
-    favorite: false,
   };
-  api.state.currentReportContent = [
+  api.state.currentSessionFileContent = [
     '# Markdown Table Render Report',
     '',
     '## What Changed',
@@ -9583,7 +10826,7 @@ test('report viewer renders the shipped table verification report as real tables
     '| Numeric column | 42 | aligned right |',
   ].join('\n');
 
-  const html = api.renderReportViewer().innerHTML;
+  const html = api.renderSessionFileViewer().innerHTML;
   assert.match(html, /<table>/u);
   assert.match(html, /<th style="text-align: left;">Area<\/th>/u);
   assert.match(html, /<td style="text-align: left;">Basic markdown tables<\/td>/u);
@@ -9594,53 +10837,63 @@ test('report viewer renders the shipped table verification report as real tables
   assert.match(html, /<td style="text-align: center;"><code>foo\|bar<\/code><\/td>/u);
 });
 
-test('assistant report paths open as app report links', async () => {
+test('assistant project file links and explicit bare paths open in the session file viewer', async () => {
   const { api } = await loadAppHarness();
 
   const markdownHtml = api.renderTimelineItem({
     kind: 'message',
     role: 'assistant',
     label: 'Assistant',
-    text: '[Summary](/Users/alice/.codex-web/reports/project-a/2026-05-19/summary.md)',
+    text: '[审计](docs/audit.md) [相对审计](./docs/audit.md) [图片](images/preview.avif)',
   });
-  assert.match(markdownHtml, /data-report-path="\/Users\/alice\/\.codex-web\/reports\/project-a\/2026-05-19\/summary\.md"/u);
-  assert.match(markdownHtml, /class="report-link"/u);
+  assert.match(markdownHtml, /data-session-file-path="docs\/audit\.md"/u);
+  assert.match(markdownHtml, /data-session-file-path="\.\/docs\/audit\.md"/u);
+  assert.match(markdownHtml, /data-session-file-path="images\/preview\.avif"/u);
+  assert.match(markdownHtml, /class="session-file-link"/u);
+
+  const sourceHtml = api.renderTimelineItem({
+    kind: 'message',
+    role: 'assistant',
+    label: 'Assistant',
+    text: '[app.js](/repo/packages/codex-web/public/app.js:3091) [server.ts](/repo/packages/codex-web/src/server.ts:1498)',
+  });
+  assert.match(sourceHtml, /data-session-file-path="\/repo\/packages\/codex-web\/public\/app\.js:3091"/u);
+  assert.match(sourceHtml, /data-session-file-path="\/repo\/packages\/codex-web\/src\/server\.ts:1498"/u);
+  assert.doesNotMatch(sourceHtml, /\[app\.js\]\(|\[server\.ts\]\(/u);
 
   const plainHtml = api.renderTimelineItem({
     kind: 'message',
     role: 'assistant',
     label: 'Assistant',
-    text: '手机可打开报告：/Users/alice/.codex-web/reports/project-a/2026-05-19/summary.md',
+    text: '文件在 docs/audit.md，也可看 images/preview.tiff。',
   });
-  assert.match(plainHtml, /data-report-path="\/Users\/alice\/\.codex-web\/reports\/project-a\/2026-05-19\/summary\.md"/u);
-  assert.match(plainHtml, />summary\.md<\/a>/u);
+  assert.match(plainHtml, /data-session-file-path="docs\/audit\.md"/u);
+  assert.match(plainHtml, /data-session-file-path="images\/preview\.tiff"/u);
 });
 
-test('assistant local markdown paths outside codex-web reports stay as plain text', async () => {
+test('assistant web links stay external while unsupported local files stay plain', async () => {
   const { api } = await loadAppHarness();
 
   const markdownHtml = api.renderTimelineItem({
     kind: 'message',
     role: 'assistant',
     label: 'Assistant',
-    text: '[Render Test](/Users/alice/work/codex-mobile-web-app/render-test.md)',
+    text: '[OpenAI](https://openai.com/docs) [Data](docs/data.csv)',
   });
-  assert.doesNotMatch(markdownHtml, /class="report-link"/u);
-  assert.doesNotMatch(markdownHtml, /data-report-path=/u);
-  assert.match(markdownHtml, /render-test\.md/u);
+  assert.match(markdownHtml, /href="https:\/\/openai\.com\/docs" target="_blank" rel="noopener noreferrer"/u);
+  assert.doesNotMatch(markdownHtml, /data-session-file-path="docs\/data\.csv"/u);
 
   const plainHtml = api.renderTimelineItem({
     kind: 'message',
     role: 'assistant',
     label: 'Assistant',
-    text: '查看这个文件：/Users/alice/work/codex-mobile-web-app/render-test.md',
+    text: '查看这个文件：docs/data.csv',
   });
-  assert.doesNotMatch(plainHtml, /class="report-link"/u);
-  assert.doesNotMatch(plainHtml, /data-report-path=/u);
-  assert.match(plainHtml, /render-test\.md/u);
+  assert.doesNotMatch(plainHtml, /class="session-file-link"|data-session-file-path=/u);
+  assert.match(plainHtml, /docs\/data\.csv/u);
 });
 
-test('session menu opens reports without crowding the chat header', async () => {
+test('session menu and navigation no longer expose reports UI', async () => {
   const { api } = await loadAppHarness();
 
   api.state.sessionId = 'session_a';
@@ -9649,55 +10902,20 @@ test('session menu opens reports without crowding the chat header', async () => 
     cwd: '/Users/alice/work/project-a',
     projectName: 'Project A',
   };
-  api.state.reports = [
-    {
-      id: 'project-a/2026-05-19/summary.md',
-      project: 'project-a',
-      title: 'summary',
-      kind: 'markdown',
-      favorite: false,
-      updatedAt: '2026-05-19T10:00:00.000Z',
-    },
-  ];
   api.state.settingsOpen = true;
 
   const html = api.renderChat().innerHTML;
 
-  assert.doesNotMatch(html, /class="ghost compact-button session-report-button"/u);
-  assert.match(html, /data-session-reports-project="project-a"/u);
-  assert.match(html, /data-session-reports-project="project-a"[^>]*>Open<\/button>/u);
-  assert.doesNotMatch(html, /data-session-report-id/u);
+  assert.doesNotMatch(html, /Reports|session-report|data-report/u);
   assert.match(html, /id="settings-toggle"/u);
   assert.match(html, /<textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">/u);
 });
 
-test('opening reports from the session menu closes its focus scope', async () => {
-  const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
-  api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'chat';
-  api.state.sessionId = 'session_a';
-  api.state.currentSession = {
-    id: 'session_a',
-    cwd: '/Users/alice/work/project-a',
-    projectName: 'Project A',
-    settings: { metadata: {} },
-  };
-  api.state.sessions = [api.state.currentSession];
-  api.state.reports = [{
-    id: 'project-a/2026-05-19/summary.md',
-    project: 'project-a',
-    title: 'summary',
-    kind: 'markdown',
-  }];
-  api.state.reportsLoaded = true;
-  api.state.settingsOpen = true;
-  api.state.composerExpanded = false;
-
-  await api.openReportsPage({ project: 'project-a', returnView: 'chat' });
-
-  assert.equal(api.state.settingsOpen, false);
-  assert.equal(api.state.desktopOverlay, 'reports');
-  assert.equal(api.state.view, 'sessions');
+test('file and attachment controls meet mobile touch target sizing', async () => {
+  const styles = await readFile(stylesUrl, 'utf8');
+  assert.match(styles, /\.message-attachment\s*\{[^}]*min-height:\s*44px;/su);
+  assert.match(styles, /\.attachment-main\s*\{[^}]*min-height:\s*44px;/su);
+  assert.match(styles, /\.page-nav-action\s*\{[^}]*min-height:\s*44px;/su);
 });
 
 test('favorite filter shows only favorite sessions and all shows every session', async () => {
@@ -9787,7 +11005,7 @@ test('session restore renders recents first and loads favorites only on demand',
   });
   await flushMicrotasks();
 
-  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me', '/api/settings', '/api/models', '/api/projects', '/api/sessions', '/api/reports']);
+  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me', '/api/settings', '/api/models', '/api/projects', '/api/sessions']);
   pending[1]?.resolve({
     ok: true,
     status: 200,
@@ -9813,24 +11031,19 @@ test('session restore renders recents first and loads favorites only on demand',
       ],
     }),
   });
-  pending[5]?.resolve({
-    ok: true,
-    status: 200,
-    json: async () => ({ items: [] }),
-  });
   await restore;
   await flushMicrotasks();
 
   assert.equal(api.state.sortMode, 'time');
   assert.equal(api.state.sessionsScope, 'all');
   assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['all_session', 'favorite_session']));
-  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me', '/api/settings', '/api/models', '/api/projects', '/api/sessions', '/api/reports']);
+  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me', '/api/settings', '/api/models', '/api/projects', '/api/sessions']);
 
   const loadFavorites = api.setSessionSortMode('favorites');
   await flushMicrotasks();
 
-  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me', '/api/settings', '/api/models', '/api/projects', '/api/sessions', '/api/reports', '/api/sessions?favorite=true']);
-  pending[6]?.resolve({
+  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me', '/api/settings', '/api/models', '/api/projects', '/api/sessions', '/api/sessions?favorite=true']);
+  pending[5]?.resolve({
     ok: true,
     status: 200,
     json: async () => ({
@@ -10209,11 +11422,10 @@ test('auth expiration clears cached session summaries from local storage', async
   assert.equal(api.state.authSession, null);
 });
 
-test('auth expiration prevents late session and report responses from restoring logged-out state', async () => {
+test('auth expiration prevents late session and file responses from restoring logged-out state', async () => {
   let releaseSessionDetail: ((payload: unknown) => void) | null = null;
   let releaseSessionList: ((payload: unknown) => void) | null = null;
-  let releaseReportList: ((payload: unknown) => void) | null = null;
-  let releaseReportContent: ((payload: unknown) => void) | null = null;
+  let releaseFileResolve: ((payload: unknown) => void) | null = null;
   const delayedJson = (release: (value: (payload: unknown) => void) => void) => ({
     ok: true,
     status: 200,
@@ -10233,14 +11445,9 @@ test('auth expiration prevents late session and report responses from restoring 
           releaseSessionList = resolve;
         });
       }
-      if (path === '/api/reports') {
+      if (path === '/api/sessions/session_active/files/resolve') {
         return delayedJson((resolve) => {
-          releaseReportList = resolve;
-        });
-      }
-      if (path === '/api/reports/project-a%2Flate.md/content') {
-        return delayedJson((resolve) => {
-          releaseReportContent = resolve;
+          releaseFileResolve = resolve;
         });
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -10258,28 +11465,20 @@ test('auth expiration prevents late session and report responses from restoring 
   }));
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
-  api.state.view = 'reports';
+  api.state.view = 'chat';
   api.state.sessionId = 'session_active';
   api.state.currentSession = { id: 'session_active', cwd: '/repo', settings: { metadata: {} } };
   api.state.sessions = [api.state.currentSession];
   api.state.sessionsByScope.all = [api.state.currentSession];
-  api.state.reports = [{
-    id: 'project-a/late.md',
-    project: 'project-a',
-    title: 'Late report',
-    kind: 'markdown',
-  }];
 
   const pendingSessionDetail = api.refreshCurrentSessionMetadata();
   const pendingSessionList = api.refreshSessionsList({ renderAfter: false, scope: 'all' });
-  const pendingReportList = api.refreshReportsList({ renderAfter: false });
-  const pendingReportContent = api.openReportById('project-a/late.md');
+  const pendingFile = api.openSessionFileByPath('docs/late.md');
   await flushMicrotasks();
 
   assert.equal(typeof releaseSessionDetail, 'function');
   assert.equal(typeof releaseSessionList, 'function');
-  assert.equal(typeof releaseReportList, 'function');
-  assert.equal(typeof releaseReportContent, 'function');
+  assert.equal(typeof releaseFileResolve, 'function');
 
   api.handleApiError({ status: 401, payload: { message: 'Session expired' } });
 
@@ -10289,29 +11488,24 @@ test('auth expiration prevents late session and report responses from restoring 
   releaseSessionList?.({
     items: [{ id: 'session_late_list', cwd: '/late-list', firstUserInput: 'Late list response', settings: { metadata: {} } }],
   });
-  releaseReportList?.({
-    items: [{ id: 'project-a/list-late.md', project: 'project-a', title: 'Late list report', kind: 'markdown' }],
+  releaseFileResolve?.({
+    file: { id: 'file_late', name: 'late.md', kind: 'markdown', contentUrl: '/api/sessions/session_active/files/file_late/content' },
   });
-  releaseReportContent?.({
-    report: { id: 'project-a/late.md', project: 'project-a', title: 'Late report', kind: 'markdown' },
-    content: '# Late report content',
-  });
-  await Promise.all([pendingSessionDetail, pendingSessionList, pendingReportList, pendingReportContent]);
+  await Promise.all([pendingSessionDetail, pendingSessionList, pendingFile]);
 
   assert.equal(api.state.authSession, null);
   assert.equal(api.state.sessionId, null);
   assert.equal(api.state.currentSession, null);
-  assert.equal(api.state.currentReport, null);
-  assert.equal(api.state.currentReportContent, '');
+  assert.equal(api.state.currentSessionFile, null);
+  assert.equal(api.state.currentSessionFileContent, '');
   assert.equal(api.state.sessions.length, 0);
   assert.equal(api.state.sessionsByScope.favorites.length, 0);
   assert.equal(api.state.sessionsByScope.all.length, 0);
   assert.equal(api.state.sessionsByScope.archived.length, 0);
-  assert.equal(api.state.reports.length, 0);
   assert.equal(storage.get('codexWebToken'), undefined);
   assert.equal(storage.get('codexWebSessionsCache'), undefined);
   assert.equal(storage.get('codexWebTimelineCache'), undefined);
-  assert.doesNotMatch(JSON.stringify(api.state), /Late detail response|Late list response|Late report content/u);
+  assert.doesNotMatch(JSON.stringify(api.state), /Late detail response|Late list response|file_late/u);
 });
 
 test('auth expiration prevents late session mutations from upserting or persisting session data', async () => {
@@ -10883,6 +12077,220 @@ test('PWA foreground recovery refreshes session history and reconnects unhealthy
   assert.match(app, /after=\$\{encodeURIComponent\(String\(state\.lastTurnEventSequence\)\)\}/u);
 });
 
+test('active session refresh keeps the live assistant entry instead of replacing it with history', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_1',
+              cwd: '/repo',
+              activeTurnId: 'turn_1',
+              settings: { metadata: {} },
+              thread: {
+                turns: [{
+                  id: 'turn_1',
+                  status: 'in_progress',
+                  items: [
+                    { type: 'message', role: 'user', text: 'Keep working' },
+                    { type: 'message', role: 'assistant', text: 'Checking the implementation.' },
+                  ],
+                }],
+              },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.turnId = 'turn_1';
+  api.state.pendingTurn = true;
+  api.state.timeline = [
+    { id: 'local_user_1', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Keep working' },
+    { id: 'assistant_turn_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'commentary', text: 'Checking the implementation.' },
+  ];
+
+  await api.refreshCurrentSessionMetadata({ hydrateTimeline: true });
+
+  const assistantItems = api.state.timeline.filter((item) => item.role === 'assistant');
+  assert.equal(assistantItems.length, 1);
+  assert.equal(assistantItems[0]?.id, 'assistant_turn_1');
+});
+
+test('initial SSE replay replaces active-turn history instead of duplicating it', async () => {
+  let readCount = 0;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/turns/turn_1/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => {
+                readCount += 1;
+                if (readCount === 1) {
+                  return {
+                    done: false,
+                    value: new TextEncoder().encode(
+                      'id: 1\ndata: {"type":"assistant.delta","turnId":"turn_1","text":"Checking the implementation.","phase":"commentary","sequence":1}\n\n',
+                    ),
+                  };
+                }
+                return { done: true };
+              },
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.turnId = 'turn_1';
+  api.state.pendingTurn = true;
+  api.state.lastTurnEventSequence = null;
+  api.state.timeline = [
+    { id: 'history_turn_1_0', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Keep working' },
+    { id: 'history_turn_1_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Checking the implementation.' },
+  ];
+
+  await api.streamTurnEvents('turn_1');
+
+  const assistantItems = api.state.timeline.filter((item) => item.role === 'assistant');
+  assert.equal(assistantItems.length, 1);
+  assert.equal(assistantItems[0]?.id, 'assistant_turn_1');
+  assert.equal(assistantItems[0]?.text, 'Checking the implementation.');
+});
+
+test('terminal session history is authoritative and rejects late started and final frames for the same turn', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_terminal');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
+            id: 'session_terminal',
+            cwd: '/repo',
+            activeTurnId: null,
+            thread: {
+              turns: [{
+                id: 'turn_terminal',
+                status: 'completed',
+                items: [
+                  { itemId: 'user_terminal', type: 'message', role: 'user', text: 'Finish it' },
+                  { itemId: 'final_terminal', type: 'agentMessage', role: 'assistant', phase: 'final_answer', text: 'Authoritative final' },
+                ],
+              }],
+            },
+          },
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_terminal';
+  api.state.currentSession = { id: 'session_terminal', cwd: '/repo' };
+  api.state.turnId = 'turn_terminal';
+  api.state.pendingTurn = true;
+  api.state.timeline = [{
+    id: 'assistant_turn_terminal_partial',
+    kind: 'message',
+    role: 'assistant',
+    label: 'Assistant',
+    meta: 'commentary',
+    text: 'Temporary partial answer',
+    turnId: 'turn_terminal',
+    source: 'stream',
+  }];
+
+  await api.refreshCurrentSessionMetadata({ hydrateTimeline: true });
+  api.applyTurnEvent({ type: 'turn.started', turnId: 'turn_terminal' }, null);
+  api.applyTurnEvent({
+    type: 'assistant.final',
+    turnId: 'turn_terminal',
+    itemId: 'final_terminal',
+    eventType: 'completed',
+    text: 'Late duplicate final',
+    delta: '',
+  }, null);
+
+  const assistantItems = api.state.timeline.filter((item) => item.role === 'assistant');
+  assert.equal(assistantItems.length, 1);
+  assert.equal(assistantItems[0]?.id, 'assistant_turn_terminal_final_terminal');
+  assert.equal(assistantItems[0]?.text, 'Authoritative final');
+  assert.equal(api.state.terminalTurnIds.has('turn_terminal'), true);
+  assert.equal(api.state.pendingTurn, false);
+});
+
+test('approval resolution can settle after terminal while late assistant content stays rejected', async () => {
+  const { api } = await loadAppHarness();
+  api.state.currentSession = { id: 'session_terminal_approval', cwd: '/repo' };
+  api.state.sessionId = 'session_terminal_approval';
+  api.state.terminalTurnIds.add('turn_terminal_approval');
+  api.state.approvals.set('approval_late', {
+    id: 'approval_approval_late',
+    kind: 'approval',
+    approvalId: 'approval_late',
+    turnId: 'turn_terminal_approval',
+    summary: {},
+    resolved: false,
+  });
+  api.state.batches.set('batch_late', {
+    id: 'batch_batch_late',
+    kind: 'batch',
+    turnId: 'turn_terminal_approval',
+    batchId: 'batch_late',
+    batchKind: 'command',
+    title: 'npm test',
+    status: 'started',
+    summary: {},
+  });
+
+  api.applyTurnEvent({
+    type: 'approval.resolved',
+    turnId: 'turn_terminal_approval',
+    approvalId: 'approval_late',
+    decision: 'accepted',
+  }, null);
+  api.applyTurnEvent({
+    type: 'batch.completed',
+    turnId: 'turn_terminal_approval',
+    batchId: 'batch_late',
+    status: 'completed',
+  }, null);
+  api.applyTurnEvent({
+    type: 'assistant.delta',
+    turnId: 'turn_terminal_approval',
+    itemId: 'late_commentary',
+    eventType: 'completed',
+    phase: 'commentary',
+    text: 'Must not appear',
+    delta: '',
+  }, null);
+
+  assert.equal(api.state.approvals.get('approval_late')?.resolved, true);
+  assert.equal(api.state.batches.get('batch_late')?.status, 'completed');
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /Must not appear/u);
+});
+
 test('foreground recovery keeps the latest chat message visible after browser resume resets scroll to top', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
@@ -11093,7 +12501,7 @@ test('PWA stream network failures keep the active turn recoverable when visibili
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, true);
   assert.equal(api.state.status, 'Stream paused');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Reconnecting</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Working · Reconnecting</span></div>');
 });
 
 test('PWA stream ending without a terminal event keeps the active turn recoverable', async () => {
@@ -11130,7 +12538,7 @@ test('PWA stream ending without a terminal event keeps the active turn recoverab
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, true);
   assert.equal(api.state.status, 'Stream paused');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Reconnecting</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Working · Reconnecting</span></div>');
 });
 
 test('PWA stream recovery reconnects a paused active turn while the page stays visible', async () => {
@@ -11302,9 +12710,9 @@ test('PWA history refresh replaces optimistic message statuses with backend hist
   assert.equal(api.state.pendingTurn, false);
   assert.equal(api.state.turnId, null);
   assert.equal(api.state.streamWasBackgrounded, false);
-  assert.equal(JSON.stringify(api.state.timeline.map((item) => item.meta)), JSON.stringify(['history', 'history']));
+  assert.equal(JSON.stringify(api.state.timeline.map((item) => item.meta)), JSON.stringify(['history', 'final']));
   assert.match(api.renderTimelineItem(api.state.timeline[0]), /<span class="card-kind">history<\/span>/u);
-  assert.match(api.renderTimelineItem(api.state.timeline[1]), /<span class="card-kind">history<\/span>/u);
+  assert.match(api.renderTimelineItem(api.state.timeline[1]), /<span class="card-kind">final<\/span>/u);
 });
 
 test('PWA history refresh surfaces the latest failed turn as a visible error', async () => {
@@ -11364,7 +12772,7 @@ test('PWA history refresh surfaces the latest failed turn as a visible error', a
   assert.doesNotMatch(api.renderChat().innerHTML, /composer-error/u);
 });
 
-test('composer request failures keep the optimistic user message before the error', async () => {
+test('composer request failures keep the optimistic user message in the retryable outbox', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path) => {
@@ -11392,18 +12800,17 @@ test('composer request failures keep the optimistic user message before the erro
 
   await api.onComposerSubmit({ preventDefault() {} });
 
-  assert.deepEqual(fetchCalls, [
-    '/api/sessions/session_1/turns',
-    '/api/sessions/session_1/timeline',
-  ]);
+  assert.deepEqual(fetchCalls, ['/api/sessions/session_1/turns']);
   assert.equal(JSON.stringify(api.state.timeline.map((item) => item.text)), JSON.stringify([
     'Question before rate limit',
-    '429 Too Many Requests',
   ]));
   assert.equal(api.state.timeline[0]?.role, 'user');
   assert.equal(api.state.timeline[0]?.meta, 'pending');
-  assert.equal(api.state.timeline[1]?.role, 'system');
-  assert.equal(api.state.timeline[1]?.severity, 'error');
+  const submission = api.state.submissionOutbox.get(api.state.timeline[0]?.submissionId);
+  assert.equal(submission?.status, 'failed');
+  assert.equal(submission?.retryable, true);
+  assert.equal(submission?.error, '429 Too Many Requests');
+  assert.match(api.renderTimelineItem(api.state.timeline[0]), /Retry send/u);
 });
 
 test('opening a session surfaces a failed terminal turn as a visible error', async () => {
@@ -11832,7 +13239,7 @@ test('session refresh restores running status when backend reports an active tur
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_active');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Working</span></div>');
   assert.ok(fetchCalls.includes('/api/turns/turn_active/events'));
 });
 
@@ -11945,7 +13352,7 @@ test('opening a session restores running status when the session has an active t
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_active');
   assert.equal(api.state.status, 'Turn running');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Running</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="work" role="status" aria-live="polite" aria-atomic="true"><span>Working</span></div>');
   assert.ok(fetchCalls.includes('/api/turns/turn_active/events'));
 });
 
@@ -12056,7 +13463,7 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
     if (path === '/api/sessions') {
       return { ok: true, status: 200, json: async () => ({ items: sessions }) };
     }
-    if (path === '/api/projects' || path === '/api/reports') {
+    if (path === '/api/projects') {
       return { ok: true, status: 200, json: async () => ({ items: [] }) };
     }
     throw new Error(`unexpected fetch ${path}`);
@@ -12065,7 +13472,9 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 
 async function loadAppHarness(overrides = {}) {
   const app = await readFile(appUrl, 'utf8');
-  const storage = new Map(Object.entries(overrides.storage || {}));
+  const storage = overrides.storage instanceof Map
+    ? overrides.storage
+    : new Map(Object.entries(overrides.storage || {}));
   const elements = new Map();
   let activeElement = null;
   const removeClasses = (element, classNames) => {
@@ -12195,7 +13604,7 @@ async function loadAppHarness(overrides = {}) {
     elements.delete('#username');
     elements.delete('#password');
     elements.delete('#attach-button');
-    elements.delete('.report-viewer');
+    elements.delete('.session-file-viewer');
 	    elements.delete('#mobile-sidebar-toggle-button');
 	    elements.delete('#mobile-drawer-backdrop');
 	    elements.delete('.mobile-project-drawer');
@@ -12236,10 +13645,10 @@ async function loadAppHarness(overrides = {}) {
         },
       }));
     }
-    if (String(html || '').includes('class="report-viewer"')) {
-      const reportHtml = String(html).match(/<main class="report-viewer">([\s\S]*?)<\/main>/u)?.[1] || '';
-      trackElement('.report-viewer', createTrackedElement('.report-viewer', {
-        innerHTML: reportHtml,
+    if (String(html || '').includes('class="session-file-viewer"')) {
+      const fileHtml = String(html).match(/<main class="session-file-viewer">([\s\S]*?)<\/main>/u)?.[1] || '';
+      trackElement('.session-file-viewer', createTrackedElement('.session-file-viewer', {
+        innerHTML: fileHtml,
         scrollTop: 0,
         scrollHeight: 1200,
         clientHeight: 600,
@@ -12283,16 +13692,25 @@ async function loadAppHarness(overrides = {}) {
       textContent: JSON.stringify({ siteTitle: overrides.bootstrapSiteTitle }),
     });
   }
+  const ContextURL = class extends URL {};
+  ContextURL.createObjectURL = overrides.URL?.createObjectURL || (() => 'blob:codex-web-test');
+  ContextURL.revokeObjectURL = overrides.URL?.revokeObjectURL || (() => {});
   const context = {
     console,
     __appRenderCount: 0,
     __elements: elements,
     localStorage: {
+      get length() {
+        return storage.size;
+      },
+      key: (index) => [...storage.keys()][index] ?? null,
       getItem: (key) => storage.get(key) || null,
       setItem: (key, value) => {
+        overrides.onLocalStorageSetItem?.(key, String(value));
         storage.set(key, String(value));
       },
       removeItem: (key) => {
+        overrides.onLocalStorageRemoveItem?.(key);
         storage.delete(key);
       },
     },
@@ -12335,6 +13753,7 @@ async function loadAppHarness(overrides = {}) {
       innerHeight: overrides.viewportHeight ?? 844,
       location: {
         pathname: overrides.pathname || '/',
+        origin: overrides.origin || 'http://codex.test',
         reload() {},
       },
       addEventListener(type, listener) {
@@ -12349,12 +13768,13 @@ async function loadAppHarness(overrides = {}) {
       screen: overrides.screen || {},
       scrollTo() {},
     },
-    __dispatchWindowEvent(type) {
-      windowListeners.get(type)?.({ type });
+    __dispatchWindowEvent(type, event = {}) {
+      windowListeners.get(type)?.({ type, ...event });
     },
     screen: overrides.screen || {},
     navigator: {
       userAgent: 'Node test',
+      onLine: overrides.onLine ?? true,
     },
     requestAnimationFrame: overrides.requestAnimationFrame || ((callback) => {
       callback();
@@ -12368,6 +13788,9 @@ async function loadAppHarness(overrides = {}) {
     AbortController,
     FormData,
     TextEncoder,
+    Blob,
+    URL: ContextURL,
+    Date: overrides.Date || Date,
     ResizeObserver: class ResizeObserver {
       observe() {}
       disconnect() {}
@@ -12404,10 +13827,17 @@ globalThis.__codexWebTest = {
   upsertSession: typeof upsertSession === 'function' ? upsertSession : null,
   renderChat: typeof renderChat === 'function' ? renderChat : null,
   renderChatContent: typeof renderChatContent === 'function' ? renderChatContent : null,
-  renderReportsPage: typeof renderReportsPage === 'function' ? renderReportsPage : null,
-  renderReportViewer: typeof renderReportViewer === 'function' ? renderReportViewer : null,
+  renderSessionFileViewer: typeof renderSessionFileViewer === 'function' ? renderSessionFileViewer : null,
+  renderSessionFileViewerContent: typeof renderSessionFileViewerContent === 'function' ? renderSessionFileViewerContent : null,
   renderTimelineItem: typeof renderTimelineItem === 'function' ? renderTimelineItem : null,
   renderComposerStatus: typeof renderComposerStatus === 'function' ? renderComposerStatus : null,
+	  renderWorkDetailsDialog: typeof renderWorkDetailsDialog === 'function' ? renderWorkDetailsDialog : null,
+	  mergeAuthoritativeTimelineAuxiliaryEntries: typeof mergeAuthoritativeTimelineAuxiliaryEntries === 'function' ? mergeAuthoritativeTimelineAuxiliaryEntries : null,
+	  handleWorkDetailToggle: typeof handleWorkDetailToggle === 'function' ? handleWorkDetailToggle : null,
+  currentSessionWorkItems: typeof currentSessionWorkItems === 'function' ? currentSessionWorkItems : null,
+	  canViewCurrentWorkDetails: typeof canViewCurrentWorkDetails === 'function' ? canViewCurrentWorkDetails : null,
+	  enforceCurrentWorkDetailsAccess: typeof enforceCurrentWorkDetailsAccess === 'function' ? enforceCurrentWorkDetailsAccess : null,
+	  resolvePendingWorkDetailsPolicy: typeof resolvePendingWorkDetailsPolicy === 'function' ? resolvePendingWorkDetailsPolicy : null,
   refreshChatDynamicUi: typeof refreshChatDynamicUi === 'function' ? refreshChatDynamicUi : null,
   composerStatusLabel: typeof composerStatusLabel === 'function' ? composerStatusLabel : null,
   applyMessageFontSize: typeof applyMessageFontSize === 'function' ? applyMessageFontSize : null,
@@ -12428,11 +13858,6 @@ globalThis.__codexWebTest = {
   loadSharedSessionFromLocation: typeof loadSharedSessionFromLocation === 'function' ? loadSharedSessionFromLocation : null,
   ensureSession: typeof ensureSession === 'function' ? ensureSession : null,
   refreshProjectsList: typeof refreshProjectsList === 'function' ? refreshProjectsList : null,
-	  refreshReportsList: typeof refreshReportsList === 'function' ? refreshReportsList : null,
-	  openReportsPage: typeof openReportsPage === 'function' ? openReportsPage : null,
-	  closeReportsPage: typeof closeReportsPage === 'function' ? closeReportsPage : null,
-	  handleReportsBackNavigation: typeof handleReportsBackNavigation === 'function' ? handleReportsBackNavigation : null,
-	  toggleReportFavorite: typeof toggleReportFavorite === 'function' ? toggleReportFavorite : null,
 	  showSessionList: typeof showSessionList === 'function' ? showSessionList : null,
   openAppSettingsPage: typeof openAppSettingsPage === 'function' ? openAppSettingsPage : null,
   openAdminConsole: typeof openAdminConsole === 'function' ? openAdminConsole : null,
@@ -12440,9 +13865,8 @@ globalThis.__codexWebTest = {
   openNewSessionPage: typeof openNewSessionPage === 'function' ? openNewSessionPage : null,
   shareCurrentSession: typeof shareCurrentSession === 'function' ? shareCurrentSession : null,
   copyShareLink: typeof copyShareLink === 'function' ? copyShareLink : null,
-	  openReportById: typeof openReportById === 'function' ? openReportById : null,
-	  closeReportViewer: typeof closeReportViewer === 'function' ? closeReportViewer : null,
-  openReportByPath: typeof openReportByPath === 'function' ? openReportByPath : null,
+	  openSessionFileByPath: typeof openSessionFileByPath === 'function' ? openSessionFileByPath : null,
+	  closeSessionFileViewer: typeof closeSessionFileViewer === 'function' ? closeSessionFileViewer : null,
   getActiveScrollContainer: typeof getActiveScrollContainer === 'function' ? getActiveScrollContainer : null,
   setSessionSortMode: typeof setSessionSortMode === 'function' ? setSessionSortMode : null,
   selectSession: typeof selectSession === 'function' ? selectSession : null,
@@ -12455,7 +13879,9 @@ globalThis.__codexWebTest = {
   scrollTimelineToBottomIfFollowingLatest: typeof scrollTimelineToBottomIfFollowingLatest === 'function' ? scrollTimelineToBottomIfFollowingLatest : null,
   handleTimelineWheel: typeof handleTimelineWheel === 'function' ? handleTimelineWheel : null,
   handleComposerRefresh: typeof handleComposerRefresh === 'function' ? handleComposerRefresh : null,
-  recoverActiveTurnIfStreamUnhealthy: typeof recoverActiveTurnIfStreamUnhealthy === 'function' ? recoverActiveTurnIfStreamUnhealthy : null,
+	  recoverActiveTurnIfStreamUnhealthy: typeof recoverActiveTurnIfStreamUnhealthy === 'function' ? recoverActiveTurnIfStreamUnhealthy : null,
+	  revalidateWorkDetailsPolicyAfterStreamClose: typeof revalidateWorkDetailsPolicyAfterStreamClose === 'function' ? revalidateWorkDetailsPolicyAfterStreamClose : null,
+  isTurnStreamHealthy: typeof isTurnStreamHealthy === 'function' ? isTurnStreamHealthy : null,
   checkForAppUpdate: typeof checkForAppUpdate === 'function' ? checkForAppUpdate : null,
   filteredSessions: typeof filteredSessions === 'function' ? filteredSessions : null,
   sortedSessions: typeof sortedSessions === 'function' ? sortedSessions : null,
@@ -12489,11 +13915,19 @@ globalThis.__codexWebTest = {
 	  handleFocusScopeKeydown: typeof handleFocusScopeKeydown === 'function' ? handleFocusScopeKeydown : null,
 	  syncFocusScope: typeof syncFocusScope === 'function' ? syncFocusScope : null,
 	  streamTurnEvents,
+	  presentTurnEventForCurrentAudience: typeof presentTurnEventForCurrentAudience === 'function' ? presentTurnEventForCurrentAudience : null,
 	  applyTurnEvent: typeof applyTurnEvent === 'function' ? applyTurnEvent : null,
 	  enqueueQueuedMessage: typeof enqueueQueuedMessage === 'function' ? enqueueQueuedMessage : null,
 	  removeQueuedMessage: typeof removeQueuedMessage === 'function' ? removeQueuedMessage : null,
 	  queuedMessagesForCurrentSession: typeof queuedMessagesForCurrentSession === 'function' ? queuedMessagesForCurrentSession : null,
 	  sendNextQueuedMessage: typeof sendNextQueuedMessage === 'function' ? sendNextQueuedMessage : null,
+	  drainSubmissionOutbox: typeof drainSubmissionOutbox === 'function' ? drainSubmissionOutbox : null,
+	  retrySubmission: typeof retrySubmission === 'function' ? retrySubmission : null,
+	  cancelSubmission: typeof cancelSubmission === 'function' ? cancelSubmission : null,
+	  onSubmissionStorageChange: typeof onSubmissionStorageChange === 'function' ? onSubmissionStorageChange : null,
+	  submissionOutboxEntryStorageKey: typeof submissionOutboxEntryStorageKey === 'function' ? submissionOutboxEntryStorageKey : null,
+	  visibleTimelineItems: typeof visibleTimelineItems === 'function' ? visibleTimelineItems : null,
+	  SUBMISSION_REQUEST_TIMEOUT_MS: typeof SUBMISSION_REQUEST_TIMEOUT_MS === 'number' ? SUBMISSION_REQUEST_TIMEOUT_MS : null,
 	  saveCurrentTimeline,
 	};`, context);
   return {
@@ -12505,4 +13939,8 @@ globalThis.__codexWebTest = {
 
 async function flushMicrotasks() {
   await new Promise((resolve) => setImmediate(resolve));
+}
+
+function submissionStorageEntries(storage) {
+  return [...storage.entries()].filter(([key]) => key.startsWith('codexWebSubmissionOutbox:'));
 }

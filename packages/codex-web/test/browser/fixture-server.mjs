@@ -1,12 +1,15 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const publicRoot = fileURLToPath(new URL('../../public/', import.meta.url));
+const fixtureHistoryImage = readFileSync(path.join(publicRoot, 'icon-192.png'));
 const portArgument = process.argv.find((argument) => argument.startsWith('--port='));
 const port = Number(portArgument?.slice('--port='.length) || process.env.PORT || 41739);
+const activeTurnStreams = new Map();
+let activeTurnEventSequence = 100;
 
 const fixtureSession = {
   id: 'session_browser_fixture',
@@ -127,6 +130,103 @@ const fixtureHistorySession = {
   },
 };
 
+const fixtureFileTimeline = [
+  ...Array.from({ length: 6 }, (_item, index) => ([
+    {
+      id: `file_history_user_${index}`,
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'history',
+      text: `Earlier file viewer question ${index + 1}`,
+    },
+    {
+      id: `file_history_assistant_${index}`,
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'history',
+      text: `Earlier file viewer answer ${index + 1}`,
+    },
+  ])).flat(),
+  {
+    id: 'file_history_upload',
+    kind: 'message',
+    role: 'user',
+    label: 'You',
+    meta: 'history',
+    text: 'This image was uploaded in an earlier turn.',
+    attachments: [{
+      id: 'attachment_browser_history_image',
+      kind: 'image',
+      fileName: 'history-image.png',
+      mimeType: 'image/png',
+      sizeBytes: fixtureHistoryImage.byteLength,
+      localPath: '/state/turn-attachments/browser/history-image.png',
+    }],
+  },
+  {
+    id: 'file_history_generated_markdown',
+    kind: 'message',
+    role: 'assistant',
+    label: 'Assistant',
+    meta: 'final',
+    text: 'Generated [Browser session guide](docs/browser-session-guide.md) and [sandboxed HTML preview](docs/browser-sandbox.html) in this project.',
+  },
+];
+
+const fixtureFileSession = {
+  ...fixtureIdleSession,
+  id: 'session_browser_files',
+  title: 'Session file viewer fixture',
+  preview: 'Open generated files and retained attachments',
+  firstUserInput: 'Open generated files and retained attachments',
+  lastUserInput: 'This image was uploaded in an earlier turn.',
+  lastInputAt: Date.parse('2026-07-15T07:30:00.000Z'),
+  updatedAt: Date.parse('2026-07-15T07:31:00.000Z'),
+  timeline: fixtureFileTimeline,
+  thread: {
+    id: 'session_browser_files',
+    turns: [],
+  },
+};
+
+const fixtureSessionFiles = new Map([
+  ['docs/browser-session-guide.md', {
+    id: 'sf_browser_markdown',
+    sessionId: 'session_browser_files',
+    name: 'browser-session-guide.md',
+    kind: 'markdown',
+    mimeType: 'text/markdown; charset=utf-8',
+    source: 'project',
+    updatedAt: '2026-07-15T07:31:00.000Z',
+    data: Buffer.from('# Browser Session Guide\n\nThis Markdown file was resolved from the current project.\n\n- Session scoped\n- Mobile ready\n'),
+  }],
+  ['docs/browser-sandbox.html', {
+    id: 'sf_browser_html',
+    sessionId: 'session_browser_files',
+    name: 'browser-sandbox.html',
+    kind: 'html',
+    mimeType: 'text/html; charset=utf-8',
+    source: 'project',
+    updatedAt: '2026-07-15T07:32:00.000Z',
+    data: Buffer.from('<meta http-equiv="refresh" content="0;url=/html-refresh-target"><link rel="stylesheet" href="/html-probe.css"><script>document.documentElement.dataset.scriptRan="true"</script><img src="/html-probe.png" alt="blocked"><h1>Sandboxed HTML</h1>'),
+  }],
+  ['/state/turn-attachments/browser/history-image.png', {
+    id: 'sf_browser_history_image',
+    sessionId: 'session_browser_files',
+    name: 'history-image.png',
+    kind: 'image',
+    mimeType: 'image/png',
+    source: 'turn_attachment',
+    updatedAt: '2026-07-15T07:30:00.000Z',
+    data: fixtureHistoryImage,
+  }],
+]);
+const fixtureSessionFilesById = new Map(
+  [...fixtureSessionFiles.values()].map((file) => [file.id, file]),
+);
+
 const jsonRoutes = new Map([
   ['/api/auth/me', {
     session: {
@@ -163,12 +263,12 @@ const jsonRoutes = new Map([
       favorite: true,
     }],
   }],
-  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureHistorySession] }],
+  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureFileSession, fixtureHistorySession] }],
   ['/api/sessions/session_browser_fixture', { session: fixtureSession }],
   ['/api/sessions/session_browser_idle', { session: fixtureIdleSession }],
   ['/api/sessions/session_browser_archived', { session: fixtureArchivedSession }],
   ['/api/sessions/session_browser_history', { session: fixtureHistorySession }],
-  ['/api/reports', { items: [] }],
+  ['/api/sessions/session_browser_files', { session: fixtureFileSession }],
 ]);
 
 const contentTypes = new Map([
@@ -193,6 +293,26 @@ const server = createServer(async (request, response) => {
 
     if (pathname === '/api/turns/turn_browser_active/events') {
       streamActiveTurn(request, response);
+      return;
+    }
+
+    if (pathname === '/__test/turn-event' && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) {
+        body += chunk;
+      }
+      const event = JSON.parse(body || '{}');
+      activeTurnEventSequence += 1;
+      const authorization = request.headers.authorization || '';
+      let delivered = 0;
+      for (const [stream, streamAuthorization] of activeTurnStreams) {
+        if (streamAuthorization !== authorization) {
+          continue;
+        }
+        stream.write(`id: ${activeTurnEventSequence}\ndata: ${JSON.stringify(event)}\n\n`);
+        delivered += 1;
+      }
+      sendJson(response, 200, { delivered });
       return;
     }
 
@@ -221,6 +341,49 @@ const server = createServer(async (request, response) => {
           localPath: '/state/pasted-image.png',
         }],
       });
+      return;
+    }
+
+    const sessionFileResolveMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/files\/resolve$/u);
+    if (sessionFileResolveMatch && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) {
+        body += chunk;
+      }
+      const sessionId = decodeURIComponent(sessionFileResolveMatch[1]);
+      const inputPath = String(JSON.parse(body || '{}').path || '');
+      const file = fixtureSessionFiles.get(inputPath);
+      if (!file || file.sessionId !== sessionId) {
+        sendJson(response, 404, { error: 'file_not_found', message: 'Session file was not found.' });
+        return;
+      }
+      const contentUrl = `/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(file.id)}/content`;
+      sendJson(response, 200, {
+        file: {
+          id: file.id,
+          name: file.name,
+          kind: file.kind,
+          mimeType: file.mimeType,
+          sizeBytes: file.data.byteLength,
+          updatedAt: file.updatedAt,
+          source: file.source,
+          contentUrl,
+          downloadUrl: `${contentUrl}?download=1`,
+        },
+      });
+      return;
+    }
+
+    const sessionFileContentMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/files\/([^/]+)\/content$/u);
+    if (sessionFileContentMatch && request.method === 'GET') {
+      const sessionId = decodeURIComponent(sessionFileContentMatch[1]);
+      const fileId = decodeURIComponent(sessionFileContentMatch[2]);
+      const file = fixtureSessionFilesById.get(fileId);
+      if (!file || file.sessionId !== sessionId) {
+        sendJson(response, 404, { error: 'file_not_found', message: 'Session file was not found.' });
+        return;
+      }
+      sendFileContent(response, file, requestUrl.searchParams.get('download') === '1');
       return;
     }
 
@@ -290,6 +453,16 @@ function sendText(response, status, body) {
   response.end(body);
 }
 
+function sendFileContent(response, file, download) {
+  response.writeHead(200, {
+    'Cache-Control': 'no-store',
+    'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${file.name}"`,
+    'Content-Length': file.data.byteLength,
+    'Content-Type': file.mimeType,
+  });
+  response.end(file.data);
+}
+
 function streamActiveTurn(request, response) {
   response.writeHead(200, {
     'Cache-Control': 'no-cache, no-transform',
@@ -297,12 +470,22 @@ function streamActiveTurn(request, response) {
     'Content-Type': 'text/event-stream; charset=utf-8',
   });
   response.flushHeaders();
+  activeTurnStreams.set(response, request.headers.authorization || '');
 
   const events = [
     {
       type: 'turn.started',
       turnId: 'turn_browser_active',
       threadId: 'session_browser_fixture',
+    },
+    {
+      type: 'assistant.delta',
+      turnId: 'turn_browser_active',
+      itemId: 'commentary_browser_before',
+      eventType: 'completed',
+      phase: 'commentary',
+      text: 'Checking the event stream and replay state.',
+      delta: '',
     },
     {
       type: 'batch.started',
@@ -315,13 +498,28 @@ function streamActiveTurn(request, response) {
       type: 'batch.updated',
       turnId: 'turn_browser_active',
       batchId: 'batch_browser_command',
-      summary: { command: 'npm test', output: 'Tests are still running' },
+      summary: {
+        command: 'npm test',
+        output: [
+          { type: 'input_text', text: 'Tests are still running' },
+          { type: 'input_text', text: 'No failures yet' },
+        ],
+      },
     },
     {
       type: 'batch.completed',
       turnId: 'turn_browser_active',
       batchId: 'batch_browser_command',
       status: 'completed',
+    },
+    {
+      type: 'assistant.delta',
+      turnId: 'turn_browser_active',
+      itemId: 'commentary_browser_after',
+      eventType: 'completed',
+      phase: 'commentary',
+      text: 'Command output is complete; reviewing the file update.',
+      delta: '',
     },
     {
       type: 'batch.started',
@@ -335,12 +533,14 @@ function streamActiveTurn(request, response) {
       turnId: 'turn_browser_active',
       batchId: 'batch_browser_edit',
       summary: {
-        fileChanges: [{
-          path: 'packages/codex-web/public/styles.css',
-          action: 'updated',
-          additions: 4,
-          deletions: 1,
-        }],
+        fileChanges: {
+          'packages/codex-web/public/styles.css': {
+            action: 'updated',
+            additions: 4,
+            deletions: 1,
+          },
+          'packages/codex-web/public/app.js': { action: 'modified' },
+        },
       },
     },
     {
@@ -357,5 +557,8 @@ function streamActiveTurn(request, response) {
   });
 
   const heartbeat = setInterval(() => response.write(': keep-alive\n\n'), 5_000);
-  request.on('close', () => clearInterval(heartbeat));
+  request.on('close', () => {
+    activeTurnStreams.delete(response);
+    clearInterval(heartbeat);
+  });
 }

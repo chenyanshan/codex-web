@@ -61,8 +61,8 @@ Codex Web 提供 Web 层多人访问控制 facade，只适用于成员彼此完�
   后端在本机保存文件，并把安全 local path 交给 Codex。
 - 模型和推理选项来自当前 Codex CLI；当前 session 配置与本浏览器的新会话默认值
   分开管理。
-- 已鉴权 reports 列表和报告查看器，以及仓库自带的 `codex-mobile-report`
-  skill。
+- 在当前 session 对话内直接预览 Markdown、HTML、PDF、常见图片、网页链接，以及
+  仍在保留期内的历史附件。
 - 仓库自带 `codex-web-user-context` skill，可在需要时读取当前 Codex Web
   登录用户和项目上下文。
 - macOS launchd 服务脚本和 Linux systemd 配置说明。
@@ -77,11 +77,10 @@ packages/codex-native-api   可复用 Codex app-server 集成层
 packages/codex-web          HTTP API、auth、runtime bridge 和 Web UI
 scripts/install             面向 AI 的安装脚本
 scripts/service             launchd 服务脚本
-skills/codex-mobile-report  配套报告 skill
 skills/codex-web-user-context  当前 Codex Web 用户/项目上下文 skill
 docs/superpowers/specs      设计文档
 docs/superpowers/plans      实现计划
-docs/rendering              本地 Markdown/report 渲染验证材料
+docs/rendering              本地 Markdown/文件渲染验证材料
 ```
 
 本仓库从 `CodexBridge-main` 拆分出来。
@@ -157,7 +156,7 @@ scripts/install/install-codex-web-macos.sh
 ```
 
 安装脚本会处理依赖安装、密码设置、服务启动、可选 launchd 自启动，以及安装仓库
-自带的两个 skill。
+自带的用户上下文 skill。
 
 ## 配置
 
@@ -177,6 +176,9 @@ scripts/install/install-codex-web-macos.sh
 ~/.codex-web/uploads/
 ~/.codex-web/tasks/
 ```
+
+`reports/` 和 `report-index.json` 仅用于保证旧版本生成的链接仍能打开。新的 session
+文件保留在当前项目或附件存储中，Codex Web 不再提供全局 Reports 区域。
 
 `auth.json` 保存单用户密码和 session token 的哈希；`identity.json` 保存多人模式
 的密码、session token、分享 capability 的哈希，以及 Web 层授权元数据。两者都不
@@ -225,22 +227,23 @@ Codex Web 会先显示本机浏览器缓存的会话摘要，再在后台向宿�
 
 ### 存储生命周期
 
-Codex Web 只会按受管文件名或报告扩展名清理由自身管理的文件，不跟随符号链接，
-也不会删除项目中的无关文件。清理发生在启动、受管写入前和读取报告前。达到配额
-时先删除过期文件，再从最旧的受管文件开始删除。
+Codex Web 只会按受管文件名或旧报告扩展名清理由自身管理的文件，不跟随符号链接，
+也不会删除项目中的无关文件。清理发生在启动、受管写入前和读取旧报告前。Session
+Viewer 从项目中打开的文件不由 Codex Web 管理或删除。达到配额时先删除过期的受管
+文件，再从最旧的受管文件开始删除。
 
 | 受管数据 | 默认策略 | 配置项 |
 | --- | --- | --- |
-| 状态目录 upload、turn 快照、报告、runtime context | 总计 2 GiB | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
+| 状态目录 upload、turn 快照、旧报告、runtime context | 总计 2 GiB | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
 | 项目内 upload | 每项目 512 MiB | `CODEX_WEB_PROJECT_UPLOAD_MAX_BYTES` |
 | 上传源文件 | TTL 7 天 | `CODEX_WEB_UPLOAD_TTL_SECONDS` |
 | turn 附件快照 | TTL 30 天 | `CODEX_WEB_TURN_ATTACHMENT_TTL_SECONDS` |
-| 报告 | TTL 365 天 | `CODEX_WEB_REPORT_TTL_SECONDS` |
+| 旧报告 | TTL 365 天 | `CODEX_WEB_REPORT_TTL_SECONDS` |
 | runtime context 文件 | TTL 30 天 | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
 | 应用 timeline | 每 session 500 条、总计 16 MiB | `CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION`、`CODEX_WEB_TIMELINE_MAX_BYTES` |
 
-报告 favorite 只是展示元数据，不是长期归档保证。需要长期保留的材料应移出
-`~/.codex-web/reports/`，或提高对应 retention 与 quota 配置。
+`~/.codex-web/reports/` 下的旧文件仍受对应 retention 与 quota 配置约束。该策略只为
+兼容旧版本，不适用于当前 session 项目目录里的文件。
 
 ## 附件
 
@@ -272,32 +275,24 @@ turn prompt。
 
 上传源文件和不可变 turn 快照还会受上面的存储生命周期策略约束。
 
-## 报告 Skill
+历史 session 中展示的附件，在上传源文件或不可变 turn 快照仍存在时可以直接点击。
+已经被 retention 策略清理的附件无法重建，界面会显示为不可用。
 
-配套 skill 位于：
+## Session 文件查看器
 
-```text
-skills/codex-mobile-report
-```
+文件属于对话内容，不再是独立的 Reports 产品。Assistant 在当前项目中生成并链接
+文件后，可以直接从该 session 打开。相对路径以 session 项目根目录解析，访问范围
+限制在当前项目和该 session 已授权的附件目录。
 
-安装到本机 Codex skills：
+- Markdown 使用对话的 Markdown 渲染能力。
+- 自包含的静态 HTML 在 sandbox viewer 中渲染；脚本、相对路径和远程子资源会被阻止。
+- PDF 和常见图片格式在应用内打开。
+- HTTP/HTTPS 链接按普通网页链接打开，后端不会代理目标网页。
 
-```bash
-mkdir -p ~/.codex/skills
-mkdir -p ~/.codex/skills/codex-mobile-report
-cp -R skills/codex-mobile-report/. ~/.codex/skills/codex-mobile-report/
-```
-
-开发时建议使用软链接：
-
-```bash
-mkdir -p ~/.codex/skills
-ln -s "$(pwd)/skills/codex-mobile-report" ~/.codex/skills/codex-mobile-report
-```
-
-该 skill 会把手机可读 Markdown 或自包含 HTML 报告写入
-`~/.codex-web/reports/`。Codex Web 会通过已鉴权 API 暴露这些报告，并在应用内
-打开报告链接。
+新安装不再附带或安装报告生成 skill。`~/.codex-web/reports/` 下的旧链接仍可通过
+已鉴权兼容接口打开，但不再提供全局 Reports 列表和 favorite 工作流。已有的
+`~/.codex/skills/codex-mobile-report` 位于仓库外，升级时不会改动；不再需要时可由
+部署者手动删除。
 
 ## 用户上下文 Skill
 
@@ -453,10 +448,12 @@ Android：用 Chrome 打开，打开浏览器菜单，再点 `Install app` 或
 
 ## 设计文档
 
-当前设计和实现记录：
+设计和实现记录如下。文件工作流以 Session 文件查看器规范为准；较早文档中的 Report
+要求仅作为历史兼容背景保留。
 
 ```text
 docs/superpowers/specs/2026-05-17-codex-web-design.md
+docs/superpowers/specs/2026-07-17-session-file-viewer-design.md
 docs/superpowers/specs/2026-05-19-codex-mobile-reports-design.md
 docs/superpowers/specs/2026-05-23-codex-web-desktop-workspace-design.md
 docs/superpowers/specs/2026-05-27-codex-web-multi-user-rbac-design.md

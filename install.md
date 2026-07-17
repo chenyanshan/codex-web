@@ -71,36 +71,11 @@ The installer script will:
 
 - run `npm install`
 - write the password via `npm run codex-web -- auth set-password`
-- install the bundled report and user-context skills
+- install the bundled user-context skill
 - install or skip launchd based on `--autostart`
 - install hourly private log rotation when launchd is enabled
 - start the service
 - print the local and LAN URLs when available
-
-## Install The Report Skill
-
-After the macOS installer succeeds, the agent should also install the bundled
-report skill from:
-
-```text
-skills/codex-mobile-report
-```
-
-Run:
-
-```bash
-mkdir -p ~/.codex/skills
-mkdir -p ~/.codex/skills/codex-mobile-report
-cp -R skills/codex-mobile-report/. ~/.codex/skills/codex-mobile-report/
-```
-
-If the user plans to keep editing this repository locally, the agent may use a
-symlink instead:
-
-```bash
-mkdir -p ~/.codex/skills
-ln -s "$(pwd)/skills/codex-mobile-report" ~/.codex/skills/codex-mobile-report
-```
 
 ## Install The User Context Skill
 
@@ -135,11 +110,17 @@ After installation, the agent should explain the basic usage flow:
 2. Log in with the password that was set during install.
 3. On iPhone or Android, follow `docs/pwa-setup.md` to add the app to the home
    screen.
-4. In later Codex chats, the user can ask for a phone-readable report such as:
-   `请用 codex-mobile-report 给我生成手机可读报告`
-5. The report skill writes reports under:
-   `~/.codex-web/reports/`
-6. Codex Web lists those reports inside the mobile app.
+4. Ask Codex to create a Markdown, self-contained static HTML, PDF, or image
+   file in the current project and include a link in its answer.
+5. Open that link directly from the session. Normal HTTP and HTTPS links open
+   as web pages.
+6. Files and images attached to earlier messages remain clickable while their
+   retained source or turn snapshot still exists.
+
+New installs do not install a report-generation skill or create a Reports
+workflow. Legacy links under `~/.codex-web/reports/` remain readable for
+compatibility. An existing `~/.codex/skills/codex-mobile-report` directory is
+outside the repository and is not modified by this installer.
 
 The handoff must also state these deployment boundaries:
 
@@ -150,9 +131,9 @@ The handoff must also state these deployment boundaries:
 - Public share links are off by default. Enabling them requires
   `CODEX_WEB_PUBLIC_SHARES_ENABLED=true`; links use the configured TTL and must
   be treated as bearer capabilities.
-- Managed uploads, attachment snapshots, reports, runtime context, timeline,
-  and launchd logs use the quotas and retention defaults documented in
-  `README.md`.
+- Managed uploads, attachment snapshots, legacy reports, runtime context,
+  timeline, and launchd logs use the quotas and retention defaults documented
+  in `README.md`.
 
 ## Post-Install Handoff
 
@@ -161,5 +142,6 @@ After the installer succeeds, point the user to:
 - `README.md` for the normal project overview
 - `README.zh-CN.md` for Chinese instructions
 - `docs/pwa-setup.md` for mobile PWA installation on iPhone or Android
-- `skills/codex-mobile-report` for phone-readable report generation
+- `docs/superpowers/specs/2026-07-17-session-file-viewer-design.md` for session
+  file-preview behavior and security boundaries
 - `skills/codex-web-user-context` for current Codex Web user/project context discovery

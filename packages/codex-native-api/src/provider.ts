@@ -120,6 +120,7 @@ export interface ProviderProfile {
 }
 
 export interface ProviderThreadTurnItem {
+  id?: string | null;
   type: string;
   role: string | null;
   phase: string | null;
@@ -356,6 +357,8 @@ export interface ProviderMcpServerStatus {
 }
 
 export interface ProviderTurnProgress {
+  itemId?: string | null;
+  eventType?: 'started' | 'delta' | 'completed';
   text: string;
   delta: string;
   outputKind: string;

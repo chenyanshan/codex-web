@@ -42,29 +42,7 @@ test('file report store lists markdown and html reports grouped by project', asy
       favorite: false,
     },
   ]);
-});
-
-test('file report store persists favorite state in report index', async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-reports-'));
-  t.after(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-  const reportsDir = path.join(dir, 'reports');
-  const indexPath = path.join(dir, 'report-index.json');
-  await fs.mkdir(path.join(reportsDir, 'project-a', '2026-05-19'), { recursive: true });
-  await fs.writeFile(path.join(reportsDir, 'project-a', '2026-05-19', 'summary.md'), '# Summary\n', 'utf8');
-
-  const store = new FileReportStore({ reportsDir, indexPath });
-  const updated = await store.setFavorite('project-a/2026-05-19/summary.md', true);
-  const reloaded = new FileReportStore({ reportsDir, indexPath });
-  const report = await reloaded.readReport('project-a/2026-05-19/summary.md');
-
-  assert.equal(updated?.favorite, true);
-  assert.equal(report?.favorite, true);
-  const raw = JSON.parse(await fs.readFile(indexPath, 'utf8')) as {
-    reports: Record<string, { favorite: boolean }>;
-  };
-  assert.equal(raw.reports['project-a/2026-05-19/summary.md']?.favorite, true);
+  await assert.rejects(fs.access(indexPath), /ENOENT/u);
 });
 
 test('file report store resolves absolute paths only under reports root', async (t) => {

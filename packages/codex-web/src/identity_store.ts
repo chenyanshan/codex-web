@@ -45,6 +45,7 @@ export interface CodexWebProject {
   displayName: string;
   enabled: boolean;
   activeSessionLimit: number | null;
+  showWorkDetailsToMembers: boolean;
 }
 
 export interface CodexWebAppSession {
@@ -600,6 +601,7 @@ function normalizeProject(project: CodexWebProject): CodexWebProject {
     displayName: cwdLeafName(String(project.displayName ?? '').trim()) || cwdLeafName(cwd) || id,
     enabled: project.enabled !== false,
     activeSessionLimit: normalizeProjectActiveSessionLimit((project as CodexWebProject & { activeSessionLimit?: unknown }).activeSessionLimit),
+    showWorkDetailsToMembers: (project as CodexWebProject & { showWorkDetailsToMembers?: unknown }).showWorkDetailsToMembers !== false,
   };
 }
 

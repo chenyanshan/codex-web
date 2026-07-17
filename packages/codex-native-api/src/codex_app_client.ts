@@ -277,10 +277,33 @@ interface ApprovedExecution {
 
 interface ProgressState {
   commentaryText: string;
+  reasoningSummaryText: string;
   finalAnswerText: string;
   sawAssistantActivity: boolean;
   lastAssistantActivityAt: number;
+  items: Map<string, ProgressItemState>;
 }
+
+interface ProgressItemState {
+  text: string;
+  outputKind: string;
+  reasoningSummaryParts: Map<number, string> | null;
+}
+
+type BufferedTurnEvent =
+  | { type: 'notification'; value: any }
+  | { type: 'approval_request'; value: ProviderApprovalRequest };
+
+interface EarlyTurnEventCapture {
+  threadId: string;
+  turnId: string | null;
+  events: BufferedTurnEvent[];
+  onNotification: (notification: any) => void;
+  onApprovalRequest: (request: ProviderApprovalRequest) => void;
+  stopped: boolean;
+}
+
+const earlyTurnEventCapturesByClient = new WeakMap<object, Set<EarlyTurnEventCapture>>();
 
 interface CodexStderrEntry {
   sequence: number;
@@ -421,6 +444,7 @@ export class CodexAppClient extends EventEmitter {
     this.childStderrTail = [];
     this.childStderrSequence = 0;
     this.threadConfigDefaults = new Map();
+    earlyTurnEventCapturesByClient.set(this, new Set());
   }
 
   logDebug(event: string, payload: unknown = null): void {
@@ -453,6 +477,7 @@ export class CodexAppClient extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    stopAllEarlyTurnEventCaptures(this);
     this.connected = false;
     this.socket?.close();
     this.socket = null;
@@ -705,55 +730,62 @@ export class CodexAppClient extends EventEmitter {
       ),
     });
     const stderrBaseline = this.childStderrSequence;
-    const result: any = await this.request('turn/start', {
-      threadId,
-      input: Array.isArray(input) && input.length > 0
-        ? input
-        : [{
-          type: 'text',
-          text: inputText,
-          text_elements: [],
-        }],
-      cwd,
-      approvalPolicy,
-      sandboxPolicy: mapSandboxPolicy(sandboxMode),
-      model: effectiveModel,
-      serviceTier,
-      effort: effectiveEffort,
-      summary: null,
-      personality,
-      outputSchema: null,
-      collaborationMode: serializeCollaborationMode({
-        collaborationMode,
-        model: effectiveModel,
-        effort: effectiveEffort,
-        developerInstructions,
-      }),
-    }, { timeoutMs: 30_000 });
-    const turn = result?.turn;
-    if (!turn?.id) {
-      throw new Error('Codex turn/start returned no turn id');
-    }
-    this.logDebug('turn_start_acknowledged', {
-      threadId,
-      turnId: String(turn.id),
-      status: String(turn.status ?? ''),
-    });
-    if (typeof onTurnStarted === 'function') {
-      await onTurnStarted({
-        turnId: String(turn.id),
+    const earlyEventCapture = beginEarlyTurnEventCapture(this, threadId);
+    try {
+      const result: any = await this.request('turn/start', {
         threadId,
+        input: Array.isArray(input) && input.length > 0
+          ? input
+          : [{
+            type: 'text',
+            text: inputText,
+            text_elements: [],
+          }],
+        cwd,
+        approvalPolicy,
+        sandboxPolicy: mapSandboxPolicy(sandboxMode),
+        model: effectiveModel,
+        serviceTier,
+        effort: effectiveEffort,
+        summary: null,
+        personality,
+        outputSchema: null,
+        collaborationMode: serializeCollaborationMode({
+          collaborationMode,
+          model: effectiveModel,
+          effort: effectiveEffort,
+          developerInstructions,
+        }),
+      }, { timeoutMs: 30_000 });
+      const turn = result?.turn;
+      if (!turn?.id) {
+        throw new Error('Codex turn/start returned no turn id');
+      }
+      const acknowledgedTurnId = String(turn.id);
+      this.logDebug('turn_start_acknowledged', {
+        threadId,
+        turnId: acknowledgedTurnId,
+        status: String(turn.status ?? ''),
       });
+      if (typeof onTurnStarted === 'function') {
+        await onTurnStarted({
+          turnId: acknowledgedTurnId,
+          threadId,
+        });
+      }
+      earlyEventCapture.turnId = acknowledgedTurnId;
+      return await this.waitForTurnResult({
+        threadId,
+        turnId: acknowledgedTurnId,
+        onProgress,
+        onWorkEvent,
+        onApprovalRequest,
+        timeoutMs,
+        stderrBaseline,
+      });
+    } finally {
+      stopEarlyTurnEventCapture(this, earlyEventCapture);
     }
-    return this.waitForTurnResult({
-      threadId,
-      turnId: String(turn.id),
-      onProgress,
-      onWorkEvent,
-      onApprovalRequest,
-      timeoutMs,
-      stderrBaseline,
-    });
   }
 
   async interruptTurn({ threadId, turnId }: { threadId: string; turnId: string }): Promise<void> {
@@ -1568,10 +1600,11 @@ export class CodexAppClient extends EventEmitter {
     timeoutMs: number;
     stderrBaseline?: number;
   }): Promise<ProviderTurnResult> {
-    const deadline = this.turnPollNow() + timeoutMs;
+    let deadline = this.turnPollNow() + timeoutMs;
     let firstTerminalWithoutOutputAt = null;
     let lastTurnSnapshotKey = null;
     let stableTerminalReadCount = 0;
+    let terminalSettleLeaseRenewed = false;
     let pollCount = 0;
     let includeTurnsUnsupported = false;
     let includeTurnsUnsupportedAt = 0;
@@ -1580,11 +1613,15 @@ export class CodexAppClient extends EventEmitter {
     const terminalSettleMs = computeTerminalSettleMs(timeoutMs);
     const progressState: ProgressState = {
       commentaryText: '',
+      reasoningSummaryText: '',
       finalAnswerText: '',
       sawAssistantActivity: false,
       lastAssistantActivityAt: 0,
+      items: new Map(),
     };
-    const itemOutputKinds = new Map();
+    const itemOutputKinds = new Map<string, string>();
+    const workOutputTexts = new Map<string, string>();
+    const startedWorkEvents = new Map<string, ProviderTurnWorkEvent>();
     const emittedSnapshotWorkEvents = new Set<string>();
     let sawTerminalNotification = false;
     let turnNotificationError: string | null = null;
@@ -1596,7 +1633,12 @@ export class CodexAppClient extends EventEmitter {
       if (notificationError) {
         turnNotificationError = notificationError;
       }
-      const workEvent = extractWorkEventUpdate(notification, { threadId, turnId });
+      const workEvent = extractWorkEventUpdate(notification, {
+        threadId,
+        turnId,
+        workOutputTexts,
+        startedWorkEvents,
+      });
       if (workEvent && typeof onWorkEvent === 'function') {
         void onWorkEvent(workEvent);
       }
@@ -1604,21 +1646,19 @@ export class CodexAppClient extends EventEmitter {
       if (!progress) {
         return;
       }
-      if (progress.outputKind === 'final_answer') {
-        progressState.finalAnswerText += progress.delta;
-      } else {
-        progressState.commentaryText += progress.delta;
+      if (progress.text || progress.eventType !== 'started') {
+        if (progress.outputKind === 'final_answer') {
+          progressState.finalAnswerText = progress.text;
+        } else if (progress.outputKind === 'reasoning_summary') {
+          progressState.reasoningSummaryText = progress.text;
+        } else {
+          progressState.commentaryText = progress.text;
+        }
       }
       progressState.sawAssistantActivity = true;
       progressState.lastAssistantActivityAt = this.turnPollNow();
       if (typeof onProgress === 'function') {
-        void onProgress({
-          text: progress.outputKind === 'final_answer'
-            ? progressState.finalAnswerText
-            : progressState.commentaryText,
-          delta: progress.delta,
-          outputKind: progress.outputKind,
-        });
+        void onProgress(progress);
       }
     };
     const onApprovalEvent = (request: ProviderApprovalRequest) => {
@@ -1642,12 +1682,24 @@ export class CodexAppClient extends EventEmitter {
       terminalSettleMs,
     });
     try {
+      const bufferedEvents = claimEarlyTurnEvents(this, threadId, turnId);
+      if (bufferedEvents.length > 0) {
+        this.logDebug('turn_wait_replay_early_events', {
+          threadId,
+          turnId,
+          eventCount: bufferedEvents.length,
+        });
+      }
+      for (const event of bufferedEvents) {
+        if (event.type === 'notification') {
+          onNotification(event.value);
+        } else {
+          onApprovalEvent(event.value);
+        }
+      }
       while (true) {
         const pendingApprovalCount = this.getPendingApprovals({ threadId, turnId }).length;
         const pastDeadline = this.turnPollNow() >= deadline;
-        if (pastDeadline && pendingApprovalCount === 0) {
-          break;
-        }
         if (pastDeadline && pendingApprovalCount > 0) {
           if (!pendingApprovalWaitLogged || pendingApprovalCount !== lastPendingApprovalCount) {
             this.logDebug('turn_wait_continue', {
@@ -1724,12 +1776,14 @@ export class CodexAppClient extends EventEmitter {
           turn: summarizeTurnSnapshot(turn),
           progress: summarizeProgressState(progressState),
         });
-        emitWorkEventsFromSessionPath({
-          sessionPath: thread?.path ?? null,
-          turnId,
-          onWorkEvent,
-          emittedKeys: emittedSnapshotWorkEvents,
-        });
+        if (!turnHasNativeWorkItems(turn)) {
+          emitWorkEventsFromSessionPath({
+            sessionPath: thread?.path ?? null,
+            turnId,
+            onWorkEvent,
+            emittedKeys: emittedSnapshotWorkEvents,
+          });
+        }
         const openTurnRuntimeError = findOpenTurnRuntimeErrorFromSessionPath(thread?.path ?? null, turnId);
         if (openTurnRuntimeError) {
           this.logDebug('turn_wait_error', {
@@ -1762,8 +1816,40 @@ export class CodexAppClient extends EventEmitter {
           });
           throw new Error(stderrRuntimeError);
         }
+        const turnIsTerminal = Boolean(turn && isTurnTerminal(turn.status));
+        const threadRuntimeType = normalizeNullableString(thread?.runtimeStatus?.type);
+        const shouldRenewObserverLease = pendingApprovalCount > 0
+          || Boolean(turn && !turnIsTerminal)
+          || threadRuntimeType === 'active'
+          || (includeTurnsUnsupported && !sawTerminalNotification);
+        if (pastDeadline && !turnIsTerminal) {
+          if (!shouldRenewObserverLease) {
+            break;
+          }
+          deadline = this.turnPollNow() + timeoutMs;
+          this.logDebug('turn_wait_continue', {
+            threadId,
+            turnId,
+            pollCount,
+            reason: 'observer_lease_renewed',
+            pendingApprovalCount,
+            threadRuntimeType,
+            nextDeadline: deadline,
+          });
+        }
+        if (pastDeadline && turnIsTerminal && !terminalSettleLeaseRenewed) {
+          terminalSettleLeaseRenewed = true;
+          deadline = this.turnPollNow() + terminalSettleMs;
+          this.logDebug('turn_wait_continue', {
+            threadId,
+            turnId,
+            pollCount,
+            reason: 'terminal_settle_lease_renewed',
+            nextDeadline: deadline,
+          });
+        }
         if (includeTurnsUnsupported) {
-          const previewText = progressState.finalAnswerText || progressState.commentaryText;
+          const previewText = resolveProgressPreviewText(progressState);
           const settleAnchor = Math.max(
             includeTurnsUnsupportedAt,
             progressState.lastAssistantActivityAt || 0,
@@ -1789,8 +1875,8 @@ export class CodexAppClient extends EventEmitter {
               outputArtifacts: [],
               outputMedia: [],
               outputState: sawTerminalNotification ? 'complete' : 'partial',
-              previewText: progressState.finalAnswerText,
-              finalSource: progressState.finalAnswerText ? 'progress_only' : 'commentary_only',
+              previewText,
+              finalSource: resolveProgressFinalSource(progressState),
               status: sawTerminalNotification ? 'completed' : null,
             };
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -1862,7 +1948,7 @@ export class CodexAppClient extends EventEmitter {
               outputArtifacts,
               outputMedia: normalizeLegacyImageMedia(outputArtifacts),
               outputState: 'complete',
-              previewText: progressState.finalAnswerText,
+              previewText: resolveProgressPreviewText(progressState),
               finalSource: 'thread_items',
               status: turn.status,
             };
@@ -1886,7 +1972,7 @@ export class CodexAppClient extends EventEmitter {
               outputArtifacts,
               outputMedia: normalizeLegacyImageMedia(outputArtifacts),
               outputState: 'complete',
-              previewText: progressState.finalAnswerText,
+              previewText: resolveProgressPreviewText(progressState),
               finalSource: 'thread_items_media',
               status: turn.status,
             };
@@ -1920,8 +2006,8 @@ export class CodexAppClient extends EventEmitter {
               title: thread?.title ?? null,
               outputText: '',
               outputState: 'interrupted',
-              previewText: progressState.finalAnswerText,
-              finalSource: progressState.finalAnswerText ? 'progress_only' : 'none',
+              previewText: resolveProgressPreviewText(progressState),
+              finalSource: resolveProgressFinalSource(progressState),
               status: turn.status,
             };
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -1948,7 +2034,7 @@ export class CodexAppClient extends EventEmitter {
               threadId,
               title: thread?.title ?? null,
               status: turn.status,
-              previewText: progressState.finalAnswerText,
+              previewText: resolveProgressPreviewText(progressState),
               sessionState,
             });
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2001,7 +2087,7 @@ export class CodexAppClient extends EventEmitter {
               threadId,
               title: thread?.title ?? null,
               status: turn.status,
-              previewText: progressState.finalAnswerText,
+              previewText: resolveProgressPreviewText(progressState),
               sessionState,
             });
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2037,11 +2123,7 @@ export class CodexAppClient extends EventEmitter {
               outputText: '',
               outputState: previewText ? 'partial' : 'missing',
               previewText,
-              finalSource: progressState.finalAnswerText
-                ? 'progress_only'
-                : progressState.commentaryText
-                  ? 'commentary_only'
-                  : 'session_task_complete_empty',
+              finalSource: resolveProgressFinalSource(progressState, 'session_task_complete_empty'),
               status: turn.status,
             };
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2068,7 +2150,7 @@ export class CodexAppClient extends EventEmitter {
                 outputText: '',
                 outputState: 'partial',
                 previewText,
-                finalSource: progressState.finalAnswerText ? 'progress_only' : 'commentary_only',
+                finalSource: resolveProgressFinalSource(progressState),
                 status: turn.status,
               };
               this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2103,7 +2185,7 @@ export class CodexAppClient extends EventEmitter {
                 outputText: '',
                 outputState: 'partial',
                 previewText,
-                finalSource: progressState.finalAnswerText ? 'progress_only' : 'commentary_only',
+                finalSource: resolveProgressFinalSource(progressState),
                 status: turn.status,
               };
               this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2125,11 +2207,7 @@ export class CodexAppClient extends EventEmitter {
             outputText: '',
             outputState: previewText ? 'partial' : 'missing',
             previewText,
-            finalSource: progressState.finalAnswerText
-              ? 'progress_only'
-              : progressState.commentaryText
-                ? 'commentary_only'
-                : 'none',
+            finalSource: resolveProgressFinalSource(progressState),
             status: turn.status,
           };
           this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2137,7 +2215,7 @@ export class CodexAppClient extends EventEmitter {
         }
         await this.turnPollSleep(1000);
       }
-      const previewText = progressState.finalAnswerText || progressState.commentaryText;
+      const previewText = resolveProgressPreviewText(progressState);
       if (previewText) {
         const result = {
           turnId,
@@ -2146,7 +2224,7 @@ export class CodexAppClient extends EventEmitter {
           outputText: '',
           outputState: 'partial',
           previewText,
-          finalSource: progressState.finalAnswerText ? 'progress_only' : 'commentary_only',
+          finalSource: resolveProgressFinalSource(progressState),
           status: null,
         };
         this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2165,6 +2243,98 @@ export class CodexAppClient extends EventEmitter {
       this.off('approval_request', onApprovalEvent);
     }
   }
+}
+
+function beginEarlyTurnEventCapture(
+  client: CodexAppClient,
+  threadId: string,
+): EarlyTurnEventCapture {
+  const captures = earlyTurnEventCapturesByClient.get(client) ?? new Set<EarlyTurnEventCapture>();
+  earlyTurnEventCapturesByClient.set(client, captures);
+  const capture: EarlyTurnEventCapture = {
+    threadId,
+    turnId: null,
+    events: [],
+    onNotification: () => {},
+    onApprovalRequest: () => {},
+    stopped: false,
+  };
+  capture.onNotification = (notification: any) => {
+    const notificationThreadId = extractThreadIdFromNotification(notification);
+    const notificationTurnId = extractNotificationTurnId(notification?.params ?? null);
+    if (
+      notificationThreadId !== threadId
+      && (notificationThreadId || !notificationTurnId)
+    ) {
+      return;
+    }
+    capture.events.push({ type: 'notification', value: notification });
+  };
+  capture.onApprovalRequest = (request: ProviderApprovalRequest) => {
+    if (request.threadId !== threadId) {
+      return;
+    }
+    capture.events.push({ type: 'approval_request', value: request });
+  };
+  captures.add(capture);
+  client.on('notification', capture.onNotification);
+  client.on('approval_request', capture.onApprovalRequest);
+  return capture;
+}
+
+function stopEarlyTurnEventCapture(
+  client: CodexAppClient,
+  capture: EarlyTurnEventCapture,
+): void {
+  if (capture.stopped) {
+    return;
+  }
+  capture.stopped = true;
+  client.off('notification', capture.onNotification);
+  client.off('approval_request', capture.onApprovalRequest);
+  earlyTurnEventCapturesByClient.get(client)?.delete(capture);
+}
+
+function stopAllEarlyTurnEventCaptures(client: CodexAppClient): void {
+  const captures = earlyTurnEventCapturesByClient.get(client);
+  if (!captures) {
+    return;
+  }
+  for (const capture of [...captures]) {
+    stopEarlyTurnEventCapture(client, capture);
+  }
+}
+
+function claimEarlyTurnEvents(
+  client: CodexAppClient,
+  threadId: string,
+  turnId: string,
+): BufferedTurnEvent[] {
+  const captures = earlyTurnEventCapturesByClient.get(client);
+  const capture = captures
+    ? [...captures].find((entry) => entry.threadId === threadId && entry.turnId === turnId)
+    : null;
+  if (!capture) {
+    return [];
+  }
+  stopEarlyTurnEventCapture(client, capture);
+  const seen = new Set<unknown>();
+  const events = capture.events.filter((event) => {
+    if (seen.has(event.value)) {
+      return false;
+    }
+    seen.add(event.value);
+    if (event.type === 'approval_request') {
+      return event.value.threadId === threadId
+        && (!event.value.turnId || event.value.turnId === turnId);
+    }
+    const notificationThreadId = extractThreadIdFromNotification(event.value);
+    const notificationTurnId = extractNotificationTurnId(event.value?.params ?? null);
+    return (!notificationThreadId || notificationThreadId === threadId)
+      && (!notificationTurnId || notificationTurnId === turnId);
+  });
+  capture.events = [];
+  return events;
 }
 
 function mapPendingApproval(message: any): PendingApproval | null {
@@ -2760,6 +2930,7 @@ function summarizeTurnSnapshot(turn: any) {
 function summarizeProgressState(progressState: Partial<ProgressState>) {
   return {
     commentaryLength: String(progressState?.commentaryText ?? '').length,
+    reasoningSummaryLength: String(progressState?.reasoningSummaryText ?? '').length,
     finalAnswerLength: String(progressState?.finalAnswerText ?? '').length,
     sawAssistantActivity: Boolean(progressState?.sawAssistantActivity),
     lastAssistantActivityAt: progressState?.lastAssistantActivityAt ?? 0,
@@ -2938,14 +3109,26 @@ function normalizeNullableTimestamp(value) {
 
 function mapTurnItem(raw) {
   return {
+    id: extractItemId(raw),
     type: typeof raw?.type === 'string' ? raw.type : 'unknown',
     role: typeof raw?.role === 'string' ? raw.role : null,
     phase: typeof raw?.phase === 'string' ? raw.phase : null,
-    text: extractStructuredText(raw),
+    text: (isReasoningItem(raw) ? extractReasoningSummaryText(raw) : extractStructuredText(raw)) ?? '',
     savedPath: extractStructuredString(raw?.savedPath),
     result: extractStructuredString(raw?.result),
-    raw: raw && typeof raw === 'object' ? cloneSessionResponseItem(raw) : null,
+    raw: cloneTurnItemRaw(raw),
   };
+}
+
+function cloneTurnItemRaw(raw): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const cloned = cloneSessionResponseItem(raw);
+  if (isReasoningItem(cloned)) {
+    delete cloned.content;
+  }
+  return cloned;
 }
 
 function mapModel(raw) {
@@ -3434,7 +3617,8 @@ function isTerminalNotificationForThread(
   }
   const method = String(notification?.method ?? '').replace(/[^a-z]/gi, '').toLowerCase();
   if (method === 'turncompleted') {
-    return true;
+    const notificationTurnId = extractNotificationTurnId(notification?.params ?? null);
+    return !notificationTurnId || notificationTurnId === turnId;
   }
   if (method === 'itemcompleted') {
     const notificationTurnId = extractNotificationTurnId(notification?.params ?? null);
@@ -3558,9 +3742,31 @@ function extractTurnCommentaryText(turn) {
 }
 
 function resolveTurnPreviewText(turn, progressState: Partial<ProgressState> = {}) {
+  return resolveProgressPreviewText(progressState)
+    || extractTurnCommentaryText(turn);
+}
+
+function resolveProgressPreviewText(progressState: Partial<ProgressState> = {}): string {
   return progressState.finalAnswerText
     || progressState.commentaryText
-    || extractTurnCommentaryText(turn);
+    || progressState.reasoningSummaryText
+    || '';
+}
+
+function resolveProgressFinalSource(
+  progressState: Partial<ProgressState> = {},
+  fallback = 'none',
+): string {
+  if (progressState.finalAnswerText) {
+    return 'progress_only';
+  }
+  if (progressState.commentaryText) {
+    return 'commentary_only';
+  }
+  if (progressState.reasoningSummaryText) {
+    return 'reasoning_summary_only';
+  }
+  return fallback;
 }
 
 function extractTurnOutputArtifacts(turn) {
@@ -4157,10 +4363,15 @@ function selectSessionAgentMessage(
 }
 
 function cloneSessionResponseItem(payload: Record<string, unknown>): ProviderResponseItem {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(payload);
+  const cloned: ProviderResponseItem = typeof structuredClone === 'function'
+    ? structuredClone(payload)
+    : JSON.parse(JSON.stringify(payload));
+  if (normalizeEventItemType(cloned) === 'reasoning') {
+    delete cloned.content;
+    delete cloned.encrypted_content;
+    delete cloned.encryptedContent;
   }
-  return JSON.parse(JSON.stringify(payload));
+  return cloned;
 }
 
 function attachSessionResponseItems(
@@ -4189,7 +4400,7 @@ function shouldWaitForSettledOutputAfterTerminalTurn(turn: any, progressState: P
   if (visibleItems.length === 0) {
     return true;
   }
-  if (progressState.finalAnswerText) {
+  if (progressState.finalAnswerText || progressState.reasoningSummaryText) {
     return true;
   }
   return visibleItems.every((item) => {
@@ -4207,7 +4418,11 @@ function hasUnsettledAssistantActivity(turn: any, progressState: Partial<Progres
   if (progressState.finalAnswerText) {
     return true;
   }
-  if (progressState.commentaryText || progressState.sawAssistantActivity) {
+  if (
+    progressState.commentaryText
+    || progressState.reasoningSummaryText
+    || progressState.sawAssistantActivity
+  ) {
     return true;
   }
   return turn.items.some((item) => {
@@ -4233,7 +4448,12 @@ function buildTurnSnapshotKey(turn) {
   });
 }
 
-function extractProgressUpdate(notification, turnId, itemOutputKinds, progressState) {
+function extractProgressUpdate(
+  notification,
+  turnId,
+  itemOutputKinds,
+  progressState,
+): ProviderTurnProgress | null {
   if (!notification || typeof notification.method !== 'string') {
     return null;
   }
@@ -4245,24 +4465,56 @@ function extractProgressUpdate(notification, turnId, itemOutputKinds, progressSt
   const method = notification.method;
   if (method === 'item/started' || method === 'item/completed') {
     const item = params?.item ?? params;
-    if (!isAssistantVisibleItem(item)) {
+    if (!isAssistantVisibleItem(item) && !isReasoningItem(item)) {
       return null;
     }
-    const itemId = extractItemId(item);
-    const outputKind = classifyAgentOutput(extractAgentPhase(item), method === 'item/completed');
+    const itemId = extractItemId(item) ?? extractItemId(params);
+    const outputKind = isReasoningItem(item)
+      ? 'reasoning_summary'
+      : resolveLifecycleOutputKind(item, itemId, itemOutputKinds, method === 'item/completed');
     if (itemId) {
       itemOutputKinds.set(itemId, outputKind);
     }
-    if (method === 'item/completed' && outputKind === 'final_answer') {
-      const nextText = extractCompletedAgentText(params) ?? item?.text ?? null;
-      return buildProgressUpdate(progressState.finalAnswerText, nextText, outputKind);
-    }
-    return null;
+    const state = getProgressItemState(progressState, itemId, outputKind);
+    const itemText = isReasoningItem(item)
+      ? extractReasoningSummaryText(item)
+      : extractCompletedAgentText(params);
+    return buildProgressUpdate({
+      state,
+      nextText: itemText ?? state.text,
+      outputKind,
+      itemId,
+      eventType: method === 'item/started' ? 'started' : 'completed',
+      emitEmpty: true,
+    });
   }
-  if (method !== 'item/agentMessage/delta') {
-    if (!isAgentDeltaNotificationMethod(method)) {
+  if (isReasoningSummaryDeltaNotificationMethod(method)) {
+    const delta = extractNotificationDelta(params);
+    if (!delta) {
       return null;
     }
+    const itemId = extractItemId(params);
+    const state = getProgressItemState(progressState, itemId, 'reasoning_summary');
+    const summaryIndex = normalizeSummaryIndex(params?.summaryIndex);
+    const summaryParts = state.reasoningSummaryParts ?? new Map<number, string>();
+    const previousText = state.text;
+    summaryParts.set(summaryIndex, `${summaryParts.get(summaryIndex) ?? ''}${delta}`);
+    state.reasoningSummaryParts = summaryParts;
+    state.text = [...summaryParts.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, text]) => text)
+      .join('\n\n');
+    state.outputKind = 'reasoning_summary';
+    return {
+      itemId,
+      eventType: 'delta',
+      text: state.text,
+      delta: state.text.startsWith(previousText) ? state.text.slice(previousText.length) : '',
+      outputKind: 'reasoning_summary',
+    };
+  }
+  if (!isAgentDeltaNotificationMethod(method)) {
+    return null;
   }
   const delta = extractNotificationDelta(params);
   if (!delta) {
@@ -4270,10 +4522,14 @@ function extractProgressUpdate(notification, turnId, itemOutputKinds, progressSt
   }
   const itemId = extractItemId(params);
   const outputKind = resolveNotificationOutputKind(params, itemId, itemOutputKinds);
-  const currentText = outputKind === 'final_answer'
-    ? progressState.finalAnswerText
-    : progressState.commentaryText;
-  return buildProgressUpdate(currentText, `${currentText}${delta}`, outputKind);
+  const state = getProgressItemState(progressState, itemId, outputKind);
+  return buildProgressUpdate({
+    state,
+    nextText: `${state.text}${delta}`,
+    outputKind,
+    itemId,
+    eventType: 'delta',
+  });
 }
 
 function extractWorkEventUpdate(
@@ -4281,9 +4537,13 @@ function extractWorkEventUpdate(
   {
     threadId,
     turnId,
+    workOutputTexts,
+    startedWorkEvents,
   }: {
     threadId: string;
     turnId: string;
+    workOutputTexts: Map<string, string>;
+    startedWorkEvents: Map<string, ProviderTurnWorkEvent>;
   },
 ): ProviderTurnWorkEvent | null {
   if (!notification || typeof notification.method !== 'string') {
@@ -4312,26 +4572,65 @@ function extractWorkEventUpdate(
     if (isAssistantVisibleItem(item) || isUserVisibleItem(item)) {
       return null;
     }
-    const itemId = extractItemId(item) ?? extractItemId(params);
+    const itemType = normalizeEventItemType(item);
+    const responseToolItem = itemType === 'functioncall'
+      || itemType === 'customtoolcall'
+      || itemType === 'functioncalloutput'
+      || itemType === 'customtoolcalloutput';
+    const itemId = responseToolItem
+      ? extractToolCallCorrelationId(item, params)
+      : extractItemId(item) ?? extractItemId(params);
     if (!itemId) {
       return null;
     }
     const summary = buildWorkSummary(item, params);
-    const kind = classifyWorkEventKind(item, params);
+    const previous = startedWorkEvents.get(itemId);
+    const kind = previous?.kind ?? classifyWorkEventKind(item, params);
+    if (kind === 'command') {
+      const output = typeof summary.output === 'string' ? summary.output : null;
+      if (output !== null) {
+        workOutputTexts.set(itemId, output);
+      } else if (method === 'item/completed' && workOutputTexts.has(itemId)) {
+        summary.output = workOutputTexts.get(itemId)!;
+      }
+    }
     if (kind === 'unknown' && Object.keys(summary).length === 0) {
       return null;
     }
-    return {
+    const event: ProviderTurnWorkEvent = {
       type: method === 'item/started' ? 'started' : 'completed',
       itemId,
       kind,
-      title: buildWorkTitle(kind, item, summary),
+      title: previous?.title ?? buildWorkTitle(kind, item, summary),
       status: normalizeNullableString(item?.status ?? params?.status),
       summary,
       raw: notification,
     };
+    if (event.type === 'started') {
+      startedWorkEvents.set(itemId, event);
+    }
+    return event;
   }
-  if (method === 'codex/event/exec_command_output_delta') {
+  if (method === 'item/fileChange/patchUpdated') {
+    const itemId = extractItemId(params);
+    const fileChanges = extractFileChangesValue(params);
+    if (!itemId || fileChanges.length === 0) {
+      return null;
+    }
+    return {
+      type: 'updated',
+      itemId,
+      kind: 'file_change',
+      title: buildWorkTitle('file_change', params, { fileChanges }),
+      status: normalizeNullableString(params?.status),
+      summary: { fileChanges },
+      raw: notification,
+    };
+  }
+  if (
+    method === 'item/commandExecution/outputDelta'
+    || method === 'codex/event/exec_command_output_delta'
+  ) {
     const itemId = extractItemId(params);
     const delta = extractNotificationDelta(params)
       ?? normalizeNullableString(params?.chunk)
@@ -4339,11 +4638,13 @@ function extractWorkEventUpdate(
     if (!itemId || !delta) {
       return null;
     }
+    const output = `${workOutputTexts.get(itemId) ?? ''}${delta}`;
+    workOutputTexts.set(itemId, output);
     return {
       type: 'updated',
       itemId,
       kind: 'command',
-      summary: { output: delta },
+      summary: { output, outputDelta: delta },
       raw: notification,
     };
   }
@@ -4407,6 +4708,15 @@ function extractWorkEventsFromTurnSnapshot(turn: any): ProviderTurnWorkEvent[] {
   )));
 }
 
+function turnHasNativeWorkItems(turn: any): boolean {
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  return items.some((item) => {
+    const raw = item?.raw && typeof item.raw === 'object' ? item.raw : item;
+    const type = normalizeEventItemType(raw);
+    return type === 'commandexecution' || type === 'filechange';
+  });
+}
+
 function extractWorkEventsFromSessionPath(
   sessionPath: string | null | undefined,
   turnId: string,
@@ -4426,13 +4736,16 @@ function extractWorkEventsFromResponseItems(items: any[]): ProviderTurnWorkEvent
   const startedByItemId = new Map<string, ProviderTurnWorkEvent>();
   const events: ProviderTurnWorkEvent[] = [];
   for (const item of items) {
-    const event = extractWorkEventFromTurnItem(item, startedByItemId);
-    if (!event) {
+    const extracted = extractWorkEventFromTurnItem(item, startedByItemId);
+    if (!extracted) {
       continue;
     }
-    events.push(event);
-    if (event.type === 'started') {
-      startedByItemId.set(event.itemId, event);
+    const itemEvents = Array.isArray(extracted) ? extracted : [extracted];
+    for (const event of itemEvents) {
+      events.push(event);
+      if (event.type === 'started') {
+        startedByItemId.set(event.itemId, event);
+      }
     }
   }
   return events;
@@ -4517,12 +4830,18 @@ function isSessionAnyTurnBoundary(entry: any): boolean {
 function extractWorkEventFromTurnItem(
   item: any,
   startedByItemId: Map<string, ProviderTurnWorkEvent>,
-): ProviderTurnWorkEvent | null {
+): ProviderTurnWorkEvent | ProviderTurnWorkEvent[] | null {
   if (!item || typeof item !== 'object' || isAssistantVisibleItem(item) || isUserVisibleItem(item)) {
     return null;
   }
   const itemType = normalizeEventItemType(item);
-  const itemId = extractItemId(item);
+  const responseToolItem = itemType === 'functioncall'
+    || itemType === 'customtoolcall'
+    || itemType === 'functioncalloutput'
+    || itemType === 'customtoolcalloutput';
+  const itemId = responseToolItem
+    ? extractToolCallCorrelationId(item)
+    : extractItemId(item);
   if (!itemId) {
     return null;
   }
@@ -4559,12 +4878,76 @@ function extractWorkEventFromTurnItem(
       raw: item,
     };
   }
+  if (itemType === 'commandexecution' || itemType === 'filechange') {
+    const summary = buildWorkSummary(item, item);
+    const kind = itemType === 'commandexecution' ? 'command' : 'file_change';
+    const status = normalizeNullableString(item?.status);
+    const title = buildWorkTitle(kind, item, summary);
+    const events: ProviderTurnWorkEvent[] = [{
+      type: 'started',
+      itemId,
+      kind,
+      title,
+      status,
+      summary: {},
+      raw: item,
+    }, {
+      type: 'updated',
+      itemId,
+      kind,
+      title,
+      status,
+      summary,
+      raw: item,
+    }];
+    if (isCompletedWorkItemStatus(status)) {
+      events.push({
+        type: 'completed',
+        itemId,
+        kind,
+        title,
+        status,
+        summary,
+        raw: item,
+      });
+    }
+    return events;
+  }
   return null;
+}
+
+function extractToolCallCorrelationId(...values: any[]): string | null {
+  for (const value of values) {
+    const callId = normalizeNullableString(
+      value?.call_id
+        ?? value?.callId
+        ?? value?.item?.call_id
+        ?? value?.item?.callId,
+    );
+    if (callId) {
+      return callId;
+    }
+  }
+  for (const value of values) {
+    const itemId = extractItemId(value);
+    if (itemId) {
+      return itemId;
+    }
+  }
+  return null;
+}
+
+function isCompletedWorkItemStatus(status: string | null): boolean {
+  const normalized = String(status ?? '').replace(/[^a-z]/giu, '').toLowerCase();
+  return ['completed', 'complete', 'failed', 'declined', 'cancelled', 'canceled'].includes(normalized);
 }
 
 function classifyWorkEventKind(item, params): ProviderTurnWorkEventKind {
   const toolName = extractToolName(item) ?? extractToolName(params);
   const parsedToolArguments = parseToolArguments(item) ?? parseToolArguments(params);
+  if (hasEmbeddedApplyPatchCall(item) || hasEmbeddedApplyPatchCall(params)) {
+    return 'file_change';
+  }
   const typeText = [
     item?.type,
     item?.kind,
@@ -4686,7 +5069,7 @@ function buildWorkTitle(
   summary: Record<string, unknown>,
 ): string {
   const explicit = normalizeNullableString(item?.title ?? item?.name ?? item?.label);
-  if (explicit) {
+  if (explicit && !(kind === 'file_change' && normalizeToolName(explicit) === 'exec')) {
     return explicit;
   }
   if (kind === 'command' && typeof summary.command === 'string' && summary.command.trim()) {
@@ -4784,15 +5167,80 @@ function extractPatchText(value): string | null {
   if (!value || typeof value !== 'object') {
     return null;
   }
-  const direct = normalizeNullableString(value?.patch ?? value?.diff ?? value?.changeset ?? value?.input ?? value?.item?.patch ?? value?.item?.diff ?? value?.item?.input);
+  const direct = normalizeNullableString(value?.patch ?? value?.diff ?? value?.changeset ?? value?.item?.patch ?? value?.item?.diff);
   if (direct) {
     return direct;
   }
-  const rawArguments = value?.arguments ?? value?.input ?? value?.item?.arguments ?? value?.item?.input;
-  if (typeof rawArguments === 'string' && rawArguments.includes('*** Begin Patch')) {
-    return rawArguments;
+  const candidates = [
+    value?.arguments,
+    value?.input,
+    value?.item?.arguments,
+    value?.item?.input,
+  ];
+  for (const candidate of candidates) {
+    const patch = extractEmbeddedPatchPayload(candidate);
+    if (patch) {
+      return patch;
+    }
   }
   return null;
+}
+
+function hasEmbeddedApplyPatchCall(value): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  for (const candidate of [value?.arguments, value?.input, value?.item?.arguments, value?.item?.input]) {
+    if (typeof candidate === 'string' && /\btools\s*\.\s*apply_patch\s*\(/u.test(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function extractEmbeddedPatchPayload(value): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const start = value.indexOf('*** Begin Patch');
+  if (start < 0) {
+    return null;
+  }
+  const marker = '*** End Patch';
+  const end = value.indexOf(marker, start);
+  if (end < 0) {
+    return null;
+  }
+  const payload = value.slice(start, end + marker.length);
+  return payload.includes('\n') ? payload : decodeEscapedPatchPayload(payload);
+}
+
+function decodeEscapedPatchPayload(value: string): string {
+  let decoded = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (character !== '\\' || index + 1 >= value.length) {
+      decoded += character;
+      continue;
+    }
+    const escape = value[index + 1]!;
+    if (escape === 'n') {
+      decoded += '\n';
+      index += 1;
+    } else if (escape === 'r') {
+      decoded += '\r';
+      index += 1;
+    } else if (escape === 't') {
+      decoded += '\t';
+      index += 1;
+    } else if (escape === '"' || escape === "'" || escape === '\\') {
+      decoded += escape;
+      index += 1;
+    } else {
+      decoded += character;
+    }
+  }
+  return decoded;
 }
 
 function firstNonEmptyFileChanges(groups: Array<Array<Record<string, unknown>>>): Array<Record<string, unknown>> {
@@ -4829,16 +5277,20 @@ function extractFileChangesFromPatch(value: string | null): Array<Record<string,
 }
 
 function extractWorkOutputValue(value): string | null {
-  const direct = normalizeNullableString(
-    value?.output
-      ?? value?.stdout
-      ?? value?.stderr
-      ?? value?.text
-      ?? value?.content
-      ?? value?.result?.output,
-  );
-  if (direct) {
-    return direct;
+  for (const candidate of [
+    value?.output,
+    value?.aggregatedOutput,
+    value?.aggregated_output,
+    value?.stdout,
+    value?.stderr,
+    value?.text,
+    value?.content,
+    value?.result?.output,
+  ]) {
+    const direct = extractStructuredString(candidate);
+    if (direct) {
+      return direct;
+    }
   }
   if (Array.isArray(value?.outputs)) {
     const output = value.outputs
@@ -4882,9 +5334,24 @@ function normalizeFileChange(value): Record<string, unknown> | null {
     return null;
   }
   const change: Record<string, unknown> = { path: pathValue };
-  const action = normalizeNullableString(value?.action ?? value?.type ?? value?.status);
+  const kind = value?.kind && typeof value.kind === 'object' ? value.kind : null;
+  const kindType = normalizeNullableString(kind?.type ?? (typeof value?.kind === 'string' ? value.kind : null));
+  const action = normalizeFileChangeAction(
+    normalizeNullableString(value?.action ?? kindType ?? value?.type ?? value?.status),
+  );
   if (action) {
     change.action = action;
+  }
+  if (kindType) {
+    change.kind = kindType;
+  }
+  const movePath = normalizeNullableString(kind?.move_path ?? kind?.movePath ?? value?.move_path ?? value?.movePath);
+  if (movePath) {
+    change.movePath = movePath;
+  }
+  const diff = typeof value?.diff === 'string' ? value.diff : null;
+  if (diff !== null) {
+    change.diff = diff;
   }
   const additions = extractNumericValue(value, ['additions', 'added', 'linesAdded']);
   if (additions !== null) {
@@ -4895,6 +5362,20 @@ function normalizeFileChange(value): Record<string, unknown> | null {
     change.deletions = deletions;
   }
   return change;
+}
+
+function normalizeFileChangeAction(value: string | null): string | null {
+  const normalized = String(value ?? '').replace(/[^a-z]/giu, '').toLowerCase();
+  if (normalized === 'add' || normalized === 'added' || normalized === 'create' || normalized === 'created') {
+    return 'added';
+  }
+  if (normalized === 'delete' || normalized === 'deleted' || normalized === 'remove' || normalized === 'removed') {
+    return 'deleted';
+  }
+  if (normalized === 'update' || normalized === 'updated' || normalized === 'modify' || normalized === 'modified') {
+    return 'modified';
+  }
+  return value;
 }
 
 function extractNumericValue(value, keys: string[]): number | null {
@@ -4922,6 +5403,10 @@ function extractNotificationTurnId(params) {
   const nested = typeof params?.item?.turnId === 'string' ? params.item.turnId : null;
   if (nested) {
     return nested;
+  }
+  const turn = typeof params?.turn?.id === 'string' ? params.turn.id : null;
+  if (turn) {
+    return turn;
   }
   return typeof params?.event?.turnId === 'string' ? params.event.turnId : null;
 }
@@ -4960,19 +5445,67 @@ function resolveNotificationOutputKind(params, itemId, itemOutputKinds) {
   return explicit;
 }
 
-function buildProgressUpdate(currentText, nextText, outputKind) {
+function resolveLifecycleOutputKind(item, itemId, itemOutputKinds, completed) {
+  const phase = extractAgentPhase(item);
+  if (!phase && !completed && itemId && itemOutputKinds.has(itemId)) {
+    return itemOutputKinds.get(itemId);
+  }
+  return classifyAgentOutput(phase, completed);
+}
+
+function getProgressItemState(
+  progressState: ProgressState,
+  itemId: string | null,
+  outputKind: string,
+): ProgressItemState {
+  const key = itemId ?? `anonymous:${outputKind}`;
+  const existing = progressState.items.get(key);
+  if (existing) {
+    existing.outputKind = outputKind;
+    return existing;
+  }
+  const state: ProgressItemState = {
+    text: '',
+    outputKind,
+    reasoningSummaryParts: null,
+  };
+  progressState.items.set(key, state);
+  return state;
+}
+
+function buildProgressUpdate({
+  state,
+  nextText,
+  outputKind,
+  itemId,
+  eventType,
+  emitEmpty = false,
+}: {
+  state: ProgressItemState;
+  nextText: unknown;
+  outputKind: string;
+  itemId: string | null;
+  eventType: 'started' | 'delta' | 'completed';
+  emitEmpty?: boolean;
+}): ProviderTurnProgress | null {
   const normalizedNextText = String(nextText ?? '');
-  if (!normalizedNextText) {
+  if (!normalizedNextText && !emitEmpty) {
     return null;
   }
-  const previous = String(currentText ?? '');
+  const previous = state.text;
   const delta = normalizedNextText.startsWith(previous)
     ? normalizedNextText.slice(previous.length)
-    : normalizedNextText;
-  if (!delta) {
+    : previous
+      ? ''
+      : normalizedNextText;
+  if (!delta && !emitEmpty) {
     return null;
   }
+  state.text = normalizedNextText;
+  state.outputKind = outputKind;
   return {
+    itemId,
+    eventType,
     text: normalizedNextText,
     delta,
     outputKind,
@@ -5027,6 +5560,16 @@ function isAgentDeltaNotificationMethod(method) {
     || normalized === 'itemmessagedelta';
 }
 
+function isReasoningSummaryDeltaNotificationMethod(method) {
+  const normalized = String(method ?? '').replace(/[^a-z]/gi, '').toLowerCase();
+  return normalized === 'itemreasoningsummarytextdelta';
+}
+
+function normalizeSummaryIndex(value): number {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= 0 ? numeric : 0;
+}
+
 function extractItemId(value) {
   const candidates = [
     value?.itemId,
@@ -5056,6 +5599,18 @@ function extractAgentPhase(value) {
   return null;
 }
 
+function isReasoningItem(item) {
+  return normalizeEventItemType(item) === 'reasoning';
+}
+
+function extractReasoningSummaryText(item): string {
+  const summary = Array.isArray(item?.summary) ? item.summary : [];
+  return summary
+    .map((entry) => extractStructuredString(entry))
+    .filter((entry): entry is string => Boolean(entry))
+    .join('\n\n');
+}
+
 function extractCompletedAgentText(params) {
   if (typeof params?.text === 'string' && params.text) {
     return params.text;
@@ -5077,6 +5632,13 @@ function extractStructuredText(value) {
 function extractStructuredString(value) {
   if (typeof value === 'string' && value.trim()) {
     return value;
+  }
+  if (Array.isArray(value)) {
+    const text = value
+      .map((entry) => extractStructuredString(entry))
+      .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+      .join('\n');
+    return text || null;
   }
   if (!value || typeof value !== 'object') {
     return null;

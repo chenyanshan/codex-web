@@ -178,6 +178,54 @@ async function createIdentityStore() {
   return store;
 }
 
+async function readInitialSseEvents(url: string, token: string): Promise<any[]> {
+  const controller = new AbortController();
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: controller.signal,
+  });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') ?? '', /^text\/event-stream\b/iu);
+  assert.ok(response.body);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let payload = '';
+  const timeout = setTimeout(() => controller.abort(), 2_000);
+  try {
+    while (!payload.includes('"type":"turn.completed"')) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      payload += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+    await reader.cancel().catch(() => {});
+  }
+  return payload
+    .split('\n')
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice('data: '.length)));
+}
+
+async function waitForSseClose(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      reader.read().then((result) => result.done).catch(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 test('multi-user session list omits conversation details while direct reads retain them', async () => {
   const identityStore = await createIdentityStore();
   const aliceRuntimeSession = {
@@ -383,7 +431,7 @@ test('multi-user session create uses project cwd and stores app session mapping'
   }
 });
 
-test('admin project APIs persist active session limits', async () => {
+test('admin project APIs persist active session limits and member work visibility', async () => {
   const identityStore = await createIdentityStore();
   const runtime = runtimeStub();
   const server = createCodexWebServer({
@@ -404,11 +452,13 @@ test('admin project APIs persist active session limits', async () => {
         cwd: '/Users/admin/limited',
         displayName: 'Limited',
         activeSessionLimit: 5,
+        showWorkDetailsToMembers: false,
       }),
     });
     assert.equal(create.status, 201);
     const createPayload = await create.json();
     assert.equal(createPayload.project.activeSessionLimit, 5);
+    assert.equal(createPayload.project.showWorkDetailsToMembers, false);
 
     const list = await fetch(`${server.baseUrl}/api/admin/projects`, {
       headers: { Authorization: 'Bearer admin' },
@@ -416,12 +466,13 @@ test('admin project APIs persist active session limits', async () => {
     assert.equal(list.status, 200);
     const listPayload = await list.json();
     assert.equal(listPayload.items.find((item: any) => item.id === 'project_limited')?.activeSessionLimit, 5);
+    assert.equal(listPayload.items.find((item: any) => item.id === 'project_limited')?.showWorkDetailsToMembers, false);
   } finally {
     await server.stop();
   }
 });
 
-test('admin project patch updates active session limits', async () => {
+test('admin project patch updates active session limits and member work visibility', async () => {
   const identityStore = await createIdentityStore();
   const runtime = runtimeStub();
   const server = createCodexWebServer({
@@ -440,6 +491,7 @@ test('admin project patch updates active session limits', async () => {
       body: JSON.stringify({
         displayName: 'Allowed Updated',
         activeSessionLimit: 7,
+        showWorkDetailsToMembers: false,
       }),
     });
     assert.equal(patch.status, 200);
@@ -448,10 +500,164 @@ test('admin project patch updates active session limits', async () => {
     assert.equal(patchPayload.project.displayName, 'Allowed Updated');
     assert.equal(patchPayload.project.cwd, '/Users/alice/secret-repo');
     assert.equal(patchPayload.project.activeSessionLimit, 7);
+    assert.equal(patchPayload.project.showWorkDetailsToMembers, false);
 
     const state = await identityStore.readState();
     assert.equal(state.projects.find((project) => project.id === 'project_allowed')?.activeSessionLimit, 7);
+    assert.equal(state.projects.find((project) => project.id === 'project_allowed')?.showWorkDetailsToMembers, false);
   } finally {
+    await server.stop();
+  }
+});
+
+test('disabling member work details closes existing streams and restricts subsequent hydration', async () => {
+  const identityStore = await createIdentityStore();
+  const runtimeSession = {
+    id: 'thread_alice',
+    cwd: '/Users/alice/private',
+    projectName: 'private',
+    settings: {},
+    thread: {
+      threadId: 'thread_alice',
+      turns: [{
+        id: 'turn_alice',
+        status: 'completed',
+        error: null,
+        items: [
+          { type: 'message', role: 'assistant', phase: 'commentary', text: 'PRIVATE_COMMENTARY' },
+          { type: 'message', role: 'assistant', phase: 'final_answer', text: 'Safe answer' },
+        ],
+      }],
+    },
+    timeline: [
+      { id: 'timeline_commentary', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'PRIVATE_COMMENTARY' },
+      { id: 'timeline_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Safe answer' },
+    ],
+  };
+  const runtime = {
+    ...runtimeStub(),
+    readSession: async () => runtimeSession,
+    threadIdForTurn: () => 'thread_alice',
+    getTurnEvents: () => [{
+      sequence: 1,
+      event: {
+        id: 'evt_turn_started',
+        type: 'turn.started',
+        turnId: 'turn_alice',
+        threadId: 'thread_alice',
+      },
+    }],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  const controller = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  try {
+    const stream = await fetch(`${server.baseUrl}/api/turns/turn_alice/events`, {
+      headers: { Authorization: 'Bearer alice' },
+      signal: controller.signal,
+    });
+    assert.equal(stream.status, 200);
+    assert.ok(stream.body);
+    reader = stream.body.getReader();
+    const initial = await reader.read();
+    assert.equal(initial.done, false);
+    assert.match(new TextDecoder().decode(initial.value), /turn\.started/u);
+
+    const patch = await fetch(`${server.baseUrl}/api/admin/projects/project_allowed`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ showWorkDetailsToMembers: false }),
+    });
+    assert.equal(patch.status, 200);
+    assert.equal((await patch.json()).project.showWorkDetailsToMembers, false);
+
+    assert.equal(await waitForSseClose(reader), true);
+
+    const hydrated = await fetch(`${server.baseUrl}/api/sessions/app_alice`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(hydrated.status, 200);
+    const payload = await hydrated.json();
+    assert.equal(payload.session.canViewWorkDetails, false);
+    assert.deepEqual(
+      payload.session.thread.turns[0].items.map((item: any) => item.text),
+      ['Safe answer'],
+    );
+    assert.deepEqual(payload.session.timeline.map((entry: any) => entry.text), ['Safe answer']);
+    assert.doesNotMatch(JSON.stringify(payload), /PRIVATE_COMMENTARY/u);
+  } finally {
+    controller.abort();
+    await reader?.cancel().catch(() => {});
+    await server.stop();
+  }
+});
+
+test('legacy project POST closes existing streams when member work visibility changes', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = {
+    ...runtimeStub(),
+    threadIdForTurn: () => 'thread_alice',
+    getTurnEvents: () => [{
+      sequence: 1,
+      event: {
+        id: 'evt_turn_started',
+        type: 'turn.started',
+        turnId: 'turn_alice',
+        threadId: 'thread_alice',
+      },
+    }],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  const controller = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  try {
+    const stream = await fetch(`${server.baseUrl}/api/turns/turn_alice/events`, {
+      headers: { Authorization: 'Bearer alice' },
+      signal: controller.signal,
+    });
+    assert.equal(stream.status, 200);
+    assert.ok(stream.body);
+    reader = stream.body.getReader();
+    const initial = await reader.read();
+    assert.equal(initial.done, false);
+
+    const update = await fetch(`${server.baseUrl}/api/admin/projects`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'project_allowed',
+        internalName: 'secret-repo',
+        cwd: '/Users/alice/secret-repo',
+        displayName: 'Allowed Project',
+        enabled: true,
+        activeSessionLimit: null,
+        showWorkDetailsToMembers: false,
+      }),
+    });
+    assert.equal(update.status, 201);
+    assert.equal((await update.json()).project.showWorkDetailsToMembers, false);
+    assert.equal(await waitForSseClose(reader), true);
+  } finally {
+    controller.abort();
+    await reader?.cancel().catch(() => {});
     await server.stop();
   }
 });
@@ -808,10 +1014,42 @@ test('admin projects list exposes every enabled project as creatable', async () 
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       items: [
-        { id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, favorite: false },
-        { id: 'project_denied', displayName: 'Other Project', canCreate: true, favorite: false },
+        { id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, canViewWorkDetails: true, favorite: false },
+        { id: 'project_denied', displayName: 'Other Project', canCreate: true, canViewWorkDetails: true, favorite: false },
       ],
     });
+  } finally {
+    await server.stop();
+  }
+});
+
+test('project list exposes computed work-detail capability for admins and members', async () => {
+  const identityStore = await createIdentityStore();
+  const existing = (await identityStore.readState()).projects.find((project) => project.id === 'project_allowed')!;
+  await identityStore.upsertProject({ ...existing, showWorkDetailsToMembers: false });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const [memberResponse, adminResponse] = await Promise.all([
+      fetch(`${server.baseUrl}/api/projects`, { headers: { Authorization: 'Bearer alice' } }),
+      fetch(`${server.baseUrl}/api/projects`, { headers: { Authorization: 'Bearer admin' } }),
+    ]);
+    assert.equal(memberResponse.status, 200);
+    assert.equal(adminResponse.status, 200);
+    const memberPayload = await memberResponse.json();
+    const adminPayload = await adminResponse.json();
+
+    assert.equal(memberPayload.items.find((item: any) => item.id === 'project_allowed')?.canViewWorkDetails, false);
+    assert.equal(adminPayload.items.find((item: any) => item.id === 'project_allowed')?.canViewWorkDetails, true);
   } finally {
     await server.stop();
   }
@@ -885,7 +1123,7 @@ test('multi-user role-assigned projects are creatable without a separate user to
     });
     assert.equal(projects.status, 200);
     assert.deepEqual(await projects.json(), {
-      items: [{ id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, favorite: false }],
+      items: [{ id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, canViewWorkDetails: true, favorite: false }],
     });
 
     const create = await fetch(`${server.baseUrl}/api/sessions`, {
@@ -1075,6 +1313,150 @@ test('admin normal event stream access to another owner session is hidden', asyn
       headers: { Authorization: 'Bearer admin' },
     });
     assert.equal(response.status, 404);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('hidden project event streams send safe work categories to members and full details to admins', async () => {
+  const identityStore = await createIdentityStore();
+  const existingProject = (await identityStore.readState()).projects.find((project) => project.id === 'project_allowed')!;
+  await identityStore.upsertProject({ ...existingProject, showWorkDetailsToMembers: false });
+  await identityStore.upsertSession({
+    id: 'app_admin',
+    codexThreadId: 'thread_admin',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_admin',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: null,
+    archiveSource: null,
+  });
+  const storedEventsFor = (turnId: string, threadId: string) => [
+    {
+      sequence: 1,
+      event: {
+        id: `evt_${turnId}_commentary`,
+        type: 'assistant.delta',
+        turnId,
+        threadId,
+        text: 'Inspecting /Users/alice/private',
+        phase: 'commentary',
+      },
+    },
+    {
+      sequence: 2,
+      event: {
+        id: `evt_${turnId}_started`,
+        type: 'batch.started',
+        turnId,
+        batchId: `batch_${turnId}`,
+        kind: 'command',
+        title: 'cat /Users/alice/private',
+      },
+    },
+    {
+      sequence: 3,
+      event: {
+        id: `evt_${turnId}_updated`,
+        type: 'batch.updated',
+        turnId,
+        batchId: `batch_${turnId}`,
+        summary: {
+          command: 'cat /Users/alice/private',
+          output: 'secret output',
+          fileChanges: [{ path: '/Users/alice/private', diff: 'private diff' }],
+        },
+      },
+    },
+    {
+      sequence: 4,
+      event: {
+        id: `evt_${turnId}_completed`,
+        type: 'batch.completed',
+        turnId,
+        batchId: `batch_${turnId}`,
+        status: 'completed',
+      },
+    },
+    {
+      sequence: 5,
+      event: {
+        id: `evt_${turnId}_final_delta`,
+        type: 'assistant.delta',
+        turnId,
+        threadId,
+        text: 'Done',
+        phase: 'final_answer',
+      },
+    },
+    {
+      sequence: 6,
+      event: {
+        id: `evt_${turnId}_turn_completed`,
+        type: 'turn.completed',
+        turnId,
+        threadId,
+        status: 'completed',
+      },
+    },
+  ];
+  const runtime = {
+    ...runtimeStub(),
+    threadIdForTurn: (turnId: string) => turnId === 'turn_admin' ? 'thread_admin' : 'thread_alice',
+    getTurnEvents: (turnId: string) => storedEventsFor(
+      turnId,
+      turnId === 'turn_admin' ? 'thread_admin' : 'thread_alice',
+    ),
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const memberEvents = await readInitialSseEvents(`${server.baseUrl}/api/turns/turn_alice/events`, 'alice');
+    const adminEvents = await readInitialSseEvents(`${server.baseUrl}/api/turns/turn_admin/events`, 'admin');
+
+    assert.deepEqual(memberEvents.map((event) => event.type), [
+      'stream.ready',
+      'batch.started',
+      'batch.completed',
+      'assistant.delta',
+      'turn.completed',
+    ]);
+    assert.equal(memberEvents[0]?.reset, false);
+    assert.equal(memberEvents[1]?.kind, 'command');
+    assert.equal(memberEvents[1]?.title, 'Running command');
+    assert.equal(memberEvents[2]?.status, 'completed');
+    assert.equal(memberEvents[3]?.phase, 'final_answer');
+    assert.doesNotMatch(
+      JSON.stringify(memberEvents),
+      /Users|private|secret output|private diff|fileChanges|batch\.updated|commentary/u,
+    );
+
+    assert.deepEqual(adminEvents.map((event) => event.type), [
+      'stream.ready',
+      'assistant.delta',
+      'batch.started',
+      'batch.updated',
+      'batch.completed',
+      'assistant.delta',
+      'turn.completed',
+    ]);
+    assert.equal(adminEvents[0]?.reset, false);
+    assert.equal(adminEvents[1]?.phase, 'commentary');
+    assert.equal(adminEvents[2]?.title, 'cat /Users/alice/private');
+    assert.equal(adminEvents[3]?.summary.command, 'cat /Users/alice/private');
+    assert.equal(adminEvents[3]?.summary.output, 'secret output');
+    assert.equal(adminEvents[3]?.summary.fileChanges[0].diff, 'private diff');
   } finally {
     await server.stop();
   }
@@ -1496,6 +1878,106 @@ test('share links read sessions without bearer auth and stay read-only', async (
   }
 });
 
+test('share capabilities expose only same-project reports referenced by public assistant answers', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-share-reports-'));
+  const identityStore = await createIdentityStore();
+  const linkedReportId = 'project_allowed/2026-07-16/linked.md';
+  const unlistedReportId = 'project_allowed/2026-07-16/unlisted.md';
+  const symlinkReportId = 'project_allowed/2026-07-16/escape.md';
+  const otherProjectReportId = 'project_denied/2026-07-16/other.md';
+  await fs.mkdir(path.join(stateDir, 'reports', 'project_allowed', '2026-07-16'), { recursive: true });
+  await fs.mkdir(path.join(stateDir, 'reports', 'project_denied', '2026-07-16'), { recursive: true });
+  await fs.writeFile(path.join(stateDir, 'reports', linkedReportId), '# Linked report\n');
+  await fs.writeFile(path.join(stateDir, 'reports', unlistedReportId), '# Unlisted report\n');
+  await fs.writeFile(path.join(stateDir, 'reports', otherProjectReportId), '# Other project\n');
+  const outsideReportPath = path.join(stateDir, 'outside.md');
+  await fs.writeFile(outsideReportPath, '# Outside report\n');
+  await fs.symlink(outsideReportPath, path.join(stateDir, 'reports', symlinkReportId));
+  await fs.writeFile(path.join(stateDir, 'report-index.json'), JSON.stringify({
+    version: 1,
+    reports: {
+      [otherProjectReportId]: { project: 'project_allowed' },
+    },
+  }));
+  const userText = `Do not share /Users/alice/.codex-web/reports/${unlistedReportId}`;
+  const assistantText = [
+    `[Linked](/Users/alice/.codex-web/reports/${linkedReportId})`,
+    `[Other](/Users/alice/.codex-web/reports/${otherProjectReportId})`,
+    `[Traversal](/Users/alice/.codex-web/reports/project_allowed/../secret.md)`,
+    `[Symlink](/Users/alice/.codex-web/reports/${symlinkReportId})`,
+  ].join('\n');
+  const runtime = {
+    ...runtimeStub(),
+    readSession: async (threadId: string) => ({
+      id: threadId,
+      cwd: '/Users/alice/secret-repo',
+      projectName: 'secret-repo',
+      settings: {},
+      thread: {
+        turns: [{
+          id: 'turn_reports',
+          status: 'completed',
+          error: null,
+          items: [
+            { type: 'message', role: 'user', phase: null, text: userText },
+            { type: 'message', role: 'assistant', phase: 'final_answer', text: assistantText },
+          ],
+        }],
+      },
+      timeline: [
+        { id: 'user_reports', kind: 'message', role: 'user', label: 'User', meta: 'history', text: userText },
+        { id: 'assistant_reports', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: assistantText },
+      ],
+    }),
+  };
+  const precreated = await identityStore.createShare({ sessionId: 'app_alice', createdByUserId: 'user_alice' });
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig({ stateDir, publicSharesEnabled: true }),
+  });
+  await server.start();
+  try {
+    const sessionResponse = await fetch(`${server.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/session`);
+    assert.equal(sessionResponse.status, 200);
+    const sessionPayload = await sessionResponse.json();
+    assert.deepEqual(sessionPayload.reports.map((report: any) => report.id), [linkedReportId]);
+    assert.equal(sessionPayload.reports[0].path, undefined);
+
+    const contentResponse = await fetch(
+      `${server.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/reports/${encodeURIComponent(linkedReportId)}/content`,
+    );
+    assert.equal(contentResponse.status, 200);
+    const contentPayload = await contentResponse.json();
+    assert.equal(contentPayload.content, '# Linked report\n');
+    assert.equal(contentPayload.report.id, linkedReportId);
+    assert.equal(contentPayload.report.path, undefined);
+
+    const unlistedResponse = await fetch(
+      `${server.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/reports/${encodeURIComponent(unlistedReportId)}/content`,
+    );
+    assert.equal(unlistedResponse.status, 404);
+    const otherProjectResponse = await fetch(
+      `${server.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/reports/${encodeURIComponent(otherProjectReportId)}/content`,
+    );
+    assert.equal(otherProjectResponse.status, 404);
+
+    const createResponse = await fetch(`${server.baseUrl}/api/sessions/app_alice/share`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(createResponse.status, 201);
+    const createPayload = await createResponse.json();
+    assert.deepEqual(createPayload.reports.map((report: any) => report.id), [linkedReportId]);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('share event streams are limited to turns from the shared session', async () => {
   const identityStore = await createIdentityStore();
   const { token } = await identityStore.createShare({ sessionId: 'app_alice', createdByUserId: 'user_alice' });
@@ -1630,6 +2112,7 @@ test('admin settings and project management APIs require admin principal', async
       displayName: 'new-secret',
       enabled: true,
       activeSessionLimit: 30,
+      showWorkDetailsToMembers: true,
     });
   } finally {
     await server.stop();
@@ -1825,7 +2308,7 @@ test('admin can create users with direct project assignments that unlock project
     });
     assert.equal(projects.status, 200);
     assert.deepEqual(await projects.json(), {
-      items: [{ id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, favorite: false }],
+      items: [{ id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, canViewWorkDetails: true, favorite: false }],
     });
 
     const create = await fetch(`${server.baseUrl}/api/sessions`, {
@@ -1898,7 +2381,7 @@ test('project favorites are stored per user and returned with projects', async (
     });
     assert.equal(aliceProjects.status, 200);
     assert.deepEqual(await aliceProjects.json(), {
-      items: [{ id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, favorite: true }],
+      items: [{ id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, canViewWorkDetails: true, favorite: true }],
     });
 
     const adminProjects = await fetch(`${server.baseUrl}/api/projects`, {
@@ -1907,8 +2390,8 @@ test('project favorites are stored per user and returned with projects', async (
     assert.equal(adminProjects.status, 200);
     assert.deepEqual(await adminProjects.json(), {
       items: [
-        { id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, favorite: false },
-        { id: 'project_denied', displayName: 'Other Project', canCreate: true, favorite: false },
+        { id: 'project_allowed', displayName: 'Allowed Project', canCreate: true, canViewWorkDetails: true, favorite: false },
+        { id: 'project_denied', displayName: 'Other Project', canCreate: true, canViewWorkDetails: true, favorite: false },
       ],
     });
 
@@ -2238,7 +2721,7 @@ test('starting a writable app session turn projects codex web runtime context an
   }
 });
 
-test('ordinary multi-user requests are forced to safe runtime policies at every input boundary', async () => {
+test('ordinary trusted multi-user requests preserve full access at every input boundary', async () => {
   const identityStore = await createIdentityStore();
   const createInputs: any[] = [];
   const settingsInputs: any[] = [];
@@ -2295,10 +2778,28 @@ test('ordinary multi-user requests are forced to safe runtime policies at every 
     });
     assert.equal(turn.status, 202);
 
-    for (const policy of [createInputs[0]?.settings, settingsInputs[0], turnInputs[0]?.settings]) {
-      assert.equal(policy.accessPreset, 'default');
-      assert.equal(policy.sandboxMode, 'workspace-write');
-      assert.equal(policy.approvalPolicy, 'on-request');
+    const durableSubmission = await fetch(`${server.baseUrl}/api/session-submissions`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        submissionId: `sub-full-access-${process.pid}-${Date.now()}`,
+        projectId: 'project_allowed',
+        text: 'start with full access',
+        settings: { accessPreset: 'full-access', sandboxMode: 'danger-full-access', approvalPolicy: 'never' },
+      }),
+    });
+    assert.equal(durableSubmission.status, 201);
+
+    for (const policy of [
+      createInputs[0]?.settings,
+      settingsInputs[0],
+      turnInputs[0]?.settings,
+      createInputs[1]?.settings,
+      turnInputs[1]?.settings,
+    ]) {
+      assert.equal(policy.accessPreset, 'full-access');
+      assert.equal(policy.sandboxMode, 'danger-full-access');
+      assert.equal(policy.approvalPolicy, 'never');
     }
   } finally {
     await server.stop();
@@ -2492,9 +2993,197 @@ test('multi-user reports are filtered by project grants and omit server paths', 
       headers: { Authorization: 'Bearer alice' },
     });
     assert.equal(denied.status, 404);
+
+    const favoriteMutation = await fetch(`${server.baseUrl}/api/reports/${encodeURIComponent(allowedId)}/favorite`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: true }),
+    });
+    assert.equal(favoriteMutation.status, 404);
+    await assert.rejects(fs.access(path.join(stateDir, 'report-index.json')), /ENOENT/u);
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('hidden projects filter work details from every member session hydration response', async () => {
+  const identityStore = await createIdentityStore();
+  const existingProject = (await identityStore.readState()).projects.find((project) => project.id === 'project_allowed')!;
+  await identityStore.upsertProject({ ...existingProject, showWorkDetailsToMembers: false });
+  await identityStore.upsertSession({
+    id: 'app_admin',
+    codexThreadId: 'thread_admin',
+    projectId: 'project_allowed',
+    ownerUserId: 'user_admin',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: null,
+    archiveSource: null,
+  });
+  const sensitiveSession = (threadId: string) => ({
+    id: threadId,
+    cwd: '/Users/alice/private',
+    projectName: 'private',
+    settings: {},
+    thread: {
+      threadId,
+      turns: [
+        {
+          id: 'turn_sensitive',
+          status: 'failed',
+          error: 'failed at /Users/alice/private/command.sh',
+          items: [
+            { type: 'message', role: 'user', phase: null, text: 'Safe question' },
+            { type: 'message', role: 'assistant', phase: 'commentary', text: 'COMMENTARY /Users/alice/private' },
+            { type: 'message', role: 'assistant', phase: 'analysis', text: 'ANALYSIS private reasoning' },
+            { type: 'commandExecution', role: null, phase: null, text: 'COMMAND cat /Users/alice/private' },
+            { type: 'toolOutput', role: null, phase: null, text: 'OUTPUT private output and DIFF private diff' },
+            { type: 'message', role: 'assistant', phase: 'final_answer', text: 'Safe answer' },
+          ],
+        },
+        {
+          id: 'turn_legacy_final',
+          status: 'completed',
+          error: null,
+          items: [
+            { type: 'message', role: 'user', phase: null, text: 'Legacy question' },
+            { type: 'message', role: 'assistant', phase: null, text: 'EARLY_NULL_COMMENTARY private path' },
+            { type: 'message', role: 'assistant', phase: null, text: 'Legacy safe answer' },
+          ],
+        },
+        {
+          id: 'turn_active',
+          status: 'inProgress',
+          error: null,
+          items: [
+            { type: 'message', role: 'user', phase: null, text: 'Active question' },
+            { type: 'message', role: 'assistant', phase: null, text: 'ACTIVE_NULL_COMMENTARY private path' },
+            { type: 'message', role: 'assistant', phase: 'final_answer', text: 'Explicit final answer' },
+          ],
+        },
+      ],
+    },
+    timeline: [
+      { id: 'timeline_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Safe question' },
+      { id: 'timeline_commentary', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'COMMENTARY /Users/alice/private' },
+      { id: 'timeline_analysis', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'ANALYSIS private reasoning' },
+      { id: 'timeline_tool', kind: 'message', role: 'system', label: 'Command /Users/alice/private', meta: 'work', text: 'OUTPUT private output and DIFF private diff' },
+      { id: 'timeline_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Safe answer' },
+      { id: 'timeline_error', kind: 'message', role: 'system', label: 'Error /Users/alice/private', meta: 'failed', text: 'failed at /Users/alice/private', severity: 'error' },
+      { id: 'timeline_legacy_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Legacy question' },
+      { id: 'timeline_legacy_early', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'EARLY_NULL_COMMENTARY private path' },
+      { id: 'timeline_legacy_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Legacy safe answer' },
+      { id: 'timeline_active_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Active question' },
+      { id: 'timeline_active_null', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'ACTIVE_NULL_COMMENTARY private path' },
+      { id: 'timeline_active_explicit', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Explicit final answer' },
+    ],
+  });
+  const runtime = {
+    ...runtimeStub(),
+    readSession: async (threadId: string) => sensitiveSession(threadId),
+    updateSessionFavorite: async (threadId: string) => sensitiveSession(threadId),
+    updateSessionSettings: async (threadId: string) => sensitiveSession(threadId),
+    startTurn: async (threadId: string) => ({
+      type: 'command',
+      command: { name: 'goal', action: 'show', message: 'Goal is active.', goal: null },
+      session: sensitiveSession(threadId),
+    }),
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const memberResponses = await Promise.all([
+      fetch(`${server.baseUrl}/api/sessions/app_alice`, {
+        headers: { Authorization: 'Bearer alice' },
+      }),
+      fetch(`${server.baseUrl}/api/sessions/app_alice/favorite`, {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ favorite: true }),
+      }),
+      fetch(`${server.baseUrl}/api/sessions/app_alice/settings`, {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5.4' }),
+      }),
+      fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: '/goal' }),
+      }),
+    ]);
+    const memberPayloads = await Promise.all(memberResponses.map(async (response) => {
+      assert.ok(response.status === 200 || response.status === 202);
+      return response.json();
+    }));
+    for (const payload of memberPayloads) {
+      assert.equal(payload.session.canViewWorkDetails, false);
+      assert.deepEqual(
+        payload.session.thread.turns[0].items.map((item: any) => item.text),
+        ['Safe question', 'Safe answer'],
+      );
+      assert.equal(payload.session.thread.turns[0].error, 'Turn failed');
+      assert.deepEqual(
+        payload.session.thread.turns[1].items.map((item: any) => item.text),
+        ['Legacy question', 'Legacy safe answer'],
+      );
+      assert.deepEqual(
+        payload.session.thread.turns[2].items.map((item: any) => item.text),
+        ['Active question', 'Explicit final answer'],
+      );
+      assert.deepEqual(
+        payload.session.timeline.map((entry: any) => entry.text),
+        [
+          'Safe question',
+          'Safe answer',
+          'Turn failed',
+          'Legacy question',
+          'Legacy safe answer',
+          'Active question',
+          'Explicit final answer',
+        ],
+      );
+      assert.deepEqual(
+        payload.session.timeline.map((entry: any) => entry.meta),
+        ['history', 'final', 'failed', 'history', 'final', 'history', 'final'],
+      );
+      assert.doesNotMatch(
+        JSON.stringify(payload),
+        /COMMENTARY|ANALYSIS|COMMAND|OUTPUT|DIFF|EARLY_NULL|ACTIVE_NULL|Users\/alice|private reasoning|private output|private diff/u,
+      );
+    }
+
+    const adminResponse = await fetch(`${server.baseUrl}/api/sessions/app_admin`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(adminResponse.status, 200);
+    const adminPayload = await adminResponse.json();
+    assert.equal(adminPayload.session.canViewWorkDetails, true);
+    assert.deepEqual(
+      adminPayload.session.thread.turns[0].items.map((item: any) => item.text),
+      [
+        'Safe question',
+        'COMMENTARY /Users/alice/private',
+        'ANALYSIS private reasoning',
+        'COMMAND cat /Users/alice/private',
+        'OUTPUT private output and DIFF private diff',
+        'Safe answer',
+      ],
+    );
+    assert.match(JSON.stringify(adminPayload), /COMMENTARY|ANALYSIS|COMMAND|OUTPUT|DIFF|Users\/alice/u);
+  } finally {
+    await server.stop();
   }
 });
 
@@ -2520,21 +3209,72 @@ test('session and share DTOs whitelist nested runtime data', async () => {
         threadId: 'thread_alice',
         cwd: '/Users/alice/private',
         path: '/Users/alice/.codex/session.jsonl',
-        turns: [{
-          id: 'turn_1',
-          status: 'completed',
-          error: null,
-          items: [{
-            type: 'message',
-            role: 'assistant',
-            phase: 'final_answer',
-            text: 'Safe answer',
-            savedPath: '/Users/alice/private/output.md',
-            raw: { cwd: '/Users/alice/private' },
-          }],
-        }],
+        turns: [
+          {
+            id: 'turn_1',
+            status: 'completed',
+            error: null,
+            items: [
+              { type: 'message', role: 'user', phase: null, text: 'Safe question' },
+              { type: 'message', role: 'assistant', phase: 'commentary', text: 'HIDDEN_COMMENTARY' },
+              { type: 'message', role: 'assistant', phase: 'analysis', text: 'HIDDEN_ANALYSIS' },
+              { type: 'commandExecution', role: null, phase: null, text: 'HIDDEN_TOOL_OUTPUT' },
+              {
+                type: 'message',
+                role: 'assistant',
+                phase: 'final_answer',
+                text: 'Safe answer',
+                savedPath: '/Users/alice/private/output.md',
+                raw: { cwd: '/Users/alice/private' },
+              },
+            ],
+          },
+          {
+            id: 'turn_legacy',
+            status: 'completed',
+            error: null,
+            items: [
+              { type: 'message', role: 'assistant', phase: null, text: 'HIDDEN_EARLY_NULL' },
+              { type: 'message', role: 'assistant', phase: null, text: 'Legacy answer' },
+            ],
+          },
+          {
+            id: 'turn_active',
+            status: 'inProgress',
+            error: null,
+            items: [
+              { type: 'message', role: 'assistant', phase: null, text: 'HIDDEN_ACTIVE_NULL' },
+            ],
+          },
+          {
+            id: 'turn_failed_null',
+            status: 'failed',
+            error: 'provider failure',
+            items: [
+              { type: 'message', role: 'assistant', phase: null, text: 'HIDDEN_FAILED_NULL' },
+            ],
+          },
+          {
+            id: 'turn_interrupted_null',
+            status: 'interrupted',
+            error: null,
+            items: [
+              { type: 'message', role: 'assistant', phase: null, text: 'HIDDEN_INTERRUPTED_NULL' },
+            ],
+          },
+        ],
       },
-      timeline: [{ id: 'timeline_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: '', text: 'Safe answer' }],
+      timeline: [
+        { id: 'timeline_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Safe question' },
+        { id: 'timeline_commentary', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'HIDDEN_COMMENTARY' },
+        { id: 'timeline_analysis', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'HIDDEN_ANALYSIS' },
+        { id: 'timeline_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Safe answer' },
+        { id: 'timeline_legacy_early', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'HIDDEN_EARLY_NULL' },
+        { id: 'timeline_legacy_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Legacy answer' },
+        { id: 'timeline_active_null', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'HIDDEN_ACTIVE_NULL' },
+        { id: 'timeline_failed_null', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'HIDDEN_FAILED_NULL' },
+        { id: 'timeline_interrupted_null', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'HIDDEN_INTERRUPTED_NULL' },
+      ],
     }),
   };
   runtime.startTurn = async () => ({
@@ -2572,14 +3312,50 @@ test('session and share DTOs whitelist nested runtime data', async () => {
     const workspacePayload = await workspace.json();
     const sharePayload = await share.json();
     const commandPayload = await command.json();
+    assert.equal(workspacePayload.session.canViewWorkDetails, true);
+    assert.equal(sharePayload.session.canViewWorkDetails, false);
+    assert.equal(commandPayload.session.canViewWorkDetails, true);
     for (const payload of [workspacePayload, sharePayload, commandPayload]) {
       const serialized = JSON.stringify(payload);
       assert.doesNotMatch(serialized, /"(?:cwd|threadId|raw|bridgeSessionId|metadata|savedPath)"/u);
       assert.doesNotMatch(serialized, /\/Users\/alice\/private|session\.jsonl|unknownProviderField/u);
-      if (payload.session) {
-        assert.equal(payload.session.thread.turns[0].items[0].text, 'Safe answer');
-      }
     }
+    assert.deepEqual(
+      workspacePayload.session.thread.turns[0].items.map((item: any) => item.text),
+      ['Safe question', 'HIDDEN_COMMENTARY', 'HIDDEN_ANALYSIS', 'HIDDEN_TOOL_OUTPUT', 'Safe answer'],
+    );
+    assert.deepEqual(
+      commandPayload.session.thread.turns[0].items.map((item: any) => item.text),
+      ['Safe question', 'HIDDEN_COMMENTARY', 'HIDDEN_ANALYSIS', 'HIDDEN_TOOL_OUTPUT', 'Safe answer'],
+    );
+    assert.deepEqual(
+      sharePayload.session.thread.turns[0].items.map((item: any) => item.text),
+      ['Safe question', 'Safe answer'],
+    );
+    assert.deepEqual(
+      sharePayload.session.thread.turns[1].items.map((item: any) => item.text),
+      ['Legacy answer'],
+    );
+    assert.deepEqual(sharePayload.session.thread.turns[2].items, []);
+    assert.deepEqual(sharePayload.session.thread.turns[3].items, []);
+    assert.deepEqual(sharePayload.session.thread.turns[4].items, []);
+    assert.equal(sharePayload.session.thread.turns[3].error, 'Turn failed');
+    assert.deepEqual(
+      sharePayload.session.timeline.map((entry: any) => entry.text),
+      ['Safe question', 'Safe answer', 'Legacy answer'],
+    );
+    assert.deepEqual(
+      sharePayload.session.timeline.map((entry: any) => entry.meta),
+      ['history', 'final', 'final'],
+    );
+    assert.equal(
+      workspacePayload.session.timeline.find((entry: any) => entry.text === 'Safe answer')?.meta,
+      'history',
+    );
+    assert.doesNotMatch(
+      JSON.stringify(sharePayload),
+      /HIDDEN_COMMENTARY|HIDDEN_ANALYSIS|HIDDEN_TOOL_OUTPUT|HIDDEN_EARLY_NULL|HIDDEN_ACTIVE_NULL|HIDDEN_FAILED_NULL|HIDDEN_INTERRUPTED_NULL/u,
+    );
     assert.equal(workspacePayload.session.ownerUserId, 'user_alice');
     assert.equal(workspacePayload.session.activityState, 'waiting_approval');
     assert.equal(sharePayload.session.ownerUserId, undefined);
@@ -2615,15 +3391,32 @@ test('public share capabilities require the feature flag and become invalid afte
     await disabledServer.stop();
   }
 
+  const enabledRuntime = {
+    ...runtimeStub(),
+    getTurnEvents: () => [{
+      sequence: 1,
+      event: {
+        id: 'evt_turn_started',
+        type: 'turn.started',
+        turnId: 'turn_alice',
+        threadId: 'thread_alice',
+      },
+    }],
+  };
   const enabledServer = createCodexWebServer({
     auth: authFor({
       alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
     }),
     identityStore,
-    runtime: runtimeStub() as any,
+    runtime: enabledRuntime as any,
     config: createConfig({ publicSharesEnabled: true }),
   });
   await enabledServer.start();
+  const revokedController = new AbortController();
+  const modeController = new AbortController();
+  let revokedReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let modeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   try {
     const createdResponse = await fetch(`${enabledServer.baseUrl}/api/sessions/app_alice/share`, {
       method: 'POST',
@@ -2631,11 +3424,21 @@ test('public share capabilities require the feature flag and become invalid afte
     });
     assert.equal(createdResponse.status, 201);
     const created = await createdResponse.json();
+    const revokedStream = await fetch(
+      `${enabledServer.baseUrl}/api/share/${encodeURIComponent(created.token)}/turns/turn_alice/events`,
+      { signal: revokedController.signal },
+    );
+    assert.equal(revokedStream.status, 200);
+    assert.ok(revokedStream.body);
+    revokedReader = revokedStream.body.getReader();
+    assert.equal((await revokedReader.read()).done, false);
+
     const revoke = await fetch(`${enabledServer.baseUrl}/api/shares/${encodeURIComponent(created.id)}`, {
       method: 'DELETE',
       headers: { Authorization: 'Bearer alice' },
     });
     assert.equal(revoke.status, 200);
+    assert.equal(await waitForSseClose(revokedReader), true);
     const revokedRead = await fetch(`${enabledServer.baseUrl}/api/share/${encodeURIComponent(created.token)}/session`);
     assert.equal(revokedRead.status, 404);
 
@@ -2656,10 +3459,30 @@ test('public share capabilities require the feature flag and become invalid afte
     const restoredGrant = await fetch(`${enabledServer.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/session`);
     assert.equal(restoredGrant.status, 200);
 
-    await identityStore.setMultiUserEnabled(false);
+    const modeStream = await fetch(
+      `${enabledServer.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/turns/turn_alice/events`,
+      { signal: modeController.signal },
+    );
+    assert.equal(modeStream.status, 200);
+    assert.ok(modeStream.body);
+    modeReader = modeStream.body.getReader();
+    assert.equal((await modeReader.read()).done, false);
+
+    const disableMode = await fetch(`${enabledServer.baseUrl}/api/admin/settings`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ multiUserEnabled: false }),
+    });
+    assert.equal(disableMode.status, 200);
+    assert.equal((await disableMode.json()).settings.multiUserEnabled, false);
+    assert.equal(await waitForSseClose(modeReader), true);
     const disabledByMode = await fetch(`${enabledServer.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/session`);
     assert.equal(disabledByMode.status, 404);
   } finally {
+    revokedController.abort();
+    modeController.abort();
+    await revokedReader?.cancel().catch(() => {});
+    await modeReader?.cancel().catch(() => {});
     await enabledServer.stop();
   }
 });

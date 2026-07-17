@@ -8,11 +8,13 @@ import {
   presentCodexWebEvent,
 } from '../src/event_model.js';
 
-test('progress normalization emits assistant delta events without retaining cumulative raw text', () => {
+test('progress normalization preserves stable item lifecycle, cumulative text, and the latest delta', () => {
   const event = normalizeProgressEvent({
     turnId: 'turn_1',
     threadId: 'thread_1',
     progress: {
+      itemId: 'item_answer_1',
+      eventType: 'delta',
       text: 'Hello',
       delta: 'lo',
       outputKind: 'final_answer',
@@ -24,9 +26,14 @@ test('progress normalization emits assistant delta events without retaining cumu
     type: 'assistant.delta',
     turnId: 'turn_1',
     threadId: 'thread_1',
-    text: 'lo',
+    itemId: 'item_answer_1',
+    eventType: 'delta',
+    text: 'Hello',
+    delta: 'lo',
     phase: 'final_answer',
     raw: {
+      itemId: 'item_answer_1',
+      eventType: 'delta',
       outputKind: 'final_answer',
       textLength: 5,
       deltaLength: 2,
@@ -46,7 +53,12 @@ test('approval normalization emits approval request summary', () => {
       reason: 'needs shell',
       command: 'npm test',
       cwd: '/workspace',
+      grantRoot: '/workspace/generated',
+      networkPermission: true,
+      fileReadPermissions: ['/workspace/input'],
+      fileWritePermissions: ['/workspace/output'],
       availableDecisionKeys: ['accept', 'acceptForSession', 'decline'],
+      execPolicyAmendment: ['prefix_rule(pattern=["npm", "test"], decision="allow")'],
     },
   });
 
@@ -58,11 +70,12 @@ test('approval normalization emits approval request summary', () => {
     command: 'npm test',
     cwd: '/workspace',
     fileChanges: [],
-    grantRoot: null,
-    networkPermission: null,
-    fileReadPermissions: [],
-    fileWritePermissions: [],
+    grantRoot: '/workspace/generated',
+    networkPermission: true,
+    fileReadPermissions: ['/workspace/input'],
+    fileWritePermissions: ['/workspace/output'],
     availableDecisionKeys: ['accept', 'acceptForSession', 'decline'],
+    execPolicyAmendment: ['prefix_rule(pattern=["npm", "test"], decision="allow")'],
   });
 });
 
@@ -80,6 +93,10 @@ test('turn completion uses provider status and final text', () => {
 
   assert.equal(events[0].type, 'assistant.final');
   assert.equal(events[0].text, 'Final answer');
+  assert.equal(events[0].itemId, 'assistant_turn_3_final');
+  assert.equal(events[0].eventType, 'completed');
+  assert.equal(events[0].delta, '');
+  assert.equal(events[0].phase, 'final_answer');
   assert.equal(events[0].raw, undefined);
   assert.equal(events[1].type, 'turn.completed');
   assert.equal(events[1].status, 'completed');
@@ -132,7 +149,7 @@ test('turn failure normalization does not expose local stack traces to frontend 
   assert.doesNotMatch(JSON.stringify(event), /codex_app_client\.ts/u);
 });
 
-test('public event DTOs omit internal thread ids, raw payloads, and cwd fields', () => {
+test('workspace event DTOs retain authorized work context but omit internal and raw fields', () => {
   const presented = presentCodexWebEvent({
     id: 'evt_approval',
     type: 'approval.requested',
@@ -155,9 +172,42 @@ test('public event DTOs omit internal thread ids, raw payloads, and cwd fields',
     turnId: 'turn_1',
     approvalId: 'approval_1',
     approvalKind: 'command',
-    summary: { reason: 'Run tests', command: 'npm test' },
+    summary: { reason: 'Run tests', command: 'npm test', cwd: '/Users/alice/private' },
   });
-  assert.doesNotMatch(JSON.stringify(presented), /thread_private|\/Users\/alice|unknownProviderField|raw/u);
+  assert.doesNotMatch(JSON.stringify(presented), /thread_private|unknownProviderField|raw/u);
+});
+
+test('workspace batch updates retain structured file and failure details', () => {
+  const presented = presentCodexWebEvent({
+    id: 'evt_batch_details',
+    type: 'batch.updated',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    summary: {
+      command: 'npm test',
+      cwd: '/repo',
+      diff: '*** Update File: app.js',
+      error: 'Command failed',
+      exitCode: 1,
+      fileChanges: [{ path: 'app.js', action: 'modified' }],
+      unknownProviderField: 'secret',
+    },
+  });
+
+  assert.deepEqual(presented, {
+    id: 'evt_batch_details',
+    type: 'batch.updated',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    summary: {
+      command: 'npm test',
+      cwd: '/repo',
+      diff: '*** Update File: app.js',
+      error: 'Command failed',
+      exitCode: 1,
+      fileChanges: [{ path: 'app.js', action: 'modified' }],
+    },
+  });
 });
 
 test('share event DTOs expose answer lifecycle but suppress machine work and approval events', () => {
@@ -188,4 +238,158 @@ test('share event DTOs expose answer lifecycle but suppress machine work and app
     phase: 'final_answer',
   });
   assert.equal(batch, null);
+});
+
+test('summary workspace event DTOs expose work categories without work details or commentary', () => {
+  const commentary = presentCodexWebEvent({
+    id: 'evt_commentary',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    threadId: 'thread_private',
+    text: 'I am reading /Users/alice/private',
+    phase: 'commentary',
+  }, 'workspace_summary');
+  const finalDelta = presentCodexWebEvent({
+    id: 'evt_final',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    threadId: 'thread_private',
+    text: 'Done',
+    phase: 'final_answer',
+  }, 'workspace_summary');
+  const started = presentCodexWebEvent({
+    id: 'evt_started',
+    type: 'batch.started',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    kind: 'command',
+    title: 'cat /Users/alice/private',
+  }, 'workspace_summary');
+  const updated = presentCodexWebEvent({
+    id: 'evt_updated',
+    type: 'batch.updated',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    summary: {
+      command: 'cat /Users/alice/private',
+      output: 'secret output',
+      fileChanges: [{ path: '/Users/alice/private' }],
+    },
+  }, 'workspace_summary');
+  const completed = presentCodexWebEvent({
+    id: 'evt_completed',
+    type: 'batch.completed',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    status: 'completed',
+  }, 'workspace_summary');
+
+  assert.equal(commentary, null);
+  assert.deepEqual(finalDelta, {
+    id: 'evt_final',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    text: 'Done',
+    phase: 'final_answer',
+  });
+  assert.deepEqual(started, {
+    id: 'evt_started',
+    type: 'batch.started',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    kind: 'command',
+    title: 'Running command',
+  });
+  assert.equal(updated, null);
+  assert.deepEqual(completed, {
+    id: 'evt_completed',
+    type: 'batch.completed',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    status: 'completed',
+  });
+  assert.doesNotMatch(JSON.stringify([started, completed]), /Users|secret|cat /u);
+
+  const unsafeCompleted = presentCodexWebEvent({
+    id: 'evt_unsafe_completed',
+    type: 'batch.completed',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    status: 'failed at /Users/alice/private',
+  }, 'workspace_summary');
+  assert.equal(unsafeCompleted?.status, 'completed');
+  assert.doesNotMatch(JSON.stringify(unsafeCompleted), /Users|private/u);
+});
+
+test('summary workspace approvals retain only decision context and file targets', () => {
+  const approval = presentCodexWebEvent({
+    id: 'evt_approval_summary',
+    type: 'approval.requested',
+    turnId: 'turn_1',
+    approvalId: 'approval_1',
+    approvalKind: 'command',
+    summary: {
+      command: 'rm -rf /Users/alice/private',
+      reason: 'Remove generated files',
+      networkPermission: false,
+      grantRoot: '/Users/alice/private/generated',
+      fileReadPermissions: ['/Users/alice/private/input.txt', '', 42],
+      fileWritePermissions: ['/Users/alice/private/output.txt'],
+      execPolicyAmendment: ['allow rm build/*', null],
+      cwd: '/Users/alice/private',
+      output: 'secret output',
+      diff: 'secret diff',
+      patch: 'secret patch',
+      exitCode: 17,
+      fileChanges: [
+        {
+          path: '/Users/alice/private/source.txt',
+          target: '/Users/alice/private/target.txt',
+          output: 'nested output',
+          diff: 'nested diff',
+          patch: 'nested patch',
+          exitCode: 9,
+        },
+        '/Users/alice/private/plain.txt',
+        { diff: 'no target means no decision context' },
+      ],
+      availableDecisionKeys: ['accept', 'decline'],
+    },
+  }, 'workspace_summary');
+
+  assert.deepEqual(approval, {
+    id: 'evt_approval_summary',
+    type: 'approval.requested',
+    turnId: 'turn_1',
+    approvalId: 'approval_1',
+    approvalKind: 'command',
+    summary: {
+      availableDecisionKeys: ['accept', 'decline'],
+      command: 'rm -rf /Users/alice/private',
+      reason: 'Remove generated files',
+      grantRoot: '/Users/alice/private/generated',
+      networkPermission: false,
+      fileReadPermissions: ['/Users/alice/private/input.txt'],
+      fileWritePermissions: ['/Users/alice/private/output.txt'],
+      execPolicyAmendment: ['allow rm build/*'],
+      fileChanges: [
+        { path: '/Users/alice/private/source.txt', target: '/Users/alice/private/target.txt' },
+        '/Users/alice/private/plain.txt',
+      ],
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(approval), /"(?:cwd|output|diff|patch|exitCode)"|nested/u);
+});
+
+test('share event DTOs suppress non-final assistant commentary', () => {
+  const commentary = presentCodexWebEvent({
+    id: 'evt_share_commentary',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    threadId: 'thread_private',
+    text: 'Inspecting private files',
+    phase: 'commentary',
+  }, 'share');
+
+  assert.equal(commentary, null);
 });

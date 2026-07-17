@@ -216,6 +216,40 @@ test('identity store defaults project active session limit to 30 and persists ex
   assert.equal((state.projects.find((project) => project.id === 'project_custom_limit') as any)?.activeSessionLimit, 12);
 });
 
+test('identity store defaults legacy project work details to visible and persists hidden projects', async () => {
+  const identityPath = await tempIdentityPath();
+  await fs.writeFile(identityPath, JSON.stringify({
+    settings: { multiUserEnabled: true },
+    projects: [{
+      id: 'project_legacy',
+      internalName: 'legacy',
+      cwd: '/Users/alice/legacy',
+      displayName: 'Legacy',
+      enabled: true,
+      activeSessionLimit: 30,
+    }],
+  }));
+  const store = new FileIdentityStore({ identityPath });
+
+  assert.equal((await store.readState()).projects[0]?.showWorkDetailsToMembers, true);
+
+  const hidden = await store.upsertProject({
+    id: 'project_hidden',
+    internalName: 'hidden',
+    cwd: '/Users/alice/hidden',
+    displayName: 'Hidden',
+    enabled: true,
+    activeSessionLimit: 30,
+    showWorkDetailsToMembers: false,
+  });
+
+  assert.equal(hidden.showWorkDetailsToMembers, false);
+  assert.equal(
+    (await store.readState()).projects.find((project) => project.id === 'project_hidden')?.showWorkDetailsToMembers,
+    false,
+  );
+});
+
 test('identity store persists archive metadata on app sessions', async () => {
   const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
 

@@ -1691,7 +1691,6 @@ test('runtime handles help slash command without starting a native turn', async 
     defaultCwd: '/workspace',
     client,
     eventBus: new CodexWebEventBus(),
-    helpReportPath: '/tmp/codex-web-state/reports/codex-mobile-web-app/2026-05-22/codex-web-help.md',
   });
 
   const result = await runtime.startTurn('thread_help', { text: '/help' });
@@ -1708,10 +1707,7 @@ test('runtime handles help slash command without starting a native turn', async 
   assert.match((result as any).command.message, /\/goal clear/u);
   assert.match((result as any).command.message, /\/goal/u);
   assert.match((result as any).command.message, /\/help/u);
-  assert.match(
-    (result as any).command.message,
-    /\/tmp\/codex-web-state\/reports\/codex-mobile-web-app\/2026-05-22\/codex-web-help\.md/u,
-  );
+  assert.doesNotMatch((result as any).command.message, /reports|帮助文档/iu);
   assert.equal(startTurnCalls, 0);
 });
 
@@ -2464,6 +2460,134 @@ test('runtime emits normalized turn and approval events and maps approval decisi
   assert.deepEqual(resolvedTypes, ['approval.resolved', 'batch.completed']);
 });
 
+test('runtime keeps assistant item identity through final completion and ignores late terminal events', async () => {
+  let lateProgress: ((progress: any) => Promise<void> | void) | null = null;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [createThread()], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_1', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread(),
+    writeConfigValue: async () => {},
+    startTurn: async ({ onTurnStarted, onProgress }) => {
+      await onTurnStarted?.({ turnId: 'turn_items', threadId: 'thread_1' });
+      await onProgress?.({
+        itemId: 'item_final',
+        eventType: 'started',
+        text: '',
+        delta: '',
+        outputKind: 'final_answer',
+      });
+      await onProgress?.({
+        itemId: 'item_final',
+        eventType: 'completed',
+        text: 'Done',
+        delta: 'Done',
+        outputKind: 'final_answer',
+      });
+      lateProgress = onProgress ?? null;
+      return {
+        outputText: 'Done',
+        status: 'completed',
+        turnId: 'turn_items',
+        threadId: 'thread_1',
+      };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  await runtime.startTurn('thread_1', { text: 'finish' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const beforeLate = runtime.getTurnEvents('turn_items').map((entry) => entry.event);
+  const assistantEvents = beforeLate.filter((event) => event.type === 'assistant.delta' || event.type === 'assistant.final');
+  assert.deepEqual(assistantEvents.map((event) => event.itemId), ['item_final', 'item_final', 'item_final']);
+  assert.equal(beforeLate.filter((event) => event.type === 'turn.completed').length, 1);
+
+  await lateProgress?.({
+    itemId: 'item_late',
+    eventType: 'delta',
+    text: 'late',
+    delta: 'late',
+    outputKind: 'commentary',
+  });
+  assert.equal(runtime.getTurnEvents('turn_items').length, beforeLate.length);
+});
+
+test('runtime appends command stream deltas into cumulative batch output', async () => {
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [createThread()], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_1', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread(),
+    writeConfigValue: async () => {},
+    startTurn: async ({ onTurnStarted, onWorkEvent }) => {
+      await onTurnStarted?.({ turnId: 'turn_output', threadId: 'thread_1' });
+      await onWorkEvent?.({
+        type: 'started',
+        itemId: 'command_1',
+        kind: 'command',
+        summary: { command: 'npm test' },
+      });
+      await onWorkEvent?.({
+        type: 'updated',
+        itemId: 'command_1',
+        kind: 'command',
+        summary: { output: 'one ', outputDelta: 'one ', stdoutDelta: 'A', stderrDelta: 'E' },
+      });
+      await onWorkEvent?.({
+        type: 'updated',
+        itemId: 'command_1',
+        kind: 'command',
+        summary: { output: 'one two', outputDelta: 'two', stdoutDelta: 'B', stderrDelta: 'F' },
+      });
+      await onWorkEvent?.({
+        type: 'completed',
+        itemId: 'command_1',
+        kind: 'command',
+        status: 'completed',
+        summary: { output: 'one two' },
+      });
+      return {
+        outputText: 'Complete',
+        status: 'completed',
+        turnId: 'turn_output',
+        threadId: 'thread_1',
+      };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  await runtime.startTurn('thread_1', { text: 'run tests' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const latestUpdate = runtime.getTurnEvents('turn_output')
+    .map((entry) => entry.event)
+    .filter((event) => event.type === 'batch.updated')
+    .at(-1);
+  assert.equal(latestUpdate?.type, 'batch.updated');
+  assert.deepEqual(latestUpdate?.summary, {
+    command: 'npm test',
+    output: 'one two',
+    outputDelta: 'two',
+    stdout: 'AB',
+    stdoutDelta: 'B',
+    stderr: 'EF',
+    stderrDelta: 'F',
+  });
+});
+
 test('runtime replays a recovered old-turn approval and makes that turn visible', async () => {
   const approvalRequest: ProviderApprovalRequest = {
     requestId: 'approval_recovered',
@@ -2619,6 +2743,19 @@ test('runtime observes an active provider turn recovered after restart', async (
         status: 'completed',
         turnId,
         threadId,
+        responseItems: [{
+          id: 'item_recovered_commentary',
+          type: 'message',
+          role: 'assistant',
+          phase: 'commentary',
+          content: [{ type: 'output_text', text: 'Recovered' }],
+        }, {
+          id: 'item_recovered_final',
+          type: 'message',
+          role: 'assistant',
+          phase: 'final_answer',
+          content: [{ type: 'output_text', text: 'Recovered answer' }],
+        }],
       };
     },
     writeConfigValue: async () => {},
@@ -2631,11 +2768,12 @@ test('runtime observes an active provider turn recovered after restart', async (
     interruptTurn: async () => {},
     respondToApproval: async () => {},
   };
+  const eventBus = new CodexWebEventBus({ epoch: 'epoch_recovered_runtime' });
   const runtime = new CodexWebRuntime({
     codexBin: 'codex',
     defaultCwd: '/workspace',
     client,
-    eventBus: new CodexWebEventBus(),
+    eventBus,
   });
 
   assert.equal((await runtime.readSession('thread_observed'))?.activeTurnId, 'turn_observed');
@@ -2647,6 +2785,15 @@ test('runtime observes an active provider turn recovered after restart', async (
     'assistant.final',
     'turn.completed',
   ]);
+  const recoveredFinal = runtime.getTurnEvents('turn_observed')
+    .map((entry) => entry.event)
+    .find((event) => event.type === 'assistant.final');
+  assert.equal(recoveredFinal?.type, 'assistant.final');
+  assert.equal(recoveredFinal?.itemId, 'item_recovered_final');
+  assert.equal(
+    runtime.getTurnEventReplay('turn_observed', null, 'epoch_recovered_runtime').snapshotComplete,
+    false,
+  );
   assert.equal(runtime.hasActiveTurn('turn_observed'), false);
 });
 

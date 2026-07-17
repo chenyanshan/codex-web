@@ -58,3 +58,153 @@ test('event bus keeps bounded turn histories globally', () => {
   assert.deepEqual(bus.list('turn_2').map((entry) => entry.event.id), ['evt_2']);
   assert.deepEqual(bus.list('turn_3').map((entry) => entry.event.id), ['evt_3']);
 });
+
+test('event bus resets expired cursors and retains a compact full-turn snapshot', () => {
+  const bus = new CodexWebEventBus({ maxEventsPerTurn: 2, epoch: 'epoch_current' });
+  bus.append('turn_1', {
+    id: 'evt_started',
+    type: 'turn.started',
+    turnId: 'turn_1',
+    threadId: 'thread_1',
+  });
+  bus.append('turn_1', {
+    id: 'evt_commentary_1',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    threadId: 'thread_1',
+    itemId: 'item_commentary',
+    eventType: 'delta',
+    text: 'Checking',
+    delta: 'Checking',
+    phase: 'commentary',
+  });
+  bus.append('turn_1', {
+    id: 'evt_commentary_2',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    threadId: 'thread_1',
+    itemId: 'item_commentary',
+    eventType: 'completed',
+    text: 'Checking complete',
+    delta: ' complete',
+    phase: 'commentary',
+  });
+
+  const replay = bus.replay('turn_1', 0, 'epoch_current');
+  assert.equal(replay.reset, true);
+  assert.equal(replay.resetReason, 'cursor_expired');
+  assert.equal(replay.retainedFloor, 1);
+  assert.equal(replay.snapshotComplete, true);
+  assert.deepEqual(replay.events.map((entry) => entry.event.id), ['evt_commentary_1', 'evt_commentary_2']);
+  assert.deepEqual(bus.snapshot('turn_1').map((entry) => entry.event.id), [
+    'evt_started',
+    'evt_commentary_2',
+  ]);
+});
+
+test('event bus rejects another process epoch while preserving valid same-epoch cursors', () => {
+  const bus = new CodexWebEventBus({ maxEventsPerTurn: 3, epoch: 'epoch_current' });
+  const first = bus.append('turn_1', {
+    id: 'evt_1',
+    type: 'turn.started',
+    turnId: 'turn_1',
+    threadId: 'thread_1',
+  });
+  bus.append('turn_1', {
+    id: 'evt_2',
+    type: 'assistant.delta',
+    turnId: 'turn_1',
+    threadId: 'thread_1',
+    text: 'Hello',
+    phase: 'commentary',
+  });
+
+  const valid = bus.replay('turn_1', first.sequence, 'epoch_current');
+  assert.equal(valid.reset, false);
+  assert.equal(valid.snapshotComplete, true);
+  assert.deepEqual(valid.events.map((entry) => entry.event.id), ['evt_2']);
+
+  const restarted = bus.replay('turn_1', first.sequence, 'epoch_previous');
+  assert.equal(restarted.reset, true);
+  assert.equal(restarted.resetReason, 'epoch_mismatch');
+  assert.equal(restarted.snapshotComplete, false);
+  assert.deepEqual(restarted.events.map((entry) => entry.event.id), ['evt_1', 'evt_2']);
+});
+
+test('event bus never marks recovered or mid-turn projections as complete snapshots', () => {
+  const recovered = new CodexWebEventBus({ maxEventsPerTurn: 1, epoch: 'epoch_recovered' });
+  recovered.append('turn_recovered', {
+    id: 'evt_recovered_started',
+    type: 'turn.started',
+    turnId: 'turn_recovered',
+    threadId: 'thread_1',
+    raw: { recovered: true },
+  });
+  recovered.append('turn_recovered', {
+    id: 'evt_recovered_delta',
+    type: 'assistant.delta',
+    turnId: 'turn_recovered',
+    threadId: 'thread_1',
+    itemId: 'item_recovered',
+    eventType: 'delta',
+    text: 'Resumed here',
+    delta: 'Resumed here',
+    phase: 'commentary',
+  });
+  const recoveredReplay = recovered.replay('turn_recovered', 0, 'epoch_recovered');
+  assert.equal(recoveredReplay.resetReason, 'cursor_expired');
+  assert.equal(recoveredReplay.snapshotComplete, false);
+
+  const midTurn = new CodexWebEventBus({ maxEventsPerTurn: 1, epoch: 'epoch_mid_turn' });
+  midTurn.append('turn_mid', {
+    id: 'evt_mid_delta_1',
+    type: 'assistant.delta',
+    turnId: 'turn_mid',
+    threadId: 'thread_1',
+    text: 'Tail one',
+    phase: 'commentary',
+  });
+  midTurn.append('turn_mid', {
+    id: 'evt_mid_delta_2',
+    type: 'assistant.delta',
+    turnId: 'turn_mid',
+    threadId: 'thread_1',
+    text: 'Tail two',
+    phase: 'commentary',
+  });
+  assert.equal(midTurn.replay('turn_mid', 0, 'epoch_mid_turn').snapshotComplete, false);
+});
+
+test('event bus snapshot restores cumulative assistant state after thousands of deltas', () => {
+  const bus = new CodexWebEventBus({ maxEventsPerTurn: 5, epoch: 'epoch_large_turn' });
+  bus.append('turn_large', {
+    id: 'evt_started',
+    type: 'turn.started',
+    turnId: 'turn_large',
+    threadId: 'thread_1',
+  });
+  for (let index = 1; index <= 2_000; index += 1) {
+    bus.append('turn_large', {
+      id: `evt_delta_${index}`,
+      type: 'assistant.delta',
+      turnId: 'turn_large',
+      threadId: 'thread_1',
+      itemId: 'item_long_answer',
+      eventType: index === 2_000 ? 'completed' : 'delta',
+      text: 'x'.repeat(index),
+      delta: 'x',
+      phase: 'final_answer',
+    });
+  }
+
+  const replay = bus.replay('turn_large', 1, 'epoch_large_turn');
+  assert.equal(replay.reset, true);
+  assert.equal(replay.snapshotComplete, true);
+  assert.equal(replay.events.length, 5);
+  const snapshot = bus.snapshot('turn_large');
+  assert.equal(snapshot.length, 2);
+  const answer = snapshot.find((entry) => entry.event.type === 'assistant.delta')?.event;
+  assert.equal(answer?.type, 'assistant.delta');
+  assert.equal(answer?.text.length, 2_000);
+  assert.equal(answer?.eventType, 'completed');
+});

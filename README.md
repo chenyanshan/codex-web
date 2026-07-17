@@ -74,8 +74,8 @@ Untrusted users must be separated with distinct OS users, containers, or hosts.
   paths to Codex.
 - Model and reasoning choices from the active Codex CLI, with current-session
   controls kept separate from per-browser defaults for new sessions.
-- Authenticated report index and report viewer, plus the bundled
-  `codex-mobile-report` skill.
+- Session-scoped file previews for Markdown, HTML, PDF, common images, web
+  links, and retained attachments directly from the conversation.
 - A bundled `codex-web-user-context` skill for discovering the current Codex
   Web user/project context from a server-projected runtime file.
 - macOS launchd service helpers and Linux systemd setup instructions.
@@ -91,11 +91,10 @@ packages/codex-native-api   reusable Codex app-server integration
 packages/codex-web          HTTP API, auth, runtime bridge, and web UI
 scripts/install             AI-guided installer scripts
 scripts/service             launchd service helpers
-skills/codex-mobile-report  companion report skill
 skills/codex-web-user-context current Codex Web user/project context skill
 docs/superpowers/specs      design docs
 docs/superpowers/plans      implementation plans
-docs/rendering              local markdown/report rendering fixtures
+docs/rendering              local Markdown/file rendering fixtures
 ```
 
 This repository was split out from `CodexBridge-main`.
@@ -181,7 +180,7 @@ scripts/install/install-codex-web-macos.sh
 ```
 
 The installer handles dependency install, password setup, service start,
-optional launchd autostart, and installation of both bundled skills.
+optional launchd autostart, and installation of the bundled user-context skill.
 
 ## Configuration
 
@@ -201,6 +200,10 @@ Default paths:
 ~/.codex-web/uploads/
 ~/.codex-web/tasks/
 ```
+
+`reports/` and `report-index.json` are retained only so links created by older
+Codex Web versions keep working. New session files stay in their current
+project or attachment storage; Codex Web no longer uses a global Reports area.
 
 `auth.json` stores single-user password and session-token hashes.
 `identity.json` stores multi-user password, session-token, and share-capability
@@ -259,24 +262,26 @@ and clear site data when retiring a device.
 
 ### Storage lifecycle
 
-Codex Web cleans only files it owns by managed filename or report extension;
-it does not follow symlinks or delete unrelated project files. Cleanup runs at
-startup, before managed writes, and before report access. When a quota is full,
-expired files go first, then the oldest managed files.
+Codex Web cleans only files it owns by managed filename or legacy report
+extension; it does not follow symlinks or delete unrelated project files.
+Cleanup runs at startup, before managed writes, and before legacy report
+access. Files opened from a project by the session viewer are not managed or
+deleted by Codex Web. When a quota is full, expired managed files go first,
+then the oldest managed files.
 
 | Managed data | Default policy | Configuration |
 | --- | --- | --- |
-| State uploads, turn snapshots, reports, runtime context | 2 GiB total | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
+| State uploads, turn snapshots, legacy reports, runtime context | 2 GiB total | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
 | Project-local uploads | 512 MiB per project | `CODEX_WEB_PROJECT_UPLOAD_MAX_BYTES` |
 | Uploaded source files | 7-day TTL | `CODEX_WEB_UPLOAD_TTL_SECONDS` |
 | Turn attachment snapshots | 30-day TTL | `CODEX_WEB_TURN_ATTACHMENT_TTL_SECONDS` |
-| Reports | 365-day TTL | `CODEX_WEB_REPORT_TTL_SECONDS` |
+| Legacy reports | 365-day TTL | `CODEX_WEB_REPORT_TTL_SECONDS` |
 | Runtime context files | 30-day TTL | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
 | App timeline | 500 entries per session, 16 MiB total | `CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION`, `CODEX_WEB_TIMELINE_MAX_BYTES` |
 
-Report favorites are presentation metadata, not an archival guarantee. Move
-long-term records outside `~/.codex-web/reports/` or increase the configured
-retention and quota.
+Legacy files under `~/.codex-web/reports/` remain subject to their configured
+retention and quota. This policy exists for backward compatibility and does not
+apply to files in a session's project directory.
 
 ## Attachments
 
@@ -310,32 +315,30 @@ Upload limits:
 Uploaded source files and immutable turn snapshots are also subject to the
 storage lifecycle policy above.
 
-## Reports Skill
+Attachments shown in existing session history remain clickable while their
+stored source or immutable turn snapshot still exists. An attachment already
+removed by its retention policy cannot be reconstructed and is shown as
+unavailable.
 
-The companion skill lives at:
+## Session File Viewer
 
-```text
-skills/codex-mobile-report
-```
+Files are part of the conversation rather than a separate Reports product. When
+the assistant links a file in the current project, the link opens directly from
+that session. Relative paths resolve from the session project root, and access
+is restricted to that project and the session's authorized attachment roots.
 
-Install it into local Codex skills:
+- Markdown renders with the conversation Markdown renderer.
+- Self-contained static HTML renders in a sandboxed viewer; scripts and
+  relative or remote subresources are blocked.
+- PDF and common image formats open in the in-app viewer.
+- HTTP and HTTPS links open as normal web links and are not proxied by the
+  backend.
 
-```bash
-mkdir -p ~/.codex/skills
-mkdir -p ~/.codex/skills/codex-mobile-report
-cp -R skills/codex-mobile-report/. ~/.codex/skills/codex-mobile-report/
-```
-
-For active development, symlink it instead:
-
-```bash
-mkdir -p ~/.codex/skills
-ln -s "$(pwd)/skills/codex-mobile-report" ~/.codex/skills/codex-mobile-report
-```
-
-The skill writes phone-readable Markdown or self-contained HTML reports under
-`~/.codex-web/reports/`. Codex Web exposes those reports through authenticated
-APIs and renders report links in the app.
+New installs do not ship or install a report-generation skill. Existing links
+under `~/.codex-web/reports/` remain readable through authenticated compatibility
+routes, but there is no global Reports list or favorite workflow. An existing
+`~/.codex/skills/codex-mobile-report` directory is outside this repository and
+is not modified during upgrades; remove it manually if it is no longer needed.
 
 ## User Context Skill
 
@@ -500,10 +503,13 @@ More notes: [docs/pwa-setup.md](docs/pwa-setup.md).
 
 ## Design Docs
 
-Current design and implementation notes:
+Design and implementation notes are listed below. For file workflows, the
+Session File Viewer design is authoritative; Report requirements in earlier
+documents are historical compatibility context.
 
 ```text
 docs/superpowers/specs/2026-05-17-codex-web-design.md
+docs/superpowers/specs/2026-07-17-session-file-viewer-design.md
 docs/superpowers/specs/2026-05-19-codex-mobile-reports-design.md
 docs/superpowers/specs/2026-05-23-codex-web-desktop-workspace-design.md
 docs/superpowers/specs/2026-05-27-codex-web-multi-user-rbac-design.md
