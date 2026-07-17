@@ -334,11 +334,9 @@ is restricted to that project and the session's authorized attachment roots.
 - HTTP and HTTPS links open as normal web links and are not proxied by the
   backend.
 
-New installs do not ship or install a report-generation skill. Existing links
-under `~/.codex-web/reports/` remain readable through authenticated compatibility
-routes, but there is no global Reports list or favorite workflow. An existing
-`~/.codex/skills/codex-mobile-report` directory is outside this repository and
-is not modified during upgrades; remove it manually if it is no longer needed.
+Existing links under `~/.codex-web/reports/` remain readable through
+authenticated compatibility routes, but there is no global Reports list or
+favorite workflow.
 
 ## User Context Skill
 
@@ -503,14 +501,12 @@ More notes: [docs/pwa-setup.md](docs/pwa-setup.md).
 
 ## Design Docs
 
-Design and implementation notes are listed below. For file workflows, the
-Session File Viewer design is authoritative; Report requirements in earlier
-documents are historical compatibility context.
+Design and implementation notes are listed below. The Session File Viewer
+design is authoritative for file workflows.
 
 ```text
 docs/superpowers/specs/2026-05-17-codex-web-design.md
 docs/superpowers/specs/2026-07-17-session-file-viewer-design.md
-docs/superpowers/specs/2026-05-19-codex-mobile-reports-design.md
 docs/superpowers/specs/2026-05-23-codex-web-desktop-workspace-design.md
 docs/superpowers/specs/2026-05-27-codex-web-multi-user-rbac-design.md
 docs/superpowers/specs/2026-05-28-role-project-new-session-design.md

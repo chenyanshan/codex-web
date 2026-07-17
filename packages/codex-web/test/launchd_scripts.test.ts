@@ -80,7 +80,6 @@ test('macOS installer script installs dependencies, configures password, and opt
   assert.match(script, /--password-stdin/u);
   assert.doesNotMatch(script, /--password\)/u);
   assert.doesNotMatch(script, /CODEX_WEB_INSTALL_PASSWORD/u);
-  assert.doesNotMatch(script, /install_bundled_skill "codex-mobile-report"/u);
   assert.match(script, /install_bundled_skill "codex-web-user-context"/u);
   assert.match(script, /install-codex-web-launchd-user\.sh/u);
   assert.match(script, /--autostart/u);

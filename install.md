@@ -117,11 +117,6 @@ After installation, the agent should explain the basic usage flow:
 6. Files and images attached to earlier messages remain clickable while their
    retained source or turn snapshot still exists.
 
-New installs do not install a report-generation skill or create a Reports
-workflow. Legacy links under `~/.codex-web/reports/` remain readable for
-compatibility. An existing `~/.codex/skills/codex-mobile-report` directory is
-outside the repository and is not modified by this installer.
-
 The handoff must also state these deployment boundaries:
 
 - Phone login and PWA use require the operator's HTTPS endpoint; plain LAN HTTP

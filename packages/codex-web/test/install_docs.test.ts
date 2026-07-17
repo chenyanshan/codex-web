@@ -34,12 +34,9 @@ test('install.md is the AI install entrypoint for GitHub blob links and local pr
   assert.doesNotMatch(installDoc, /--password\s+['"<]/u);
   assert.match(installDoc, /Do not ask the user to send their password/u);
   assert.match(installDoc, /--autostart/u);
-  assert.doesNotMatch(installDoc, /^skills\/codex-mobile-report(?:\/|$)/mu);
   assert.match(installDoc, /skills\/codex-web-user-context/u);
   assert.match(installDoc, /~\/\.codex\/skills\/codex-web-user-context/u);
-  assert.match(installDoc, /~\/\.codex-web\/reports\//u);
   assert.match(installDoc, /Markdown, self-contained static HTML, PDF, or image/u);
-  assert.match(installDoc, /Legacy links[\s\S]*compatibility/u);
   assert.match(installDoc, /fully trusted users/u);
   assert.match(installDoc, /CODEX_WEB_PUBLIC_SHARES_ENABLED=true/u);
   assert.match(installDoc, /hourly private log rotation/u);
@@ -61,7 +58,6 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readme, /AI install/i);
   assert.match(readme, /Help me install https:\/\/github\.com\/chenyanshan\/codex-web\/blob\/main\/README\.md/u);
   assert.doesNotMatch(readme, /chenyanshan\/codex-mobile-web-app\/blob\/main/u);
-  assert.doesNotMatch(readme, /^skills\/codex-mobile-report(?:\/|$)/mu);
   assert.match(readme, /Session File Viewer/u);
   assert.match(readme, /2026-07-17-session-file-viewer-design\.md/u);
   assert.match(readme, /existing session history remain clickable/u);
@@ -84,7 +80,6 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(readmeZh, /AI 安装/u);
   assert.match(readmeZh, /帮我安装 https:\/\/github\.com\/chenyanshan\/codex-web\/blob\/main\/README\.md/u);
   assert.doesNotMatch(readmeZh, /chenyanshan\/codex-mobile-web-app\/blob\/main/u);
-  assert.doesNotMatch(readmeZh, /^skills\/codex-mobile-report(?:\/|$)/mu);
   assert.match(readmeZh, /Session 文件查看器/u);
   assert.match(readmeZh, /2026-07-17-session-file-viewer-design\.md/u);
   assert.match(readmeZh, /历史 session 中展示的附件/u);
@@ -104,23 +99,10 @@ test('README files point AI installers to install.md and include PWA setup guida
   assert.match(updateSectionZh, /CODEX_REAL_BIN[\s\S]*?ultra/iu);
 });
 
-test('session file viewer docs replace the bundled report skill without dropping legacy share compatibility', async () => {
-  const [currentDesign, legacyDesign] = await Promise.all([
-    readRepoFile('docs/superpowers/specs/2026-07-17-session-file-viewer-design.md'),
-    readRepoFile('docs/superpowers/specs/2026-05-19-codex-mobile-reports-design.md'),
-  ]);
+test('session file viewer docs retain legacy share compatibility', async () => {
+  const currentDesign = await readRepoFile('docs/superpowers/specs/2026-07-17-session-file-viewer-design.md');
 
   assert.match(currentDesign, /There is no global Reports page/u);
   assert.match(currentDesign, /historical session attachments/u);
   assert.match(currentDesign, /Existing capability-scoped public-share report URLs/u);
-  assert.match(legacyDesign, /Superseded on 2026-07-17/u);
-  assert.match(legacyDesign, /capability-scoped public-share reads/u);
-  await assert.rejects(
-    () => readRepoFile('skills/codex-mobile-report/SKILL.md'),
-    { code: 'ENOENT' },
-  );
-  await assert.rejects(
-    () => readRepoFile('skills/codex-mobile-report/agents/openai.yaml'),
-    { code: 'ENOENT' },
-  );
 });

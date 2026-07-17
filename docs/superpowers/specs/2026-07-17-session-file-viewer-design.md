@@ -2,14 +2,14 @@
 
 Status: current
 
-Supersedes `2026-05-19-codex-mobile-reports-design.md` for new file workflows.
+Defines the current file workflow for Codex Web.
 
 ## Product Model
 
 The session is the only user-facing context. Files created by Codex, files
 uploaded to the conversation, and normal web links appear where they were
 mentioned in the timeline. There is no global Reports page, report project
-index, favorite workflow, or report-generation skill.
+index, or favorite workflow.
 
 Opening a file must preserve the active session, timeline position, draft, and
 turn state so closing the viewer returns to the same conversation context.
@@ -105,4 +105,3 @@ deleted automatically.
 - Cross-project, cross-session, traversal, and symlink-escape reads fail closed.
 - Old report links and old public-share report URLs remain readable.
 - Login no longer preloads a report list, and no Reports navigation remains.
-- New installs do not install or instruct Codex to use a report skill.

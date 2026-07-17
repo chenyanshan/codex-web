@@ -289,10 +289,8 @@ turn prompt。
 - PDF 和常见图片格式在应用内打开。
 - HTTP/HTTPS 链接按普通网页链接打开，后端不会代理目标网页。
 
-新安装不再附带或安装报告生成 skill。`~/.codex-web/reports/` 下的旧链接仍可通过
-已鉴权兼容接口打开，但不再提供全局 Reports 列表和 favorite 工作流。已有的
-`~/.codex/skills/codex-mobile-report` 位于仓库外，升级时不会改动；不再需要时可由
-部署者手动删除。
+`~/.codex-web/reports/` 下的旧链接仍可通过已鉴权兼容接口打开，但不再提供
+全局 Reports 列表和 favorite 工作流。
 
 ## 用户上下文 Skill
 
@@ -448,13 +446,11 @@ Android：用 Chrome 打开，打开浏览器菜单，再点 `Install app` 或
 
 ## 设计文档
 
-设计和实现记录如下。文件工作流以 Session 文件查看器规范为准；较早文档中的 Report
-要求仅作为历史兼容背景保留。
+设计和实现记录如下。文件工作流以 Session 文件查看器规范为准。
 
 ```text
 docs/superpowers/specs/2026-05-17-codex-web-design.md
 docs/superpowers/specs/2026-07-17-session-file-viewer-design.md
-docs/superpowers/specs/2026-05-19-codex-mobile-reports-design.md
 docs/superpowers/specs/2026-05-23-codex-web-desktop-workspace-design.md
 docs/superpowers/specs/2026-05-27-codex-web-multi-user-rbac-design.md
 docs/superpowers/specs/2026-05-28-role-project-new-session-design.md
