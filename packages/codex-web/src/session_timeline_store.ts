@@ -10,6 +10,11 @@ export interface CodexWebTimelineMessage {
   label: string;
   meta: string;
   text: string;
+  turnId?: string;
+  itemId?: string;
+  projectionKey?: string;
+  phase?: string;
+  lifecycle?: 'started' | 'delta' | 'completed';
   severity?: 'error';
   afterHistoryIndex?: number;
 }
@@ -206,6 +211,11 @@ function normalizeEntryOrNull(value: unknown): CodexWebTimelineMessage | null {
     label,
     meta,
     text,
+    turnId: optionalString(value.turnId),
+    itemId: optionalString(value.itemId),
+    projectionKey: optionalString(value.projectionKey),
+    phase: optionalString(value.phase),
+    lifecycle: normalizeLifecycle(value.lifecycle),
     severity: value.severity === 'error' ? 'error' : undefined,
     afterHistoryIndex: Number.isFinite(value.afterHistoryIndex) ? Math.max(0, Math.floor(Number(value.afterHistoryIndex))) : undefined,
   };
@@ -219,9 +229,22 @@ function normalizeEntry(entry: CodexWebTimelineMessage): CodexWebTimelineMessage
     label: entry.label,
     meta: entry.meta,
     text: entry.text,
+    turnId: optionalString(entry.turnId),
+    itemId: optionalString(entry.itemId),
+    projectionKey: optionalString(entry.projectionKey),
+    phase: optionalString(entry.phase),
+    lifecycle: normalizeLifecycle(entry.lifecycle),
     severity: entry.severity === 'error' ? 'error' : undefined,
     afterHistoryIndex: Number.isFinite(entry.afterHistoryIndex) ? Math.max(0, Math.floor(Number(entry.afterHistoryIndex))) : undefined,
   };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeLifecycle(value: unknown): CodexWebTimelineMessage['lifecycle'] {
+  return value === 'started' || value === 'delta' || value === 'completed' ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

@@ -136,6 +136,40 @@ test('API routes accept valid bearer token', async () => {
   }
 });
 
+test('large JSON responses negotiate gzip compression', async () => {
+  const runtime = {
+    ...createRuntimeStub(),
+    listModels: async () => Array.from({ length: 20 }, (_, index) => ({
+      id: `model-${index}`,
+      model: `model-${index}`,
+      displayName: `Model ${index} with a deliberately descriptive display name`,
+      isDefault: index === 0,
+      supportedReasoningEfforts: ['low', 'medium', 'high'],
+      defaultReasoningEffort: 'medium',
+    })),
+  };
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/models`, {
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'Accept-Encoding': 'gzip',
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-encoding'), 'gzip');
+    assert.match(response.headers.get('vary') ?? '', /Accept-Encoding/iu);
+    assert.equal(((await response.json()) as any).items.length, 20);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('static, API, and error responses use the common browser security policy', async () => {
   const server = createCodexWebServer({
     auth: createAcceptingAuth(),
@@ -757,6 +791,7 @@ test('static root is public', async () => {
     assert.match(html, /Codex Web/);
     assert.match(html, /app\.js/);
     assert.match(html, /styles\.css/);
+    assert.match(response.headers.get('cache-control') ?? '', /stale-while-revalidate/u);
 
     const indexResponse = await fetch(`${server.baseUrl}/index.html`);
     assert.equal(indexResponse.status, 200);
@@ -774,11 +809,31 @@ test('static root is public', async () => {
     const buildIdMatch = script.match(/const APP_BUILD_ID = '([^']+)'/u);
     assert.ok(buildIdMatch?.[1]);
     assert.notEqual(buildIdMatch?.[1], '__CODEX_WEB_BUILD_ID__');
+    const buildId = buildIdMatch[1];
+    assert.match(html, new RegExp(`/app\\.js\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/styles\\.css\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/theme-init\\.js\\?v=${buildId}`, 'u'));
+    assert.equal(scriptResponse.headers.get('cache-control'), 'no-cache');
+
+    const versionedScriptResponse = await fetch(`${server.baseUrl}/app.js?v=${buildId}`, {
+      headers: { 'Accept-Encoding': 'br' },
+    });
+    assert.equal(versionedScriptResponse.status, 200);
+    assert.equal(versionedScriptResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.equal(versionedScriptResponse.headers.get('content-encoding'), 'br');
+    assert.match(versionedScriptResponse.headers.get('vary') ?? '', /Accept-Encoding/iu);
+    assert.match(await versionedScriptResponse.text(), /localStorage|codexWebToken|fetch/u);
 
     const styleResponse = await fetch(`${server.baseUrl}/styles.css`);
     assert.equal(styleResponse.status, 200);
     assert.match(styleResponse.headers.get('content-type') ?? '', /^text\/css\b/i);
     assert.match(await styleResponse.text(), /body|--bg|font-family/u);
+    const gzipStyleResponse = await fetch(`${server.baseUrl}/styles.css?v=${buildId}`, {
+      headers: { 'Accept-Encoding': 'gzip' },
+    });
+    assert.equal(gzipStyleResponse.headers.get('content-encoding'), 'gzip');
+    assert.equal(gzipStyleResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.match(await gzipStyleResponse.text(), /body|--bg|font-family/u);
 
     const themeInitResponse = await fetch(`${server.baseUrl}/theme-init.js`);
     assert.equal(themeInitResponse.status, 200);
@@ -788,7 +843,20 @@ test('static root is public', async () => {
     const manifestResponse = await fetch(`${server.baseUrl}/manifest.webmanifest`);
     assert.equal(manifestResponse.status, 200);
     assert.match(manifestResponse.headers.get('content-type') ?? '', /^application\/manifest\+json\b/i);
-    assert.equal((await manifestResponse.json()).display, 'standalone');
+    const manifest = await manifestResponse.json() as any;
+    assert.equal(manifest.display, 'standalone');
+    assert.ok(manifest.icons.every((icon: any) => icon.src.endsWith(`?v=${buildId}`)));
+
+    const versionResponse = await fetch(`${server.baseUrl}/version.json`);
+    assert.equal(versionResponse.status, 200);
+    assert.equal(versionResponse.headers.get('cache-control'), 'no-cache');
+    assert.deepEqual(await versionResponse.json(), { buildId });
+    const versionEtag = versionResponse.headers.get('etag');
+    assert.ok(versionEtag);
+    const unchangedVersionResponse = await fetch(`${server.baseUrl}/version.json`, {
+      headers: { 'If-None-Match': versionEtag },
+    });
+    assert.equal(unchangedVersionResponse.status, 304);
 
     const serviceWorkerResponse = await fetch(`${server.baseUrl}/service-worker.js`);
     assert.equal(serviceWorkerResponse.status, 200);
@@ -797,6 +865,7 @@ test('static root is public', async () => {
     assert.match(serviceWorker, /self\.addEventListener/u);
     assert.match(serviceWorker, new RegExp(`codex-web-static-${buildIdMatch?.[1]}`.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
     assert.doesNotMatch(serviceWorker, /__CODEX_WEB_BUILD_ID__/u);
+    assert.equal(serviceWorkerResponse.headers.get('cache-control'), 'no-cache');
 
     const iconResponse = await fetch(`${server.baseUrl}/icon-192.png`);
     assert.equal(iconResponse.status, 200);
@@ -804,6 +873,29 @@ test('static root is public', async () => {
   } finally {
     await server.stop();
   }
+});
+
+test('default static build id is stable across server restarts', async () => {
+  const readBuildId = async (): Promise<string> => {
+    const server = createCodexWebServer({
+      auth: createAcceptingAuth(),
+      runtime: createRuntimeStub() as any,
+      config: createConfig(),
+    });
+    await server.start();
+    try {
+      const response = await fetch(`${server.baseUrl}/version.json`);
+      assert.equal(response.status, 200);
+      return String(((await response.json()) as any).buildId);
+    } finally {
+      await server.stop();
+    }
+  };
+
+  const first = await readBuildId();
+  const second = await readBuildId();
+  assert.match(first, /^[a-f0-9]{20}$/u);
+  assert.equal(second, first);
 });
 
 test('static app shell exposes configured global title before login', async () => {
@@ -853,6 +945,7 @@ test('static asset resolvers are evaluated per request', async () => {
     const first = await fetch(`${server.baseUrl}/app.js`);
     assert.equal(first.status, 200);
     assert.equal(await first.text(), "console.log('v1')");
+    assert.equal(first.headers.get('cache-control'), 'no-store');
 
     version = 'v2';
 
@@ -1533,7 +1626,7 @@ test('single-user session list omits conversation details while direct reads ret
     runtime: {
       ...createRuntimeStub(),
       listSessions: async () => [runtimeSession],
-      readSession: async () => runtimeSession,
+      readSession: async () => ({ ...runtimeSession, goal: null }),
     } as any,
     config: createConfig(),
   });
@@ -1546,6 +1639,7 @@ test('single-user session list omits conversation details while direct reads ret
     const listPayload = await listResponse.json();
     assert.equal(listPayload.items[0].id, 'thread_1');
     assert.equal(listPayload.items[0].activityState, 'running');
+    assert.equal('goal' in listPayload.items[0], false);
     assert.equal('thread' in listPayload.items[0], false);
     assert.equal('timeline' in listPayload.items[0], false);
 
@@ -1557,6 +1651,8 @@ test('single-user session list omits conversation details while direct reads ret
     assert.equal(detailPayload.session.thread.turns[0].items[0].id, 'item_answer');
     assert.equal(detailPayload.session.thread.turns[0].items[0].text, 'Detailed answer');
     assert.equal(detailPayload.session.timeline[0].text, 'Detailed answer');
+    assert.equal('goal' in detailPayload.session, true);
+    assert.equal(detailPayload.session.goal, null);
   } finally {
     await server.stop();
   }
@@ -1783,6 +1879,262 @@ test('POST /api/reports/resolve accepts report-root absolute paths and rejects o
   }
 });
 
+test('GET /api/sessions/:id/status returns lightweight metadata and an active-turn snapshot', async () => {
+  const bus = new CodexWebEventBus({ epoch: 'epoch_status' });
+  bus.append('turn_status', {
+    id: 'evt_status_started',
+    type: 'turn.started',
+    turnId: 'turn_status',
+    threadId: 'thread_status',
+  });
+  bus.append('turn_status', {
+    id: 'evt_status_delta',
+    type: 'assistant.delta',
+    turnId: 'turn_status',
+    threadId: 'thread_status',
+    itemId: 'item_status',
+    eventType: 'delta',
+    text: 'Current answer',
+    delta: 'Current answer',
+    phase: 'final_answer',
+  });
+  let fullSessionReads = 0;
+  let statusReads = 0;
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      eventBus: bus,
+      readSession: async () => {
+        fullSessionReads += 1;
+        return null;
+      },
+      readSessionStatus: async () => {
+        statusReads += 1;
+        return {
+          id: 'thread_status',
+          cwd: '/workspace',
+          projectName: 'workspace',
+          title: 'Status thread',
+          updatedAt: 10,
+          preview: 'Preview',
+          firstUserInput: 'Preview',
+          lastUserInput: 'Preview',
+          lastInputAt: 10,
+          favorite: false,
+          favoriteOrder: null,
+          activeTurnId: 'turn_status',
+          activityState: 'running',
+          settings: {},
+          thread: { threadId: 'thread_status', turns: [] },
+          timeline: [],
+        };
+      },
+      getTurnEventReplay: (turnId: string, after?: string | number | null, epoch?: string | null) => (
+        bus.replay(turnId, after, epoch)
+      ),
+      getTurnEventSnapshot: (turnId: string) => bus.snapshot(turnId),
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions/thread_status/status`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json() as any;
+    assert.equal(statusReads, 1);
+    assert.equal(fullSessionReads, 0);
+    assert.equal(payload.session.activeTurnId, 'turn_status');
+    assert.equal('goal' in payload.session, false);
+    assert.equal(payload.session.thread, undefined);
+    assert.equal(payload.turnSnapshot.epoch, 'epoch_status');
+    assert.equal(payload.turnSnapshot.complete, true);
+    assert.deepEqual(payload.turnSnapshot.events.map((event: any) => event.id), [
+      'evt_status_started',
+      'evt_status_delta',
+    ]);
+    assert.equal(payload.turnSnapshot.events[1].text, 'Current answer');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('GET /api/sessions/:id/timeline pages backward from the latest entries', async () => {
+  const bus = new CodexWebEventBus({ epoch: 'epoch_timeline' });
+  bus.append('turn_timeline', {
+    id: 'evt_timeline_started',
+    type: 'turn.started',
+    turnId: 'turn_timeline',
+    threadId: 'thread_timeline',
+  });
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      eventBus: bus,
+      readSession: async () => ({
+        id: 'thread_timeline',
+        activeTurnId: 'turn_timeline',
+        activityState: 'running',
+        thread: { threadId: 'thread_timeline', turns: [] },
+        timeline: [
+          { id: 'one', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'One' },
+          {
+            id: 'two',
+            kind: 'message',
+            role: 'assistant',
+            label: 'Assistant',
+            meta: 'final',
+            text: 'Two',
+            turnId: 'turn_timeline',
+            itemId: 'item_two',
+            projectionKey: 'turn_timeline\u0000item_two',
+            phase: 'final_answer',
+            lifecycle: 'completed',
+            raw: { secret: true },
+          },
+          { id: 'three', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Three' },
+        ],
+      }),
+      getTurnEventReplay: (turnId: string, after?: string | number | null, epoch?: string | null) => (
+        bus.replay(turnId, after, epoch)
+      ),
+      getTurnEventSnapshot: (turnId: string) => bus.snapshot(turnId),
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const latest = await fetch(`${server.baseUrl}/api/sessions/thread_timeline/timeline?limit=2`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(latest.status, 200);
+    const latestPayload = await latest.json() as any;
+    assert.deepEqual(latestPayload.items.map((item: any) => item.id), ['two', 'three']);
+    assert.equal(latestPayload.nextBefore, '1');
+    assert.equal(latestPayload.hasMore, true);
+    assert.equal(latestPayload.session.activeTurnId, 'turn_timeline');
+    assert.equal(latestPayload.session.thread, undefined);
+    assert.equal(latestPayload.turnSnapshot.turnId, 'turn_timeline');
+    assert.equal(latestPayload.turnSnapshot.epoch, 'epoch_timeline');
+    assert.deepEqual(latestPayload.items[0], {
+      id: 'two',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'final',
+      text: 'Two',
+      turnId: 'turn_timeline',
+      itemId: 'item_two',
+      projectionKey: 'turn_timeline\u0000item_two',
+      phase: 'final_answer',
+      lifecycle: 'completed',
+    });
+    assert.equal('raw' in latestPayload.items[0], false);
+
+    const snapshotOmitted = await fetch(`${server.baseUrl}/api/sessions/thread_timeline/timeline?limit=2`, {
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'X-Codex-Include-Turn-Snapshot': 'false',
+      },
+    });
+    const snapshotOmittedPayload = await snapshotOmitted.json() as any;
+    assert.equal(snapshotOmitted.status, 200);
+    assert.equal('turnSnapshot' in snapshotOmittedPayload, false);
+
+    const older = await fetch(`${server.baseUrl}/api/sessions/thread_timeline/timeline?limit=2&before=1`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    const olderPayload = await older.json() as any;
+    assert.deepEqual(olderPayload.items.map((item: any) => item.id), ['one']);
+    assert.equal(olderPayload.nextBefore, null);
+    assert.equal('turnSnapshot' in olderPayload, false);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('fresh SSE subscriptions use a compact snapshot and cursor replay sends delta-only frames', async () => {
+  const bus = new CodexWebEventBus({ epoch: 'epoch_compact' });
+  bus.append('turn_compact', {
+    id: 'evt_compact_started',
+    type: 'turn.started',
+    turnId: 'turn_compact',
+    threadId: 'thread_compact',
+  });
+  const firstDelta = bus.append('turn_compact', {
+    id: 'evt_compact_1',
+    type: 'assistant.delta',
+    turnId: 'turn_compact',
+    threadId: 'thread_compact',
+    itemId: 'item_compact',
+    eventType: 'delta',
+    text: 'Hello',
+    delta: 'Hello',
+    phase: 'final_answer',
+  });
+  bus.append('turn_compact', {
+    id: 'evt_compact_2',
+    type: 'assistant.delta',
+    turnId: 'turn_compact',
+    threadId: 'thread_compact',
+    itemId: 'item_compact',
+    eventType: 'delta',
+    text: 'Hello world',
+    delta: ' world',
+    phase: 'final_answer',
+  });
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      eventBus: bus,
+      getTurnEvents: (turnId: string, after?: string | number | null) => bus.list(turnId, after),
+      getTurnEventReplay: (turnId: string, after?: string | number | null, epoch?: string | null) => (
+        bus.replay(turnId, after, epoch)
+      ),
+      getTurnEventSnapshot: (turnId: string) => bus.snapshot(turnId),
+      subscribeToTurn: (turnId: string, listener: any) => bus.subscribe(turnId, listener),
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const fresh = await fetch(`${server.baseUrl}/api/turns/turn_compact/events`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(fresh.headers.get('x-codex-event-reset'), 'true');
+    const freshReader = fresh.body?.getReader();
+    assert.ok(freshReader);
+    const freshChunk = await freshReader!.read();
+    const freshText = new TextDecoder().decode(freshChunk.value);
+    assert.match(freshText, /initial_snapshot/u);
+    assert.match(freshText, /Hello world/u);
+    assert.doesNotMatch(freshText, /evt_compact_1/u);
+    await freshReader!.cancel();
+
+    const replay = await fetch(
+      `${server.baseUrl}/api/turns/turn_compact/events?after=${firstDelta.sequence}&epoch=epoch_compact`,
+      { headers: { Authorization: 'Bearer cw_token' } },
+    );
+    assert.equal(replay.headers.get('x-codex-event-reset'), 'false');
+    const replayReader = replay.body?.getReader();
+    assert.ok(replayReader);
+    let replayText = '';
+    for (let index = 0; index < 3 && !replayText.includes('evt_compact_2'); index += 1) {
+      const chunk = await replayReader!.read();
+      replayText += new TextDecoder().decode(chunk.value);
+    }
+    assert.match(replayText, /"delta":" world"/u);
+    assert.doesNotMatch(replayText, /"text":"Hello world"/u);
+    await replayReader!.cancel();
+  } finally {
+    await server.stop();
+  }
+});
+
 test('SSE route accepts bearer auth and streams events', async () => {
   let unsubscribeCalled = false;
   let resolveUnsubscribed: (() => void) | null = null;
@@ -1821,13 +2173,17 @@ test('SSE route accepts bearer auth and streams events', async () => {
   await server.start();
   try {
     const response = await fetch(`${server.baseUrl}/api/turns/turn_1/events`, {
-      headers: { Authorization: 'Bearer cw_token' },
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'Accept-Encoding': 'br',
+      },
     });
     assert.equal(response.status, 200);
     assertSecurityHeaders(response);
     assert.match(response.headers.get('cache-control') ?? '', /no-transform/u);
     assert.equal(response.headers.get('x-accel-buffering'), 'no');
     assert.equal(response.headers.get('x-codex-event-reset'), 'false');
+    assert.equal(response.headers.get('content-encoding'), null);
     const reader = response.body?.getReader();
     assert.ok(reader);
     let text = '';

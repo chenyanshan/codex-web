@@ -49,6 +49,7 @@ import type {
 const CODEX_WEB_MODEL_DEFAULTS_VERSION = 2;
 const LEGACY_DEFAULT_MODEL = 'gpt-5.4';
 const LEGACY_DEFAULT_REASONING_EFFORT = 'xhigh';
+const SESSION_STATUS_SUMMARY_CACHE_MS = 5_000;
 
 interface CodexWebRuntimeLogger {
   debug?: (message: string) => void;
@@ -69,7 +70,7 @@ export interface CodexWebSession {
   lastInputAt: number | null;
   favorite: boolean;
   favoriteOrder: number | null;
-  goal: ProviderThreadGoal | null;
+  goal?: ProviderThreadGoal | null;
   activeTurnId: string | null;
   activityState: CodexWebSessionActivityState;
   settings: CodexWebStoredSessionSettings;
@@ -172,6 +173,10 @@ export interface CodexWebRuntimeOptions {
   logger?: CodexWebRuntimeLogger;
 }
 
+export interface ReadSessionStatusOptions {
+  archived?: boolean;
+}
+
 export interface CreateSessionInput {
   cwd?: string | null;
   title?: string | null;
@@ -245,7 +250,13 @@ export class CodexWebRuntime {
 
   private readonly sessionSettings = new Map<string, CodexWebStoredSessionSettings>();
 
+  private readonly threadSummaries = new Map<string, ProviderThreadSummary>();
+
+  private readonly threadSummaryCachedAt = new Map<string, number>();
+
   private readonly turnToThread = new Map<string, string>();
+
+  private readonly activeTurnByThread = new Map<string, string>();
 
   private readonly approvalToTurn = new Map<string, string>();
 
@@ -315,7 +326,10 @@ export class CodexWebRuntime {
     this.unsubscribeApprovalRequests?.();
     this.unsubscribeApprovalRequests = null;
     this.sessionSettings.clear();
+    this.threadSummaries.clear();
+    this.threadSummaryCachedAt.clear();
     this.turnToThread.clear();
+    this.activeTurnByThread.clear();
     this.approvalToTurn.clear();
     this.approvalToBatch.clear();
     this.activeTurns.clear();
@@ -328,13 +342,14 @@ export class CodexWebRuntime {
   }
 
   async listSessions(options: ListSessionsOptions = {}): Promise<CodexWebSession[]> {
+    this.primeSessionSettingsCache();
     if (options.favorite === true) {
       return this.listFavoriteSessions();
     }
     const result = await this.client.listThreads({ limit: 100, archived: options.archived === true });
     return result.items
       .filter((thread) => typeof thread.threadId === 'string' && thread.threadId)
-      .map((thread) => this.toSession(thread));
+      .map((thread) => this.toSessionSummary(thread));
   }
 
   private async listFavoriteSessions(): Promise<CodexWebSession[]> {
@@ -345,12 +360,16 @@ export class CodexWebRuntime {
     const threads = await Promise.all(favoriteIds.map((threadId) => this.readFavoriteThreadSummary(threadId)));
     const sessions = threads
       .filter((thread): thread is ProviderThreadSummary => Boolean(thread?.threadId))
-      .map((thread) => this.toSession(thread));
+      .map((thread) => this.toSessionSummary(thread));
     return sessions.sort((left, right) => (left.favoriteOrder ?? Number.MAX_SAFE_INTEGER) - (right.favoriteOrder ?? Number.MAX_SAFE_INTEGER)
       || (right.lastInputAt ?? 0) - (left.lastInputAt ?? 0));
   }
 
   private async readFavoriteThreadSummary(threadId: string): Promise<ProviderThreadSummary | null> {
+    return this.readTurnFreeThreadSummary(threadId);
+  }
+
+  private async readTurnFreeThreadSummary(threadId: string): Promise<ProviderThreadSummary | null> {
     try {
       const thread = await this.client.readThread(threadId, false);
       if (thread) {
@@ -413,6 +432,31 @@ export class CodexWebRuntime {
     const session = this.toSession(thread);
     this.observeRecoveredTurn(session);
     return this.withThreadGoal(session);
+  }
+
+  async readSessionStatus(
+    sessionId: string,
+    options: ReadSessionStatusOptions = {},
+  ): Promise<CodexWebSession | null> {
+    this.primeSessionSettingsCache();
+    const cachedThread = this.threadSummaries.get(sessionId) ?? null;
+    const cachedAt = this.threadSummaryCachedAt.get(sessionId) ?? 0;
+    let thread = cachedThread && Date.now() - cachedAt <= SESSION_STATUS_SUMMARY_CACHE_MS
+      ? cachedThread
+      : null;
+    if (!thread) {
+      thread = await this.readTurnFreeThreadSummary(sessionId);
+    }
+    if (!thread && options.archived === true) {
+      thread = this.readArchivedThreadSummary(sessionId);
+    }
+    if (!thread) {
+      this.threadSummaries.delete(sessionId);
+      this.threadSummaryCachedAt.delete(sessionId);
+      return null;
+    }
+    this.replayPendingApprovals(sessionId);
+    return this.toSessionSummary(thread);
   }
 
   async updateSessionSettings(
@@ -591,6 +635,8 @@ export class CodexWebRuntime {
       }
       startedTurnId = turnId;
       this.rememberTurnThread(turnId, sessionId);
+      this.rememberActiveTurn(sessionId, turnId);
+      this.markThreadSummaryActive(sessionId);
       this.append(turnId, normalizeTurnStartedEvent({
         turnId,
         threadId: sessionId,
@@ -671,6 +717,7 @@ export class CodexWebRuntime {
         rejectStarted?.(error);
       }
       const turnId = startedTurnId || `turn_failed_${sessionId}`;
+      const failureMessage = publicRuntimeTurnFailureMessage(error);
       this.logDebug('turn_error', {
         sessionId,
         turnId,
@@ -679,7 +726,7 @@ export class CodexWebRuntime {
       const event = normalizeTurnFailedEvent({
         turnId,
         threadId: sessionId,
-        error,
+        error: failureMessage === 'Turn failed' ? new Error(failureMessage) : error,
       });
       this.logDebug('turn_normalized_events', {
         sessionId,
@@ -687,12 +734,12 @@ export class CodexWebRuntime {
         events: [summarizeRuntimeEvent(event)],
       });
       this.append(turnId, event);
-      this.appendFailedTurnTimeline(sessionId, turnId, runtimeTurnErrorMessage({
-        error: (error as Error | undefined)?.message ?? null,
-        details: (error as Error & { details?: unknown } | undefined)?.details ?? null,
-        items: [],
-        message: error instanceof Error ? error.message : String(error || ''),
-      }), timelineMessagesFromThread(session.thread).length + 1);
+      this.appendFailedTurnTimeline(
+        sessionId,
+        turnId,
+        failureMessage,
+        timelineMessagesFromThread(session.thread).length + 1,
+      );
       if (startedTurnId) {
         this.cleanupFinishedTurn(startedTurnId);
       }
@@ -900,6 +947,7 @@ export class CodexWebRuntime {
       return;
     }
     this.rememberTurnThread(turnId, threadId);
+    this.rememberActiveTurn(threadId, turnId);
     this.approvalToTurn.set(requestId, turnId);
     this.approvalToBatch.set(requestId, request.itemId || requestId);
     this.append(turnId, normalizeApprovalBatchEvent({ turnId, request }));
@@ -997,10 +1045,11 @@ export class CodexWebRuntime {
         this.cleanupFinishedTurn(turnId);
       }
     }).catch((error: unknown) => {
+      const failureMessage = publicRuntimeTurnFailureMessage(error);
       this.append(turnId, normalizeTurnFailedEvent({
         turnId,
         threadId: session.id,
-        error,
+        error: failureMessage === 'Turn failed' ? new Error(failureMessage) : error,
       }));
       this.cleanupFinishedTurn(turnId);
     }).finally(() => {
@@ -1027,6 +1076,10 @@ export class CodexWebRuntime {
     this.eventBus.append(turnId, event);
     if (event.type === 'turn.completed' || event.type === 'turn.failed') {
       this.terminalTurns.add(turnId);
+      const threadId = this.turnToThread.get(turnId);
+      if (threadId) {
+        this.markThreadSummaryIdle(threadId);
+      }
       while (this.terminalTurns.size > MAX_TURN_THREAD_MAPPINGS) {
         const oldestTurnId = this.terminalTurns.values().next().value as string | undefined;
         if (!oldestTurnId) {
@@ -1157,6 +1210,7 @@ export class CodexWebRuntime {
   }
 
   private toSession(thread: ProviderThreadSummary): CodexWebSession {
+    this.rememberThreadSummary(thread);
     this.rememberThreadTurns(thread);
     const current = this.getSessionSettings(thread.threadId);
     const updatedAt = thread.updatedAt ?? null;
@@ -1187,6 +1241,84 @@ export class CodexWebRuntime {
     };
   }
 
+  private toSessionSummary(thread: ProviderThreadSummary): CodexWebSession {
+    this.rememberThreadSummary(thread);
+    this.rememberThreadTurns(thread);
+    const current = this.getSessionSettings(thread.threadId);
+    const updatedAt = thread.updatedAt ?? null;
+    const inputSummary = summarizeSessionInputs(thread);
+    const activeTurnId = this.activeTurnIdForThread(thread.threadId, thread);
+    return {
+      id: thread.threadId,
+      cwd: thread.cwd,
+      projectName: summarizeProjectName(thread.cwd),
+      title: thread.title,
+      updatedAt,
+      preview: thread.preview ?? null,
+      firstUserInput: inputSummary.firstUserInput,
+      lastUserInput: inputSummary.lastUserInput,
+      lastInputAt: updatedAt,
+      favorite: current.favorite === true,
+      favoriteOrder: current.favoriteOrder ?? null,
+      activeTurnId,
+      activityState: sessionActivityState(
+        thread,
+        activeTurnId,
+        Boolean(this.pendingApprovalTurnIdForThread(thread.threadId)),
+      ),
+      settings: current,
+      thread: { ...thread, turns: [] },
+      timeline: [],
+    };
+  }
+
+  private rememberThreadSummary(thread: ProviderThreadSummary): void {
+    if (!thread.threadId) {
+      return;
+    }
+    this.threadSummaries.set(thread.threadId, { ...thread, turns: [] });
+    this.threadSummaryCachedAt.set(thread.threadId, Date.now());
+    while (this.threadSummaries.size > MAX_TURN_THREAD_MAPPINGS) {
+      const oldestThreadId = this.threadSummaries.keys().next().value as string | undefined;
+      if (!oldestThreadId) {
+        break;
+      }
+      this.threadSummaries.delete(oldestThreadId);
+      this.threadSummaryCachedAt.delete(oldestThreadId);
+    }
+  }
+
+  private markThreadSummaryActive(threadId: string): void {
+    const thread = this.threadSummaries.get(threadId);
+    if (!thread) {
+      return;
+    }
+    this.threadSummaries.set(threadId, {
+      ...thread,
+      runtimeStatus: {
+        type: 'active',
+        activeFlags: thread.runtimeStatus?.activeFlags ?? [],
+      },
+    });
+    this.threadSummaryCachedAt.set(threadId, Date.now());
+  }
+
+  private markThreadSummaryIdle(threadId: string): void {
+    this.activeTurnByThread.delete(threadId);
+    const thread = this.threadSummaries.get(threadId);
+    if (!thread) {
+      return;
+    }
+    this.threadSummaries.set(threadId, {
+      ...thread,
+      runtimeStatus: {
+        type: 'idle',
+        activeFlags: [],
+      },
+    });
+    this.threadSummaryCachedAt.set(threadId, Date.now());
+  }
+
   private toStoredFavoriteSession(
     sessionId: string,
     settings: CodexWebStoredSessionSettings,
@@ -1212,7 +1344,6 @@ export class CodexWebRuntime {
       lastInputAt: updatedAt,
       favorite: settings.favorite === true,
       favoriteOrder: settings.favoriteOrder ?? null,
-      goal: null,
       activeTurnId: null,
       activityState: null,
       settings,
@@ -1232,6 +1363,20 @@ export class CodexWebRuntime {
         break;
       }
       this.turnToThread.delete(oldestTurnId);
+    }
+  }
+
+  private rememberActiveTurn(threadId: string, turnId: string): void {
+    if (this.activeTurnByThread.has(threadId)) {
+      this.activeTurnByThread.delete(threadId);
+    }
+    this.activeTurnByThread.set(threadId, turnId);
+    while (this.activeTurnByThread.size > MAX_TURN_THREAD_MAPPINGS) {
+      const oldestThreadId = this.activeTurnByThread.keys().next().value as string | undefined;
+      if (!oldestThreadId) {
+        break;
+      }
+      this.activeTurnByThread.delete(oldestThreadId);
     }
   }
 
@@ -1262,7 +1407,12 @@ export class CodexWebRuntime {
     }
     if (providerTurnId) {
       this.forgetTrackedTurnsForThread(threadId, providerTurnId);
+      this.rememberActiveTurn(threadId, providerTurnId);
       return providerTurnId;
+    }
+    const rememberedTurnId = this.activeTurnByThread.get(threadId);
+    if (rememberedTurnId) {
+      return rememberedTurnId;
     }
     for (const [turnId] of this.activeTurns) {
       if (this.turnToThread.get(turnId) === threadId) {
@@ -1292,6 +1442,11 @@ export class CodexWebRuntime {
       if (this.turnToThread.get(turnId) === threadId && turnId !== keepTurnId) {
         this.activeTurns.delete(turnId);
       }
+    }
+    if (keepTurnId) {
+      this.rememberActiveTurn(threadId, keepTurnId);
+    } else {
+      this.activeTurnByThread.delete(threadId);
     }
   }
 
@@ -1363,6 +1518,24 @@ export class CodexWebRuntime {
     return settings;
   }
 
+  private primeSessionSettingsCache(): void {
+    if (typeof this.settingsStore?.list !== 'function') {
+      return;
+    }
+    for (const [sessionId, stored] of this.settingsStore.list()) {
+      const migratedStored = migrateLegacyModelDefaults(stored);
+      if (!migratedStored) {
+        continue;
+      }
+      this.sessionSettings.set(sessionId, {
+        ...createDefaultSettings(sessionId),
+        ...migratedStored,
+        bridgeSessionId: sessionId,
+        metadata: migratedStored.metadata ?? {},
+      });
+    }
+  }
+
   private getStoredSessionSettings(sessionId: string): CodexWebStoredSessionSettings | null {
     return this.sessionSettings.get(sessionId) ?? this.settingsStore?.get(sessionId) ?? null;
   }
@@ -1389,14 +1562,7 @@ export class CodexWebRuntime {
   }
 
   private favoriteSessionIds(): string[] {
-    const settingsById = new Map<string, CodexWebStoredSessionSettings>();
-    for (const [sessionId, settings] of this.settingsStore?.list?.() ?? []) {
-      settingsById.set(sessionId, settings);
-    }
-    for (const [sessionId, settings] of this.sessionSettings.entries()) {
-      settingsById.set(sessionId, settings);
-    }
-    return [...settingsById.entries()]
+    return [...this.sessionSettings.entries()]
       .filter(([, settings]) => settings.favorite === true)
       .sort(([, left], [, right]) => (left.favoriteOrder ?? Number.MAX_SAFE_INTEGER) - (right.favoriteOrder ?? Number.MAX_SAFE_INTEGER)
         || (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
@@ -1692,19 +1858,55 @@ function createSessionTimelineEntryId(
 function timelineMessagesFromThread(thread: ProviderThreadSummary): CodexWebTimelineMessage[] {
   const items: CodexWebTimelineMessage[] = [];
   for (const turn of thread.turns ?? []) {
-    for (const item of turn.items ?? []) {
+    const turnItems = turn.items ?? [];
+    const explicitFinalIndexes = new Set<number>();
+    let fallbackFinalIndex = -1;
+    for (let index = 0; index < turnItems.length; index += 1) {
+      const item = turnItems[index]!;
+      if (
+        isTimelineAssistantMessageItem(item)
+        && normalizeTimelineAssistantPhase(item.phase) === 'final_answer'
+      ) {
+        explicitFinalIndexes.add(index);
+      }
+    }
+    if (explicitFinalIndexes.size === 0 && isSuccessTurnStatus(turn.status)) {
+      for (let index = turnItems.length - 1; index >= 0; index -= 1) {
+        const item = turnItems[index]!;
+        if (
+          isTimelineAssistantMessageItem(item)
+          && !normalizeTimelineAssistantPhase(item.phase)
+        ) {
+          fallbackFinalIndex = index;
+          break;
+        }
+      }
+    }
+    for (let itemIndex = 0; itemIndex < turnItems.length; itemIndex += 1) {
+      const item = turnItems[itemIndex]!;
       const role = normalizeTimelineMessageRole(item.role, item.type);
       const text = typeof item.text === 'string' ? item.text.trim() : '';
       if (!role || !text) {
         continue;
       }
+      const itemId = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : null;
+      const isFinal = role === 'assistant'
+        && (explicitFinalIndexes.has(itemIndex) || fallbackFinalIndex === itemIndex);
+      const phase = role === 'assistant' ? historicalTimelineAssistantPhase(item, isFinal) : null;
       items.push({
         id: `history_${turn.id}_${items.length}`,
         kind: 'message',
         role,
         label: role === 'user' ? 'You' : 'Assistant',
-        meta: 'history',
+        meta: role === 'assistant' ? timelineAssistantMeta(phase, isFinal) : 'history',
         text,
+        turnId: turn.id,
+        ...(itemId ? {
+          itemId,
+          projectionKey: `${turn.id}\u0000${itemId}`,
+        } : {}),
+        ...(phase ? { phase } : {}),
+        lifecycle: 'completed',
       });
     }
     if (isFailureTurnStatus(turn.status)) {
@@ -1715,6 +1917,8 @@ function timelineMessagesFromThread(thread: ProviderThreadSummary): CodexWebTime
         label: 'Error',
         meta: 'failed',
         text: runtimeTurnErrorMessage(turn) || 'Turn failed',
+        turnId: turn.id,
+        lifecycle: 'completed',
         severity: 'error',
       });
     }
@@ -1741,13 +1945,54 @@ function normalizeTimelineMessageRole(role: string | null | undefined, type: str
     return normalizedRole;
   }
   const normalizedType = typeof type === 'string' ? type.replace(/[^a-z]/giu, '').toLowerCase() : '';
-  if (normalizedType.includes('assistant') || normalizedType.includes('agent')) {
+  if (normalizedType.includes('assistant') || normalizedType.includes('agent') || normalizedType.includes('reasoning')) {
     return 'assistant';
   }
   if (normalizedType.includes('user')) {
     return 'user';
   }
   return null;
+}
+
+function normalizeTimelineAssistantPhase(phase: string | null | undefined): string {
+  return typeof phase === 'string'
+    ? phase.trim().toLowerCase().replace(/[\s-]+/gu, '_')
+    : '';
+}
+
+function isTimelineAssistantMessageItem(item: ProviderThreadTurnItem): boolean {
+  if (normalizeTimelineMessageRole(item.role, item.type) !== 'assistant') {
+    return false;
+  }
+  const normalizedType = String(item.type || '').replace(/[^a-z]/giu, '').toLowerCase();
+  return !normalizedType || normalizedType.includes('message');
+}
+
+function historicalTimelineAssistantPhase(
+  item: ProviderThreadTurnItem,
+  isFinal: boolean,
+): string {
+  const normalizedType = String(item.type || '').replace(/[^a-z]/giu, '').toLowerCase();
+  if (normalizedType.includes('reasoning')) {
+    return 'reasoning_summary';
+  }
+  if (isFinal) {
+    return 'final_answer';
+  }
+  return normalizeTimelineAssistantPhase(item.phase) || 'commentary';
+}
+
+function timelineAssistantMeta(phase: string | null, isFinal: boolean): string {
+  if (isFinal || phase === 'final_answer' || phase === 'final') {
+    return 'final';
+  }
+  if (phase?.includes('reasoning') && phase.includes('summary')) {
+    return 'reasoning-summary';
+  }
+  if (phase === 'commentary' || phase === 'analysis') {
+    return 'commentary';
+  }
+  return phase || 'commentary';
 }
 
 function timelineDedupKey(entry: CodexWebTimelineMessage): string {
@@ -1763,6 +2008,20 @@ function runtimeTurnErrorMessage(turn: Pick<ProviderThreadTurn, 'error' | 'items
     || normalizeRuntimeErrorText(turn?.message)
     || runtimeTurnItemErrorMessage(turn)
     || 'Turn failed';
+}
+
+function publicRuntimeTurnFailureMessage(error: unknown): string {
+  const message = runtimeTurnErrorMessage({
+    error: (error as Error | undefined)?.message ?? null,
+    details: (error as Error & { details?: unknown } | undefined)?.details ?? null,
+    items: [],
+    message: error instanceof Error ? error.message : String(error || ''),
+  });
+  return isRuntimeRequestTimeoutMessage(message) ? 'Turn failed' : message;
+}
+
+function isRuntimeRequestTimeoutMessage(message: string): boolean {
+  return /\brequest\s+(?:timed\s*out|timeout)\b|\btimed\s*out\s+waiting\s+for\s+codex\s+turn\b/iu.test(message);
 }
 
 function runtimeTurnItemErrorMessage(turn: {

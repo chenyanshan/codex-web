@@ -41,6 +41,40 @@ test('progress normalization preserves stable item lifecycle, cumulative text, a
   });
 });
 
+test('compact assistant delta DTOs omit cumulative text but snapshots retain it', () => {
+  const event = normalizeProgressEvent({
+    turnId: 'turn_compact',
+    threadId: 'thread_compact',
+    progress: {
+      itemId: 'item_answer',
+      eventType: 'delta',
+      text: 'Hello world',
+      delta: ' world',
+      outputKind: 'final_answer',
+    },
+  });
+
+  assert.deepEqual(presentCodexWebEvent(event, 'workspace', { compactAssistantDelta: true }), {
+    id: event.id,
+    type: 'assistant.delta',
+    turnId: 'turn_compact',
+    phase: 'final_answer',
+    itemId: 'item_answer',
+    eventType: 'delta',
+    delta: ' world',
+  });
+  assert.deepEqual(presentCodexWebEvent(event, 'workspace_summary', { compactAssistantDelta: true }), {
+    id: event.id,
+    type: 'assistant.delta',
+    turnId: 'turn_compact',
+    phase: 'final_answer',
+    itemId: 'item_answer',
+    eventType: 'delta',
+    delta: ' world',
+  });
+  assert.equal(presentCodexWebEvent(event)?.text, 'Hello world');
+});
+
 test('approval normalization emits approval request summary', () => {
   const event = normalizeApprovalEvent({
     turnId: 'turn_2',

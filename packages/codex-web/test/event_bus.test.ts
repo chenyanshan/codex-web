@@ -95,7 +95,7 @@ test('event bus resets expired cursors and retains a compact full-turn snapshot'
   assert.equal(replay.resetReason, 'cursor_expired');
   assert.equal(replay.retainedFloor, 1);
   assert.equal(replay.snapshotComplete, true);
-  assert.deepEqual(replay.events.map((entry) => entry.event.id), ['evt_commentary_1', 'evt_commentary_2']);
+  assert.deepEqual(replay.events, []);
   assert.deepEqual(bus.snapshot('turn_1').map((entry) => entry.event.id), [
     'evt_started',
     'evt_commentary_2',
@@ -128,7 +128,7 @@ test('event bus rejects another process epoch while preserving valid same-epoch 
   assert.equal(restarted.reset, true);
   assert.equal(restarted.resetReason, 'epoch_mismatch');
   assert.equal(restarted.snapshotComplete, false);
-  assert.deepEqual(restarted.events.map((entry) => entry.event.id), ['evt_1', 'evt_2']);
+  assert.deepEqual(restarted.events, []);
 });
 
 test('event bus never marks recovered or mid-turn projections as complete snapshots', () => {
@@ -200,11 +200,54 @@ test('event bus snapshot restores cumulative assistant state after thousands of 
   const replay = bus.replay('turn_large', 1, 'epoch_large_turn');
   assert.equal(replay.reset, true);
   assert.equal(replay.snapshotComplete, true);
-  assert.equal(replay.events.length, 5);
+  assert.equal(replay.events.length, 0);
   const snapshot = bus.snapshot('turn_large');
   assert.equal(snapshot.length, 2);
   const answer = snapshot.find((entry) => entry.event.type === 'assistant.delta')?.event;
   assert.equal(answer?.type, 'assistant.delta');
   assert.equal(answer?.text.length, 2_000);
   assert.equal(answer?.eventType, 'completed');
+});
+
+test('event bus uses a compact snapshot for a fresh subscription without a cursor', () => {
+  const bus = new CodexWebEventBus({ epoch: 'epoch_fresh' });
+  bus.append('turn_fresh', {
+    id: 'evt_started',
+    type: 'turn.started',
+    turnId: 'turn_fresh',
+    threadId: 'thread_1',
+  });
+  bus.append('turn_fresh', {
+    id: 'evt_delta_1',
+    type: 'assistant.delta',
+    turnId: 'turn_fresh',
+    threadId: 'thread_1',
+    itemId: 'item_answer',
+    eventType: 'delta',
+    text: 'Hello',
+    delta: 'Hello',
+    phase: 'final_answer',
+  });
+  bus.append('turn_fresh', {
+    id: 'evt_delta_2',
+    type: 'assistant.delta',
+    turnId: 'turn_fresh',
+    threadId: 'thread_1',
+    itemId: 'item_answer',
+    eventType: 'delta',
+    text: 'Hello world',
+    delta: ' world',
+    phase: 'final_answer',
+  });
+
+  const replay = bus.replay('turn_fresh');
+
+  assert.equal(replay.reset, true);
+  assert.equal(replay.resetReason, 'initial_snapshot');
+  assert.equal(replay.snapshotComplete, true);
+  assert.deepEqual(replay.events, []);
+  assert.deepEqual(bus.snapshot('turn_fresh').map((entry) => entry.event.id), [
+    'evt_started',
+    'evt_delta_2',
+  ]);
 });

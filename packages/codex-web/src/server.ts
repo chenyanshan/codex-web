@@ -6,6 +6,7 @@ import type { Socket } from 'node:net';
 import path from 'node:path';
 import { URL } from 'node:url';
 import { fileURLToPath } from 'node:url';
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
 import {
   canCreateProjectSession,
   effectiveProjectGrant,
@@ -141,7 +142,28 @@ const LOGIN_RATE_LIMIT_PER_CLIENT = 10;
 const LOGIN_RATE_LIMIT_GLOBAL = 100;
 const BUILD_ID_PLACEHOLDER = '__CODEX_WEB_BUILD_ID__';
 const DEFAULT_SITE_TITLE = 'Codex Web';
-type StaticFileAsset = { body: string | Buffer; contentType: string };
+const STATIC_IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const APP_SHELL_CACHE_CONTROL = 'public, max-age=0, stale-while-revalidate=86400';
+const COMPRESSION_MIN_BYTES = 256;
+const DEFAULT_STATIC_SOURCE_FILES = [
+  'index.html',
+  'app.js',
+  'styles.css',
+  'theme-init.js',
+  'pwa-pull-refresh.js',
+  'manifest.webmanifest',
+  'service-worker.js',
+  'icon-192.png',
+  'icon-512.png',
+  'apple-touch-icon.png',
+] as const;
+type StaticFileAsset = {
+  body: string | Buffer;
+  contentType: string;
+  buildId?: string;
+  cacheControl?: string;
+  immutableWhenVersioned?: boolean;
+};
 type StaticFileEntry = StaticFileAsset | (() => StaticFileAsset);
 type StaticFilesRecord = Record<string, StaticFileEntry>;
 
@@ -262,61 +284,98 @@ export function createCodexWebServer({
 
 function loadDefaultStaticFiles(): StaticFilesRecord {
   const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
-  const buildId = createBuildId();
-  const readText = (relativePath: string) => readFileSync(path.join(publicDir, relativePath), 'utf8');
-  const readBinary = (relativePath: string) => readFileSync(path.join(publicDir, relativePath));
+  const sources = new Map(DEFAULT_STATIC_SOURCE_FILES.map((relativePath) => [
+    relativePath,
+    readFileSync(path.join(publicDir, relativePath)),
+  ]));
+  const buildId = createBuildId(sources);
+  const readBinary = (relativePath: typeof DEFAULT_STATIC_SOURCE_FILES[number]): Buffer => {
+    const source = sources.get(relativePath);
+    if (!source) {
+      throw new Error(`Missing static asset: ${relativePath}`);
+    }
+    return source;
+  };
+  const readText = (relativePath: typeof DEFAULT_STATIC_SOURCE_FILES[number]): string => (
+    readBinary(relativePath).toString('utf8')
+  );
   const indexAsset = (): StaticFileAsset => ({
-    body: readText('index.html'),
+    body: injectBuildId(readText('index.html'), buildId),
     contentType: 'text/html; charset=utf-8',
+    buildId,
+    cacheControl: APP_SHELL_CACHE_CONTROL,
+  });
+  const versionedAsset = (
+    body: string | Buffer,
+    contentType: string,
+  ): StaticFileAsset => ({
+    body,
+    contentType,
+    buildId,
+    immutableWhenVersioned: true,
   });
   return {
     '/': indexAsset,
     '/index.html': indexAsset,
-    '/app.js': () => ({
-      body: injectBuildId(readText('app.js'), buildId),
-      contentType: 'application/javascript; charset=utf-8',
-    }),
-    '/styles.css': () => ({
-      body: readText('styles.css'),
-      contentType: 'text/css; charset=utf-8',
-    }),
-    '/theme-init.js': () => ({
-      body: readText('theme-init.js'),
-      contentType: 'application/javascript; charset=utf-8',
-    }),
-    '/pwa-pull-refresh.js': () => ({
-      body: readText('pwa-pull-refresh.js'),
-      contentType: 'application/javascript; charset=utf-8',
-    }),
-    '/manifest.webmanifest': () => ({
-      body: readText('manifest.webmanifest'),
-      contentType: 'application/manifest+json; charset=utf-8',
-    }),
+    '/app.js': () => versionedAsset(
+      injectBuildId(readText('app.js'), buildId),
+      'application/javascript; charset=utf-8',
+    ),
+    '/styles.css': () => versionedAsset(readText('styles.css'), 'text/css; charset=utf-8'),
+    '/theme-init.js': () => versionedAsset(readText('theme-init.js'), 'application/javascript; charset=utf-8'),
+    '/pwa-pull-refresh.js': () => versionedAsset(
+      readText('pwa-pull-refresh.js'),
+      'application/javascript; charset=utf-8',
+    ),
+    '/manifest.webmanifest': () => versionedAsset(
+      injectManifestBuildId(readText('manifest.webmanifest'), buildId),
+      'application/manifest+json; charset=utf-8',
+    ),
     '/service-worker.js': () => ({
       body: injectBuildId(readText('service-worker.js'), buildId),
       contentType: 'application/javascript; charset=utf-8',
+      buildId,
+      cacheControl: 'no-cache',
     }),
-    '/icon-192.png': () => ({
-      body: readBinary('icon-192.png'),
-      contentType: 'image/png',
+    '/version.json': () => ({
+      body: `${JSON.stringify({ buildId })}\n`,
+      contentType: 'application/json; charset=utf-8',
+      buildId,
+      cacheControl: 'no-cache',
     }),
-    '/icon-512.png': () => ({
-      body: readBinary('icon-512.png'),
-      contentType: 'image/png',
-    }),
-    '/apple-touch-icon.png': () => ({
-      body: readBinary('apple-touch-icon.png'),
-      contentType: 'image/png',
-    }),
+    '/icon-192.png': () => versionedAsset(readBinary('icon-192.png'), 'image/png'),
+    '/icon-512.png': () => versionedAsset(readBinary('icon-512.png'), 'image/png'),
+    '/apple-touch-icon.png': () => versionedAsset(readBinary('apple-touch-icon.png'), 'image/png'),
   };
 }
 
-function createBuildId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+function createBuildId(sources: Map<string, Buffer>): string {
+  const hash = crypto.createHash('sha256');
+  for (const relativePath of DEFAULT_STATIC_SOURCE_FILES) {
+    hash.update(relativePath);
+    hash.update('\0');
+    hash.update(sources.get(relativePath)!);
+    hash.update('\0');
+  }
+  return hash.digest('hex').slice(0, 20);
 }
 
 function injectBuildId(source: string, buildId: string): string {
   return source.replaceAll(BUILD_ID_PLACEHOLDER, buildId);
+}
+
+function injectManifestBuildId(source: string, buildId: string): string {
+  const manifest = JSON.parse(source) as { icons?: Array<{ src?: unknown }> };
+  for (const icon of manifest.icons ?? []) {
+    if (typeof icon.src === 'string' && icon.src.startsWith('/')) {
+      icon.src = versionedStaticUrl(icon.src, buildId);
+    }
+  }
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
+function versionedStaticUrl(pathname: string, buildId: string): string {
+  return `${pathname}?v=${encodeURIComponent(buildId)}`;
 }
 
 async function handleRequest({
@@ -367,11 +426,7 @@ async function handleRequest({
       const identityState = identityStore ? await identityStore.readState() : null;
       asset = injectAppShellBootstrap(asset, siteTitleFromIdentityState(identityState));
     }
-    response.writeHead(200, {
-      'Content-Type': asset.contentType,
-      'Cache-Control': 'no-store',
-    });
-    response.end(asset.body);
+    writeStaticAsset({ request, response, url, asset });
     return;
   }
 
@@ -593,6 +648,23 @@ async function handleRequest({
     return;
   }
 
+  const sessionStatusMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/status$/u);
+  if (sessionStatusMatch && method === 'GET') {
+    const session = await runtime.readSessionStatus(
+      decodeURIComponent(sessionStatusMatch[1]!),
+      { archived: url.searchParams.get('archived') === 'true' },
+    );
+    if (!session) {
+      writeSessionNotFound(response);
+      return;
+    }
+    writeJson(response, 200, {
+      session: presentSessionSummary(session),
+      turnSnapshot: presentActiveTurnSnapshot(runtime, session.activeTurnId, 'workspace'),
+    });
+    return;
+  }
+
   const sessionFileResolveMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/files\/resolve$/u);
   if (sessionFileResolveMatch && method === 'POST') {
     const sessionId = decodeURIComponent(sessionFileResolveMatch[1]!);
@@ -661,6 +733,24 @@ async function handleRequest({
   }
 
   const sessionTimelineMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/timeline$/u);
+  if (sessionTimelineMatch && method === 'GET') {
+    const session = await runtime.readSession(decodeURIComponent(sessionTimelineMatch[1]!));
+    if (!session) {
+      writeSessionNotFound(response);
+      return;
+    }
+    writeJson(response, 200, {
+      ...paginateSessionTimeline(
+        presentSessionTimeline(session.timeline, session.thread, true),
+        url,
+      ),
+      session: presentSessionSummary(session),
+      ...(shouldIncludeTimelineTurnSnapshot(request, url)
+        ? { turnSnapshot: presentActiveTurnSnapshot(runtime, session.activeTurnId, 'workspace') }
+        : {}),
+    });
+    return;
+  }
   if (sessionTimelineMatch && method === 'POST') {
     const sessionId = decodeURIComponent(sessionTimelineMatch[1]!);
     const session = await runtime.readSession(sessionId);
@@ -878,6 +968,56 @@ function resolveStaticFile(entry: StaticFileEntry | undefined): StaticFileAsset 
   return typeof entry === 'function' ? entry() : entry;
 }
 
+function writeStaticAsset({
+  request,
+  response,
+  url,
+  asset,
+}: {
+  request: IncomingMessage;
+  response: ServerResponse;
+  url: URL;
+  asset: StaticFileAsset;
+}): void {
+  const body = Buffer.isBuffer(asset.body) ? asset.body : Buffer.from(asset.body);
+  const etag = contentEtag(body);
+  const cacheControl = asset.immutableWhenVersioned
+    && asset.buildId
+    && url.searchParams.get('v') === asset.buildId
+    ? STATIC_IMMUTABLE_CACHE_CONTROL
+    : asset.cacheControl ?? (asset.buildId ? 'no-cache' : 'no-store');
+  const baseHeaders: Record<string, string> = {
+    'Content-Type': asset.contentType,
+    'Cache-Control': cacheControl,
+    ETag: etag,
+  };
+  if (isCompressibleContentType(asset.contentType)) {
+    baseHeaders.Vary = appendVaryHeader(baseHeaders.Vary, 'Accept-Encoding');
+  }
+  if ((request.method === 'GET' || request.method === 'HEAD') && requestMatchesEtag(request, etag)) {
+    response.writeHead(304, baseHeaders);
+    response.end();
+    return;
+  }
+  const encoded = encodeResponseBody(request, body, asset.contentType);
+  if (encoded.contentEncoding) {
+    baseHeaders['Content-Encoding'] = encoded.contentEncoding;
+  }
+  baseHeaders['Content-Length'] = String(encoded.body.byteLength);
+  response.writeHead(200, baseHeaders);
+  response.end(request.method === 'HEAD' ? undefined : encoded.body);
+}
+
+function contentEtag(body: Buffer): string {
+  return `W/"${crypto.createHash('sha256').update(body).digest('base64url').slice(0, 22)}"`;
+}
+
+function requestMatchesEtag(request: IncomingMessage, etag: string): boolean {
+  const value = request.headers['if-none-match'];
+  const candidates = Array.isArray(value) ? value : value?.split(',');
+  return candidates?.some((candidate) => candidate.trim() === '*' || candidate.trim() === etag) ?? false;
+}
+
 function isAppShellHtml(pathname: string, asset: StaticFileAsset): boolean {
   return (pathname === '/' || pathname === '/index.html' || isShareAppRoute(pathname))
     && typeof asset.body === 'string'
@@ -890,7 +1030,7 @@ function injectAppShellBootstrap(asset: StaticFileAsset, siteTitle: string): Sta
   let body = String(asset.body).replace(/<title>[^<]*<\/title>/iu, `<title>${escapeHtml(title)}</title>`);
   if (!body.includes('id="codex-web-bootstrap"')) {
     body = body.replace(
-      /(\s*<script type="module" src="\/app\.js"><\/script>)/u,
+      /(\s*<script type="module" src="\/app\.js(?:\?[^"<]*)?"><\/script>)/u,
       `\n  ${bootstrap}$1`,
     );
   }
@@ -2519,6 +2659,41 @@ async function handleMultiUserRequest({
     return true;
   }
 
+  const sessionStatusMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/status$/u);
+  if (sessionStatusMatch && method === 'GET') {
+    const resolved = resolveReadableWorkspaceAppSession(
+      identityState,
+      principal,
+      decodeURIComponent(sessionStatusMatch[1]!),
+    );
+    if (!resolved) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const runtimeSession = await runtime.readSessionStatus(
+      resolved.appSession.codexThreadId,
+      { archived: resolved.appSession.archived === true },
+    );
+    if (!runtimeSession) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const includeWorkDetails = canViewProjectWorkDetails(principal, resolved.project);
+    const audience: CodexWebEventAudience = includeWorkDetails ? 'workspace' : 'workspace_summary';
+    writeJson(response, 200, {
+      session: presentSessionForUser({
+        runtimeSession,
+        appSession: resolved.appSession,
+        project: resolved.project,
+        observer: isObserverSessionForPrincipal(identityState, principal, resolved.appSession),
+        includeDetails: false,
+        includeWorkDetails,
+      }),
+      turnSnapshot: presentActiveTurnSnapshot(runtime, runtimeSession.activeTurnId, audience),
+    });
+    return true;
+  }
+
   const adminSessionsMatch = pathname.match(/^\/api\/admin\/sessions(?:\/([^/]+))?$/u);
   if (pathname.startsWith('/api/admin/')) {
     if (!principal.isAdmin) {
@@ -2760,6 +2935,46 @@ async function handleMultiUserRequest({
   }
 
   const sessionTimelineMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/timeline$/u);
+  if (sessionTimelineMatch && method === 'GET') {
+    const resolved = resolveReadableWorkspaceAppSession(
+      identityState,
+      principal,
+      decodeURIComponent(sessionTimelineMatch[1]!),
+    );
+    if (!resolved) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const runtimeSession = await runtime.readSession(resolved.appSession.codexThreadId);
+    if (!runtimeSession) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const includeWorkDetails = canViewProjectWorkDetails(principal, resolved.project);
+    const audience: CodexWebEventAudience = includeWorkDetails ? 'workspace' : 'workspace_summary';
+    writeJson(response, 200, {
+      ...paginateSessionTimeline(
+        presentSessionTimeline(
+          runtimeSession.timeline,
+          runtimeSession.thread,
+          includeWorkDetails,
+        ),
+        url,
+      ),
+      session: presentSessionForUser({
+        runtimeSession,
+        appSession: resolved.appSession,
+        project: resolved.project,
+        observer: isObserverSessionForPrincipal(identityState, principal, resolved.appSession),
+        includeDetails: false,
+        includeWorkDetails,
+      }),
+      ...(shouldIncludeTimelineTurnSnapshot(request, url)
+        ? { turnSnapshot: presentActiveTurnSnapshot(runtime, runtimeSession.activeTurnId, audience) }
+        : {}),
+    });
+    return true;
+  }
   if (sessionTimelineMatch && method === 'POST') {
     const sessionId = decodeURIComponent(sessionTimelineMatch[1]!);
     const stateForSession = await stateForSessionAccess({
@@ -4141,7 +4356,9 @@ function presentSessionForUser({
     favoriteOrder: typeof session.favoriteOrder === 'number' && Number.isFinite(session.favoriteOrder)
       ? session.favoriteOrder
       : null,
-    goal: presentSessionGoal(session.goal),
+    ...(Object.prototype.hasOwnProperty.call(session, 'goal')
+      ? { goal: presentSessionGoal(session.goal) }
+      : {}),
     activeTurnId: typeof session.activeTurnId === 'string' ? session.activeTurnId : null,
     ...(includeActivity && activityState ? { activityState } : {}),
     settings: presentSessionSettings(session.settings),
@@ -4172,6 +4389,66 @@ function presentSessionSummary(session: CodexWebSession): Partial<CodexWebSessio
     delete summary.activityState;
   }
   return summary;
+}
+
+function presentActiveTurnSnapshot(
+  runtime: CodexWebRuntime,
+  turnId: string | null | undefined,
+  audience: CodexWebEventAudience,
+): Record<string, unknown> | null {
+  if (!turnId) {
+    return null;
+  }
+  const replay = runtime.getTurnEventReplay(turnId, null, runtime.eventBus.epoch);
+  const entries = runtime.getTurnEventSnapshot(turnId);
+  const events = entries
+    .map((entry) => {
+      const event = presentCodexWebEvent(entry.event, audience);
+      return event ? { ...event, sequence: entry.sequence } : null;
+    })
+    .filter((event): event is Record<string, unknown> & { sequence: number } => event !== null);
+  const throughSequence = Math.max(
+    replay.latestSequence ?? 0,
+    ...entries.map((entry) => entry.sequence),
+  ) || null;
+  return {
+    turnId,
+    epoch: replay.epoch,
+    throughSequence,
+    complete: replay.snapshotComplete,
+    events,
+  };
+}
+
+function paginateSessionTimeline(
+  timeline: Array<Record<string, unknown>>,
+  url: URL,
+): Record<string, unknown> {
+  const requestedLimit = Number(url.searchParams.get('limit'));
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(100, Math.floor(requestedLimit))
+    : 50;
+  const rawBefore = url.searchParams.get('before');
+  const requestedBefore = rawBefore === null ? Number.NaN : Number(rawBefore);
+  const end = Number.isFinite(requestedBefore) && requestedBefore >= 0
+    ? Math.min(timeline.length, Math.floor(requestedBefore))
+    : timeline.length;
+  const start = Math.max(0, end - limit);
+  return {
+    items: timeline.slice(start, end),
+    nextBefore: start > 0 ? String(start) : null,
+    hasMore: start > 0,
+    total: timeline.length,
+  };
+}
+
+function shouldIncludeTimelineTurnSnapshot(request: IncomingMessage, url: URL): boolean {
+  if (url.searchParams.has('before')) {
+    return false;
+  }
+  const raw = request.headers['x-codex-include-turn-snapshot'];
+  const value = (Array.isArray(raw) ? raw[0] : raw)?.trim().toLowerCase();
+  return value !== 'false' && value !== '0' && value !== 'no';
 }
 
 function presentSessionActivityState(
@@ -4288,7 +4565,6 @@ function restrictedTurnConversationItemIndexes(turn: {
   const items = Array.isArray(turn.items) ? turn.items : [];
   const allowed = new Set<number>();
   let hasExplicitFinal = false;
-  let lastAssistantIndex = -1;
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]!;
     const role = restrictedConversationRole(item);
@@ -4299,19 +4575,21 @@ function restrictedTurnConversationItemIndexes(turn: {
     if (role !== 'assistant') {
       continue;
     }
-    lastAssistantIndex = index;
     if (normalizeAssistantPhase(item.phase) === 'final_answer') {
       hasExplicitFinal = true;
       allowed.add(index);
     }
   }
-  if (
-    !hasExplicitFinal
-    && isSuccessfulHydrationTurnStatus(turn.status)
-    && lastAssistantIndex >= 0
-    && normalizeAssistantPhase(items[lastAssistantIndex]?.phase) === ''
-  ) {
-    allowed.add(lastAssistantIndex);
+  if (!hasExplicitFinal && isSuccessfulHydrationTurnStatus(turn.status)) {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      if (
+        restrictedConversationRole(items[index]!) === 'assistant'
+        && normalizeAssistantPhase(items[index]!.phase) === ''
+      ) {
+        allowed.add(index);
+        break;
+      }
+    }
   }
   return allowed;
 }
@@ -4405,6 +4683,13 @@ function presentSessionTimeline(
       label: restrictedError ? 'Error' : restrictedAssistant ? 'Assistant' : entry.label,
       meta: restrictedError ? 'failed' : restrictedAssistant ? 'final' : entry.meta,
       text: restrictedError ? 'Turn failed' : entry.text,
+      ...(typeof entry.turnId === 'string' && entry.turnId ? { turnId: entry.turnId } : {}),
+      ...(typeof entry.itemId === 'string' && entry.itemId ? { itemId: entry.itemId } : {}),
+      ...(typeof entry.projectionKey === 'string' && entry.projectionKey ? { projectionKey: entry.projectionKey } : {}),
+      ...(typeof entry.phase === 'string' && entry.phase ? { phase: entry.phase } : {}),
+      ...(entry.lifecycle === 'started' || entry.lifecycle === 'delta' || entry.lifecycle === 'completed'
+        ? { lifecycle: entry.lifecycle }
+        : {}),
       ...(entry.severity === 'error' ? { severity: 'error' } : {}),
       ...(Number.isFinite(entry.afterHistoryIndex) ? { afterHistoryIndex: Number(entry.afterHistoryIndex) } : {}),
     }];
@@ -5281,7 +5566,7 @@ function extractBearerToken(request: IncomingMessage): string | null {
   return null;
 }
 
-async function streamTurnEvents({
+export async function streamTurnEvents({
   request,
   response,
   runtime,
@@ -5300,110 +5585,203 @@ async function streamTurnEvents({
   registerSseCloser: (close: () => void) => () => void;
   audience?: CodexWebEventAudience;
 }): Promise<void> {
+  const maxQueuedLiveEvents = 64;
   const pendingLiveEvents: CodexWebStoredEvent[] = [];
+  const liveEvents: CodexWebStoredEvent[] = [];
+  let sentThroughSequence = 0;
   let replaying = true;
-  let writeLiveEvent: ((entry: CodexWebStoredEvent) => void) | null = null;
-  const unsubscribe = runtime.subscribeToTurn(turnId, (entry) => {
-    if (replaying || !writeLiveEvent) {
-      pendingLiveEvents.push(entry);
-      return;
-    }
-    writeLiveEvent(entry);
-  });
-
-  let replay: CodexWebEventReplay;
-  try {
-    const compatibleRuntime = runtime as unknown as {
-      getTurnEventReplay?: (
-        replayTurnId: string,
-        replayAfterId?: string | number | null,
-        replayEpoch?: string | null,
-      ) => CodexWebEventReplay;
-    };
-    replay = compatibleRuntime.getTurnEventReplay
-      ? compatibleRuntime.getTurnEventReplay(turnId, afterId, requestedEpoch)
-      : legacyTurnEventReplay(runtime, turnId, afterId, requestedEpoch);
-  } catch (error) {
-    unsubscribe();
-    throw error;
-  }
-
-  response.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-store, must-revalidate, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-    'X-Codex-Event-Epoch': replay.epoch,
-    'X-Codex-Event-Reset': replay.reset ? 'true' : 'false',
-  });
-  response.flushHeaders();
+  let closed = false;
+  let flushingLiveEvents = false;
+  let slowConsumerResetPending = false;
+  let heartbeatPending = false;
+  let snapshotThroughSequence = 0;
+  let heartbeat: NodeJS.Timeout | null = null;
+  let unregisterForcedClose: (() => void) | null = null;
 
   const compatibleRuntime = runtime as unknown as {
+    getTurnEventReplay?: (
+      replayTurnId: string,
+      replayAfterId?: string | number | null,
+      replayEpoch?: string | null,
+    ) => CodexWebEventReplay;
     getTurnEventSnapshot?: (snapshotTurnId: string) => CodexWebStoredEvent[];
   };
-  const snapshotEvents = replay.reset
-    ? (compatibleRuntime.getTurnEventSnapshot?.(turnId) ?? [])
+
+  const readReplay = (
+    replayAfterId?: string | number | null,
+    replayEpoch?: string | null,
+  ): CodexWebEventReplay => compatibleRuntime.getTurnEventReplay
+    ? compatibleRuntime.getTurnEventReplay(turnId, replayAfterId, replayEpoch)
+    : legacyTurnEventReplay(runtime, turnId, replayAfterId, replayEpoch);
+
+  const snapshotControl = (
+    replay: CodexWebEventReplay,
+    forceResetReason: string | null = null,
+  ): { frame: string; throughSequence: number } => {
+    const reset = replay.reset || Boolean(forceResetReason);
+    const snapshotEntries = reset
+      ? compatibleRuntime.getTurnEventSnapshot?.(turnId) ?? []
+      : [];
+    const snapshotEvents = snapshotEntries
       .map((entry) => {
         const event = presentCodexWebEvent(entry.event, audience);
         return event ? { ...event, sequence: entry.sequence } : null;
       })
-      .filter((event): event is Record<string, unknown> & { sequence: number } => event !== null)
-    : [];
-  const control = {
-    type: replay.reset ? 'stream.reset' : 'stream.ready',
-    epoch: replay.epoch,
-    reset: replay.reset,
-    ...(replay.resetReason ? { reason: replay.resetReason } : {}),
-    retainedFrom: replay.retainedFrom,
-    retainedFloor: replay.retainedFloor,
-    latestSequence: replay.latestSequence,
-    ...(replay.reset ? {
-      snapshot: {
-        events: snapshotEvents,
-        throughSequence: replay.latestSequence,
-        complete: replay.snapshotComplete,
-      },
-    } : {}),
+      .filter((event): event is Record<string, unknown> & { sequence: number } => event !== null);
+    const throughSequence = reset
+      ? Math.max(replay.latestSequence ?? 0, ...snapshotEntries.map((entry) => entry.sequence))
+      : 0;
+    const control = {
+      type: reset ? 'stream.reset' : 'stream.ready',
+      epoch: replay.epoch,
+      reset,
+      ...(forceResetReason || replay.resetReason
+        ? { reason: forceResetReason ?? replay.resetReason }
+        : {}),
+      retainedFrom: replay.retainedFrom,
+      retainedFloor: replay.retainedFloor,
+      latestSequence: reset ? throughSequence || replay.latestSequence : replay.latestSequence,
+      ...(reset ? {
+        snapshot: {
+          events: snapshotEvents,
+          throughSequence: throughSequence || replay.latestSequence,
+          complete: replay.snapshotComplete,
+        },
+      } : {}),
+    };
+    return {
+      frame: `event: control\ndata: ${JSON.stringify(control)}\n\n`,
+      throughSequence,
+    };
   };
-  response.write(`event: control\ndata: ${JSON.stringify(control)}\n\n`);
 
-  const sentSequences = new Set<number>();
-  const writeEvent = (entry: CodexWebStoredEvent) => {
-    if (sentSequences.has(entry.sequence)) {
+  const waitForDrainOrClose = (): Promise<void> => new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      response.off('drain', finish);
+      response.off('close', finish);
+      response.off('error', finish);
+      resolve();
+    };
+    response.once('drain', finish);
+    response.once('close', finish);
+    response.once('error', finish);
+  });
+
+  const writeChunk = async (chunk: string): Promise<boolean> => {
+    if (closed || response.writableEnded || response.destroyed) {
+      return false;
+    }
+    if (response.write(chunk)) {
+      return true;
+    }
+    await waitForDrainOrClose();
+    return !closed && !response.writableEnded && !response.destroyed;
+  };
+
+  const writeEvent = async (entry: CodexWebStoredEvent): Promise<void> => {
+    if (entry.sequence <= snapshotThroughSequence || entry.sequence <= sentThroughSequence) {
       return;
     }
-    sentSequences.add(entry.sequence);
-    const event = presentCodexWebEvent(entry.event, audience);
+    const event = presentCodexWebEvent(entry.event, audience, { compactAssistantDelta: true });
     if (!event) {
+      sentThroughSequence = Math.max(sentThroughSequence, entry.sequence);
       return;
     }
-    response.write(`id: ${entry.sequence}\nevent: message\ndata: ${JSON.stringify({
+    const written = await writeChunk(`id: ${entry.sequence}\nevent: message\ndata: ${JSON.stringify({
       ...event,
       sequence: entry.sequence,
     })}\n\n`);
+    if (written) {
+      sentThroughSequence = Math.max(sentThroughSequence, entry.sequence);
+    }
   };
-  writeLiveEvent = writeEvent;
 
-  for (const entry of replay.events) {
-    writeEvent(entry);
-  }
-  replaying = false;
-  for (const entry of pendingLiveEvents) {
-    writeEvent(entry);
-  }
-  pendingLiveEvents.length = 0;
-  const heartbeat = setInterval(() => {
-    response.write(': keepalive\n\n');
-  }, 15_000);
-  let closed = false;
-  let unregisterForcedClose: (() => void) | null = null;
+  const flushLiveEvents = async (): Promise<void> => {
+    if (flushingLiveEvents || replaying || closed) {
+      return;
+    }
+    flushingLiveEvents = true;
+    try {
+      while (!closed) {
+        if (slowConsumerResetPending) {
+          // The snapshot covers earlier appends; clear first so appends during a blocked write stay queued.
+          slowConsumerResetPending = false;
+          liveEvents.length = 0;
+          const currentReplay = readReplay(null, runtime.eventBus.epoch);
+          const resetControl = snapshotControl(currentReplay, 'slow_consumer');
+          snapshotThroughSequence = Math.max(snapshotThroughSequence, resetControl.throughSequence);
+          if (!await writeChunk(resetControl.frame)) {
+            return;
+          }
+          continue;
+        }
+        const entry = liveEvents.shift();
+        if (entry) {
+          await writeEvent(entry);
+          continue;
+        }
+        if (heartbeatPending) {
+          heartbeatPending = false;
+          if (!await writeChunk(': keepalive\n\n')) {
+            return;
+          }
+          continue;
+        }
+        break;
+      }
+    } finally {
+      flushingLiveEvents = false;
+      if (!closed && (slowConsumerResetPending || liveEvents.length > 0 || heartbeatPending)) {
+        void flushLiveEvents();
+      }
+    }
+  };
+
+  const enqueueLiveEvent = (entry: CodexWebStoredEvent): void => {
+    if (closed || entry.sequence <= snapshotThroughSequence) {
+      return;
+    }
+    if (slowConsumerResetPending) {
+      return;
+    }
+    if (liveEvents.length >= maxQueuedLiveEvents) {
+      liveEvents.length = 0;
+      slowConsumerResetPending = true;
+    } else {
+      liveEvents.push(entry);
+    }
+    void flushLiveEvents();
+  };
+
+  const unsubscribe = runtime.subscribeToTurn(turnId, (entry) => {
+    if (replaying) {
+      if (pendingLiveEvents.length >= maxQueuedLiveEvents) {
+        pendingLiveEvents.length = 0;
+        slowConsumerResetPending = true;
+      } else if (!slowConsumerResetPending) {
+        pendingLiveEvents.push(entry);
+      }
+      return;
+    }
+    enqueueLiveEvent(entry);
+  });
 
   const cleanup = () => {
     if (closed) {
       return;
     }
     closed = true;
-    clearInterval(heartbeat);
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+    pendingLiveEvents.length = 0;
+    liveEvents.length = 0;
     unsubscribe();
     unregisterForcedClose?.();
     unregisterForcedClose = null;
@@ -5421,6 +5799,45 @@ async function streamTurnEvents({
   request.once('aborted', cleanup);
   response.once('close', cleanup);
   response.once('error', cleanup);
+
+  let replay: CodexWebEventReplay;
+  try {
+    replay = readReplay(afterId, requestedEpoch);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-store, must-revalidate, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'X-Codex-Event-Epoch': replay.epoch,
+    'X-Codex-Event-Reset': replay.reset ? 'true' : 'false',
+  });
+  response.flushHeaders();
+
+  const initialControl = snapshotControl(replay);
+  snapshotThroughSequence = initialControl.throughSequence;
+  if (!await writeChunk(initialControl.frame)) {
+    cleanup();
+    return;
+  }
+
+  for (const entry of replay.events) {
+    await writeEvent(entry);
+  }
+  replaying = false;
+  for (const entry of pendingLiveEvents) {
+    enqueueLiveEvent(entry);
+  }
+  pendingLiveEvents.length = 0;
+  heartbeat = setInterval(() => {
+    heartbeatPending = true;
+    void flushLiveEvents();
+  }, 15_000);
+  void flushLiveEvents();
 }
 
 function legacyTurnEventReplay(
@@ -5520,12 +5937,82 @@ function writeJson(
   payload: unknown,
   headers: Record<string, string> = {},
 ): void {
-  response.writeHead(status, {
+  const contentType = 'application/json; charset=utf-8';
+  const body = Buffer.from(`${JSON.stringify(payload)}\n`);
+  const encoded = encodeResponseBody(response.req, body, contentType);
+  const responseHeaders: Record<string, string> = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    Vary: 'Accept-Encoding',
+    'Content-Length': String(encoded.body.byteLength),
     ...headers,
-  });
-  response.end(`${JSON.stringify(payload)}\n`);
+  };
+  if (encoded.contentEncoding) {
+    responseHeaders['Content-Encoding'] = encoded.contentEncoding;
+  }
+  response.writeHead(status, responseHeaders);
+  response.end(encoded.body);
+}
+
+function encodeResponseBody(
+  request: IncomingMessage,
+  body: Buffer,
+  contentType: string,
+): { body: Buffer; contentEncoding: 'br' | 'gzip' | null } {
+  if (body.byteLength < COMPRESSION_MIN_BYTES || !isCompressibleContentType(contentType)) {
+    return { body, contentEncoding: null };
+  }
+  const contentEncoding = preferredContentEncoding(request.headers['accept-encoding']);
+  if (contentEncoding === 'br') {
+    return {
+      body: brotliCompressSync(body, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+      }),
+      contentEncoding,
+    };
+  }
+  if (contentEncoding === 'gzip') {
+    return { body: gzipSync(body, { level: 6 }), contentEncoding };
+  }
+  return { body, contentEncoding: null };
+}
+
+function isCompressibleContentType(contentType: string): boolean {
+  return /^text\//iu.test(contentType)
+    || /^(?:application\/(?:javascript|json|manifest\+json))\b/iu.test(contentType);
+}
+
+function preferredContentEncoding(
+  headerValue: string | string[] | undefined,
+): 'br' | 'gzip' | null {
+  const raw = Array.isArray(headerValue) ? headerValue.join(',') : headerValue;
+  if (!raw) {
+    return null;
+  }
+  const qualities = new Map<string, number>();
+  for (const entry of raw.split(',')) {
+    const [rawName, ...parameters] = entry.trim().toLowerCase().split(';');
+    const name = rawName?.trim();
+    if (!name) {
+      continue;
+    }
+    const qualityParameter = parameters.find((parameter) => parameter.trim().startsWith('q='));
+    const quality = qualityParameter ? Number(qualityParameter.trim().slice(2)) : 1;
+    qualities.set(name, Number.isFinite(quality) ? Math.max(0, Math.min(1, quality)) : 0);
+  }
+  const wildcardQuality = qualities.get('*') ?? 0;
+  const identityQuality = qualities.get('identity') ?? 0;
+  const candidates = (['br', 'gzip'] as const)
+    .map((name) => ({ name, quality: qualities.get(name) ?? wildcardQuality }))
+    .filter((candidate) => candidate.quality > 0 && candidate.quality >= identityQuality)
+    .sort((left, right) => right.quality - left.quality);
+  return candidates[0]?.name ?? null;
+}
+
+function appendVaryHeader(existing: string | undefined, name: string): string {
+  const values = new Set((existing ?? '').split(',').map((value) => value.trim()).filter(Boolean));
+  values.add(name);
+  return [...values].join(', ');
 }
 
 function applySecurityResponseHeaders(response: ServerResponse): void {

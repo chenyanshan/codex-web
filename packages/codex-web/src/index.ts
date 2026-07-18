@@ -52,6 +52,7 @@ export {
   type CodexWebRuntimeOptions,
   type CodexWebSession,
   type CreateSessionInput,
+  type ReadSessionStatusOptions,
   type StartTurnInput,
   type UpdateSessionSettingsInput,
 } from './runtime.js';

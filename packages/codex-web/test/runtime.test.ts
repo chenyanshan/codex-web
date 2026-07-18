@@ -179,6 +179,346 @@ test('runtime lists sessions from thread summaries without hydrating every threa
   assert.equal(sessions[1]?.activityState, 'running');
 });
 
+test('runtime session lists bulk-load settings once and never read timeline state', async () => {
+  let settingsListCalls = 0;
+  let settingsGetCalls = 0;
+  let timelineListCalls = 0;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({
+      items: [createThread('thread_summary_a'), createThread('thread_summary_b')],
+      nextCursor: null,
+    }),
+    startThread: async () => ({ threadId: 'thread_summary_a', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => createThread('thread_summary_a'),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_1',
+      threadId: 'thread_summary_a',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    settingsStore: {
+      list: () => {
+        settingsListCalls += 1;
+        return [
+          ['thread_summary_a', { bridgeSessionId: 'thread_summary_a', favorite: true, metadata: {} }],
+          ['thread_summary_b', { bridgeSessionId: 'thread_summary_b', favorite: false, metadata: {} }],
+        ] as any;
+      },
+      get: () => {
+        settingsGetCalls += 1;
+        return null;
+      },
+      set: () => {},
+      delete: () => {},
+    },
+    timelineStore: {
+      list: () => {
+        timelineListCalls += 1;
+        return [];
+      },
+      append: () => {},
+      replace: () => {},
+      delete: () => {},
+    },
+  });
+
+  const sessions = await runtime.listSessions();
+
+  assert.equal(settingsListCalls, 1);
+  assert.equal(settingsGetCalls, 0);
+  assert.equal(timelineListCalls, 0);
+  assert.equal(sessions[0]?.favorite, true);
+  assert.deepEqual(sessions.map((session) => session.thread.turns), [[], []]);
+  assert.deepEqual(sessions.map((session) => session.timeline), [[], []]);
+});
+
+test('runtime reads lightweight session status without thread hydration, timeline, or goal RPCs', async () => {
+  let readThreadCalls = 0;
+  let readGoalCalls = 0;
+  let timelineListCalls = 0;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({
+      items: [{
+        ...createThread('thread_status'),
+        runtimeStatus: { type: 'active', activeFlags: [] },
+        turns: [{ id: 'turn_status', status: 'running', error: null, items: [] }],
+      }],
+      nextCursor: null,
+    }),
+    startThread: async () => ({ threadId: 'thread_status', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => {
+      readThreadCalls += 1;
+      return createThread('thread_status');
+    },
+    getThreadGoal: async () => {
+      readGoalCalls += 1;
+      return null;
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_status',
+      threadId: 'thread_status',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    timelineStore: {
+      list: () => {
+        timelineListCalls += 1;
+        return [];
+      },
+      append: () => {},
+      replace: () => {},
+      delete: () => {},
+    },
+  });
+
+  await runtime.listSessions();
+  const status = await runtime.readSessionStatus('thread_status');
+
+  assert.equal(readThreadCalls, 0);
+  assert.equal(readGoalCalls, 0);
+  assert.equal(timelineListCalls, 0);
+  assert.equal(status?.activeTurnId, 'turn_status');
+  assert.equal(status?.activityState, 'running');
+  assert.equal(Object.prototype.hasOwnProperty.call(status, 'goal'), false);
+  assert.deepEqual(status?.thread.turns, []);
+  assert.deepEqual(status?.timeline, []);
+});
+
+test('runtime lightweight status uses a targeted turn-free read instead of scanning the first list page', async () => {
+  let listCalls = 0;
+  const readCalls: boolean[] = [];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => {
+      listCalls += 1;
+      return { items: [], nextCursor: 'next-page' };
+    },
+    startThread: async () => ({ threadId: 'thread_old', cwd: '/workspace', title: 'Thread' }),
+    readThread: async (_threadId, includeTurns) => {
+      readCalls.push(Boolean(includeTurns));
+      return createThread('thread_old');
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_old',
+      threadId: 'thread_old',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  const status = await runtime.readSessionStatus('thread_old');
+
+  assert.equal(status?.id, 'thread_old');
+  assert.equal(Object.prototype.hasOwnProperty.call(status, 'goal'), false);
+  assert.equal(listCalls, 0);
+  assert.deepEqual(readCalls, [false]);
+  assert.deepEqual(status?.thread.turns, []);
+});
+
+test('runtime lightweight status resumes historical threads before retrying a turn-free read', async () => {
+  const readCalls: boolean[] = [];
+  let resumed = false;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_historical', cwd: '/workspace', title: 'Thread' }),
+    readThread: async (_threadId, includeTurns) => {
+      readCalls.push(Boolean(includeTurns));
+      if (!resumed) {
+        throw new Error('thread not loaded');
+      }
+      return createThread('thread_historical');
+    },
+    resumeThread: async ({ threadId }) => {
+      assert.equal(threadId, 'thread_historical');
+      resumed = true;
+      return {};
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_historical',
+      threadId: 'thread_historical',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  const status = await runtime.readSessionStatus('thread_historical');
+
+  assert.equal(status?.id, 'thread_historical');
+  assert.deepEqual(readCalls, [false, false]);
+});
+
+test('runtime lightweight status does not resurrect a stale cached thread after a confirmed miss', async () => {
+  let readCalls = 0;
+  let resumeCalls = 0;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({
+      items: [{ ...createThread('thread_deleted'), title: 'Stale cached title' }],
+      nextCursor: null,
+    }),
+    startThread: async () => ({ threadId: 'thread_deleted', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => {
+      readCalls += 1;
+      return null;
+    },
+    resumeThread: async () => {
+      resumeCalls += 1;
+      throw new Error('thread not found');
+    },
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_deleted',
+      threadId: 'thread_deleted',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  assert.equal((await runtime.listSessions())[0]?.title, 'Stale cached title');
+  (runtime as any).threadSummaryCachedAt.set('thread_deleted', 0);
+
+  assert.equal(await runtime.readSessionStatus('thread_deleted'), null);
+  assert.equal(readCalls, 1);
+  assert.equal(resumeCalls, 1);
+  assert.equal((runtime as any).threadSummaries.has('thread_deleted'), false);
+});
+
+test('runtime timeline preserves projection metadata and classifies historical assistant phases', async () => {
+  const thread: ProviderThreadSummary = {
+    ...createThread('thread_projection'),
+    turns: [{
+      id: 'turn_explicit',
+      status: 'completed',
+      error: null,
+      items: [
+        { id: 'item_user', type: 'message', role: 'user', phase: null, text: 'Question' },
+        { id: 'item_reasoning', type: 'reasoning', role: 'assistant', phase: null, text: 'Reasoning summary' },
+        { id: 'item_commentary', type: 'message', role: 'assistant', phase: 'commentary', text: 'Checking files' },
+        {
+          id: 'item_final',
+          type: 'message',
+          role: 'assistant',
+          phase: 'final_answer',
+          text: 'Explicit answer',
+          raw: { secret: 'provider-private' },
+        },
+      ],
+    }, {
+      id: 'turn_legacy',
+      status: 'success',
+      error: null,
+      items: [
+        { id: 'item_legacy_early', type: 'message', role: 'assistant', phase: null, text: 'Legacy thought' },
+        { id: 'item_legacy_final', type: 'message', role: 'assistant', phase: null, text: 'Legacy answer' },
+        { id: 'item_legacy_reasoning', type: 'reasoning', role: 'assistant', phase: null, text: 'Legacy reasoning tail' },
+      ],
+    }, {
+      id: 'turn_failed',
+      status: 'failed',
+      error: 'provider failed',
+      items: [
+        { id: 'item_failed', type: 'message', role: 'assistant', phase: null, text: 'Incomplete answer' },
+      ],
+    }],
+  };
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [thread], nextCursor: null }),
+    startThread: async () => ({ threadId: thread.threadId, cwd: thread.cwd, title: thread.title }),
+    readThread: async () => thread,
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: thread.threadId,
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+
+  const session = await runtime.readSession(thread.threadId);
+  const byText = new Map(session?.timeline.map((entry) => [entry.text, entry]));
+
+  assert.deepEqual(byText.get('Question'), {
+    id: 'history_turn_explicit_0',
+    kind: 'message',
+    role: 'user',
+    label: 'You',
+    meta: 'history',
+    text: 'Question',
+    turnId: 'turn_explicit',
+    itemId: 'item_user',
+    projectionKey: 'turn_explicit\u0000item_user',
+    lifecycle: 'completed',
+  });
+  assert.equal(byText.get('Reasoning summary')?.meta, 'reasoning-summary');
+  assert.equal(byText.get('Reasoning summary')?.phase, 'reasoning_summary');
+  assert.equal(byText.get('Checking files')?.meta, 'commentary');
+  assert.equal(byText.get('Checking files')?.phase, 'commentary');
+  assert.equal(byText.get('Explicit answer')?.meta, 'final');
+  assert.equal(byText.get('Explicit answer')?.phase, 'final_answer');
+  assert.equal(byText.get('Explicit answer')?.projectionKey, 'turn_explicit\u0000item_final');
+  assert.equal(byText.get('Legacy thought')?.meta, 'commentary');
+  assert.equal(byText.get('Legacy answer')?.meta, 'final');
+  assert.equal(byText.get('Legacy answer')?.phase, 'final_answer');
+  assert.equal(byText.get('Legacy reasoning tail')?.meta, 'reasoning-summary');
+  assert.equal(byText.get('Legacy reasoning tail')?.phase, 'reasoning_summary');
+  assert.equal(byText.get('Incomplete answer')?.meta, 'commentary');
+  assert.equal(byText.get('Incomplete answer')?.lifecycle, 'completed');
+  assert.equal(JSON.stringify(session?.timeline).includes('provider-private'), false);
+  assert.equal(JSON.stringify(session?.timeline).includes('"raw"'), false);
+});
+
 test('runtime lists archived sessions from archived thread summaries', async () => {
   const listArgs: Array<{ archived?: boolean | null }> = [];
   const client: CodexWebRuntimeClient = {
@@ -1036,6 +1376,7 @@ test('runtime reorders an existing favorite without hydrating its thread', async
   assert.equal(reordered?.id, 'thread_favorite');
   assert.equal(reordered?.favorite, true);
   assert.equal(reordered?.favoriteOrder, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(reordered, 'goal'), false);
   assert.equal(store.get('thread_favorite')?.favoriteOrder, 1);
 });
 
@@ -2119,6 +2460,49 @@ test('runtime readSession exposes backend-managed turn failure timeline entries'
   ]);
   const errorEntry = session?.timeline.find((item) => item.id === 'error_turn_403');
   assert.equal(errorEntry?.severity, 'error');
+});
+
+test('runtime hides request timeout details behind a generic turn failure', async () => {
+  const timelinePath = `/tmp/codex-web-runtime-timeline-${process.pid}-${Date.now()}-timeout.json`;
+  const eventBus = new CodexWebEventBus();
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async (): Promise<ProviderUsageReport | null> => null,
+    listThreads: async () => ({ items: [createThread('thread_timeout')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_timeout', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_timeout'),
+      turns: [{
+        id: 'turn_timeout',
+        status: 'completed',
+        error: null,
+        items: [{ type: 'message', role: 'user', phase: null, text: 'Long task' }],
+      }],
+    }),
+    writeConfigValue: async () => {},
+    startTurn: async ({ onTurnStarted }): Promise<ProviderTurnResult> => {
+      await onTurnStarted?.({ turnId: 'turn_timeout', threadId: 'thread_timeout' });
+      throw new Error('request timed out');
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus,
+    timelineStore: new FileSessionTimelineStore({ timelinePath }),
+  });
+
+  const started = await runtime.startTurn('thread_timeout', { text: 'Long task' });
+  assert.equal(started.turnId, 'turn_timeout');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const failedEvent = eventBus.list('turn_timeout').find((entry) => entry.event.type === 'turn.failed');
+  assert.equal(failedEvent?.event.type === 'turn.failed' ? failedEvent.event.message : null, 'Turn failed');
+  const session = await runtime.readSession('thread_timeout');
+  assert.equal(session?.timeline.find((item) => item.id === 'error_turn_timeout')?.text, 'Turn failed');
 });
 
 test('runtime anchors failed turn errors after the newly persisted user message', async () => {

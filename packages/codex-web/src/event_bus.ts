@@ -9,6 +9,7 @@ export interface CodexWebStoredEvent {
 export type CodexWebEventListener = (storedEvent: CodexWebStoredEvent) => void;
 
 export type CodexWebReplayResetReason =
+  | 'initial_snapshot'
   | 'epoch_mismatch'
   | 'cursor_expired'
   | 'cursor_ahead'
@@ -125,6 +126,8 @@ export class CodexWebEventBus {
       resetReason = 'cursor_ahead';
     } else if (normalizedAfter === null && retainedFloor > 0) {
       resetReason = 'history_truncated';
+    } else if (normalizedAfter === null && history.length > 0) {
+      resetReason = 'initial_snapshot';
     }
     return {
       epoch: this.epoch,
@@ -137,7 +140,7 @@ export class CodexWebEventBus {
         && this.projectionCompleteness.get(turnId) === true,
       events: resetReason === null && normalizedAfter !== null
         ? history.filter((entry) => entry.sequence > normalizedAfter)
-        : [...history],
+        : [],
     };
   }
 

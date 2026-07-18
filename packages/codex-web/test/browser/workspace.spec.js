@@ -13,6 +13,24 @@ async function readCacheEntries(page) {
   });
 }
 
+async function waitForStableCacheEntries(page) {
+  let previousSignature = '';
+  let stableReads = 0;
+  let latestEntries = [];
+  await expect.poll(async () => {
+    latestEntries = await readCacheEntries(page);
+    const signature = latestEntries.join('\n');
+    const hasCachedApp = latestEntries.some((value) => new URL(value).pathname === '/app.js');
+    stableReads = hasCachedApp && signature === previousSignature ? stableReads + 1 : 0;
+    previousSignature = signature;
+    return stableReads;
+  }, {
+    timeout: 5_000,
+    intervals: [100, 100, 200, 200, 250],
+  }).toBeGreaterThanOrEqual(2);
+  return latestEntries;
+}
+
 async function sampleBrowserMemory(page, context) {
   await page.waitForTimeout(250);
   await page.requestGC();
@@ -764,7 +782,7 @@ test('standalone foreground checks do not grow Cache Storage', async ({ page }, 
   const versionRequestUrls = [];
   page.on('request', (request) => {
     const url = new URL(request.url());
-    if (request.resourceType() === 'fetch' && url.pathname === '/app.js') {
+    if (request.resourceType() === 'fetch' && url.pathname === '/version.json') {
       versionRequestUrls.push(url.toString());
     }
   });
@@ -773,13 +791,12 @@ test('standalone foreground checks do not grow Cache Storage', async ({ page }, 
   await page.evaluate(() => window.navigator.serviceWorker.ready);
   await page.reload({ waitUntil: 'load' });
   await page.waitForFunction(() => Boolean(window.navigator.serviceWorker.controller));
-  await page.waitForLoadState('networkidle');
-  const before = await readCacheEntries(page);
+  const before = await waitForStableCacheEntries(page);
 
   for (let index = 0; index < 6; index += 1) {
     const response = page.waitForResponse((candidate) => {
       const url = new URL(candidate.url());
-      return candidate.request().resourceType() === 'fetch' && url.pathname === '/app.js';
+      return candidate.request().resourceType() === 'fetch' && url.pathname === '/version.json';
     });
     await page.evaluate(() => {
       window.__advanceCodexTestClock(16_000);
@@ -792,6 +809,7 @@ test('standalone foreground checks do not grow Cache Storage', async ({ page }, 
   expect(versionRequestUrls.length).toBeGreaterThanOrEqual(6);
   expect(versionRequestUrls.every((value) => new URL(value).search === '')).toBe(true);
   expect(before.filter((value) => new URL(value).pathname === '/app.js')).toHaveLength(1);
+  expect(before.some((value) => new URL(value).pathname === '/version.json')).toBe(false);
 });
 
 test('repeated chat renders release detached DOM and listeners', async ({ page, context }, testInfo) => {

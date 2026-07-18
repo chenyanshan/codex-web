@@ -45,6 +45,7 @@ export type CodexWebEventAudience = 'workspace' | 'workspace_summary' | 'share';
 export function presentCodexWebEvent(
   event: CodexWebEvent,
   audience: CodexWebEventAudience = 'workspace',
+  options: { compactAssistantDelta?: boolean } = {},
 ): Record<string, unknown> | null {
   const base = {
     id: event.id,
@@ -60,7 +61,7 @@ export function presentCodexWebEvent(
       }
       return {
         ...base,
-        text: event.text,
+        ...(!shouldCompactAssistantDelta(event, options) ? { text: event.text } : {}),
         phase: event.phase,
         ...(event.itemId ? { itemId: event.itemId } : {}),
         ...(event.eventType ? { eventType: event.eventType } : {}),
@@ -124,6 +125,16 @@ export function presentCodexWebEvent(
         ...(audience === 'workspace' && event.details ? { details: event.details } : {}),
       };
   }
+}
+
+function shouldCompactAssistantDelta(
+  event: Extract<CodexWebEvent, { type: 'assistant.delta' }>,
+  options: { compactAssistantDelta?: boolean },
+): boolean {
+  return options.compactAssistantDelta === true
+    && event.eventType === 'delta'
+    && typeof event.delta === 'string'
+    && event.delta.length > 0;
 }
 
 function safeWorkTitle(kind: Extract<CodexWebEvent, { type: 'batch.started' }>['kind']): string {

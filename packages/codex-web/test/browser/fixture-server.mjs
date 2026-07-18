@@ -8,6 +8,7 @@ const publicRoot = fileURLToPath(new URL('../../public/', import.meta.url));
 const fixtureHistoryImage = readFileSync(path.join(publicRoot, 'icon-192.png'));
 const portArgument = process.argv.find((argument) => argument.startsWith('--port='));
 const port = Number(portArgument?.slice('--port='.length) || process.env.PORT || 41739);
+const fixtureBuildId = '__CODEX_WEB_BUILD_ID__';
 const activeTurnStreams = new Map();
 let activeTurnEventSequence = 100;
 
@@ -288,6 +289,11 @@ const server = createServer(async (request, response) => {
 
     if (pathname === '/healthz') {
       sendText(response, 200, 'ok');
+      return;
+    }
+
+    if (pathname === '/version.json') {
+      sendJson(response, 200, { buildId: fixtureBuildId });
       return;
     }
 

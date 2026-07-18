@@ -28,11 +28,11 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.equal(parsedManifest.start_url, '/');
   assert.equal(parsedManifest.theme_color, '#f8f3e3');
   assert.equal(parsedManifest.background_color, '#f8f3e3');
-  assert.match(index, /<link rel="manifest" href="\/manifest\.webmanifest">/u);
-  assert.match(index, /<link rel="icon" href="\/icon-192\.png" type="image\/png">/u);
-  assert.match(index, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png">/u);
+  assert.match(index, /<link rel="manifest" href="\/manifest\.webmanifest\?v=__CODEX_WEB_BUILD_ID__">/u);
+  assert.match(index, /<link rel="icon" href="\/icon-192\.png\?v=__CODEX_WEB_BUILD_ID__" type="image\/png">/u);
+  assert.match(index, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png\?v=__CODEX_WEB_BUILD_ID__">/u);
   assert.match(index, /<meta name="theme-color" content="#f8f3e3">/u);
-  assert.match(index, /<script src="\/theme-init\.js"><\/script>\s*<link rel="stylesheet"/u);
+  assert.match(index, /<script src="\/theme-init\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>\s*<link rel="stylesheet"/u);
   assert.doesNotMatch(index, /screen-orientation|x5-orientation/u);
   assert.match(index, /<meta name="apple-mobile-web-app-capable" content="yes">/u);
   assert.match(index, /<meta name="apple-mobile-web-app-title" content="Codex">/u);
@@ -53,8 +53,8 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.doesNotMatch(serviceWorker, /cached \|\| fetch\(request\)/u);
   assert.match(serviceWorker, /fetch\(request\)/u);
   assert.match(serviceWorker, /cache\.put\(request, response\.clone\(\)\)/u);
-  assert.match(serviceWorker, /STATIC_ASSET_PATHS\.has\(url\.pathname\)/u);
-  assert.match(serviceWorker, /!url\.search/u);
+  assert.match(serviceWorker, /VERSIONED_STATIC_ASSET_PATHS\.has\(url\.pathname\)/u);
+  assert.match(serviceWorker, /url\.searchParams\.get\('v'\)/u);
   assert.match(themeInit, /let theme = 'sunny'/u);
   assert.match(themeInit, /document\.documentElement\.dataset\.theme = theme/u);
 });
@@ -65,7 +65,8 @@ test('PWA checks app version on foreground to escape stale standalone caches', a
   assert.match(app, /const APP_BUILD_ID = /u);
   assert.match(app, /setupAppVersionRefresh\(\)/u);
   assert.match(app, /function checkForAppUpdate\(\)/u);
-  assert.match(app, /fetch\('\/app\.js', \{ cache: 'no-store' \}\)/u);
+  assert.match(app, /fetch\('\/version\.json', \{ cache: 'no-store' \}\)/u);
+  assert.match(app, /const payload = await response\.json\(\)/u);
   assert.match(app, /appVersionCheckPromise/u);
   assert.match(app, /APP_VERSION_CHECK_COOLDOWN_MS/u);
   assert.doesNotMatch(app, /version-check=\$\{Date\.now\(\)\}/u);
@@ -88,16 +89,16 @@ test('PWA version checks share one request across duplicate foreground events', 
   const first = api.checkForAppUpdate();
   const duplicate = api.checkForAppUpdate();
 
-  assert.deepEqual(fetchCalls, ['/app.js']);
+  assert.deepEqual(fetchCalls, ['/version.json']);
   assert.equal(first, duplicate);
   assert.equal(typeof releaseFetch, 'function');
   releaseFetch?.({
     ok: true,
-    text: async () => "const APP_BUILD_ID = '__CODEX_WEB_BUILD_ID__';",
+    json: async () => ({ buildId: '__CODEX_WEB_BUILD_ID__' }),
   });
   await Promise.all([first, duplicate]);
   await api.checkForAppUpdate();
-  assert.deepEqual(fetchCalls, ['/app.js']);
+  assert.deepEqual(fetchCalls, ['/version.json']);
 });
 
 test('rerendered element listeners use abortable render and timeline lifecycles', async () => {
@@ -624,6 +625,392 @@ test('repeat opens with a stored token render the app shell before auth verifica
   assert.doesNotMatch(app, /function onLoginSubmit\(event\)\s*\{(?:(?!\n\}\n\nasync function onLogout).)*await restoreAuth\(\);/su);
   assert.doesNotMatch(app, /name="deviceName"/u);
   assert.doesNotMatch(app, /form\.get\('deviceName'\)/u);
+});
+
+test('bootstrap restores the last cached conversation before auth verification resolves', async () => {
+  let authRequested = false;
+  const session = {
+    id: 'session_cached_boot',
+    cwd: '/repo/cached',
+    firstUserInput: 'Cached question',
+    updatedAt: 10,
+    settings: { metadata: {} },
+  };
+  const cachedAnswer = {
+    id: 'cached_answer',
+    kind: 'message',
+    role: 'assistant',
+    label: 'Assistant',
+    meta: 'final',
+    text: 'Cached answer before auth',
+  };
+  const { api, context } = await loadAppHarness({
+    storage: {
+      codexWebToken: 'token',
+      codexWebSessionsCache: JSON.stringify({ scopes: { all: [session] } }),
+      codexWebWorkspaceState: JSON.stringify({ view: 'chat', sessionId: session.id }),
+      codexWebTimelineCache: JSON.stringify({
+        version: 3,
+        entries: [{
+          sessionId: session.id,
+          savedAt: 10,
+          timeline: [cachedAnswer],
+          history: [cachedAnswer],
+          historyComplete: true,
+          batches: [],
+          approvals: [],
+        }],
+      }),
+    },
+    fetch: async (path) => {
+      assert.equal(path, '/api/auth/me');
+      authRequested = true;
+      return await new Promise(() => {});
+    },
+  });
+
+  assert.equal(authRequested, true);
+  assert.equal(api.state.sessionId, session.id);
+  assert.equal(api.state.view, 'chat');
+  assert.equal(api.state.timeline[0]?.text, 'Cached answer before auth');
+  assert.match(context.document.querySelector('#app').innerHTML, /Cached answer before auth/u);
+});
+
+test('bootstrap hides cached work details until auth confirms the principal', async () => {
+  let resolveAuth: ((response: unknown) => void) | null = null;
+  const session = {
+    id: 'session_cached_private',
+    cwd: '/repo/private',
+    projectId: 'project_private',
+    firstUserInput: 'Public question',
+    updatedAt: 10,
+    settings: { metadata: {} },
+  };
+  const cachedTimeline = [
+    { id: 'cached_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Public question' },
+    { id: 'cached_commentary', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'commentary', text: 'PRIVATE_COMMENTARY' },
+    { id: 'cached_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: 'Public final answer' },
+    { id: 'cached_error', kind: 'message', role: 'system', label: 'Error', meta: 'failed', severity: 'error', text: 'PRIVATE_STACK' },
+    {
+      id: 'approval_private',
+      kind: 'approval',
+      approvalId: 'approval_private',
+      approvalKind: 'command',
+      turnId: 'turn_private',
+      summary: { command: 'cat /private/secret.txt' },
+      resolved: false,
+    },
+  ];
+  const privateBatch = {
+    id: 'batch_private',
+    kind: 'batch',
+    turnId: 'turn_private',
+    batchId: 'batch_private',
+    batchKind: 'command',
+    title: 'cat /private/secret.txt',
+    status: 'completed',
+    summary: { output: 'PRIVATE_COMMAND_OUTPUT' },
+  };
+  const { api, context, storage } = await loadAppHarness({
+    storage: {
+      codexWebToken: 'token',
+      codexWebSessionsCache: JSON.stringify({ scopes: { all: [session] } }),
+      codexWebWorkspaceState: JSON.stringify({ view: 'chat', sessionId: session.id }),
+      codexWebTimelineCache: JSON.stringify({
+        version: 3,
+        entries: [{
+          sessionId: session.id,
+          savedAt: 10,
+          timeline: cachedTimeline,
+          history: cachedTimeline,
+          historyComplete: true,
+          batches: [['batch_private', privateBatch]],
+          approvals: [['approval_private', cachedTimeline.at(-1)]],
+        }],
+      }),
+    },
+    fetch: async (path) => {
+      if (path === '/api/auth/me') {
+        return await new Promise((resolve) => {
+          resolveAuth = resolve;
+        });
+      }
+      if (path === '/api/settings') {
+        return { ok: true, status: 200, json: async () => ({ settings: {}, permissions: {} }) };
+      }
+      if (path === '/api/models') {
+        return { ok: true, status: 200, json: async () => ({ items: [], defaults: null }) };
+      }
+      if (path === '/api/projects') {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      if (path === '/api/sessions') {
+        return { ok: true, status: 200, json: async () => ({ items: [session] }) };
+      }
+      if (path === `/api/sessions/${session.id}/status`) {
+        return { ok: true, status: 200, json: async () => ({ session }) };
+      }
+      if (path === `/api/sessions/${session.id}/timeline?limit=50`) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ items: cachedTimeline.filter((item) => item.kind === 'message'), hasMore: false, nextBefore: null }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  const bootstrapHtml = context.document.querySelector('#app').innerHTML;
+  assert.match(bootstrapHtml, /Public question/u);
+  assert.match(bootstrapHtml, /Public final answer/u);
+  assert.doesNotMatch(bootstrapHtml, /PRIVATE_COMMENTARY|PRIVATE_STACK|private\/secret/u);
+  assert.equal(api.state.batches.size, 0);
+  assert.equal(api.state.approvals.size, 0);
+  assert.match(storage.get('codexWebTimelineCache') || '', /PRIVATE_COMMENTARY|PRIVATE_COMMAND_OUTPUT/u);
+
+  resolveAuth?.({
+    ok: true,
+    status: 200,
+    json: async () => ({ session: { id: 'auth_single', principal: { mode: 'single', isAdmin: false } } }),
+  });
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.match(JSON.stringify(api.state.timeline), /PRIVATE_COMMENTARY/u);
+  assert.match(JSON.stringify([...api.state.batches.values()]), /PRIVATE_COMMAND_OUTPUT/u);
+});
+
+test('bootstrap restores cached activity and reconnects SSE from the persisted cursor before auth', async () => {
+  const fetchCalls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const session = {
+    id: 'session_cached_running',
+    cwd: '/repo/cached',
+    firstUserInput: 'Keep working',
+    updatedAt: 20,
+    activeTurnId: 'turn_cached',
+    activityState: 'running',
+    settings: { metadata: {} },
+  };
+  const cachedMessage = {
+    id: 'cached_user',
+    kind: 'message',
+    role: 'user',
+    label: 'You',
+    meta: 'history',
+    text: 'Keep working',
+  };
+  const { api } = await loadAppHarness({
+    storage: {
+      codexWebToken: 'token',
+      codexWebSessionsCache: JSON.stringify({ scopes: { all: [session] } }),
+      codexWebWorkspaceState: JSON.stringify({ view: 'chat', sessionId: session.id }),
+      codexWebTimelineCache: JSON.stringify({
+        version: 3,
+        entries: [{
+          sessionId: session.id,
+          savedAt: 20,
+          timeline: [cachedMessage],
+          history: [cachedMessage],
+          historyComplete: false,
+          batches: [],
+          approvals: [],
+          streamCursor: { turnId: 'turn_cached', epoch: 'epoch_cached', sequence: 37 },
+        }],
+      }),
+    },
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/auth/me') {
+        return await new Promise(() => {});
+      }
+      if (path === '/api/turns/turn_cached/events?after=37&epoch=epoch_cached') {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'epoch_cached' },
+          body: {
+            getReader: () => ({ read: async () => await new Promise(() => {}) }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  await flushMicrotasks();
+
+  assert.equal(api.state.currentSession?.activityState, 'running');
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_cached');
+  assert.equal(api.state.lastTurnEventSequence, 37);
+  assert.equal(api.state.lastTurnEventEpoch, 'epoch_cached');
+  assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_cached/events?after=37&epoch=epoch_cached'));
+});
+
+test('startup SSE drops approval details and replays them after the principal is confirmed', async () => {
+  const fetchCalls: string[] = [];
+  let releasePendingRead: ((result: unknown) => void) | null = null;
+  let finishReplay: (() => void) | null = null;
+  const replayFinished = new Promise<void>((resolve) => {
+    finishReplay = resolve;
+  });
+  const batchEvent = {
+    id: 'event_batch_private',
+    type: 'batch.started',
+    turnId: 'turn_pending_auth',
+    batchId: 'batch_private',
+    kind: 'command',
+    title: 'cat /private/startup-secret.txt',
+    sequence: 11,
+  };
+  const approvalEvent = {
+    id: 'event_approval_private',
+    type: 'approval.requested',
+    turnId: 'turn_pending_auth',
+    approvalId: 'approval_private',
+    approvalKind: 'command',
+    summary: {
+      command: 'rm /private/startup-secret.txt',
+      grantRoot: '/private',
+      fileReadPermissions: ['/private/startup-secret.txt'],
+      output: 'STARTUP_APPROVAL_SECRET',
+    },
+    sequence: 12,
+  };
+  const finalEvent = {
+    id: 'event_final_safe',
+    type: 'assistant.final',
+    turnId: 'turn_pending_auth',
+    itemId: 'item_final_safe',
+    text: 'Safe final answer',
+    sequence: 13,
+  };
+  const initialFrames = [batchEvent, approvalEvent, finalEvent]
+    .map((event) => `id: ${event.sequence}\nevent: message\ndata: ${JSON.stringify(event)}\n\n`)
+    .join('');
+  const replayControl = {
+    type: 'stream.reset',
+    reset: true,
+    epoch: 'epoch_pending_auth',
+    snapshot: {
+      complete: true,
+      throughSequence: 13,
+      events: [batchEvent, approvalEvent, finalEvent],
+    },
+  };
+  let requestCount = 0;
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      requestCount += 1;
+      if (requestCount === 1) {
+        let readCount = 0;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'epoch_pending_auth' },
+          body: {
+            getReader: () => ({
+              read: async () => {
+                if (readCount === 0) {
+                  readCount += 1;
+                  return { done: false, value: new TextEncoder().encode(initialFrames) };
+                }
+                return await new Promise((resolve) => {
+                  releasePendingRead = resolve;
+                });
+              },
+            }),
+          },
+        };
+      }
+      let readCount = 0;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'epoch_pending_auth' },
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (readCount === 0) {
+                readCount += 1;
+                return {
+                  done: false,
+                  value: new TextEncoder().encode(`event: control\ndata: ${JSON.stringify(replayControl)}\n\n`),
+                };
+              }
+              finishReplay?.();
+              return { done: true };
+            },
+          }),
+        },
+      };
+    },
+  });
+  const safeUser = { id: 'user_safe', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Continue' };
+  api.state.token = 'token';
+  api.state.authSession = { id: 'cached' };
+  api.state.sessionId = 'session_pending_auth';
+  api.state.currentSession = { id: 'session_pending_auth', cwd: '/repo', settings: { metadata: {} } };
+  api.state.sessions = [api.state.currentSession];
+  api.state.timeline = [safeUser];
+  api.state.sessionHistoryItems = [safeUser];
+  api.state.turnId = 'turn_pending_auth';
+  api.state.pendingTurn = true;
+  api.state.lastTurnEventSequence = 10;
+  api.state.lastTurnEventEpoch = 'epoch_pending_auth';
+  api.state.timelineCache.set('session_pending_auth', {
+    savedAt: 1,
+    timeline: [safeUser],
+    history: [safeUser],
+    historyComplete: false,
+    batches: new Map(),
+    approvals: new Map(),
+    streamCursor: { turnId: 'turn_pending_auth', sequence: 10, epoch: 'epoch_pending_auth' },
+  });
+
+  const pendingStream = api.streamTurnEvents('turn_pending_auth');
+  await flushMicrotasks();
+
+  assert.equal(api.state.lastTurnEventSequence, 10);
+  assert.equal(api.state.batches.size, 0);
+  assert.equal(api.state.approvals.size, 0);
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /startup-secret|STARTUP_APPROVAL_SECRET/u);
+  assert.doesNotMatch(storage.get('codexWebTimelineCache') || '', /startup-secret|STARTUP_APPROVAL_SECRET/u);
+
+  api.state.authSession = { id: 'auth_single', principal: { mode: 'single', isAdmin: false } };
+  api.enforceCurrentWorkDetailsAccess();
+  await replayFinished;
+  await flushMicrotasks();
+
+  assert.equal(fetchCalls[0], '/api/turns/turn_pending_auth/events?after=10&epoch=epoch_pending_auth');
+  assert.equal(fetchCalls[1], '/api/turns/turn_pending_auth/events');
+  assert.equal(api.state.lastTurnEventSequence, 13);
+  assert.match(JSON.stringify([...api.state.batches.values()]), /startup-secret/u);
+  assert.match(JSON.stringify([...api.state.approvals.values()]), /STARTUP_APPROVAL_SECRET/u);
+  releasePendingRead?.({ done: true });
+  await pendingStream;
+  api.state.pendingTurn = false;
+});
+
+test('desktop list and settings views preserve the active session workspace for reload', async () => {
+  const { api, storage } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.state.sessionId = 'session_desktop_restore';
+  api.state.currentSession = { id: 'session_desktop_restore', cwd: '/repo', settings: { metadata: {} } };
+  api.state.sessions = [api.state.currentSession];
+
+  api.showSessionList();
+  let persisted = JSON.parse(storage.get('codexWebWorkspaceState'));
+  assert.equal(persisted.view, 'chat');
+  assert.equal(persisted.sessionId, 'session_desktop_restore');
+
+  api.openAppSettingsPage();
+  persisted = JSON.parse(storage.get('codexWebWorkspaceState'));
+  assert.equal(persisted.view, 'chat');
+  assert.equal(persisted.sessionId, 'session_desktop_restore');
 });
 
 test('login form supports optional username for multi-user mode', async () => {
@@ -3656,7 +4043,7 @@ test('turn completion sends the next queued message without interrupting the run
           json: async () => ({ turnId: 'turn_2' }),
         };
       }
-      if (path === '/api/sessions/session_1') {
+      if (path === '/api/sessions/session_1/status') {
         return {
           ok: true,
           status: 200,
@@ -3690,16 +4077,15 @@ test('turn completion sends the next queued message without interrupting the run
   await api.streamTurnEvents('turn_1');
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls.map((call) => call.path), [
-    '/api/turns/turn_1/events',
-    '/api/sessions/session_1',
-    '/api/sessions/session_1/turns',
-    '/api/turns/turn_2/events',
-  ]);
+  assert.equal(fetchCalls[0]?.path, '/api/turns/turn_1/events');
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/status'));
+  assert.equal(fetchCalls.some((call) => call.path === '/api/sessions/session_1/timeline?limit=50'), false);
+  assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_2/events'));
+  const queuedTurnRequest = fetchCalls.find((call) => call.path === '/api/sessions/session_1/turns');
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.queuedMessagesForCurrentSession().length, 0);
-  assert.equal(JSON.parse(fetchCalls[2].options.body).text, 'Queued follow-up');
+  assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Queued follow-up');
 });
 
 test('starting a new turn does not reuse the previous turn event sequence in the SSE request', async () => {
@@ -3975,16 +4361,15 @@ test('stream completion without a terminal event refreshes session state and sen
   await flushMicrotasks();
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls.map((call) => call.path), [
-    '/api/turns/turn_1/events',
-    '/api/sessions/session_1',
-    '/api/sessions/session_1/turns',
-    '/api/turns/turn_2/events',
-  ]);
+  assert.equal(fetchCalls[0]?.path, '/api/turns/turn_1/events');
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/status'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/timeline?limit=50'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_2/events'));
+  const queuedTurnRequest = fetchCalls.find((call) => call.path === '/api/sessions/session_1/turns');
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.queuedMessagesForCurrentSession().length, 0);
-  assert.equal(JSON.parse(fetchCalls[2].options.body).text, 'Queued after silent stream end');
+  assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Queued after silent stream end');
 });
 
 test('queued follow-up interrupts a running turn after tool batches complete and immediately starts the next turn', async () => {
@@ -4078,16 +4463,15 @@ test('queued follow-up interrupts a running turn after tool batches complete and
   await flushMicrotasks();
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls.map((call) => call.path), [
-    '/api/turns/turn_1/interrupt',
-    '/api/sessions/session_1',
-    '/api/sessions/session_1/turns',
-    '/api/turns/turn_2/events',
-  ]);
+  assert.equal(fetchCalls[0]?.path, '/api/turns/turn_1/interrupt');
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/status'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/timeline?limit=50'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_2/events'));
+  const queuedTurnRequest = fetchCalls.find((call) => call.path === '/api/sessions/session_1/turns');
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.queuedMessagesForCurrentSession().length, 0);
-  assert.equal(JSON.parse(fetchCalls[2].options.body).text, 'Take this new direction');
+  assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Take this new direction');
 });
 
 test('composer renders handled goal slash command results without streaming a turn', async () => {
@@ -4914,10 +5298,19 @@ test('stale session detail does not overwrite a cached pending message', async (
 
 test('stale detail does not mistake a repeated pending prompt for an earlier occurrence', async () => {
   const { api } = await loadAppHarness({
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
+    fetch: async (path) => {
+      if (path.endsWith('/status') || path.includes('/timeline?')) {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ error: 'route_not_found' }),
+        };
+      }
+      assert.equal(path, '/api/sessions/session_repeat');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
         session: {
           id: 'session_repeat',
           cwd: '/repo',
@@ -4934,8 +5327,9 @@ test('stale detail does not mistake a repeated pending prompt for an earlier occ
             }],
           },
         },
-      }),
-    }),
+        }),
+      };
+    },
   });
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
@@ -5032,11 +5426,20 @@ test('confirmed attachment history replaces an acknowledged upload-path cache en
     'Use the local file paths above when you inspect these attachments.',
   ].join('\n');
   const { api } = await loadAppHarness({
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        session: {
+    fetch: async (path) => {
+      if (path.endsWith('/status') || path.includes('/timeline?')) {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ error: 'route_not_found' }),
+        };
+      }
+      assert.equal(path, '/api/sessions/session_attachment_confirmed');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          session: {
           id: 'session_attachment_confirmed',
           cwd: '/repo',
           updatedAt: 30,
@@ -5051,9 +5454,10 @@ test('confirmed attachment history replaces an acknowledged upload-path cache en
               ],
             }],
           },
-        },
-      }),
-    }),
+          },
+        }),
+      };
+    },
   });
   api.state.token = 'token';
   api.state.authSession = { id: 'auth_1' };
@@ -5130,12 +5534,20 @@ test('fresh inactive session detail cache opens without another network request'
   assert.equal(api.state.timeline[0]?.text, 'Old question');
 });
 
-test('expired or active session detail caches still refresh from the backend', async () => {
+test('expired or active session caches refresh through compact endpoints', async () => {
   const fetched = [];
   const { api } = await loadAppHarness({
     fetch: async (path) => {
       fetched.push(path);
-      const sessionId = path.split('/').at(-1);
+      const sessionId = path.split('/')[3];
+      if (path.endsWith('/timeline?limit=50')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ items: [], nextBefore: null, hasMore: false }),
+        };
+      }
+      assert.equal(path, `/api/sessions/${sessionId}/status`);
       return {
         ok: true,
         status: 200,
@@ -5145,7 +5557,6 @@ test('expired or active session detail caches still refresh from the backend', a
             cwd: '/repo',
             updatedAt: 100,
             settings: { metadata: {} },
-            thread: { turns: [] },
           },
         }),
       };
@@ -5179,8 +5590,558 @@ test('expired or active session detail caches still refresh from the backend', a
   await api.selectSession('session_active');
   await api.selectSession('session_legacy');
 
-  assert.deepEqual(fetched, ['/api/sessions/session_expired', '/api/sessions/session_active', '/api/sessions/session_legacy']);
+  assert.deepEqual(fetched, [
+    '/api/sessions/session_expired/status',
+    '/api/sessions/session_expired/timeline?limit=50',
+    '/api/sessions/session_active/status',
+    '/api/sessions/session_active/timeline?limit=50',
+    '/api/sessions/session_legacy/status',
+    '/api/sessions/session_legacy/timeline?limit=50',
+  ]);
   assert.ok(api.state.timelineCache.get('session_active')?.validatedAt > 0);
+});
+
+test('session open uses a compact timeline when status fails without requesting full detail', async () => {
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_partial/status') {
+        throw new Error('status network unavailable');
+      }
+      if (path === '/api/sessions/session_partial/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'latest_answer', kind: 'message', role: 'assistant', text: 'Timeline survived' }],
+            hasMore: false,
+            nextBefore: null,
+          }),
+        };
+      }
+      throw new Error(`full detail should not be requested: ${path}`);
+    },
+  });
+  api.state.token = 'token';
+
+  const payload = await api.loadSessionOpenData({ id: 'session_partial', cwd: '/summary' });
+
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_partial/status',
+    '/api/sessions/session_partial/timeline?limit=50',
+  ]);
+  assert.equal(payload.compact, true);
+  assert.equal(payload.timelineSource, 'network');
+  assert.equal(payload.session.cwd, '/summary');
+  assert.equal(payload.session.timeline[0]?.text, 'Timeline survived');
+});
+
+test('session open keeps cached history when status succeeds and timeline fails', async () => {
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_cached_partial/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ session: { id: 'session_cached_partial', cwd: '/fresh', updatedAt: 20 } }),
+        };
+      }
+      if (path === '/api/sessions/session_cached_partial/timeline?limit=50') {
+        throw new Error('timeline network unavailable');
+      }
+      throw new Error(`full detail should not be requested: ${path}`);
+    },
+  });
+  const validatedAt = 123;
+  api.state.token = 'token';
+  api.state.timelineCache.set('session_cached_partial', {
+    savedAt: 100,
+    validatedAt,
+    sessionUpdatedAt: 10,
+    timeline: [{ id: 'cached_answer', kind: 'message', role: 'assistant', text: 'Cached answer' }],
+    history: [{ id: 'cached_answer', kind: 'message', role: 'assistant', text: 'Cached answer' }],
+    historyComplete: true,
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  const payload = await api.loadSessionOpenData({ id: 'session_cached_partial', cwd: '/old' });
+
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_cached_partial/status',
+    '/api/sessions/session_cached_partial/timeline?limit=50',
+  ]);
+  assert.equal(payload.timelineSource, 'cache');
+  assert.equal(payload.session.cwd, '/fresh');
+  assert.equal(payload.session.timeline[0]?.text, 'Cached answer');
+  assert.equal(api.state.timelineCache.get('session_cached_partial')?.validatedAt, validatedAt);
+});
+
+test('session open accepts status without history when no timeline source is available', async () => {
+  const fetchCalls: string[] = [];
+  let timelineRequestHeaders: Record<string, string> = {};
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_status_only/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: { id: 'session_status_only', activeTurnId: 'turn_status' },
+            turnSnapshot: { turnId: 'turn_status', epoch: 'epoch_status', throughSequence: 7, events: [] },
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_status_only/timeline?limit=50') {
+        timelineRequestHeaders = options.headers || {};
+        throw new Error('timeline unavailable');
+      }
+      throw new Error(`full detail should not be requested: ${path}`);
+    },
+  });
+  api.state.token = 'token';
+
+  const payload = await api.loadSessionOpenData({ id: 'session_status_only', firstUserInput: 'Summary preview' });
+
+  assert.equal(payload.timelineSource, 'none');
+  assert.equal(payload.session.activeTurnId, 'turn_status');
+  assert.equal(payload.turnSnapshot?.turnId, 'turn_status');
+  assert.equal(timelineRequestHeaders['X-Codex-Include-Turn-Snapshot'], 'false');
+  assert.equal(Object.hasOwn(payload.session, 'timeline'), false);
+  assert.equal(fetchCalls.length, 2);
+});
+
+test('timeline session metadata overrides a stale status response for cross-device active turns', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_cross_device/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: { id: 'session_cross_device', activityState: 'idle', activeTurnId: null },
+            turnSnapshot: null,
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_cross_device/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: { id: 'session_cross_device', activityState: 'running', activeTurnId: 'turn_remote' },
+            turnSnapshot: { turnId: 'turn_remote', epoch: 'epoch_remote', throughSequence: 4, complete: true, events: [] },
+            items: [],
+            hasMore: false,
+            nextBefore: null,
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+
+  const payload = await api.loadSessionOpenData({ id: 'session_cross_device' });
+
+  assert.equal(payload.session.activityState, 'running');
+  assert.equal(payload.session.activeTurnId, 'turn_remote');
+  assert.equal(payload.turnSnapshot?.epoch, 'epoch_remote');
+});
+
+test('session open falls back to legacy full detail only when both compact endpoints are unavailable', async () => {
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path.endsWith('/status') || path.includes('/timeline?')) {
+        return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
+      }
+      assert.equal(path, '/api/sessions/session_legacy_open');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ session: { id: 'session_legacy_open', thread: { turns: [] } } }),
+      };
+    },
+  });
+  api.state.token = 'token';
+
+  const payload = await api.loadSessionOpenData({ id: 'session_legacy_open' });
+
+  assert.equal(payload.compact, undefined);
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_legacy_open/status',
+    '/api/sessions/session_legacy_open/timeline?limit=50',
+    '/api/sessions/session_legacy_open',
+  ]);
+});
+
+test('session open rejects auth failure without waiting for a hanging compact sibling', async () => {
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_auth/status') {
+        return { ok: false, status: 401, json: async () => ({ error: 'invalid_session' }) };
+      }
+      if (path === '/api/sessions/session_auth/timeline?limit=50') {
+        return await new Promise(() => {});
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+
+  await assert.rejects(
+    () => api.loadSessionOpenData({ id: 'session_auth' }),
+    (error) => error?.status === 401,
+  );
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_auth/status',
+    '/api/sessions/session_auth/timeline?limit=50',
+  ]);
+});
+
+test('partial latest timeline merges stable cached history and stays incomplete until the final page', async () => {
+  const fetchCalls: string[] = [];
+  const cachedHistory = [
+    { id: 'old_user', kind: 'message', role: 'user', text: 'Old question' },
+    { id: 'old_assistant', kind: 'message', role: 'assistant', text: 'Old answer' },
+    { id: 'shared_user', kind: 'message', role: 'user', text: 'Cached latest question' },
+    { id: 'shared_assistant', kind: 'message', role: 'assistant', text: 'Cached latest answer' },
+  ];
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_pages/status') {
+        return { ok: true, status: 200, json: async () => ({ session: { id: 'session_pages', updatedAt: 2 } }) };
+      }
+      if (path === '/api/sessions/session_pages/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'shared_user', kind: 'message', role: 'user', text: 'Server latest question' },
+              { id: 'shared_assistant', kind: 'message', role: 'assistant', text: 'Server latest answer' },
+              { id: 'new_user', kind: 'message', role: 'user', text: 'Newest question' },
+              { id: 'new_assistant', kind: 'message', role: 'assistant', text: 'Newest answer' },
+            ],
+            hasMore: true,
+            nextBefore: 50,
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_pages/timeline?limit=50&before=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'very_old', kind: 'message', role: 'user', text: 'Very old question' }],
+            hasMore: false,
+            nextBefore: null,
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_pages', cwd: '/repo', updatedAt: 2, settings: { metadata: {} } }];
+  api.state.timelineCache.set('session_pages', {
+    savedAt: 1,
+    validatedAt: 0,
+    sessionUpdatedAt: 1,
+    timeline: cachedHistory,
+    history: cachedHistory,
+    historyComplete: true,
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  await api.selectSession('session_pages');
+
+  assert.equal(fetchCalls.includes('/api/sessions/session_pages'), false);
+  assert.equal(JSON.parse(storage.get('codexWebWorkspaceState')).sessionId, 'session_pages');
+  assert.equal(api.state.currentSession?.timelineNextBefore, 50);
+  assert.equal(JSON.stringify(api.state.sessionHistoryItems.map((item) => item.text)), JSON.stringify([
+    'Old question',
+    'Old answer',
+    'Server latest question',
+    'Server latest answer',
+    'Newest question',
+    'Newest answer',
+  ]));
+  assert.equal(api.state.timelineCache.get('session_pages')?.historyComplete, false);
+  assert.equal(JSON.parse(storage.get('codexWebTimelineCache')).entries[0]?.historyComplete, false);
+
+  await api.loadOlderSessionTimelinePage();
+
+  assert.equal(fetchCalls.at(-1), '/api/sessions/session_pages/timeline?limit=50&before=50');
+  assert.equal(api.state.timelineCache.get('session_pages')?.historyComplete, true);
+  assert.equal(api.state.sessionHistoryItems[0]?.text, 'Very old question');
+});
+
+test('switching sessions aborts a hanging older timeline page and lets the next session paginate', async () => {
+  const fetchCalls: string[] = [];
+  let oldPageSignal: AbortSignal | null = null;
+  let oldPageAbortCount = 0;
+  const { api } = await loadAppHarness({
+    fetch: async (path, options: any = {}) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_old/timeline?limit=50&before=50') {
+        oldPageSignal = options.signal;
+        return await new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => {
+            oldPageAbortCount += 1;
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            reject(error);
+          }, { once: true });
+        });
+      }
+      if (path === '/api/sessions/session_new/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ session: { id: 'session_new', cwd: '/new', settings: { metadata: {} } } }),
+        };
+      }
+      if (path === '/api/sessions/session_new/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'new_latest', kind: 'message', role: 'assistant', text: 'New latest answer' }],
+            hasMore: true,
+            nextBefore: 25,
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_new/timeline?limit=50&before=25') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'new_older', kind: 'message', role: 'user', text: 'New older question' }],
+            hasMore: false,
+            nextBefore: null,
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessions = [
+    { id: 'session_old', cwd: '/old', settings: { metadata: {} } },
+    { id: 'session_new', cwd: '/new', settings: { metadata: {} } },
+  ];
+  api.state.sessionId = 'session_old';
+  api.state.currentSession = {
+    id: 'session_old',
+    cwd: '/old',
+    timelineComplete: false,
+    timelineNextBefore: 50,
+    settings: { metadata: {} },
+  };
+
+  const oldPage = api.loadOlderSessionTimelinePage();
+  assert.equal(oldPageSignal?.aborted, false);
+
+  await api.selectSession('session_new');
+
+  assert.equal(oldPageSignal?.aborted, true);
+  assert.equal(oldPageAbortCount, 1);
+  assert.equal(await oldPage, false);
+  assert.equal(api.state.currentSession?.timelineNextBefore, 25);
+  assert.equal(await api.loadOlderSessionTimelinePage(), true);
+  assert.equal(api.state.sessionHistoryItems[0]?.text, 'New older question');
+  assert.ok(fetchCalls.includes('/api/sessions/session_new/timeline?limit=50&before=25'));
+});
+
+test('older timeline scroll restoration ignores a session selected before its animation frame', async () => {
+  const frames: Array<() => void> = [];
+  const { api } = await loadAppHarness({
+    requestAnimationFrame: (callback: () => void) => {
+      frames.push(callback);
+      return frames.length;
+    },
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_old/timeline?limit=50&before=50');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [{ id: 'old_older', kind: 'message', role: 'user', text: 'Old older question' }],
+          hasMore: false,
+          nextBefore: null,
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_old';
+  api.state.currentSession = {
+    id: 'session_old',
+    cwd: '/old',
+    timelineComplete: false,
+    timelineNextBefore: 50,
+  };
+  api.state.timeline = [
+    { id: 'old_latest', kind: 'message', role: 'assistant', text: 'Old latest answer' },
+  ];
+  api.state.sessionHistoryItems = [...api.state.timeline];
+  api.render();
+  frames.length = 0;
+
+  assert.equal(await api.loadOlderSessionTimelinePage(), true);
+  const oldSessionScrollRestore = frames.at(-1);
+  assert.equal(typeof oldSessionScrollRestore, 'function');
+
+  api.state.sessionId = 'session_new';
+  api.state.currentSession = { id: 'session_new', cwd: '/new' };
+  api.state.timeline = [
+    { id: 'new_latest', kind: 'message', role: 'assistant', text: 'New latest answer' },
+  ];
+  api.state.sessionHistoryItems = [...api.state.timeline];
+  api.render();
+  const newTimeline = api.context.document.querySelector('#timeline');
+  newTimeline.scrollHeight = 1_600;
+  newTimeline.scrollTop = 321;
+
+  oldSessionScrollRestore?.();
+
+  assert.equal(newTimeline.scrollTop, 321);
+});
+
+test('older timeline page timeout settles a non-cooperative fetch and releases the retry slot', async () => {
+  const timers: Array<{ callback: () => void; delay: number; cleared: boolean }> = [];
+  const signals: AbortSignal[] = [];
+  let fetchCount = 0;
+  const { api } = await loadAppHarness({
+    setTimeout: (callback: () => void, delay: number) => {
+      timers.push({ callback, delay, cleared: false });
+      return timers.length;
+    },
+    clearTimeout: (timerId: number) => {
+      if (timers[timerId - 1]) {
+        timers[timerId - 1].cleared = true;
+      }
+    },
+    fetch: async (path, options: any = {}) => {
+      assert.equal(path, '/api/sessions/session_timeout/timeline?limit=50&before=50');
+      fetchCount += 1;
+      signals.push(options.signal);
+      return await new Promise(() => {});
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_timeout';
+  api.state.currentSession = {
+    id: 'session_timeout',
+    cwd: '/repo',
+    timelineComplete: false,
+    timelineNextBefore: 50,
+  };
+
+  const firstPage = api.loadOlderSessionTimelinePage();
+  const firstTimer = timers.find((timer) => timer.delay === 12_000 && !timer.cleared);
+  assert.ok(firstTimer);
+  firstTimer.callback();
+
+  assert.equal(await firstPage, false);
+  assert.equal(signals[0]?.aborted, true);
+
+  const retryPage = api.loadOlderSessionTimelinePage();
+  assert.equal(fetchCount, 2);
+  const retryTimer = timers.findLast((timer) => timer.delay === 12_000 && !timer.cleared);
+  assert.ok(retryTimer);
+  retryTimer.callback();
+
+  assert.equal(await retryPage, false);
+  assert.equal(signals[1]?.aborted, true);
+});
+
+test('partial latest timeline drops disjoint cached history before prepending server pages', async () => {
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_gap/status') {
+        return { ok: true, status: 200, json: async () => ({ session: { id: 'session_gap', updatedAt: 2 } }) };
+      }
+      if (path === '/api/sessions/session_gap/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'server_latest', kind: 'message', role: 'assistant', text: 'Server latest answer' }],
+            hasMore: true,
+            nextBefore: 50,
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_gap/timeline?limit=50&before=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'server_previous', kind: 'message', role: 'user', text: 'Server previous question' }],
+            hasMore: true,
+            nextBefore: 25,
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{ id: 'session_gap', cwd: '/repo', updatedAt: 2, settings: { metadata: {} } }];
+  const staleHistory = [
+    { id: 'cached_old', kind: 'message', role: 'assistant', text: 'Stale cached answer' },
+  ];
+  api.state.timelineCache.set('session_gap', {
+    savedAt: 1,
+    validatedAt: 0,
+    sessionUpdatedAt: 1,
+    timeline: staleHistory,
+    history: staleHistory,
+    historyComplete: true,
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  await api.selectSession('session_gap');
+
+  assert.equal(JSON.stringify(api.state.sessionHistoryItems.map((item) => item.text)), JSON.stringify([
+    'Server latest answer',
+  ]));
+  assert.equal(api.state.currentSession?.timelineComplete, false);
+  assert.equal(api.state.currentSession?.timelineNextBefore, 50);
+
+  await api.loadOlderSessionTimelinePage();
+
+  assert.equal(fetchCalls.at(-1), '/api/sessions/session_gap/timeline?limit=50&before=50');
+  assert.equal(JSON.stringify(api.state.sessionHistoryItems.map((item) => item.text)), JSON.stringify([
+    'Server previous question',
+    'Server latest answer',
+  ]));
+  assert.equal(api.state.currentSession?.timelineComplete, false);
+  assert.equal(api.state.currentSession?.timelineNextBefore, 25);
 });
 
 test('switching sessions ignores stale SSE chunks from the previous session turn', async () => {
@@ -5716,9 +6677,14 @@ test('restricted session hydration keeps successful legacy finals but drops fail
   assert.doesNotMatch(JSON.stringify(api.state.timeline), /FAILED_PHASELESS_COMMENTARY_SECRET/u);
   assert.match(JSON.stringify(api.state.sessionHistoryItems), /Legacy completed answer/u);
   assert.doesNotMatch(JSON.stringify(api.state.sessionHistoryItems), /FAILED_PHASELESS_COMMENTARY_SECRET/u);
-  assert.equal(api.state.timeline[0]?.turnId, 'turn_completed');
-  assert.equal(api.state.timeline[0]?.itemId, 'final_completed');
-  assert.equal(api.state.timeline[0]?.projectionKey, 'turn_completed\u0000final_completed');
+  const retainedFinal = api.state.timeline.find((item) => item.text === completedAnswer);
+  const retainedHistoryFinal = api.state.sessionHistoryItems.find((item) => item.text === completedAnswer);
+  assert.equal(retainedFinal?.turnId, 'turn_completed');
+  assert.equal(retainedFinal?.itemId, 'final_completed');
+  assert.equal(retainedFinal?.projectionKey, 'turn_completed\u0000final_completed');
+  assert.equal(retainedFinal?.meta, 'final');
+  assert.equal(retainedFinal?.phase, 'final_answer');
+  assert.equal(retainedHistoryFinal?.phase, 'final_answer');
 });
 
 test('desktop session-list refresh immediately enforces a work visibility downgrade', async () => {
@@ -5942,6 +6908,40 @@ test('restricted event guard redacts full stream frames that survive a capabilit
   assert.equal(Object.hasOwn(approval.summary, 'output'), false);
   assert.equal(Object.hasOwn(approval.summary, 'diff'), false);
   assert.equal(Object.hasOwn(approval.summary, 'cwd'), false);
+});
+
+test('restricted final-answer delta frames append when the compact stream omits cumulative text', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.sessionId = 'session_compact';
+  api.state.currentSession = {
+    id: 'session_compact',
+    projectId: 'project_compact',
+    canViewWorkDetails: false,
+  };
+  api.state.projectsLoaded = true;
+  api.state.projects = [{ id: 'project_compact', canViewWorkDetails: false }];
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_compact';
+
+  let entry = null;
+  for (const delta of ['Hello', ' from the compact stream.']) {
+    const event = api.presentTurnEventForCurrentAudience({
+      type: 'assistant.delta',
+      turnId: 'turn_compact',
+      itemId: 'final_compact',
+      eventType: 'delta',
+      phase: 'final_answer',
+      delta,
+    });
+    assert.equal(Object.hasOwn(event, 'text'), false);
+    entry = api.applyTurnEvent(event, entry);
+  }
+
+  assert.equal(entry?.text, 'Hello from the compact stream.');
 });
 
 test('SSE keep-alive comments refresh stream activity and prevent a false stale state', async () => {
@@ -6596,7 +7596,7 @@ test('stream reset snapshot restores a complete projection and ignores retained 
   ];
   let readIndex = 0;
   const fetchCalls: string[] = [];
-  const { api } = await loadAppHarness({
+  const { api, storage } = await loadAppHarness({
     fetch: async (path) => {
       fetchCalls.push(path);
       if (path === '/api/sessions/session_reset') {
@@ -6682,6 +7682,10 @@ test('stream reset snapshot restores a complete projection and ignores retained 
     JSON.stringify(['Keep this before the snapshot', 'Snapshot commentary', 'Snapshot verification complete']),
   );
   assert.equal(api.state.batches.get('command_1')?.summary?.output, '643 passed');
+  const persisted = JSON.parse(storage.get('codexWebTimelineCache'));
+  assert.equal(persisted.entries[0]?.streamCursor?.turnId, 'turn_reset');
+  assert.equal(persisted.entries[0]?.streamCursor?.epoch, 'epoch_new');
+  assert.equal(persisted.entries[0]?.streamCursor?.sequence, 600);
 });
 
 test('incomplete reset snapshots merge onto authoritative session commentary instead of clearing it', async () => {
@@ -6756,6 +7760,7 @@ test('incomplete reset snapshots merge onto authoritative session commentary ins
   api.state.lastTurnEventEpoch = 'epoch_before';
 
   await api.streamTurnEvents('turn_incomplete');
+  await flushMicrotasks();
 
   assert.equal(
     JSON.stringify(api.state.timeline.filter((item) => item.role === 'assistant').map((item) => item.text)),
@@ -6803,7 +7808,7 @@ test('stream completion refreshes chat chrome without replacing the focused comp
 test('chat metadata refresh keeps the focused composer input', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
-      assert.equal(path, '/api/sessions/session_1');
+      assert.equal(path, '/api/sessions/session_1/status');
       return {
         ok: true,
         status: 200,
@@ -6838,7 +7843,7 @@ test('chat metadata refresh keeps the focused composer input', async () => {
 test('chat metadata refresh preserves composer selection', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
-      assert.equal(path, '/api/sessions/session_1');
+      assert.equal(path, '/api/sessions/session_1/status');
       return {
         ok: true,
         status: 200,
@@ -7442,6 +8447,50 @@ test('turn failures render as visible timeline error messages', async () => {
   assert.match(html, /message-card system error-message/u);
   assert.match(html, /<span class="error-badge">Error<\/span>/u);
   assert.match(html, /Codex app-server disconnected/u);
+});
+
+test('request timeout failures use a generic failed status and message', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessionId = 'session_timeout';
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_timeout';
+
+  api.applyTurnEvent({
+    type: 'turn.failed',
+    turnId: 'turn_timeout',
+    threadId: 'session_timeout',
+    message: 'request timed out',
+  }, null);
+
+  assert.equal(api.state.status, 'Turn failed');
+  assert.equal(api.state.statusTone, 'danger');
+  assert.equal(api.state.timeline.find((item) => item.id === 'error_turn_timeout')?.text, 'Turn failed');
+  assert.doesNotMatch(api.renderChat().innerHTML, /request timed out/iu);
+});
+
+test('persisted failure wins over a completed runtime turn without a final answer', async () => {
+  const { api } = await loadAppHarness();
+  api.state.status = 'Ready';
+  api.state.statusTone = 'success';
+  const session = {
+    id: 'session_timeout',
+    activeTurnId: null,
+    thread: {
+      turns: [{ id: 'turn_timeout', status: 'completed', items: [] }],
+    },
+    timeline: [
+      { id: 'user_turn_timeout', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Long task' },
+      { id: 'error_turn_timeout', kind: 'message', role: 'system', label: 'Error', meta: 'failed', severity: 'error', text: 'request timed out' },
+    ],
+  };
+
+  api.syncRuntimeStatusFromSession(session);
+
+  assert.equal(api.state.status, 'Turn failed');
+  assert.equal(api.state.statusTone, 'danger');
+  const hydrated = api.hydrateTimelineFromSession(session);
+  assert.equal(hydrated.find((item) => item.id === 'error_turn_timeout')?.text, 'Turn failed');
+  assert.doesNotMatch(JSON.stringify(hydrated), /request timed out/iu);
 });
 
 test('turn failures prefer raw details when present', async () => {
@@ -8574,7 +9623,7 @@ test('mobile UI refreshes session metadata after turn completion', async () => {
   assert.match(app, /function optimisticallyUpdateSessionInput\(text\)/u);
   assert.match(app, /optimisticallyUpdateSessionInput\(promptToSend\)/u);
   assert.match(app, /case 'turn\.completed':[\s\S]*void refreshCurrentSessionMetadata\(\);/u);
-  assert.match(app, /const sessionId = state\.sessionId;[\s\S]*apiFetch\(`\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}`\)/u);
+  assert.match(app, /const sessionId = state\.sessionId;[\s\S]*loadSessionOpenData\(state\.currentSession \|\| \{ id: sessionId \}/u);
 });
 
 test('session cards prefer the latest user input for orientation', async () => {
@@ -8875,7 +9924,7 @@ test('history hydration prefers backend-managed session timeline entries', async
     id: 'session_timeline_backend',
     timeline: [
       { id: 'history_1', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Earlier question' },
-      { id: 'history_2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Earlier answer' },
+      { id: 'history_2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', phase: 'final_answer', text: 'Earlier answer' },
       { id: 'cmd_user_1', kind: 'message', role: 'user', label: 'You', meta: 'command', text: '/goal resume' },
       { id: 'cmd_system_1', kind: 'message', role: 'system', label: '/goal', meta: 'resume', text: 'Goal resumed: ship slash goal support' },
     ],
@@ -8901,6 +9950,7 @@ test('history hydration prefers backend-managed session timeline entries', async
       ['system', 'Goal resumed: ship slash goal support'],
     ]),
   );
+  assert.equal(timeline.find((item) => item.id === 'history_2')?.phase, 'final_answer');
 });
 
 test('history hydration falls back to the full available conversation when fewer than two answered turns exist', async () => {
@@ -9680,6 +10730,62 @@ test('desktop resize preserves active session while narrow or portrait resize ma
   assert.equal(api.state.currentSession?.id, 'session_1');
 });
 
+test('responsive mobile chat clears desktop passive selection before foreground recovery', async () => {
+  const fetchCalls: string[] = [];
+  const { api, context } = await loadAppHarness({
+    viewportWidth: 1280,
+    viewportHeight: 844,
+    desktopPointer: true,
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_responsive/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ session: { id: 'session_responsive', cwd: '/repo' } }),
+        };
+      }
+      if (path === '/api/sessions/session_responsive/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ items: [], hasMore: false, nextBefore: null }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.state.sessions = [{ id: 'session_responsive', cwd: '/repo', settings: { metadata: {} } }];
+
+  api.ensureDesktopActiveSession();
+  await api.recoverActiveTurnAfterForeground();
+  assert.deepEqual(fetchCalls, []);
+
+  context.window.innerWidth = 390;
+  context.window.innerHeight = 844;
+  api.handleLayoutResize();
+  assert.equal(api.state.view, 'chat');
+
+  await api.recoverActiveTurnAfterForeground();
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_responsive/status',
+    '/api/sessions/session_responsive/timeline?limit=50',
+  ]);
+
+  fetchCalls.length = 0;
+  context.window.innerWidth = 1280;
+  context.window.innerHeight = 844;
+  api.handleLayoutResize();
+  await api.recoverActiveTurnAfterForeground();
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_responsive/status',
+    '/api/sessions/session_responsive/timeline?limit=50',
+  ]);
+});
+
 test('mobile keyboard resize keeps the focused login input', async () => {
   const { api, context } = await loadAppHarness({ viewportWidth: 390, viewportHeight: 844 });
 
@@ -9795,7 +10901,11 @@ test('desktop project selection filters sessions and opens the newest session fo
 
   await api.selectProjectScope('project_a');
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/session_newer']);
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_newer/status',
+    '/api/sessions/session_newer/timeline?limit=50',
+    '/api/sessions/session_newer',
+  ]);
   assert.equal(api.state.selectedProjectId, 'project_a');
   assert.equal(api.state.sessionId, 'session_newer');
   assert.equal(JSON.stringify(api.sortedSessions().map((session) => session.id)), JSON.stringify(['session_newer', 'session_older']));
@@ -9896,10 +11006,10 @@ test('desktop project selection prefers a running session over a newer completed
 
   await api.selectProjectScope('project_a');
 
-  assert.deepEqual(fetchCalls.slice(0, 2), [
-    '/api/sessions/session_running',
-    '/api/turns/turn_active/events',
-  ]);
+  assert.equal(fetchCalls[0], '/api/turns/turn_active/events');
+  assert.ok(fetchCalls.includes('/api/sessions/session_running/status'));
+  assert.ok(fetchCalls.includes('/api/sessions/session_running/timeline?limit=50'));
+  assert.ok(fetchCalls.includes('/api/sessions/session_running'));
   assert.equal(api.state.sessionId, 'session_running');
   assert.equal(api.state.status, 'Turn running');
   assert.match(api.context.document.querySelector('#app').innerHTML, /Still running in this project/u);
@@ -10279,7 +11389,11 @@ test('desktop composer refresh button refreshes the current session without rely
 
   await api.handleComposerRefresh();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/session_1']);
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_1/status',
+    '/api/sessions/session_1/timeline?limit=50',
+    '/api/sessions/session_1',
+  ]);
   assert.equal(api.state.timeline.some((item) => item.text === 'Refreshed answer'), true);
 });
 
@@ -11134,10 +12248,13 @@ test('all tab rerenders in time order when session detail refresh finishes after
   let resolveSessionDetail: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
-      if (path === '/api/sessions/session_recent') {
+      if (path === '/api/sessions/session_recent/status') {
         return await new Promise((resolve) => {
           resolveSessionDetail = resolve;
         });
+      }
+      if (path === '/api/sessions/session_recent/timeline?limit=50') {
+        return { ok: true, status: 200, json: async () => ({ items: [], hasMore: false, nextBefore: null }) };
       }
       throw new Error(`unexpected fetch ${path}`);
     },
@@ -11188,10 +12305,13 @@ test('all tab rerenders in time order when background session refresh finishes a
   let resolveSessionRefresh: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
-      if (path === '/api/sessions/session_recent') {
+      if (path === '/api/sessions/session_recent/status') {
         return await new Promise((resolve) => {
           resolveSessionRefresh = resolve;
         });
+      }
+      if (path === '/api/sessions/session_recent/timeline?limit=50') {
+        return { ok: true, status: 200, json: async () => ({ items: [], hasMore: false, nextBefore: null }) };
       }
       throw new Error(`unexpected fetch ${path}`);
     },
@@ -11247,10 +12367,13 @@ test('all tab uses newer updatedAt when refreshed session omits lastInputAt', as
   let resolveSessionRefresh: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
-      if (path === '/api/sessions/session_recent') {
+      if (path === '/api/sessions/session_recent/status') {
         return await new Promise((resolve) => {
           resolveSessionRefresh = resolve;
         });
+      }
+      if (path === '/api/sessions/session_recent/timeline?limit=50') {
+        return { ok: true, status: 200, json: async () => ({ items: [], hasMore: false, nextBefore: null }) };
       }
       throw new Error(`unexpected fetch ${path}`);
     },
@@ -11446,7 +12569,7 @@ test('auth expiration prevents late session and file responses from restoring lo
   });
   const { api, storage } = await loadAppHarness({
     fetch: async (path) => {
-      if (path === '/api/sessions/session_active') {
+      if (path === '/api/sessions/session_active/status') {
         return delayedJson((resolve) => {
           releaseSessionDetail = resolve;
         });
@@ -11966,7 +13089,7 @@ test('PWA standalone mode enables local pull-to-refresh without normal browser r
     readFile(pwaPullRefreshUrl, 'utf8'),
   ]);
 
-  assert.match(index, /<script src="\/pwa-pull-refresh\.js"><\/script>/u);
+  assert.match(index, /<script src="\/pwa-pull-refresh\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(serviceWorker, /'\/pwa-pull-refresh\.js'/u);
   assert.match(app, /function isStandalonePwa\(\)/u);
   assert.match(app, /navigator\.standalone === true/u);
@@ -12067,7 +13190,12 @@ test('PWA refresh updates the current view instead of reloading the app', async 
   api.state.currentSession = api.state.sessions[0];
   await api.refreshCurrentView();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions', '/api/sessions/session_fresh']);
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions',
+    '/api/sessions/session_fresh/status',
+    '/api/sessions/session_fresh/timeline?limit=50',
+    '/api/sessions/session_fresh',
+  ]);
   assert.match(api.state.timeline.map((item) => item.text).join('\n'), /Latest answer/u);
 });
 
@@ -12081,11 +13209,117 @@ test('PWA foreground recovery refreshes session history and reconnects unhealthy
   assert.match(app, /function onPageResume\(\)/u);
   assert.match(app, /state\.streamWasBackgrounded = true/u);
   assert.match(app, /function isTurnStreamHealthy\(\)/u);
-  assert.match(app, /async function recoverActiveTurnAfterForeground\(\)/u);
-  assert.match(app, /refreshCurrentSessionMetadata\(\{ hydrateTimeline: true, viewportSnapshot \}\)/u);
-  assert.match(app, /streamTurnEvents\(state\.turnId, \{ forceReconnect: true \}\)/u);
+  assert.match(app, /function recoverActiveTurnAfterForeground\(\)/u);
+  assert.match(app, /recoverActiveTurnIfStreamUnhealthy\(\{[\s\S]*viewportSnapshot,/u);
+  assert.match(app, /connectActiveTurnStream\(\{ forceReconnect: true \}\)/u);
   assert.match(app, /lastTurnEventSequence/u);
   assert.match(app, /after=\$\{encodeURIComponent\(String\(state\.lastTurnEventSequence\)\)\}/u);
+});
+
+test('stream watchdog does not poll session metadata while the open session is idle', async () => {
+  let watchdog: (() => void) | null = null;
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    setInterval: (callback) => {
+      watchdog = callback;
+      return 1;
+    },
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessionId = 'session_idle';
+  api.state.currentSession = { id: 'session_idle', cwd: '/repo' };
+  api.state.pendingTurn = false;
+  api.state.turnId = null;
+
+  assert.equal(typeof watchdog, 'function');
+  watchdog?.();
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls, []);
+});
+
+test('duplicate foreground recovery triggers share one compact reconciliation', async () => {
+  const fetchCalls: string[] = [];
+  let releaseStatus: ((response: unknown) => void) | null = null;
+  let releaseTimeline: ((response: unknown) => void) | null = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_foreground/status') {
+        return await new Promise((resolve) => {
+          releaseStatus = resolve;
+        });
+      }
+      if (path === '/api/sessions/session_foreground/timeline?limit=50') {
+        return await new Promise((resolve) => {
+          releaseTimeline = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_foreground';
+  api.state.currentSession = { id: 'session_foreground', cwd: '/repo' };
+
+  const first = api.recoverActiveTurnAfterForeground();
+  const duplicate = api.recoverActiveTurnAfterForeground();
+
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_foreground/status',
+    '/api/sessions/session_foreground/timeline?limit=50',
+  ]);
+  releaseStatus?.({
+    ok: true,
+    status: 200,
+    json: async () => ({ session: { id: 'session_foreground', cwd: '/repo' } }),
+  });
+  releaseTimeline?.({
+    ok: true,
+    status: 200,
+    json: async () => ({ items: [], hasMore: false, nextBefore: null }),
+  });
+  await Promise.all([first, duplicate]);
+});
+
+test('terminal event metadata refresh requests status without downloading timeline history', async () => {
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_terminal_status/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ session: { id: 'session_terminal_status', cwd: '/repo', activeTurnId: null } }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_terminal_status';
+  api.state.currentSession = { id: 'session_terminal_status', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_terminal_status';
+
+  api.applyTurnEvent({
+    type: 'turn.completed',
+    turnId: 'turn_terminal_status',
+    status: 'completed',
+  }, null);
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls, ['/api/sessions/session_terminal_status/status']);
 });
 
 test('active session refresh keeps the live assistant entry instead of replacing it with history', async () => {
@@ -12611,7 +13845,13 @@ test('PWA stream recovery reconnects a paused active turn while the page stays v
   await api.recoverActiveTurnIfStreamUnhealthy();
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/session_1', '/api/turns/turn_1/events']);
+  assert.deepEqual(fetchCalls, [
+    '/api/turns/turn_1/events',
+    '/api/sessions/session_1/status',
+    '/api/sessions/session_1/timeline?limit=50',
+    '/api/sessions/session_1',
+    '/api/turns/turn_1/events',
+  ]);
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, false);
@@ -13101,15 +14341,14 @@ test('PWA history refresh sends queued follow-up once the backgrounded turn is d
   await flushMicrotasks();
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls.map((call) => call.path), [
-    '/api/sessions/session_1',
-    '/api/sessions/session_1/turns',
-    '/api/turns/turn_2/events',
-  ]);
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/status'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/timeline?limit=50'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_2/events'));
+  const queuedTurnRequest = fetchCalls.find((call) => call.path === '/api/sessions/session_1/turns');
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.queuedMessagesForCurrentSession().length, 0);
-  assert.equal(JSON.parse(fetchCalls[1].options.body).text, 'Queued after background completion');
+  assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Queued after background completion');
 });
 
 test('session refresh retries a queued follow-up that was left in sending state after an interrupted turn', async () => {
@@ -13180,15 +14419,14 @@ test('session refresh retries a queued follow-up that was left in sending state 
   await flushMicrotasks();
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls.map((call) => call.path), [
-    '/api/sessions/session_1',
-    '/api/sessions/session_1/turns',
-    '/api/turns/turn_2/events',
-  ]);
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/status'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/timeline?limit=50'));
+  assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_2/events'));
+  const queuedTurnRequest = fetchCalls.find((call) => call.path === '/api/sessions/session_1/turns');
   assert.equal(api.state.status, 'Turn running');
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.queuedMessagesForCurrentSession().length, 0);
-  assert.equal(JSON.parse(fetchCalls[1].options.body).text, 'Resume this follow-up');
+  assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Resume this follow-up');
 });
 
 test('session refresh restores running status when backend reports an active turn', async () => {
@@ -13858,10 +15096,13 @@ globalThis.__codexWebTest = {
   hydrateTimelineFromSession,
   restoreTimelineForSession: typeof restoreTimelineForSession === 'function' ? restoreTimelineForSession : null,
   showMoreSessionHistory: typeof showMoreSessionHistory === 'function' ? showMoreSessionHistory : null,
+  loadOlderSessionTimelinePage: typeof loadOlderSessionTimelinePage === 'function' ? loadOlderSessionTimelinePage : null,
   applySessionSettings: typeof applySessionSettings === 'function' ? applySessionSettings : null,
   updateSessionSettings: typeof updateSessionSettings === 'function' ? updateSessionSettings : null,
   collectSettings,
   refreshCurrentSessionMetadata,
+  loadSessionOpenData: typeof loadSessionOpenData === 'function' ? loadSessionOpenData : null,
+  applySessionTurnSnapshot: typeof applySessionTurnSnapshot === 'function' ? applySessionTurnSnapshot : null,
   syncRuntimeStatusFromSession: typeof syncRuntimeStatusFromSession === 'function' ? syncRuntimeStatusFromSession : null,
   refreshSessionsList: typeof refreshSessionsList === 'function' ? refreshSessionsList : null,
   refreshCurrentView: typeof refreshCurrentView === 'function' ? refreshCurrentView : null,
@@ -13891,6 +15132,7 @@ globalThis.__codexWebTest = {
   handleTimelineWheel: typeof handleTimelineWheel === 'function' ? handleTimelineWheel : null,
   handleComposerRefresh: typeof handleComposerRefresh === 'function' ? handleComposerRefresh : null,
 	  recoverActiveTurnIfStreamUnhealthy: typeof recoverActiveTurnIfStreamUnhealthy === 'function' ? recoverActiveTurnIfStreamUnhealthy : null,
+	  recoverActiveTurnAfterForeground: typeof recoverActiveTurnAfterForeground === 'function' ? recoverActiveTurnAfterForeground : null,
 	  revalidateWorkDetailsPolicyAfterStreamClose: typeof revalidateWorkDetailsPolicyAfterStreamClose === 'function' ? revalidateWorkDetailsPolicyAfterStreamClose : null,
   isTurnStreamHealthy: typeof isTurnStreamHealthy === 'function' ? isTurnStreamHealthy : null,
   checkForAppUpdate: typeof checkForAppUpdate === 'function' ? checkForAppUpdate : null,

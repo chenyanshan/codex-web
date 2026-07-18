@@ -247,8 +247,14 @@ test('multi-user session list omits conversation details while direct reads reta
       kind: 'message',
       role: 'assistant',
       label: 'Assistant',
-      meta: '',
+      meta: 'final',
       text: 'Detailed answer',
+      turnId: 'turn_1',
+      itemId: 'item_answer',
+      projectionKey: 'turn_1\u0000item_answer',
+      phase: 'final_answer',
+      lifecycle: 'completed',
+      raw: { secret: true },
     }],
   };
   const runtime = {
@@ -273,7 +279,7 @@ test('multi-user session list omits conversation details while direct reads reta
       if (threadId !== 'thread_alice') {
         throw new Error(`unexpected session read ${threadId}`);
       }
-      return aliceRuntimeSession;
+      return { ...aliceRuntimeSession, goal: null };
     },
   };
   const server = createCodexWebServer({
@@ -294,6 +300,7 @@ test('multi-user session list omits conversation details while direct reads reta
     assert.deepEqual(payload.items.map((item: any) => item.id), ['app_alice']);
     assert.equal(payload.items[0].projectDisplayName, 'Allowed Project');
     assert.equal(payload.items[0].activityState, 'waiting_approval');
+    assert.equal('goal' in payload.items[0], false);
     assert.equal(payload.items[0].cwd, undefined);
     assert.equal('thread' in payload.items[0], false);
     assert.equal('timeline' in payload.items[0], false);
@@ -306,6 +313,14 @@ test('multi-user session list omits conversation details while direct reads reta
     const detailPayload = await detailResponse.json();
     assert.equal(detailPayload.session.thread.turns[0].items[0].text, 'Detailed answer');
     assert.equal(detailPayload.session.timeline[0].text, 'Detailed answer');
+    assert.equal(detailPayload.session.timeline[0].turnId, 'turn_1');
+    assert.equal(detailPayload.session.timeline[0].itemId, 'item_answer');
+    assert.equal(detailPayload.session.timeline[0].projectionKey, 'turn_1\u0000item_answer');
+    assert.equal(detailPayload.session.timeline[0].phase, 'final_answer');
+    assert.equal(detailPayload.session.timeline[0].lifecycle, 'completed');
+    assert.equal('raw' in detailPayload.session.timeline[0], false);
+    assert.equal('goal' in detailPayload.session, true);
+    assert.equal(detailPayload.session.goal, null);
     assert.deepEqual(runtime.calls, ['list:all', 'read:thread_alice']);
   } finally {
     await server.stop();
@@ -2923,6 +2938,169 @@ test('session timeline and favorite mutations enforce owner and project write ac
   }
 });
 
+test('compact multi-user timeline enforces ownership and preserves only safe final projection metadata', async () => {
+  const identityStore = await createIdentityStore();
+  const existingProject = (await identityStore.readState()).projects.find((project) => project.id === 'project_allowed')!;
+  await identityStore.upsertProject({ ...existingProject, showWorkDetailsToMembers: false });
+  const reads: string[] = [];
+  const runtime = {
+    ...runtimeStub(),
+    readSession: async (threadId: string) => {
+      reads.push(threadId);
+      return {
+        id: threadId,
+        settings: {},
+        activeTurnId: null,
+        goal: null,
+        thread: {
+          turns: [{
+            id: 'turn_compact',
+            status: 'completed',
+            error: null,
+            items: [
+              { id: 'item_commentary', type: 'message', role: 'assistant', phase: 'commentary', text: 'Private work' },
+              { id: 'item_final', type: 'message', role: 'assistant', phase: 'final_answer', text: 'Safe answer' },
+            ],
+          }],
+        },
+        timeline: [{
+          id: 'timeline_commentary',
+          kind: 'message',
+          role: 'assistant',
+          label: 'Assistant',
+          meta: 'commentary',
+          text: 'Private work',
+          turnId: 'turn_compact',
+          itemId: 'item_commentary',
+          projectionKey: 'turn_compact\u0000item_commentary',
+          phase: 'commentary',
+          lifecycle: 'completed',
+        }, {
+          id: 'timeline_final',
+          kind: 'message',
+          role: 'assistant',
+          label: 'Assistant',
+          meta: 'final',
+          text: 'Safe answer',
+          turnId: 'turn_compact',
+          itemId: 'item_final',
+          projectionKey: 'turn_compact\u0000item_final',
+          phase: 'final_answer',
+          lifecycle: 'completed',
+          raw: { secret: true },
+        }],
+      };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const foreign = await fetch(`${server.baseUrl}/api/sessions/app_bob/timeline`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(foreign.status, 404);
+    assert.deepEqual(reads, []);
+
+    const own = await fetch(`${server.baseUrl}/api/sessions/app_alice/timeline`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(own.status, 200);
+    const payload = await own.json() as any;
+    assert.deepEqual(reads, ['thread_alice']);
+    assert.deepEqual(payload.items, [{
+      id: 'timeline_final',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'final',
+      text: 'Safe answer',
+      turnId: 'turn_compact',
+      itemId: 'item_final',
+      projectionKey: 'turn_compact\u0000item_final',
+      phase: 'final_answer',
+      lifecycle: 'completed',
+    }]);
+    assert.equal('turnSnapshot' in payload, true);
+    assert.equal(JSON.stringify(payload).includes('Private work'), false);
+    assert.equal(JSON.stringify(payload).includes('"raw"'), false);
+
+    const snapshotOmitted = await fetch(`${server.baseUrl}/api/sessions/app_alice/timeline`, {
+      headers: {
+        Authorization: 'Bearer alice',
+        'X-Codex-Include-Turn-Snapshot': 'false',
+      },
+    });
+    const snapshotOmittedPayload = await snapshotOmitted.json() as any;
+    assert.equal(snapshotOmitted.status, 200);
+    assert.equal('turnSnapshot' in snapshotOmittedPayload, false);
+
+    const older = await fetch(`${server.baseUrl}/api/sessions/app_alice/timeline?before=1`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    const olderPayload = await older.json() as any;
+    assert.equal(older.status, 200);
+    assert.equal('turnSnapshot' in olderPayload, false);
+    assert.deepEqual(reads, ['thread_alice', 'thread_alice', 'thread_alice']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('lightweight session status preserves multi-user session ownership checks', async () => {
+  const identityStore = await createIdentityStore();
+  const statusReads: string[] = [];
+  const runtime = {
+    ...runtimeStub(),
+    readSessionStatus: async (threadId: string) => {
+      statusReads.push(threadId);
+      return {
+        id: threadId,
+        cwd: '/secret/path',
+        projectName: 'hidden',
+        settings: {},
+        activeTurnId: null,
+        activityState: null,
+        thread: { turns: [] },
+        timeline: [],
+      };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const foreign = await fetch(`${server.baseUrl}/api/sessions/app_bob/status`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(foreign.status, 404);
+    assert.deepEqual(statusReads, []);
+
+    const own = await fetch(`${server.baseUrl}/api/sessions/app_alice/status`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(own.status, 200);
+    assert.deepEqual(statusReads, ['thread_alice']);
+    const ownPayload = (await own.json()) as any;
+    assert.equal(ownPayload.session.id, 'app_alice');
+    assert.equal('goal' in ownPayload.session, false);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('read-only project grants cannot create or mutate sessions', async () => {
   const identityStore = await createIdentityStore();
   await identityStore.upsertRole({
@@ -3052,6 +3230,7 @@ test('hidden projects filter work details from every member session hydration re
             { type: 'message', role: 'user', phase: null, text: 'Legacy question' },
             { type: 'message', role: 'assistant', phase: null, text: 'EARLY_NULL_COMMENTARY private path' },
             { type: 'message', role: 'assistant', phase: null, text: 'Legacy safe answer' },
+            { type: 'message', role: 'assistant', phase: 'commentary', text: 'LATE_COMMENTARY private path' },
           ],
         },
         {
@@ -3076,6 +3255,7 @@ test('hidden projects filter work details from every member session hydration re
       { id: 'timeline_legacy_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Legacy question' },
       { id: 'timeline_legacy_early', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'EARLY_NULL_COMMENTARY private path' },
       { id: 'timeline_legacy_final', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Legacy safe answer' },
+      { id: 'timeline_legacy_late', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'commentary', text: 'LATE_COMMENTARY private path' },
       { id: 'timeline_active_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Active question' },
       { id: 'timeline_active_null', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'ACTIVE_NULL_COMMENTARY private path' },
       { id: 'timeline_active_explicit', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Explicit final answer' },

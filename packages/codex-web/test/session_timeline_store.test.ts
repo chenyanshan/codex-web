@@ -41,6 +41,35 @@ test('file session timeline store preserves other sessions during replacement an
   assert.deepEqual(reloaded.list('thread_two').map((entry) => entry.id), ['two']);
 });
 
+test('file session timeline store preserves safe projection metadata and strips provider raw data', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-session-timeline-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const timelinePath = path.join(dir, 'session-timeline.json');
+  const store = new FileSessionTimelineStore({ timelinePath });
+
+  store.append('thread_one', {
+    ...message('projected'),
+    turnId: 'turn_one',
+    itemId: 'item_one',
+    projectionKey: 'turn_one\u0000item_one',
+    phase: 'final_answer',
+    lifecycle: 'completed',
+    raw: { secret: true },
+  } as CodexWebTimelineMessage & { raw: Record<string, unknown> });
+
+  assert.deepEqual(store.list('thread_one'), [{
+    ...message('projected'),
+    turnId: 'turn_one',
+    itemId: 'item_one',
+    projectionKey: 'turn_one\u0000item_one',
+    phase: 'final_answer',
+    lifecycle: 'completed',
+    severity: undefined,
+    afterHistoryIndex: undefined,
+  }]);
+  assert.equal('raw' in store.list('thread_one')[0]!, false);
+});
+
 test('file session timeline store serializes concurrent appends across processes', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-session-timeline-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
