@@ -37,6 +37,8 @@ import type {
 } from './provider.js';
 
 const APP_SERVER_CONNECT_TIMEOUT_MS = 20_000;
+const INITIAL_TURN_MATERIALIZATION_SETTLE_MS = 2_000;
+const INITIAL_TURN_MATERIALIZATION_POLL_MS = 250;
 
 interface CodexAppLogger {
   debug?: (message: string) => void;
@@ -777,6 +779,7 @@ export class CodexAppClient extends EventEmitter {
       return await this.waitForTurnResult({
         threadId,
         turnId: acknowledgedTurnId,
+        turnStartStatus: normalizeNullableString(turn.status),
         onProgress,
         onWorkEvent,
         onApprovalRequest,
@@ -1591,6 +1594,7 @@ export class CodexAppClient extends EventEmitter {
     onApprovalRequest,
     timeoutMs,
     stderrBaseline = 0,
+    turnStartStatus = null,
   }: {
     threadId: string;
     turnId: string;
@@ -1599,6 +1603,7 @@ export class CodexAppClient extends EventEmitter {
     onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
     timeoutMs: number;
     stderrBaseline?: number;
+    turnStartStatus?: string | null;
   }): Promise<ProviderTurnResult> {
     let deadline = this.turnPollNow() + timeoutMs;
     let firstTerminalWithoutOutputAt = null;
@@ -1610,6 +1615,8 @@ export class CodexAppClient extends EventEmitter {
     let includeTurnsUnsupportedAt = 0;
     let pendingApprovalWaitLogged = false;
     let lastPendingApprovalCount = 0;
+    let initialActiveTurnSnapshotPending = normalizeTurnStatusKey(turnStartStatus) === 'inprogress';
+    let initialInterruptedSnapshotAt: number | null = null;
     const terminalSettleMs = computeTerminalSettleMs(timeoutMs);
     const progressState: ProgressState = {
       commentaryText: '',
@@ -1624,10 +1631,15 @@ export class CodexAppClient extends EventEmitter {
     const startedWorkEvents = new Map<string, ProviderTurnWorkEvent>();
     const emittedSnapshotWorkEvents = new Set<string>();
     let sawTerminalNotification = false;
+    let sawInterruptedTurnCompletionNotification = false;
+    let sawTurnWorkActivity = false;
     let turnNotificationError: string | null = null;
     const onNotification = (notification) => {
       if (isTerminalNotificationForThread(notification, threadId, turnId)) {
         sawTerminalNotification = true;
+      }
+      if (isInterruptedTurnCompletionNotificationForThread(notification, threadId, turnId)) {
+        sawInterruptedTurnCompletionNotification = true;
       }
       const notificationError = extractTurnErrorNotificationMessage(notification, { threadId, turnId });
       if (notificationError) {
@@ -1639,8 +1651,11 @@ export class CodexAppClient extends EventEmitter {
         workOutputTexts,
         startedWorkEvents,
       });
-      if (workEvent && typeof onWorkEvent === 'function') {
-        void onWorkEvent(workEvent);
+      if (workEvent) {
+        sawTurnWorkActivity = true;
+        if (typeof onWorkEvent === 'function') {
+          void onWorkEvent(workEvent);
+        }
       }
       const progress = extractProgressUpdate(notification, turnId, itemOutputKinds, progressState);
       if (!progress) {
@@ -1680,6 +1695,7 @@ export class CodexAppClient extends EventEmitter {
       timeoutMs,
       deadline,
       terminalSettleMs,
+      turnStartStatus,
     });
     try {
       const bufferedEvents = claimEarlyTurnEvents(this, threadId, turnId);
@@ -1930,6 +1946,9 @@ export class CodexAppClient extends EventEmitter {
           });
           throw new Error(buildApprovedExecutionStallError(approvedExecutionStall));
         }
+        if (turn && initialActiveTurnSnapshotPending && !isTurnTerminal(turn.status)) {
+          initialActiveTurnSnapshotPending = false;
+        }
         if (turn && isTurnTerminal(turn.status)) {
           const outputText = extractTurnOutputText(turn);
           if (outputText) {
@@ -1982,17 +2001,56 @@ export class CodexAppClient extends EventEmitter {
           }
           const sessionState = inspectTurnCompletionFromSessionPath(thread?.path ?? null, turnId);
           const hasAssistantVisibleItems = turn.items.some((item) => isAssistantVisibleItem(item));
-          const completionState = classifyTurnCompletionState(turn);
+          const snapshotCompletionState = classifyTurnCompletionState(turn);
+          const taskCompleteOverridesInterrupted = snapshotCompletionState === 'interrupted'
+            && sessionState.hasTaskComplete;
+          const completionState = taskCompleteOverridesInterrupted ? 'other' : snapshotCompletionState;
+          const terminalResultStatus = taskCompleteOverridesInterrupted ? 'completed' : turn.status;
+          const hasTurnExecutionActivity = hasAssistantVisibleItems
+            || turn.items.some((item) => isReasoningItem(item))
+            || turnHasWorkActivityItems(turn)
+            || progressState.sawAssistantActivity
+            || sawTurnWorkActivity;
           this.logDebug('turn_terminal_state', {
             threadId,
             turnId,
             pollCount,
             turn: summarizeTurnSnapshot(turn),
             hasAssistantVisibleItems,
+            hasTurnExecutionActivity,
+            snapshotCompletionState,
             completionState,
             sessionState: summarizeSessionState(thread?.path ?? null, sessionState),
             progress: summarizeProgressState(progressState),
           });
+          if (
+            completionState === 'interrupted'
+            && !turn.error
+            && !hasTurnExecutionActivity
+            && initialActiveTurnSnapshotPending
+            && !sawInterruptedTurnCompletionNotification
+            && !sessionState.hasTurnAborted
+          ) {
+            initialInterruptedSnapshotAt ??= this.turnPollNow();
+            const materializationElapsedMs = this.turnPollNow() - initialInterruptedSnapshotAt;
+            if (
+              materializationElapsedMs < INITIAL_TURN_MATERIALIZATION_SETTLE_MS
+              && this.turnPollNow() + INITIAL_TURN_MATERIALIZATION_POLL_MS <= deadline
+            ) {
+              this.logDebug('turn_wait_continue', {
+                threadId,
+                turnId,
+                pollCount,
+                reason: 'initial_interrupted_snapshot_materialization_wait',
+                turnStartStatus,
+                materializationElapsedMs,
+                materializationSettleMs: INITIAL_TURN_MATERIALIZATION_SETTLE_MS,
+              });
+              await this.turnPollSleep(INITIAL_TURN_MATERIALIZATION_POLL_MS);
+              continue;
+            }
+            initialActiveTurnSnapshotPending = false;
+          }
           if (completionState === 'interrupted') {
             this.noteApprovedExecutionSignal({
               threadId,
@@ -2013,7 +2071,7 @@ export class CodexAppClient extends EventEmitter {
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
             return result;
           }
-          if (turn.error) {
+          if (turn.error && !taskCompleteOverridesInterrupted) {
             this.logDebug('turn_wait_error', {
               threadId,
               turnId,
@@ -2022,7 +2080,13 @@ export class CodexAppClient extends EventEmitter {
             });
             throw new Error(turn.error);
           }
-          if (sessionState.lastAgentMessage && hasAssistantVisibleItems) {
+          if (
+            (sessionState.lastAgentMessage && hasAssistantVisibleItems)
+            || (
+              taskCompleteOverridesInterrupted
+              && (sessionState.lastAgentMessage || sessionState.outputArtifacts.length > 0)
+            )
+          ) {
             this.noteApprovedExecutionSignal({
               threadId,
               turnId,
@@ -2033,7 +2097,7 @@ export class CodexAppClient extends EventEmitter {
               turnId,
               threadId,
               title: thread?.title ?? null,
-              status: turn.status,
+              status: terminalResultStatus,
               previewText: resolveProgressPreviewText(progressState),
               sessionState,
             });
@@ -2086,7 +2150,7 @@ export class CodexAppClient extends EventEmitter {
               turnId,
               threadId,
               title: thread?.title ?? null,
-              status: turn.status,
+              status: terminalResultStatus,
               previewText: resolveProgressPreviewText(progressState),
               sessionState,
             });
@@ -2110,7 +2174,7 @@ export class CodexAppClient extends EventEmitter {
                 outputState: 'provider_error',
                 previewText: '',
                 finalSource: 'session_runtime_error',
-                status: turn.status,
+                status: terminalResultStatus,
                 errorMessage: sessionState.runtimeError,
               };
               this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
@@ -2124,7 +2188,7 @@ export class CodexAppClient extends EventEmitter {
               outputState: previewText ? 'partial' : 'missing',
               previewText,
               finalSource: resolveProgressFinalSource(progressState, 'session_task_complete_empty'),
-              status: turn.status,
+              status: terminalResultStatus,
             };
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
             return result;
@@ -2939,6 +3003,7 @@ function summarizeProgressState(progressState: Partial<ProgressState>) {
 
 interface SessionTurnCompletionState {
   hasTaskComplete: boolean;
+  hasTurnAborted: boolean;
   lastAgentMessage: string | null;
   toolSuggestionMessage: string | null;
   responseItems: ProviderResponseItem[];
@@ -2953,6 +3018,7 @@ function summarizeSessionState(
   return {
     sessionPath: sessionPath ?? null,
     hasTaskComplete: sessionState.hasTaskComplete,
+    hasTurnAborted: sessionState.hasTurnAborted,
     lastAgentMessagePreview: truncateDebugText(sessionState.lastAgentMessage, 160),
     toolSuggestionPreview: truncateDebugText(sessionState.toolSuggestionMessage, 160),
     runtimeError: truncateDebugText(sessionState.runtimeError, 160),
@@ -3627,6 +3693,32 @@ function isTerminalNotificationForThread(
   return false;
 }
 
+function isInterruptedTurnCompletionNotificationForThread(
+  notification: any,
+  threadId: string,
+  turnId: string,
+): boolean {
+  if (extractThreadIdFromNotification(notification) !== threadId) {
+    return false;
+  }
+  const method = String(notification?.method ?? '').replace(/[^a-z]/gi, '').toLowerCase();
+  if (method !== 'turncompleted') {
+    return false;
+  }
+  const notificationTurnId = extractNotificationTurnId(notification?.params ?? null);
+  if (notificationTurnId !== turnId) {
+    return false;
+  }
+  return classifyTurnCompletionState({
+    status: extractTurnCompletedNotificationStatus(notification),
+  }) === 'interrupted';
+}
+
+function extractTurnCompletedNotificationStatus(notification: any): string | null {
+  return extractStructuredString(notification?.params?.turn?.status)
+    ?? extractStructuredString(notification?.params?.status);
+}
+
 function extractTurnErrorNotificationMessage(
   notification: any,
   {
@@ -3966,6 +4058,7 @@ function inspectTurnCompletionFromSessionPath(sessionPath, turnId) {
   }
   try {
     const lines = fs.readFileSync(sessionPath, 'utf8').split('\n');
+    let hasTurnAborted = false;
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       const line = lines[index]?.trim();
       if (!line) {
@@ -3978,6 +4071,14 @@ function inspectTurnCompletionFromSessionPath(sessionPath, turnId) {
         continue;
       }
       const payload = entry?.payload ?? null;
+      if (
+        entry?.type === 'event_msg'
+        && payload?.type === 'turn_aborted'
+        && String(payload?.turn_id ?? '') === turnId
+      ) {
+        hasTurnAborted = true;
+        continue;
+      }
       if (entry?.type !== 'event_msg' || payload?.type !== 'task_complete') {
         continue;
       }
@@ -3993,11 +4094,18 @@ function inspectTurnCompletionFromSessionPath(sessionPath, turnId) {
       const runtimeError = findSessionRuntimeErrorForTurn(lines, index, turnId);
       return inspectSessionTurnArtifacts(lines, index, {
         hasTaskComplete: true,
+        hasTurnAborted,
         lastAgentMessage,
         toolSuggestionMessage,
         responseItems,
         runtimeError,
       });
+    }
+    if (hasTurnAborted) {
+      return {
+        ...emptySessionTurnCompletionState(),
+        hasTurnAborted: true,
+      };
     }
   } catch {
     return emptySessionTurnCompletionState();
@@ -4258,6 +4366,7 @@ function inspectSessionTurnArtifacts(
   }
   return {
     hasTaskComplete: state.hasTaskComplete,
+    hasTurnAborted: state.hasTurnAborted,
     lastAgentMessage: state.lastAgentMessage || state.toolSuggestionMessage || null,
     toolSuggestionMessage: state.toolSuggestionMessage ?? null,
     responseItems: state.responseItems,
@@ -4301,6 +4410,7 @@ function shouldWaitForSessionTaskMaterialization(sessionState, hasAssistantVisib
 function emptySessionTurnCompletionState(): SessionTurnCompletionState {
   return {
     hasTaskComplete: false,
+    hasTurnAborted: false,
     lastAgentMessage: null,
     toolSuggestionMessage: null,
     responseItems: [],
@@ -4714,6 +4824,21 @@ function turnHasNativeWorkItems(turn: any): boolean {
     const raw = item?.raw && typeof item.raw === 'object' ? item.raw : item;
     const type = normalizeEventItemType(raw);
     return type === 'commandexecution' || type === 'filechange';
+  });
+}
+
+function turnHasWorkActivityItems(turn: any): boolean {
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  return items.some((item) => {
+    const raw = item?.raw && typeof item.raw === 'object' ? item.raw : item;
+    return [
+      'commandexecution',
+      'filechange',
+      'functioncall',
+      'customtoolcall',
+      'functioncalloutput',
+      'customtoolcalloutput',
+    ].includes(normalizeEventItemType(raw));
   });
 }
 

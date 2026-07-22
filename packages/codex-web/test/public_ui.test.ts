@@ -847,6 +847,30 @@ test('bootstrap restores cached activity and reconnects SSE from the persisted c
   assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_cached/events?after=37&epoch=epoch_cached'));
 });
 
+test('auth restore keeps the active turn status instead of reporting Ready', async () => {
+  const session = {
+    id: 'session_auth_running',
+    cwd: '/repo/running',
+    activeTurnId: 'turn_auth_running',
+    activityState: 'running',
+    settings: { metadata: {} },
+  };
+  const { api } = await loadAppHarness({
+    fetch: createRestoreAuthFetch({ sessions: [session] }),
+  });
+  api.state.token = 'token';
+  api.state.sessionId = session.id;
+  api.state.currentSession = session;
+
+  await api.restoreAuth();
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_auth_running');
+  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.state.statusTone, 'warn');
+  assert.equal(api.composerStatusLabel(), 'Working');
+});
+
 test('startup SSE drops approval details and replays them after the principal is confirmed', async () => {
   const fetchCalls: string[] = [];
   let releasePendingRead: ((result: unknown) => void) | null = null;
@@ -4474,6 +4498,112 @@ test('queued follow-up interrupts a running turn after tool batches complete and
   assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Take this new direction');
 });
 
+test('queued interrupt acknowledgement timeouts stay hidden and keep the session working', async () => {
+  const timeoutMessage = 'Timed out waiting for Codex JSON-RPC response to turn/interrupt';
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/turns/turn_1/interrupt') {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: 'runtime_error', message: timeoutMessage }),
+        };
+      }
+      if (path === '/api/sessions/session_1/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_1',
+              cwd: '/repo',
+              activeTurnId: 'turn_1',
+              activityState: 'running',
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', activeTurnId: 'turn_1' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_1';
+  api.state.status = 'Turn running';
+  api.state.statusTone = 'warn';
+  api.enqueueQueuedMessage('session_1', 'Wait for the running turn');
+
+  api.applyTurnEvent({
+    type: 'batch.started',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    kind: 'command',
+    title: 'npm test',
+  }, null);
+  api.applyTurnEvent({
+    type: 'batch.completed',
+    turnId: 'turn_1',
+    batchId: 'batch_1',
+    status: 'completed',
+  }, null);
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls, [
+    '/api/turns/turn_1/interrupt',
+    '/api/sessions/session_1/status',
+  ]);
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_1');
+  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.state.statusTone, 'warn');
+  assert.equal(api.state.error, '');
+  assert.equal(api.queuedMessagesForCurrentSession().length, 1);
+  assert.doesNotMatch(api.renderChat().innerHTML, /Timed out waiting|Failed/u);
+});
+
+test('turn interrupt timeout failures are removed from events and hydrated history', async () => {
+  const timeoutMessage = 'Timed out waiting for Codex JSON-RPC response to turn/interrupt';
+  const { api } = await loadAppHarness();
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_1';
+  api.state.status = 'Turn running';
+  api.state.statusTone = 'warn';
+
+  api.applyTurnEvent({
+    type: 'turn.failed',
+    turnId: 'turn_1',
+    message: timeoutMessage,
+  }, null);
+
+  const hydrated = api.hydrateTimelineFromSession({
+    id: 'session_1',
+    timeline: [{
+      id: 'error_turn_1',
+      kind: 'message',
+      role: 'system',
+      label: 'Error',
+      meta: 'failed',
+      severity: 'error',
+      text: timeoutMessage,
+    }],
+    thread: { turns: [] },
+  });
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.state.timeline.some((item) => item.text === timeoutMessage), false);
+  assert.equal(hydrated.length, 0);
+});
+
 test('composer renders handled goal slash command results without streaming a turn', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
@@ -4971,6 +5101,34 @@ test('timeline follows the latest messages until the user scrolls upward', async
   api.state.timeline.push({ id: 'm3', kind: 'message', role: 'assistant', text: 'should not snap' });
   api.scrollTimelineToBottomIfFollowingLatest();
   assert.equal(timeline.scrollTop, 700);
+});
+
+test('timeline moves to the latest message before the next animation frame', async () => {
+  const animationFrames = [];
+  const { api, context } = await loadAppHarness({
+    requestAnimationFrame: (callback) => {
+      animationFrames.push(callback);
+      return animationFrames.length;
+    },
+  });
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_scroll_now';
+  api.state.currentSession = { id: 'session_scroll_now', cwd: '/repo' };
+  api.state.timeline = [{ id: 'message_1', kind: 'message', role: 'user', text: 'Sent now' }];
+  api.state.timelineShouldFollowLatest = true;
+  api.render();
+
+  const timeline = context.document.querySelector('#timeline');
+  timeline.scrollHeight = 900;
+  timeline.clientHeight = 300;
+  timeline.scrollTop = 0;
+  animationFrames.length = 0;
+
+  api.scrollTimelineToBottomIfFollowingLatest();
+
+  assert.equal(timeline.scrollTop, 900);
+  assert.equal(animationFrames.length, 1);
 });
 
 test('desktop workspace render keeps the chat timeline anchored to latest messages', async () => {
@@ -8677,7 +8835,7 @@ test('thread work updates render failed command details and a visible error mess
   assert.match(errorHtml, /Command failed with exit code 1/u);
 });
 
-test('new-session API failures keep a visible retryable outbox message', async () => {
+test('retryable submission failures stay quiet until three delivery attempts fail', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path) => {
@@ -8707,9 +8865,25 @@ test('new-session API failures keep a visible retryable outbox message', async (
   assert.equal(api.state.pendingTurn, false);
   assert.equal(submission?.status, 'failed');
   assert.equal(submission?.retryable, true);
+  assert.equal(submission?.attempts, 1);
   assert.equal(userItem?.role, 'user');
   assert.equal(api.state.timeline.some((item) => item.role === 'system'), false);
+  assert.equal(api.state.status, 'Waiting to send');
+  assert.equal(api.state.statusTone, 'warn');
+  assert.equal(api.state.error, '');
+  assert.doesNotMatch(api.renderTimelineItem(userItem), /delivery-failed|data-submission-retry-id=/u);
+
+  await api.drainSubmissionOutbox({ force: true });
+  assert.equal(api.state.submissionOutbox.get(submission.id)?.attempts, 2);
+  assert.doesNotMatch(api.renderTimelineItem(userItem), /delivery-failed|data-submission-retry-id=/u);
+
+  await api.drainSubmissionOutbox({ force: true });
+  const failed = api.state.submissionOutbox.get(submission.id);
   const failedHtml = api.renderTimelineItem(userItem);
+  assert.equal(fetchCalls.length, 3);
+  assert.equal(failed?.attempts, 3);
+  assert.equal(api.state.status, 'Send failed');
+  assert.equal(api.state.statusTone, 'danger');
   assert.match(failedHtml, /delivery-failed/u);
   assert.match(failedHtml, /data-submission-retry-id=/u);
   assert.match(failedHtml, /aria-label="Send failed\. Retry send"/u);
@@ -8920,7 +9094,7 @@ test('lost new-session response retries the same submission after reload', async
   assert.equal(second.api.state.sessions.some((session) => session.id === 'session_recovered'), true);
 });
 
-test('failed new-session submissions remain visible in the session list and can be reopened', async () => {
+test('silently retrying new-session submissions remain visible and can be reopened', async () => {
   const { api } = await loadAppHarness({
     fetch: async () => {
       throw new Error('Network offline');
@@ -8939,12 +9113,13 @@ test('failed new-session submissions remain visible in the session list and can 
   assert.equal(pending?.localSubmission, true);
   assert.equal(pending?.deliveryState, 'failed');
   assert.match(api.renderSessionCards(), /Visible pending session/u);
-  assert.match(api.renderSessionCards(), /Send failed/u);
+  assert.doesNotMatch(api.renderSessionCards(), /Send failed|data-submission-retry-id/u);
 
   await api.selectSession(pending.id);
   assert.equal(api.state.activeSubmissionId, pending.submissionId);
   assert.equal(api.state.timeline[0]?.text, 'Visible pending session');
-  assert.match(api.renderTimelineItem(api.state.timeline[0]), /Retry send/u);
+  assert.equal(api.state.status, 'Waiting to send');
+  assert.doesNotMatch(api.renderTimelineItem(api.state.timeline[0]), /Retry send/u);
 });
 
 test('independent submission storage keys prevent stale tabs from overwriting each other', async () => {
@@ -9510,6 +9685,28 @@ test('a stale terminal event cannot finish the current running turn', async () =
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_current');
   assert.equal(api.state.status, 'Turn running');
+});
+
+test('turn started events make the runtime state internally consistent', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessionId = 'session_started';
+  api.state.currentSession = { id: 'session_started', cwd: '/repo' };
+  api.state.pendingTurn = false;
+  api.state.turnId = null;
+  api.state.status = 'Ready';
+  api.state.statusTone = 'success';
+
+  api.applyTurnEvent({
+    type: 'turn.started',
+    turnId: 'turn_started',
+    threadId: 'session_started',
+  }, null);
+
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_started');
+  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.state.statusTone, 'warn');
+  assert.equal(api.composerStatusLabel(), 'Working');
 });
 
 test('mobile UI persists per-browser chat timelines across reloads', async () => {
@@ -13371,6 +13568,30 @@ test('active session refresh keeps the live assistant entry instead of replacing
   assert.equal(assistantItems[0]?.id, 'assistant_turn_1');
 });
 
+test('history hydration deduplicates the same turn message across unstable provider ids', async () => {
+  const { api } = await loadAppHarness();
+  const timeline = api.hydrateTimelineFromSession({
+    id: 'session_duplicate_projection',
+    thread: {
+      turns: [{
+        id: 'turn_duplicate_projection',
+        status: 'in_progress',
+        items: [
+          { id: 'user_first', type: 'message', role: 'user', text: 'Send this once' },
+          { id: 'user_second', type: 'userMessage', role: 'user', text: 'Send this once' },
+          { id: 'assistant_first', type: 'message', role: 'assistant', phase: 'commentary', text: 'Received once' },
+          { id: 'assistant_second', type: 'agentMessage', role: 'assistant', phase: 'commentary', text: 'Received once' },
+        ],
+      }],
+    },
+  });
+
+  assert.equal(JSON.stringify(timeline.map((item) => [item.role, item.text])), JSON.stringify([
+    ['user', 'Send this once'],
+    ['assistant', 'Received once'],
+  ]));
+});
+
 test('initial SSE replay replaces active-turn history instead of duplicating it', async () => {
   let readCount = 0;
   const { api } = await loadAppHarness({
@@ -14061,7 +14282,9 @@ test('composer request failures keep the optimistic user message in the retryabl
   assert.equal(submission?.status, 'failed');
   assert.equal(submission?.retryable, true);
   assert.equal(submission?.error, '429 Too Many Requests');
-  assert.match(api.renderTimelineItem(api.state.timeline[0]), /Retry send/u);
+  assert.equal(api.state.status, 'Waiting to send');
+  assert.equal(api.state.error, '');
+  assert.doesNotMatch(api.renderTimelineItem(api.state.timeline[0]), /Retry send|delivery-failed/u);
 });
 
 test('opening a session surfaces a failed terminal turn as a visible error', async () => {
@@ -14349,6 +14572,270 @@ test('PWA history refresh sends queued follow-up once the backgrounded turn is d
   assert.equal(api.state.turnId, 'turn_2');
   assert.equal(api.queuedMessagesForCurrentSession().length, 0);
   assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Queued after background completion');
+});
+
+test('idle status refresh sends a queued follow-up even when local state was already Ready', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_1',
+              cwd: '/repo',
+              activeTurnId: null,
+              settings: { metadata: {} },
+            },
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_1/turns') {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ turnId: 'turn_after_ready' }),
+        };
+      }
+      if (path === '/api/turns/turn_after_ready/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => new Promise(() => {}),
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.pendingTurn = false;
+  api.state.turnId = null;
+  api.state.status = 'Ready';
+  api.state.statusTone = 'success';
+  api.enqueueQueuedMessage('session_1', 'Send after Ready confirmation');
+
+  await api.refreshCurrentSessionMetadata();
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  const queuedTurnRequests = fetchCalls.filter((call) => call.path === '/api/sessions/session_1/turns');
+  assert.equal(queuedTurnRequests.length, 1);
+  assert.equal(JSON.parse(queuedTurnRequests[0].options.body).text, 'Send after Ready confirmation');
+  assert.equal(api.queuedMessagesForCurrentSession().length, 0);
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_after_ready');
+  assert.equal(api.state.status, 'Turn running');
+});
+
+test('session refresh sends a follow-up queued while the terminal metadata request is pending', async () => {
+  const fetchCalls = [];
+  let resolveSessionDetail = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1') {
+        return await new Promise((resolve) => {
+          resolveSessionDetail = resolve;
+        });
+      }
+      if (path === '/api/sessions/session_1/turns') {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ turnId: 'turn_queued_during_refresh' }),
+        };
+      }
+      if (path === '/api/turns/turn_queued_during_refresh/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => new Promise(() => {}),
+            }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_finishing';
+  api.state.streamWasBackgrounded = true;
+
+  const refresh = api.refreshCurrentSessionMetadata({ hydrateTimeline: true, forceDetail: true });
+  assert.equal(typeof resolveSessionDetail, 'function');
+  api.enqueueQueuedMessage('session_1', 'Queued while metadata was loading');
+  resolveSessionDetail({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      session: {
+        id: 'session_1',
+        cwd: '/repo',
+        settings: { metadata: {} },
+        thread: {
+          turns: [{
+            id: 'turn_finishing',
+            status: 'completed',
+            items: [
+              { type: 'message', role: 'user', text: 'Original question' },
+              { type: 'message', role: 'assistant', text: 'Finished answer' },
+            ],
+          }],
+        },
+      },
+    }),
+  });
+
+  await refresh;
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  const queuedTurnRequests = fetchCalls.filter((call) => call.path === '/api/sessions/session_1/turns');
+  assert.equal(queuedTurnRequests.length, 1);
+  assert.equal(JSON.parse(queuedTurnRequests[0].options.body).text, 'Queued while metadata was loading');
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_queued_during_refresh');
+  assert.equal(api.queuedMessagesForCurrentSession().length, 0);
+});
+
+test('session refresh keeps a follow-up queued when pending metadata still reports an active turn', async () => {
+  const fetchCalls = [];
+  let resolveSessionDetail = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1') {
+        return await new Promise((resolve) => {
+          resolveSessionDetail = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_still_running';
+
+  const refresh = api.refreshCurrentSessionMetadata({ hydrateTimeline: true, forceDetail: true });
+  assert.equal(typeof resolveSessionDetail, 'function');
+  api.enqueueQueuedMessage('session_1', 'Wait until the active turn finishes');
+  resolveSessionDetail({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      session: {
+        id: 'session_1',
+        cwd: '/repo',
+        activeTurnId: 'turn_still_running',
+        settings: { metadata: {} },
+        thread: {
+          turns: [{
+            id: 'turn_still_running',
+            status: 'in_progress',
+            items: [{ type: 'message', role: 'user', text: 'Original question' }],
+          }],
+        },
+      },
+    }),
+  });
+
+  await refresh;
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls.map((call) => call.path), ['/api/sessions/session_1']);
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_still_running');
+  assert.equal(api.queuedMessagesForCurrentSession().length, 1);
+  assert.equal(api.queuedMessagesForCurrentSession()[0]?.text, 'Wait until the active turn finishes');
+});
+
+test('terminal metadata for a previous session does not send its queued follow-up after switching sessions', async () => {
+  const fetchCalls = [];
+  let resolveSessionDetail = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1') {
+        return await new Promise((resolve) => {
+          resolveSessionDetail = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  const oldSession = { id: 'session_1', cwd: '/repo/old', settings: { metadata: {} } };
+  const nextSession = { id: 'session_2', cwd: '/repo/new', settings: { metadata: {} } };
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessions = [oldSession, nextSession];
+  api.state.sessionId = oldSession.id;
+  api.state.currentSession = oldSession;
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_old_finishing';
+
+  const refresh = api.refreshCurrentSessionMetadata({ hydrateTimeline: true, forceDetail: true });
+  assert.equal(typeof resolveSessionDetail, 'function');
+  api.enqueueQueuedMessage(oldSession.id, 'Keep this follow-up with the old session');
+  api.state.sessionId = nextSession.id;
+  api.state.currentSession = nextSession;
+  api.state.pendingTurn = false;
+  api.state.turnId = null;
+  resolveSessionDetail({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      session: {
+        ...oldSession,
+        thread: {
+          turns: [{
+            id: 'turn_old_finishing',
+            status: 'completed',
+            items: [
+              { type: 'message', role: 'user', text: 'Old session question' },
+              { type: 'message', role: 'assistant', text: 'Old session answer' },
+            ],
+          }],
+        },
+      },
+    }),
+  });
+
+  await refresh;
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls.map((call) => call.path), ['/api/sessions/session_1']);
+  assert.equal(api.state.sessionId, 'session_2');
+  assert.equal(api.state.currentSession?.id, 'session_2');
+  assert.equal(api.state.queuedMessages.get('session_1')?.length, 1);
+  assert.equal(api.state.queuedMessages.get('session_1')?.[0]?.text, 'Keep this follow-up with the old session');
+  assert.equal(api.queuedMessagesForCurrentSession().length, 0);
 });
 
 test('session refresh retries a queued follow-up that was left in sending state after an interrupted turn', async () => {

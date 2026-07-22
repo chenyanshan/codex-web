@@ -27,6 +27,7 @@ const MAX_SUBMISSION_OUTBOX_ITEMS = 50;
 const SUBMISSION_RETRY_BASE_MS = 5_000;
 const SUBMISSION_RETRY_MAX_MS = 5 * 60_000;
 const SUBMISSION_REQUEST_TIMEOUT_MS = 30_000;
+const SUBMISSION_VISIBLE_FAILURE_ATTEMPT = 3;
 const WORK_DETAILS_EVENT_PAGE_SIZE = 20;
 const MIN_HYDRATED_COMPLETE_EXCHANGES = 2;
 const DEFAULT_MODEL = '';
@@ -737,8 +738,10 @@ async function restoreAuth() {
     } else {
       applyDefaultSettings();
     }
-    state.status = 'Ready';
-    state.statusTone = 'success';
+    if (!state.pendingTurn) {
+      state.status = 'Ready';
+      state.statusTone = 'success';
+    }
     state.error = '';
     render();
     if (state.sessionId && workspaceRestoredFromCache) {
@@ -2597,7 +2600,12 @@ function renderQueuedMessages() {
 }
 
 async function sendNextQueuedMessage(sessionId = state.sessionId) {
-  if (!sessionId || state.queuedMessageSending || state.pendingTurn || isReadOnlySession(state.currentSession)) {
+  if (!sessionId
+    || sessionId !== state.sessionId
+    || state.currentSession?.id !== sessionId
+    || state.queuedMessageSending
+    || state.pendingTurn
+    || isReadOnlySession(state.currentSession)) {
     return false;
   }
   const [message] = pendingQueuedMessagesForSession(sessionId);
@@ -2964,6 +2972,9 @@ function renderSessionCards() {
       ? null
       : pendingSubmissionEntries().find((entry) => entry.sessionId === session.id);
     const deliveryState = session.localSubmission === true ? session.deliveryState : pendingDelivery?.status || '';
+    const deliveryFailureVisible = session.localSubmission === true
+      ? session.deliveryFailureVisible === true
+      : submissionFailureIsVisible(pendingDelivery);
     const favorite = isFavoriteSession(session);
     const favoriteLabel = t(favorite ? 'Unfavorite' : 'Favorite');
     const archiveLabel = t(session.archived === true ? 'Unarchive' : 'Archive');
@@ -2974,7 +2985,7 @@ function renderSessionCards() {
           <span class="session-card-main">
             <span class="session-card-title-row">
               <span class="session-title" data-i18n-skip>${escapeHtml(sessionDisplayTitle(session))}</span>
-              ${deliveryState === 'failed'
+              ${deliveryState === 'failed' && deliveryFailureVisible
                 ? `<span class="session-attention-state" data-state="${escapeAttribute(deliveryState)}">${escapeHtml(t(submissionDeliveryLabel(deliveryState)))}</span>`
                 : activityState ? `<span class="session-attention-state" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityState === 'waiting_approval' ? 'Needs approval' : 'Active'))}</span>` : ''}
             </span>
@@ -2988,7 +2999,7 @@ function renderSessionCards() {
         </button>
         ${session.localSubmission === true ? `
           <div class="session-card-actions submission-session-actions">
-            ${session.deliveryState !== 'sending' && session.retryable !== false ? `<button class="ghost compact-button" type="button" data-submission-retry-id="${escapeAttribute(session.submissionId)}" aria-label="${escapeAttribute(t('Retry send'))}" title="${escapeAttribute(t('Retry send'))}"><span aria-hidden="true">&#8635;</span></button>` : ''}
+            ${session.deliveryFailureVisible === true && session.retryable !== false ? `<button class="ghost compact-button" type="button" data-submission-retry-id="${escapeAttribute(session.submissionId)}" aria-label="${escapeAttribute(t('Retry send'))}" title="${escapeAttribute(t('Retry send'))}"><span aria-hidden="true">&#8635;</span></button>` : ''}
             ${session.deliveryState !== 'sending' ? `<button class="ghost compact-button" type="button" data-submission-cancel-id="${escapeAttribute(session.submissionId)}" aria-label="${escapeAttribute(t('Cancel send'))}" title="${escapeAttribute(t('Cancel send'))}"><span aria-hidden="true">&times;</span></button>` : ''}
           </div>
         ` : `
@@ -3301,6 +3312,9 @@ function visibleTimelineItems() {
       return false;
     }
     if (item?.kind === 'message') {
+      if (item.role === 'system' && isTurnInterruptTimeoutMessage(item.text)) {
+        return false;
+      }
       const display = normalizeTimelineMessageDisplay(item.role, item.text, item.attachments);
       return Boolean(String(display.text || '').trim() || display.attachments.length);
     }
@@ -3367,7 +3381,7 @@ function renderTimelineItem(item) {
     const submission = item.submissionId ? state.submissionOutbox.get(item.submissionId) : null;
     const meta = item.meta || '';
     const deliveryFailed = item.role === 'user' && (
-      submission?.status === 'failed'
+      submissionFailureIsVisible(submission)
       || (!submission && item.deliveryLabel === 'Send failed')
     );
     return `
@@ -3438,7 +3452,7 @@ function submissionDeliveryLabel(status) {
 }
 
 function renderSubmissionDeliveryActions(item, submission) {
-  const failed = submission?.status === 'failed'
+  const failed = submissionFailureIsVisible(submission)
     || (!submission && item?.deliveryLabel === 'Send failed');
   if (item?.role !== 'user' || !failed) {
     return '';
@@ -3452,6 +3466,14 @@ function renderSubmissionDeliveryActions(item, submission) {
           ${indicator}
         </div>
   `;
+}
+
+function submissionFailureIsVisible(submission) {
+  if (!submission || submission.status !== 'failed') {
+    return false;
+  }
+  return submission.retryable === false
+    || Number(submission.attempts || 0) >= SUBMISSION_VISIBLE_FAILURE_ATTEMPT;
 }
 
 function renderMessageAttachments(attachments) {
@@ -5984,7 +6006,7 @@ function restoreTimelineViewport(snapshot) {
   if (!snapshot) {
     return;
   }
-  requestAnimationFrame(() => {
+  const apply = () => {
     const timeline = document.querySelector('#timeline');
     if (!timeline) {
       return;
@@ -6002,7 +6024,9 @@ function restoreTimelineViewport(snapshot) {
       selectionEnd: snapshot.promptSelectionEnd,
       selectionDirection: snapshot.promptSelectionDirection,
     });
-  });
+  };
+  apply();
+  requestAnimationFrame(apply);
 }
 
 function renderChatWithTimelineRestored(callback) {
@@ -6849,9 +6873,12 @@ function openPendingSubmission(submissionId) {
   state.composerAttachments = [];
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
   state.chatReturnView = 'sessions';
-  state.status = submissionDeliveryLabel(entry.status);
-  state.statusTone = entry.status === 'failed' ? 'danger' : 'warn';
-  state.error = entry.error;
+  const visibleFailure = submissionFailureIsVisible(entry);
+  state.status = entry.status === 'failed' && !visibleFailure
+    ? 'Waiting to send'
+    : submissionDeliveryLabel(entry.status);
+  state.statusTone = visibleFailure ? 'danger' : 'warn';
+  state.error = visibleFailure ? entry.error : '';
   render();
   scrollTimelineToBottom();
   return true;
@@ -7248,13 +7275,14 @@ function markCachedSubmissionDelivered(entry, sessionId) {
 function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
   const message = String(error?.payload?.message || error?.message || 'Request failed');
   const retryable = isSubmissionDeliveryRetryable(error);
+  const retrySilently = retryable && entry.attempts < SUBMISSION_VISIBLE_FAILURE_ATTEMPT;
   const failed = upsertSubmissionOutboxEntry({
     ...entry,
     status: 'failed',
     updatedAt: Date.now(),
     error: message,
     retryable,
-    nextAttemptAt: retryable ? Date.now() + submissionRetryDelay(entry.attempts) : 0,
+    nextAttemptAt: retrySilently ? Date.now() + submissionRetryDelay(entry.attempts) : 0,
   });
   if (entry.queuedMessageId && entry.sessionId) {
     setQueuedMessageSending(entry.sessionId, entry.queuedMessageId, false);
@@ -7265,14 +7293,14 @@ function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
   }
   if (wasActiveDraft || state.sessionId === entry.sessionId) {
     state.pendingTurn = false;
-    state.status = 'Send failed';
-    state.statusTone = 'danger';
-    state.error = message;
+    state.status = retrySilently ? 'Waiting to send' : 'Send failed';
+    state.statusTone = retrySilently ? 'warn' : 'danger';
+    state.error = retrySilently ? '' : message;
     renderChatAtLatestIfFollowing(() => {});
   } else {
     renderSessionListAfterBackgroundUpdate();
   }
-  if (retryable) {
+  if (retrySilently) {
     scheduleSubmissionRetry();
   }
 }
@@ -8515,6 +8543,12 @@ async function resolveApproval(approvalId, action) {
 }
 
 function applyTurnEvent(event, assistantEntry) {
+  if (event.type === 'turn.failed'
+    && isTurnInterruptTimeoutMessage(event.details || event.message)) {
+    state.error = '';
+    void refreshCurrentSessionMetadata();
+    return assistantEntry;
+  }
   if ((event.type === 'turn.completed' || event.type === 'turn.failed')
     && state.turnId
     && event.turnId
@@ -8523,7 +8557,7 @@ function applyTurnEvent(event, assistantEntry) {
   }
   if (event.turnId
     && state.terminalTurnIds.has(event.turnId)
-    && !['approval.resolved', 'batch.completed', 'turn.completed', 'turn.failed'].includes(event.type)) {
+    && !['approval.resolved', 'batch.completed'].includes(event.type)) {
     return assistantEntry;
   }
   if (event.turnId) {
@@ -8537,6 +8571,10 @@ function applyTurnEvent(event, assistantEntry) {
         state.queuedInterruptRequestedTurnId = null;
         state.queuedInterruptEligibleTurnId = null;
       }
+      clearLocallyStartedTurn();
+      state.pendingTurn = true;
+      state.turnId = event.turnId;
+      state.streamWasBackgrounded = false;
       state.status = 'Turn running';
       state.statusTone = 'warn';
       sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'running', event.turnId);
@@ -8906,7 +8944,20 @@ async function maybeInterruptRunningTurnForQueuedMessage() {
       void sendNextQueuedMessage(sessionId);
     }
   } catch (error) {
-    handleApiError(error);
+    if (!isTurnInterruptTimeoutMessage(error?.payload?.message || error?.message)) {
+      console.warn('[codex-web] queued turn interrupt was not confirmed', error);
+    }
+    if (state.sessionId !== sessionId) {
+      return;
+    }
+    state.error = '';
+    state.status = 'Turn running';
+    state.statusTone = 'warn';
+    refreshChatDynamicUi();
+    await refreshCurrentSessionMetadata();
+    if (state.sessionId === sessionId && !state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) {
+      void sendNextQueuedMessage(sessionId);
+    }
   }
 }
 
@@ -9072,8 +9123,6 @@ async function refreshCurrentSessionMetadata({
   }
   const sessionId = state.sessionId;
   const requestGeneration = authRequestGeneration;
-  const wasPendingTurn = state.pendingTurn;
-  const hadQueuedMessages = queuedMessagesForSession(sessionId).length > 0;
   const snapshot = viewportSnapshot || (isDesktopWorkspaceView() ? latestTimelineViewportSnapshot() : captureTimelineViewport());
   try {
     const payload = forceDetail
@@ -9117,7 +9166,7 @@ async function refreshCurrentSessionMetadata({
           scrollTimelineToBottomIfFollowingLatest();
         }
         nextTimelineRestoreSnapshot = null;
-        if (hydrateTimeline && wasPendingTurn && hadQueuedMessages && !state.pendingTurn) {
+        if (hydrateTimeline && !state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) {
           void sendNextQueuedMessage(sessionId);
         }
       } else {
@@ -9206,6 +9255,9 @@ async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = n
   nextTimelineRestoreSnapshot = viewportSnapshot;
   renderChatWithTimelineRestored(() => {});
   nextTimelineRestoreSnapshot = null;
+  if (!state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) {
+    void sendNextQueuedMessage(sessionId);
+  }
   return session;
 }
 
@@ -10411,6 +10463,9 @@ function syncRuntimeStatusFromSession(session, { source = 'detail' } = {}) {
     }
     if (isFailureTurnStatus(normalizedStatus)) {
       clearRuntimeTurnState();
+      if (runtimeTurnHasInterruptTimeout(latestTurn)) {
+        return setRuntimeStatus('Ready', 'success', { activeTurnId: null, terminalTurnId: latestTurn.id || null });
+      }
       const message = surfaceRuntimeTurnErrorFromSession(session, latestTurn);
       return setRuntimeStatus('Turn failed', 'danger', { activeTurnId: null, terminalTurnId: latestTurn.id || null, errorMessage: message });
     }
@@ -10568,6 +10623,9 @@ function latestTimelineTerminalFailure(session) {
     if (item.role !== 'system' || item.severity !== 'error' || item.meta !== 'failed') {
       continue;
     }
+    if (isTurnInterruptTimeoutMessage(item.text)) {
+      continue;
+    }
     const id = String(item.id || '');
     return {
       turnId: id.startsWith('error_') ? id.slice('error_'.length) || null : null,
@@ -10588,6 +10646,21 @@ function publicRuntimeTurnFailureMessage(value) {
   return /\brequest\s+(?:timed\s*out|timeout)\b|\btimed\s*out\s+waiting\s+for\s+codex\s+turn\b/iu.test(message)
     ? 'Turn failed'
     : message;
+}
+
+function runtimeTurnHasInterruptTimeout(turn) {
+  return [turn?.details, turn?.error, turn?.message]
+    .some(isTurnInterruptTimeoutMessage)
+    || (Array.isArray(turn?.items) ? turn.items : []).some((item) => (
+      [item?.details, item?.error, item?.message, item?.text, item?.result,
+        item?.raw?.details, item?.raw?.error, item?.raw?.message]
+        .some(isTurnInterruptTimeoutMessage)
+    ));
+}
+
+function isTurnInterruptTimeoutMessage(value) {
+  const message = normalizeRuntimeErrorText(value);
+  return /timed out waiting for Codex JSON-RPC response to turn\/interrupt/iu.test(message);
 }
 
 function runtimeTurnItemErrorMessage(turn) {
@@ -11672,6 +11745,9 @@ async function drainSubmissionOutboxOnce({ force = false } = {}) {
     if (entry.status === 'sending' || entry.retryable === false) {
       continue;
     }
+    if (submissionFailureIsVisible(entry)) {
+      continue;
+    }
     if (!force && entry.nextAttemptAt > Date.now()) {
       continue;
     }
@@ -12056,7 +12132,10 @@ function timelineProjectionIdentity(item) {
 }
 
 function dedupeTimelineProjectionEntries(entries) {
-  const source = (Array.isArray(entries) ? entries : []).filter(Boolean);
+  const source = (Array.isArray(entries) ? entries : []).filter((item) => (
+    Boolean(item)
+    && !(item?.kind === 'message' && item.role === 'system' && isTurnInterruptTimeoutMessage(item.text))
+  ));
   const actualFinalKeys = new Set(source.flatMap((item) => {
     const turnId = timelineTurnId(item);
     const meta = String(item?.meta || '').trim().toLowerCase();
@@ -12073,8 +12152,11 @@ function dedupeTimelineProjectionEntries(entries) {
     const finalKey = item?.kind === 'message' && item.role === 'assistant' && turnId && item.text
       ? `${turnId}\u0000${item.text}`
       : '';
+    const semanticKey = timelineSemanticProjectionKey(item, turnId);
     const key = finalKey && actualFinalKeys.has(finalKey)
       ? `final:${finalKey}`
+      : semanticKey
+        ? semanticKey
       : item.projectionKey
         ? `projection:${item.projectionKey}`
         : item.id
@@ -12092,6 +12174,8 @@ function dedupeTimelineProjectionEntries(entries) {
     }
     if (key && indexes.has(key)) {
       result[indexes.get(key)] = item;
+    } else if (timelineEntriesAreTransientDuplicates(result.at(-1), item)) {
+      result[result.length - 1] = preferredTimelineDuplicate(result.at(-1), item);
     } else {
       if (key) {
         indexes.set(key, result.length);
@@ -12100,6 +12184,44 @@ function dedupeTimelineProjectionEntries(entries) {
     }
   }
   return result;
+}
+
+function timelineSemanticProjectionKey(item, turnId = timelineTurnId(item)) {
+  if (item?.kind !== 'message' || !turnId || !item.text || !['user', 'assistant'].includes(item.role)) {
+    return '';
+  }
+  if (item.role === 'user') {
+    return `semantic:${turnId}\u0000user\u0000${timelineMessageIdentity(item)}`;
+  }
+  const meta = String(item.meta || '').trim().toLowerCase();
+  const phase = meta === 'history' ? '' : meta === 'final_answer' ? 'final' : meta;
+  return `semantic:${turnId}\u0000assistant\u0000${phase}\u0000${item.text}`;
+}
+
+function timelineEntriesAreTransientDuplicates(previous, next) {
+  if (previous?.kind !== 'message' || next?.kind !== 'message' || previous.role !== next.role) {
+    return false;
+  }
+  if (timelineMessageIdentity(previous) !== timelineMessageIdentity(next)) {
+    return false;
+  }
+  const previousPending = previous.meta === 'pending' || Boolean(previous.submissionId);
+  const nextPending = next.meta === 'pending' || Boolean(next.submissionId);
+  if (!previousPending && !nextPending) {
+    return false;
+  }
+  const previousTurnId = timelineTurnId(previous);
+  const nextTurnId = timelineTurnId(next);
+  return !previousTurnId || !nextTurnId || previousTurnId === nextTurnId;
+}
+
+function preferredTimelineDuplicate(previous, next) {
+  const previousPending = previous?.meta === 'pending' || Boolean(previous?.submissionId);
+  const nextPending = next?.meta === 'pending' || Boolean(next?.submissionId);
+  if (previousPending !== nextPending) {
+    return previousPending ? next : previous;
+  }
+  return next;
 }
 
 function normalizeSessionTimeline(items) {
@@ -12116,6 +12238,9 @@ function normalizeSessionTimelineItem(item) {
     ? item.role
     : null;
   const display = normalizeTimelineMessageDisplay(role, item.text, item.attachments);
+  if (role === 'system' && isTurnInterruptTimeoutMessage(display.text)) {
+    return null;
+  }
   if (!role || (!display.text && !display.attachments.length)) {
     return null;
   }
@@ -12431,6 +12556,7 @@ function pendingSubmissionSessionSummaries() {
         submissionId: entry.id,
         localSubmission: true,
         deliveryState: entry.status,
+        deliveryFailureVisible: submissionFailureIsVisible(entry),
         retryable: entry.retryable,
         projectId: entry.projectId || undefined,
         projectDisplayName: projectVisibleName(project, entry.projectId),
@@ -13899,6 +14025,10 @@ function removeTimelineEntryById(entryId) {
 }
 
 function surfaceTimelineError(turnId, message) {
+  if (isTurnInterruptTimeoutMessage(message)) {
+    state.error = '';
+    return;
+  }
   appendTimelineError(turnId, message);
   state.error = '';
   if (!state.sessionId) {
@@ -13908,6 +14038,9 @@ function surfaceTimelineError(turnId, message) {
 }
 
 function appendTimelineError(turnId, message) {
+  if (isTurnInterruptTimeoutMessage(message)) {
+    return;
+  }
   const text = publicRuntimeTurnFailureMessage(message);
   const id = `error_${turnId || Date.now()}`;
   appendOrReplace({
@@ -13922,6 +14055,9 @@ function appendTimelineError(turnId, message) {
 }
 
 async function persistTimelineError(turnId, message) {
+  if (isTurnInterruptTimeoutMessage(message)) {
+    return;
+  }
   try {
     await apiFetch(`/api/sessions/${encodeURIComponent(state.sessionId)}/timeline`, {
       method: 'POST',
@@ -14443,6 +14579,18 @@ function handleApiError(error, options = {}) {
   const payload = error?.payload || null;
   const code = payload?.error;
   const message = payload?.message || error?.message || 'Request failed';
+  if (isTurnInterruptTimeoutMessage(message)) {
+    state.error = '';
+    if (state.pendingTurn) {
+      state.status = 'Turn running';
+      state.statusTone = 'warn';
+    } else if (state.statusTone === 'danger') {
+      state.status = 'Ready';
+      state.statusTone = 'success';
+    }
+    render();
+    return;
+  }
   if (code === 'setup_required') {
     state.setupRequired = true;
     state.setupMessage = message;
@@ -14480,14 +14628,16 @@ function inferDeviceName() {
 }
 
 function scrollTimelineToBottom() {
-  requestAnimationFrame(() => {
+  const apply = () => {
     const timeline = document.querySelector('#timeline');
     if (timeline) {
       timeline.scrollTop = timeline.scrollHeight;
       state.timelineShouldFollowLatest = true;
       rememberCurrentTimelineViewport();
     }
-  });
+  };
+  apply();
+  requestAnimationFrame(apply);
 }
 
 function scrollTimelineToTop() {

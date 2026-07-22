@@ -672,6 +672,332 @@ test('app client replays turn events emitted before turn start acknowledgement',
   assert.equal(client.listenerCount('approval_request'), 0);
 });
 
+test('app client confirms slow user-only interrupted snapshots despite item completion', async () => {
+  let now = 0;
+  let readCount = 0;
+  const sleeps: number[] = [];
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollNow: () => now,
+    turnPollSleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+  client.request = async (method: string) => {
+    assert.equal(method, 'turn/start');
+    return { turn: { id: 'turn_start_race', status: 'inProgress' } };
+  };
+  client.readThread = async () => {
+    readCount += 1;
+    if (readCount <= 4) {
+      if (readCount === 1) {
+        client.emit('notification', {
+          method: 'item/completed',
+          params: {
+            threadId: 'thread_start_race',
+            turnId: 'turn_start_race',
+            item: {
+              type: 'userMessage',
+              id: 'message_start_race',
+              role: 'user',
+              text: 'Run it',
+            },
+          },
+        });
+      }
+      return {
+        threadId: 'thread_start_race',
+        turns: [{
+          id: 'turn_start_race',
+          status: 'interrupted',
+          error: null,
+          items: [{ type: 'userMessage', role: 'user', text: 'Run it' }],
+        }],
+      } as any;
+    }
+    if (readCount === 5) {
+      client.emit('notification', {
+        method: 'turn/started',
+        params: {
+          threadId: 'thread_start_race',
+          turn: { id: 'turn_start_race', status: 'inProgress' },
+        },
+      });
+      return {
+        threadId: 'thread_start_race',
+        runtimeStatus: { type: 'active', activeFlags: [] },
+        turns: [{
+          id: 'turn_start_race',
+          status: 'inProgress',
+          error: null,
+          items: [{ type: 'userMessage', role: 'user', text: 'Run it' }],
+        }],
+      } as any;
+    }
+    return {
+      threadId: 'thread_start_race',
+      turns: [{
+        id: 'turn_start_race',
+        status: 'completed',
+        error: null,
+        items: [{
+          type: 'agentMessage',
+          role: 'assistant',
+          phase: 'final_answer',
+          text: 'Completed after materialization.',
+        }],
+      }],
+    } as any;
+  };
+
+  const result = await client.startTurn({
+    threadId: 'thread_start_race',
+    inputText: 'Run it',
+    model: 'gpt-5.6-sol',
+    timeoutMs: 5000,
+  });
+
+  assert.equal(readCount, 6);
+  assert.deepEqual(sleeps, [250, 250, 250, 250, 1000]);
+  assert.equal(result.outputState, 'complete');
+  assert.equal(result.outputText, 'Completed after materialization.');
+});
+
+test('app client returns a confirmed empty interruption without entering terminal settling', async () => {
+  let now = 0;
+  let readCount = 0;
+  const sleeps: number[] = [];
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollNow: () => now,
+    turnPollSleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+  client.request = async (method: string) => {
+    assert.equal(method, 'turn/start');
+    return { turn: { id: 'turn_immediate_interrupt', status: 'inProgress' } };
+  };
+  client.readThread = async () => {
+    readCount += 1;
+    return {
+      threadId: 'thread_immediate_interrupt',
+      turns: [{
+        id: 'turn_immediate_interrupt',
+        status: 'interrupted',
+        error: null,
+        items: [],
+      }],
+    } as any;
+  };
+
+  const result = await client.startTurn({
+    threadId: 'thread_immediate_interrupt',
+    inputText: 'Run it',
+    model: 'gpt-5.6-sol',
+    timeoutMs: 5000,
+  });
+
+  assert.equal(readCount, 9);
+  assert.deepEqual(sleeps, Array(8).fill(250));
+  assert.equal(result.outputState, 'interrupted');
+});
+
+test('app client returns an interrupted snapshot with observed work activity immediately', async () => {
+  const sleeps: number[] = [];
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  client.request = async (method: string) => {
+    assert.equal(method, 'turn/start');
+    return { turn: { id: 'turn_work_interrupt', status: 'inProgress' } };
+  };
+  client.readThread = async () => ({
+    threadId: 'thread_work_interrupt',
+    turns: [{
+      id: 'turn_work_interrupt',
+      status: 'interrupted',
+      error: null,
+      items: [{
+        type: 'commandExecution',
+        id: 'command_work_interrupt',
+        command: 'npm test',
+        status: 'interrupted',
+      }],
+    }],
+  } as any);
+
+  const result = await client.startTurn({
+    threadId: 'thread_work_interrupt',
+    inputText: 'Run it',
+    model: 'gpt-5.6-sol',
+    timeoutMs: 5000,
+  });
+
+  assert.deepEqual(sleeps, []);
+  assert.equal(result.outputState, 'interrupted');
+});
+
+test('app client accepts a matching interrupted turn completion notification immediately', async () => {
+  let readCount = 0;
+  const sleeps: number[] = [];
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  client.request = async (method: string) => {
+    assert.equal(method, 'turn/start');
+    return { turn: { id: 'turn_notified_interrupt', status: 'inProgress' } };
+  };
+  client.readThread = async () => {
+    readCount += 1;
+    client.emit('notification', {
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread_notified_interrupt',
+        turn: { id: 'turn_notified_interrupt', status: 'interrupted' },
+      },
+    });
+    return {
+      threadId: 'thread_notified_interrupt',
+      turns: [{
+        id: 'turn_notified_interrupt',
+        status: 'interrupted',
+        error: null,
+        items: [],
+      }],
+    } as any;
+  };
+
+  const result = await client.startTurn({
+    threadId: 'thread_notified_interrupt',
+    inputText: 'Run it',
+    model: 'gpt-5.6-sol',
+    timeoutMs: 5000,
+  });
+
+  assert.equal(readCount, 1);
+  assert.deepEqual(sleeps, []);
+  assert.equal(result.outputState, 'interrupted');
+});
+
+test('app client accepts a matching rollout turn_aborted event immediately', async () => {
+  const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-api-turn-aborted-'));
+  const sessionPath = path.join(sessionDir, 'rollout.jsonl');
+  fs.writeFileSync(sessionPath, JSON.stringify({
+    type: 'event_msg',
+    payload: {
+      type: 'turn_aborted',
+      turn_id: 'turn_rollout_interrupt',
+      reason: 'interrupted',
+    },
+  }));
+  let readCount = 0;
+  const sleeps: number[] = [];
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  client.request = async (method: string) => {
+    assert.equal(method, 'turn/start');
+    return { turn: { id: 'turn_rollout_interrupt', status: 'inProgress' } };
+  };
+  client.readThread = async () => {
+    readCount += 1;
+    return {
+      threadId: 'thread_rollout_interrupt',
+      path: sessionPath,
+      turns: [{
+        id: 'turn_rollout_interrupt',
+        status: 'interrupted',
+        error: null,
+        items: [],
+      }],
+    } as any;
+  };
+
+  const result = await client.startTurn({
+    threadId: 'thread_rollout_interrupt',
+    inputText: 'Run it',
+    model: 'gpt-5.6-sol',
+    timeoutMs: 5000,
+  });
+
+  assert.equal(readCount, 1);
+  assert.deepEqual(sleeps, []);
+  assert.equal(result.outputState, 'interrupted');
+});
+
+test('app client prefers matching task_complete output over a stale interrupted snapshot', async () => {
+  const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-api-stale-interrupt-'));
+  const sessionPath = path.join(sessionDir, 'rollout.jsonl');
+  fs.writeFileSync(sessionPath, [{
+    type: 'event_msg',
+    payload: {
+      type: 'task_started',
+      turn_id: 'turn_stale_interrupt',
+    },
+  }, {
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      id: 'answer_stale_interrupt',
+      role: 'assistant',
+      phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'Completed from rollout.' }],
+    },
+  }, {
+    type: 'event_msg',
+    payload: {
+      type: 'task_complete',
+      turn_id: 'turn_stale_interrupt',
+      last_agent_message: 'Completed from rollout.',
+    },
+  }].map((entry) => JSON.stringify(entry)).join('\n'));
+  const sleeps: number[] = [];
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollSleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  client.request = async (method: string) => {
+    assert.equal(method, 'turn/start');
+    return { turn: { id: 'turn_stale_interrupt', status: 'inProgress' } };
+  };
+  client.readThread = async () => ({
+    threadId: 'thread_stale_interrupt',
+    path: sessionPath,
+    turns: [{
+      id: 'turn_stale_interrupt',
+      status: 'interrupted',
+      error: null,
+      items: [],
+    }],
+  } as any);
+
+  const result = await client.startTurn({
+    threadId: 'thread_stale_interrupt',
+    inputText: 'Run it',
+    model: 'gpt-5.6-sol',
+    timeoutMs: 5000,
+  });
+
+  assert.deepEqual(sleeps, []);
+  assert.equal(result.outputState, 'complete');
+  assert.equal(result.outputText, 'Completed from rollout.');
+  assert.equal(result.status, 'completed');
+});
+
 test('app client accumulates current command execution output deltas', async () => {
   const client = new CodexAppClient({
     codexCliBin: 'codex',

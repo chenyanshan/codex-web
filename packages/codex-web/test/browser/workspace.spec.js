@@ -365,8 +365,9 @@ test('lost new-session responses recover from the durable outbox after reload', 
   await page.locator('#prompt-input').fill('Recover this weak-network session');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 
-  await expect(page.locator('#timeline [data-submission-retry-id]')).toBeVisible();
-  await expect(page.locator('#timeline [data-submission-retry-id]')).toHaveAccessibleName('Send failed. Retry send');
+  await expect(page.locator('#timeline .message-card.user')).toContainText('Recover this weak-network session');
+  await expect(page.locator('#timeline [data-submission-retry-id]')).toHaveCount(0);
+  await expect(page.locator('.composer-status')).toContainText('Waiting to send');
   const storedBeforeReload = await page.evaluate(() => {
     const prefix = 'codexWebSubmissionOutbox:';
     return Array.from({ length: window.localStorage.length }, (_item, index) => (
