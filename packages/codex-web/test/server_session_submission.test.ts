@@ -200,6 +200,60 @@ test('session submissions create and start exactly once across retries and serve
   }
 });
 
+test('successful submissions omit optional session details when response hydration fails', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-submission-hydration-'));
+  const runtime = runtimeStub();
+  const readSession = runtime.readSession;
+  let readCount = 0;
+  runtime.readSession = async (id: string) => {
+    readCount += 1;
+    if (readCount === 2) {
+      throw new Error('session rollout is temporarily unreadable');
+    }
+    return readSession(id);
+  };
+
+  const server = createCodexWebServer({
+    auth: acceptingAuth(),
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const response = await postJson(`${server.baseUrl}/api/session-submissions`, {
+      submissionId: 'sub-response-hydration',
+      text: 'submission succeeds before hydration',
+    });
+    assert.equal(response.status, 201);
+    const payload = await response.json() as any;
+    assert.equal(payload.submission.status, 'submitted');
+    assert.equal(payload.turnId, 'turn_1');
+    assert.equal('session' in payload, false);
+    assert.equal(readCount, 2);
+    assert.deepEqual(runtime.calls, { create: 1, start: 1 });
+
+    const stored = await new FileSessionSubmissionStore({ stateDir }).read(
+      'local-admin',
+      'sub-response-hydration',
+    );
+    assert.equal(stored?.status, 'submitted');
+    assert.equal(stored?.turnId, 'turn_1');
+
+    const replay = await postJson(`${server.baseUrl}/api/session-submissions`, {
+      submissionId: 'sub-response-hydration',
+      text: 'submission succeeds before hydration',
+    });
+    assert.equal(replay.status, 200);
+    const replayPayload = await replay.json() as any;
+    assert.equal(replayPayload.submission.status, 'submitted');
+    assert.equal(replayPayload.turnId, 'turn_1');
+    assert.deepEqual(runtime.calls, { create: 1, start: 1 });
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('single-user draft attachments upload without creating a session and send with the durable submission', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-draft-attachment-state-'));
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-draft-attachment-project-'));
@@ -930,6 +984,71 @@ test('independent servers serialize the same submission through the file operati
     assert.deepEqual(runtime.calls, { create: 1, start: 1 });
   } finally {
     await Promise.all([firstServer.stop(), secondServer.stop()]);
+  }
+});
+
+test('independent servers serialize multi-user creation before enforcing the active session limit', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-project-limit-lock-'));
+  const identityStore = await createMultiUserIdentityStore(stateDir);
+  await identityStore.upsertProject({
+    id: 'project_shared',
+    internalName: 'shared',
+    cwd: '/tmp/shared-project',
+    displayName: 'Shared Project',
+    enabled: true,
+    activeSessionLimit: 1,
+    showWorkDetailsToMembers: false,
+  });
+  const reopenedIdentityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const runtime = runtimeStub();
+  const createSession = runtime.createSession;
+  runtime.createSession = async (input: any) => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    return createSession(input);
+  };
+  const alice = {
+    userId: 'user_alice',
+    username: 'alice',
+    roleIds: ['role_member'],
+    isAdmin: false,
+    mode: 'multi' as const,
+  };
+  const firstServer = createCodexWebServer({
+    auth: principalAuth({ alice }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  const secondServer = createCodexWebServer({
+    auth: principalAuth({ alice }),
+    identityStore: reopenedIdentityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await Promise.all([firstServer.start(), secondServer.start()]);
+  try {
+    const submit = (baseUrl: string, submissionId: string) => fetch(`${baseUrl}/api/session-submissions`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId, projectId: 'project_shared', text: submissionId }),
+    });
+    const responses = await Promise.all([
+      submit(firstServer.baseUrl, 'project-limit-a'),
+      submit(secondServer.baseUrl, 'project-limit-b'),
+    ]);
+    assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
+    const rejected = responses.find((response) => response.status === 409)!;
+    assert.equal((await rejected.json() as any).error, 'active_session_limit_reached');
+    assert.deepEqual(runtime.calls, { create: 1, start: 1 });
+    const state = await identityStore.readState();
+    assert.equal(state.sessions.filter((session) => (
+      session.ownerUserId === 'user_alice'
+      && session.projectId === 'project_shared'
+      && session.archived === false
+    )).length, 1);
+  } finally {
+    await Promise.all([firstServer.stop(), secondServer.stop()]);
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
 

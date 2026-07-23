@@ -183,6 +183,28 @@ const UI_TRANSLATIONS = {
     Appearance: '外观',
     Advanced: '高级',
     Account: '账户',
+    Webhook: 'Webhook',
+    'Enable webhook': '启用 Webhook',
+    'Webhook endpoint': 'Webhook 接口地址',
+    'Webhook key': 'Webhook 密钥',
+    'Regenerate key': '重新生成密钥',
+    'Regenerate webhook key?': '重新生成 Webhook 密钥？',
+    'Copy key': '复制密钥',
+    'The current key will stop working immediately.': '当前密钥将立即失效。',
+    'Webhook endpoint copied.': '已复制 Webhook 接口地址。',
+    'Webhook key copied.': 'Webhook 密钥已复制。',
+    'Loading webhook settings...': '正在加载 Webhook 设置...',
+    'Webhook is disabled.': 'Webhook 已停用。',
+    'Webhook key is not available.': 'Webhook 密钥不可用。',
+    'Regenerate this legacy key once to make it copyable.': '请重新生成一次旧密钥，之后即可随时复制。',
+    'Could not load webhook settings.': '无法加载 Webhook 设置。',
+    'Could not update webhook settings.': '无法更新 Webhook 设置。',
+    'Could not regenerate webhook key.': '无法重新生成 Webhook 密钥。',
+    Regenerate: '重新生成',
+    'Could not copy webhook endpoint.': '无法复制 Webhook 接口地址。',
+    'Could not copy webhook key.': '无法复制 Webhook 密钥。',
+    Rotate: '轮换',
+    Copied: '已复制',
     Administration: '管理',
     'Current session': '当前会话',
     'Current session is running': '当前会话正在运行',
@@ -472,6 +494,8 @@ const state = {
     publicSharesEnabled: false,
     loaded: false,
   },
+  webhook: createWebhookSettingsState(),
+  webhookRotateConfirmOpen: false,
   messageFontSize: normalizeMessageFontSize(localStorage.getItem(MESSAGE_FONT_SIZE_KEY)),
   language: normalizeLanguage(localStorage.getItem(LANGUAGE_KEY)),
   defaultThreadSettings: loadDefaultThreadSettings(),
@@ -912,6 +936,8 @@ function setLoggedOut(message = '') {
   state.desktopSettingsOpen = false;
   state.desktopOverlay = null;
   state.shareDialog = null;
+  state.webhook = createWebhookSettingsState();
+  state.webhookRotateConfirmOpen = false;
   state.workDetailsOpen = false;
   state.workDetailsPolicyPendingSessionId = '';
   state.globalSettings = {
@@ -1025,6 +1051,9 @@ function requestFocusRestore() {
 }
 
 function activeFocusScope() {
+  if (state.webhookRotateConfirmOpen) {
+    return { key: 'webhook-rotate', element: document.querySelector('[data-focus-scope="webhook-rotate"]') };
+  }
   if (state.workDetailsOpen) {
     return { key: 'work-details', element: document.querySelector('[data-focus-scope="work-details"]') };
   }
@@ -1195,6 +1224,10 @@ function handleFocusScopeKeydown(event) {
 }
 
 function closeFocusScope(kind = '') {
+  if ((!kind || kind === 'webhook-rotate') && state.webhookRotateConfirmOpen) {
+    cancelWebhookKeyRotation();
+    return true;
+  }
   if ((!kind || kind === 'work-details') && state.workDetailsOpen) {
     closeWorkDetails();
     return true;
@@ -1505,6 +1538,7 @@ function renderDesktopWorkspace() {
       </div>
     </div>
     ${renderArchiveConfirmModal()}
+    ${renderWebhookDialogs()}
   `;
   return localizeElement(shell);
 }
@@ -1812,6 +1846,7 @@ function renderAppSettings() {
         ${renderAppSettingsSections()}
       </main>
     </div>
+    ${renderWebhookDialogs()}
   `;
   return localizeElement(shell);
 }
@@ -1835,6 +1870,7 @@ function renderAppSettingsSections() {
         ${renderSiteTitleSettingsSection()}
         ${renderAppearanceSettingsSection()}
         ${renderDefaultThreadSettingsSection()}
+        ${renderWebhookSettingsSection()}
         ${renderAdminSettingsSection({ title: 'Administration', showLoadingNote: true })}
         ${renderRuntimeSettingsSection()}
         <section class="settings-section">
@@ -1887,6 +1923,78 @@ function renderDefaultThreadSettingsSection() {
           <div class="settings-section-title">New sessions on this device</div>
           ${renderThreadSettingsControls({ defaults: true })}
         </section>
+  `;
+}
+
+function renderWebhookSettingsSection() {
+  const webhook = state.webhook;
+  const busy = webhook.loading || webhook.saving;
+  const endpoint = webhookEndpointUrl();
+  const keyValue = webhook.key || (webhook.hasKey
+    ? webhookKeyHintDisplay(webhook.keyHint)
+    : t('Webhook key is not available.'));
+  return `
+        <section class="settings-section webhook-settings-section" aria-busy="${String(busy)}">
+          <div class="settings-section-title">Webhook</div>
+          <label class="settings-action-row webhook-toggle-row">
+            <span class="webhook-toggle-copy">
+              <strong>Enable webhook</strong>
+              ${!webhook.loaded && webhook.loading ? '<span class="meta">Loading webhook settings...</span>' : ''}
+            </span>
+            <input id="webhook-enabled-toggle" type="checkbox"${webhook.enabled ? ' checked' : ''}${!webhook.loaded || busy ? ' disabled' : ''}>
+          </label>
+          ${webhook.error ? `<div class="meta webhook-settings-error" role="alert">${escapeHtml(translateText(webhook.error))}</div>` : ''}
+          ${webhook.loaded && !webhook.enabled ? '<div class="meta">Webhook is disabled.</div>' : ''}
+          ${webhook.loaded && webhook.enabled ? `
+            <div class="webhook-settings-details">
+              <div class="settings-field webhook-settings-field">
+                <label class="settings-field-label" for="webhook-endpoint-input">Webhook endpoint</label>
+                <div class="webhook-value-row">
+                  <input id="webhook-endpoint-input" class="webhook-value-input" type="text" readonly spellcheck="false" value="${escapeAttribute(endpoint)}" data-i18n-skip>
+                  <button class="ghost compact-button" type="button" id="webhook-copy-endpoint-button"${!endpoint || busy ? ' disabled' : ''}>${webhook.endpointCopied ? 'Copied' : 'Copy'}</button>
+                </div>
+                ${webhook.endpointCopied ? '<span class="meta" role="status">Webhook endpoint copied.</span>' : ''}
+              </div>
+              <div class="settings-field webhook-settings-field">
+                <label class="settings-field-label" for="webhook-key-input">Webhook key</label>
+                <div class="webhook-value-row">
+                  <input id="webhook-key-input" class="webhook-value-input webhook-secret-input" type="text" readonly autocomplete="off" spellcheck="false" value="${escapeAttribute(keyValue)}" data-i18n-skip>
+                  <div class="webhook-key-actions">
+                    <button class="ghost compact-button" type="button" id="webhook-copy-key-button"${!webhook.key || busy ? ' disabled' : ''}>${webhook.keyCopied ? 'Copied' : 'Copy key'}</button>
+                    <button class="ghost compact-button" type="button" id="webhook-rotate-key-button"${busy ? ' disabled' : ''}>Regenerate key</button>
+                  </div>
+                </div>
+                ${webhook.keyCopied ? '<span class="meta" role="status">Webhook key copied.</span>' : ''}
+                ${webhook.hasKey && !webhook.key ? '<span class="meta">Regenerate this legacy key once to make it copyable.</span>' : ''}
+              </div>
+            </div>
+          ` : ''}
+        </section>
+  `;
+}
+
+function renderWebhookDialogs() {
+  return renderWebhookRotateConfirmDialog();
+}
+
+function renderWebhookRotateConfirmDialog() {
+  if (!state.webhookRotateConfirmOpen) {
+    return '';
+  }
+  const saving = state.webhook.saving;
+  return `
+      <div class="modal-backdrop webhook-modal-backdrop" data-modal-dismiss="webhook-rotate">
+        <section class="confirm-dialog webhook-dialog" role="dialog" aria-modal="true" aria-labelledby="webhook-rotate-title" data-focus-scope="webhook-rotate">
+          <div>
+            <h2 id="webhook-rotate-title">Regenerate webhook key?</h2>
+            <p class="meta">The current key will stop working immediately.</p>
+          </div>
+          <div class="actions">
+            <button class="ghost compact-button" type="button" id="webhook-rotate-cancel-button"${saving ? ' disabled' : ''} data-initial-focus>Cancel</button>
+            <button class="danger compact-button" type="button" id="webhook-rotate-confirm-button"${saving ? ' disabled' : ''}>Regenerate</button>
+          </div>
+        </section>
+      </div>
   `;
 }
 
@@ -4841,13 +4949,6 @@ function bindGlobalEvents() {
     });
   }
 
-  const railShowSessionsButton = document.querySelector('#rail-show-sessions-button');
-  if (railShowSessionsButton) {
-    listenRendered(railShowSessionsButton, 'click', () => {
-      showSessionList();
-    });
-  }
-
   const mobileSidebarToggleButton = document.querySelector('#mobile-sidebar-toggle-button');
   if (mobileSidebarToggleButton) {
     listenRendered(mobileSidebarToggleButton, 'click', () => {
@@ -5239,6 +5340,47 @@ function bindGlobalEvents() {
   if (siteTitleInput) {
     listenRendered(siteTitleInput, 'change', (event) => {
       void saveSiteTitle(event.target.value);
+    });
+  }
+
+  const webhookEnabledToggle = document.querySelector('#webhook-enabled-toggle');
+  if (webhookEnabledToggle) {
+    listenRendered(webhookEnabledToggle, 'change', (event) => {
+      rememberFocusReturn(webhookEnabledToggle);
+      void setWebhookEnabled(event.target.checked === true);
+    });
+  }
+
+  const webhookCopyEndpointButton = document.querySelector('#webhook-copy-endpoint-button');
+  if (webhookCopyEndpointButton) {
+    listenRendered(webhookCopyEndpointButton, 'click', () => {
+      void copyWebhookEndpoint();
+    });
+  }
+
+  const webhookRotateKeyButton = document.querySelector('#webhook-rotate-key-button');
+  if (webhookRotateKeyButton) {
+    listenRendered(webhookRotateKeyButton, 'click', () => {
+      requestWebhookKeyRotation(webhookRotateKeyButton);
+    });
+  }
+
+  const webhookRotateCancelButton = document.querySelector('#webhook-rotate-cancel-button');
+  if (webhookRotateCancelButton) {
+    listenRendered(webhookRotateCancelButton, 'click', cancelWebhookKeyRotation);
+  }
+
+  const webhookRotateConfirmButton = document.querySelector('#webhook-rotate-confirm-button');
+  if (webhookRotateConfirmButton) {
+    listenRendered(webhookRotateConfirmButton, 'click', () => {
+      void rotateWebhookKey();
+    });
+  }
+
+  const webhookCopyKeyButton = document.querySelector('#webhook-copy-key-button');
+  if (webhookCopyKeyButton) {
+    listenRendered(webhookCopyKeyButton, 'click', () => {
+      void copyWebhookKey();
     });
   }
 
@@ -6436,6 +6578,9 @@ function openAppSettingsPage() {
     state.desktopSettingsOpen = true;
     state.desktopOverlay = null;
     render();
+    if (!state.webhook.loaded && !state.webhook.loading) {
+      void refreshWebhookSettings();
+    }
     if (isAdminPrincipal() && state.admin.settings === null) {
       void refreshAdminSettings({ renderAfter: true });
     }
@@ -6448,6 +6593,9 @@ function openAppSettingsPage() {
   state.currentSession = null;
   resetTurnState();
   render();
+  if (!state.webhook.loaded && !state.webhook.loading) {
+    void refreshWebhookSettings();
+  }
   if (isAdminPrincipal() && state.admin.settings === null) {
     void refreshAdminSettings({ renderAfter: true });
   }
@@ -7769,14 +7917,7 @@ async function copyShareLink(url, { renderAfter = true } = {}) {
   if (!normalizedUrl) {
     return false;
   }
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(normalizedUrl);
-      return finalizeShareCopySuccess(normalizedUrl, { renderAfter });
-    }
-  } catch (_error) {
-  }
-  if (legacyCopyShareLink(normalizedUrl)) {
+  if (await copyTextToClipboard(normalizedUrl, '#share-link-input')) {
     return finalizeShareCopySuccess(normalizedUrl, { renderAfter });
   }
   state.status = 'Share link ready';
@@ -7787,8 +7928,23 @@ async function copyShareLink(url, { renderAfter = true } = {}) {
   return false;
 }
 
-function legacyCopyShareLink(url) {
-  const input = document.querySelector('#share-link-input');
+async function copyTextToClipboard(value, inputSelector = '') {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return false;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(normalized);
+      return true;
+    }
+  } catch (_error) {
+  }
+  return legacyCopyText(normalized, inputSelector);
+}
+
+function legacyCopyText(value, inputSelector) {
+  const input = inputSelector ? document.querySelector(inputSelector) : null;
   if (!input || typeof document.execCommand !== 'function') {
     return false;
   }
@@ -7796,7 +7952,7 @@ function legacyCopyShareLink(url) {
     input.focus?.();
     input.select?.();
     if (typeof input.setSelectionRange === 'function') {
-      input.setSelectionRange(0, String(input.value || url).length);
+      input.setSelectionRange(0, String(input.value || value).length);
     }
     return document.execCommand('copy') === true;
   } catch (_error) {
@@ -9331,6 +9487,278 @@ async function refreshSessionsList({
       render();
     }
   }
+}
+
+function createWebhookSettingsState() {
+  return {
+    enabled: false,
+    hasKey: false,
+    key: '',
+    keyHint: '',
+    endpointPath: '',
+    loaded: false,
+    loading: false,
+    saving: false,
+    endpointCopied: false,
+    keyCopied: false,
+    error: '',
+  };
+}
+
+function normalizeWebhookEndpointPath(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized.startsWith('/') || normalized.startsWith('//')) {
+    return '';
+  }
+  try {
+    const parsed = new URL(normalized, 'http://codex-web.local');
+    return `${parsed.pathname}${parsed.search}`;
+  } catch (_error) {
+    return '';
+  }
+}
+
+function normalizeWebhookKeyHint(value) {
+  return typeof value === 'string' ? value.trim().slice(-6) : '';
+}
+
+function webhookKeyHintDisplay(value) {
+  const hint = normalizeWebhookKeyHint(value);
+  return hint ? `cwwh_...${hint}` : 'cwwh_...******';
+}
+
+function webhookEndpointUrl() {
+  const endpointPath = normalizeWebhookEndpointPath(state.webhook.endpointPath);
+  const origin = String(window.location?.origin || '').trim().replace(/\/+$/u, '');
+  if (!endpointPath || !origin) {
+    return '';
+  }
+  try {
+    const endpoint = new URL(endpointPath, `${origin}/`);
+    const expectedOrigin = new URL(`${origin}/`).origin;
+    return endpoint.origin === expectedOrigin ? endpoint.toString() : '';
+  } catch (_error) {
+    return '';
+  }
+}
+
+function applyWebhookSettingsPayload(payload) {
+  const webhook = payload?.webhook && typeof payload.webhook === 'object'
+    ? payload.webhook
+    : {};
+  state.webhook = {
+    ...createWebhookSettingsState(),
+    enabled: webhook.enabled === true,
+    hasKey: webhook.hasKey === true,
+    key: webhookResponseKey(payload),
+    keyHint: normalizeWebhookKeyHint(webhook.keyHint),
+    endpointPath: normalizeWebhookEndpointPath(webhook.endpointPath),
+    loaded: true,
+  };
+  return state.webhook;
+}
+
+function webhookResponseKey(payload) {
+  return typeof payload?.key === 'string' ? payload.key.trim().slice(0, 1000) : '';
+}
+
+function webhookErrorMessage(error, fallback) {
+  return String(error?.payload?.message || error?.message || fallback || 'Could not update webhook settings.');
+}
+
+function handleWebhookRequestError(error, fallback, previous = state.webhook) {
+  if (error?.status === 401) {
+    handleApiError(error);
+    return;
+  }
+  state.webhook = {
+    ...previous,
+    loading: false,
+    saving: false,
+    endpointCopied: false,
+    keyCopied: false,
+    error: webhookErrorMessage(error, fallback),
+  };
+}
+
+async function refreshWebhookSettings({ renderAfter = true } = {}) {
+  if (!state.authSession || isShareContext() || state.webhook.loading) {
+    return null;
+  }
+  const requestGeneration = authRequestGeneration;
+  state.webhook = {
+    ...state.webhook,
+    loading: true,
+    endpointCopied: false,
+    keyCopied: false,
+    error: '',
+  };
+  if (renderAfter) {
+    render();
+  }
+  try {
+    const payload = await apiFetch('/api/webhook');
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
+    return applyWebhookSettingsPayload(payload);
+  } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
+    handleWebhookRequestError(error, 'Could not load webhook settings.');
+    return null;
+  } finally {
+    if (isAuthRequestCurrent(requestGeneration)) {
+      state.webhook.loading = false;
+      if (renderAfter) {
+        render();
+      }
+    }
+  }
+}
+
+async function setWebhookEnabled(enabled) {
+  if (
+    !state.authSession
+    || isShareContext()
+    || !state.webhook.loaded
+    || state.webhook.loading
+    || state.webhook.saving
+  ) {
+    return null;
+  }
+  const requestGeneration = authRequestGeneration;
+  const previous = { ...state.webhook };
+  state.webhook = {
+    ...state.webhook,
+    saving: true,
+    endpointCopied: false,
+    keyCopied: false,
+    error: '',
+  };
+  render();
+  try {
+    const payload = await apiFetch('/api/webhook', {
+      method: 'PATCH',
+      body: { enabled: enabled === true },
+    });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
+    return applyWebhookSettingsPayload(payload);
+  } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
+    handleWebhookRequestError(error, 'Could not update webhook settings.', previous);
+    return null;
+  } finally {
+    if (isAuthRequestCurrent(requestGeneration)) {
+      state.webhook.saving = false;
+      render();
+    }
+  }
+}
+
+function requestWebhookKeyRotation(focusTarget = document.activeElement) {
+  if (!state.webhook.loaded || !state.webhook.enabled || state.webhook.loading || state.webhook.saving) {
+    return false;
+  }
+  rememberFocusReturn(focusTarget);
+  state.webhookRotateConfirmOpen = true;
+  state.webhook.error = '';
+  render();
+  return true;
+}
+
+function cancelWebhookKeyRotation() {
+  if (!state.webhookRotateConfirmOpen || state.webhook.saving) {
+    return false;
+  }
+  requestFocusRestore();
+  state.webhookRotateConfirmOpen = false;
+  render();
+  return true;
+}
+
+async function rotateWebhookKey() {
+  if (
+    !state.authSession
+    || isShareContext()
+    || !state.webhookRotateConfirmOpen
+    || !state.webhook.enabled
+    || state.webhook.loading
+    || state.webhook.saving
+  ) {
+    return null;
+  }
+  const requestGeneration = authRequestGeneration;
+  const previous = { ...state.webhook };
+  state.webhook = {
+    ...state.webhook,
+    saving: true,
+    endpointCopied: false,
+    keyCopied: false,
+    error: '',
+  };
+  render();
+  try {
+    const payload = await apiFetch('/api/webhook/rotate', { method: 'POST' });
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
+    const webhook = applyWebhookSettingsPayload(payload);
+    state.webhookRotateConfirmOpen = false;
+    if (!webhook.key) {
+      requestFocusRestore();
+      state.webhook.error = 'Webhook key is not available.';
+    }
+    return webhook;
+  } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
+    state.webhookRotateConfirmOpen = false;
+    requestFocusRestore();
+    handleWebhookRequestError(error, 'Could not regenerate webhook key.', previous);
+    return null;
+  } finally {
+    if (isAuthRequestCurrent(requestGeneration)) {
+      state.webhook.saving = false;
+      render();
+    }
+  }
+}
+
+async function copyWebhookEndpoint() {
+  const endpoint = webhookEndpointUrl();
+  if (!endpoint || state.webhook.loading || state.webhook.saving) {
+    return false;
+  }
+  const copied = await copyTextToClipboard(endpoint, '#webhook-endpoint-input');
+  state.webhook.endpointCopied = copied;
+  state.webhook.error = copied ? '' : 'Could not copy webhook endpoint.';
+  render();
+  return copied;
+}
+
+async function copyWebhookKey() {
+  const key = state.webhook.key || '';
+  if (!key) {
+    return false;
+  }
+  const copied = await copyTextToClipboard(key, '#webhook-key-input');
+  if (state.webhook.key !== key) {
+    return copied;
+  }
+  state.webhook = {
+    ...state.webhook,
+    keyCopied: copied,
+    error: copied ? '' : 'Could not copy webhook key.',
+  };
+  render();
+  return copied;
 }
 
 async function refreshGlobalSettings({ renderAfter = true } = {}) {
@@ -12784,9 +13212,7 @@ function renderWorkspaceRailActions({ mobile = false } = {}) {
     ${showAdmin ? '<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">Admin Console</button>' : ''}
   `;
   }
-  const sessionsActive = !settingsActive && state.view !== 'new';
   return `
-    <button class="project-rail-action${sessionsActive ? ' is-active' : ''}" type="button" id="rail-show-sessions-button">Sessions</button>
     <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">Setting</button>
     ${showAdmin ? '<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">Admin Console</button>' : ''}
   `;

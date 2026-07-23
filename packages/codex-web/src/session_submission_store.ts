@@ -146,6 +146,22 @@ export class FileSessionSubmissionStore {
     });
   }
 
+  async withSessionCreationOperationLock<T>(
+    ownerUserId: string,
+    projectId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const lockPath = path.join(
+      `${this.submissionPath}.session-creation-locks`,
+      `${submissionKey(ownerUserId, projectId)}.lock`,
+    );
+    return withFileLock(lockPath, operation, {
+      staleMs: OPERATION_LOCK_STALE_MS,
+      timeoutMs: OPERATION_LOCK_TIMEOUT_MS,
+      retireClaimStaleMs: OPERATION_LOCK_STALE_MS,
+    });
+  }
+
   private async readFile(): Promise<SessionSubmissionFile> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.submissionPath, 'utf8')) as Partial<SessionSubmissionFile>;

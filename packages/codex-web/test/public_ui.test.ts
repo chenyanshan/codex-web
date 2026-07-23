@@ -1076,6 +1076,20 @@ test('opening app settings loads admin settings when the toggle state is not cac
   const { api } = await loadAppHarness({
     fetch: async (path) => {
       fetchCalls.push(path);
+      if (path === '/api/webhook') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            webhook: {
+              enabled: false,
+              hasKey: false,
+              keyHint: '',
+              endpointPath: '/api/webhook',
+            },
+          }),
+        };
+      }
       if (path === '/api/admin/settings') {
         return {
           ok: true,
@@ -1096,7 +1110,7 @@ test('opening app settings loads admin settings when the toggle state is not cac
   api.openAppSettingsPage();
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls, ['/api/admin/settings']);
+  assert.deepEqual(fetchCalls, ['/api/webhook', '/api/admin/settings']);
   assert.equal(api.state.admin.settings?.multiUserEnabled, true);
   assert.match(api.context.document.querySelector('#app').innerHTML, /id="admin-multi-user-toggle" type="checkbox" checked/u);
 });
@@ -2647,6 +2661,184 @@ test('app settings persist theme and default thread settings', async () => {
   assert.equal(api.state.permissionPreset, 'default');
   assert.equal(api.state.approvalPolicy, 'on-request');
   assert.equal(api.state.sandboxMode, 'workspace-write');
+});
+
+test('app settings render per-user webhook controls on mobile and desktop settings surfaces', async () => {
+  const { api, context } = await loadAppHarness();
+  context.window.location.origin = 'https://codex.example';
+  api.state.authSession = {
+    id: 'auth_single',
+    principal: { userId: 'local-admin', mode: 'single', isAdmin: true },
+  };
+  api.state.webhook = {
+    ...api.state.webhook,
+    enabled: true,
+    hasKey: true,
+    key: 'cwwh_render_secret',
+    keyHint: 'aa4f2a',
+    endpointPath: '/api/webhook',
+    loaded: true,
+  };
+
+  const mobileHtml = api.renderAppSettings().innerHTML;
+  const defaultsIndex = mobileHtml.indexOf('default-thread-settings-section');
+  const webhookIndex = mobileHtml.indexOf('webhook-settings-section');
+  const advancedIndex = mobileHtml.indexOf('>Advanced<');
+
+  assert.ok(defaultsIndex >= 0 && defaultsIndex < webhookIndex);
+  assert.ok(webhookIndex < advancedIndex);
+  assert.match(mobileHtml, /id="webhook-enabled-toggle" type="checkbox" checked/u);
+  assert.match(mobileHtml, /id="webhook-endpoint-input"[^>]*value="https:\/\/codex\.example\/api\/webhook"/u);
+  assert.match(mobileHtml, /id="webhook-key-input"[^>]*value="cwwh_render_secret"/u);
+  assert.match(mobileHtml, /id="webhook-copy-endpoint-button"/u);
+  assert.match(mobileHtml, /id="webhook-copy-key-button"[^>]*>Copy key<\/button>/u);
+  assert.match(mobileHtml, /id="webhook-rotate-key-button"/u);
+
+  api.state.webhook.key = '';
+  const legacyHtml = api.renderAppSettings().innerHTML;
+  assert.match(legacyHtml, /value="cwwh_\.\.\.aa4f2a"/u);
+  assert.match(legacyHtml, /id="webhook-copy-key-button" disabled/u);
+  assert.match(legacyHtml, /Regenerate this legacy key once to make it copyable\./u);
+  api.state.webhook.key = 'cwwh_render_secret';
+
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'user_member', mode: 'multi', isAdmin: false },
+  };
+  assert.match(api.renderAppSettings().innerHTML, /webhook-settings-section/u);
+
+  api.applyLanguage('zh-CN');
+  const chineseHtml = api.renderAppSettings().innerHTML;
+  assert.match(chineseHtml, /启用 Webhook/u);
+  assert.match(chineseHtml, /Webhook 接口地址/u);
+  assert.match(chineseHtml, /重新生成密钥/u);
+  assert.match(chineseHtml, /https:\/\/codex\.example\/api\/webhook/u);
+});
+
+test('webhook settings keep the recoverable key in memory across refresh without browser persistence', async () => {
+  const fetchCalls = [];
+  let currentKey = '';
+  let currentWebhook = {
+    enabled: false,
+    hasKey: false,
+    keyHint: '',
+    endpointPath: '/api/webhook',
+  };
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      fetchCalls.push({ path, options });
+      if (path === '/api/webhook' && (options.method || 'GET') === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ webhook: currentWebhook, key: currentKey || null }),
+        };
+      }
+      if (path === '/api/webhook' && options.method === 'PATCH') {
+        if (JSON.parse(options.body).enabled === true && !currentKey) {
+          currentKey = 'cwwh_first_secret';
+        }
+        currentWebhook = {
+          ...currentWebhook,
+          enabled: JSON.parse(options.body).enabled === true,
+          hasKey: Boolean(currentKey),
+          keyHint: currentKey.slice(-6),
+        };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ webhook: currentWebhook, key: currentKey || null }),
+        };
+      }
+      if (path === '/api/webhook/rotate' && options.method === 'POST') {
+        currentKey = 'cwwh_rotated_secret';
+        currentWebhook = {
+          ...currentWebhook,
+          enabled: true,
+          hasKey: true,
+          keyHint: currentKey.slice(-6),
+        };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ webhook: currentWebhook, key: currentKey }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'browser-session-token';
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'user_member', mode: 'multi', isAdmin: false },
+  };
+
+  await api.refreshWebhookSettings({ renderAfter: false });
+  assert.equal(api.state.webhook.loaded, true);
+  assert.equal(api.state.webhook.enabled, false);
+  assert.equal(api.state.webhook.endpointPath, '/api/webhook');
+
+  await api.setWebhookEnabled(true);
+  assert.equal(api.state.webhook.enabled, true);
+  assert.equal(api.state.webhook.key, 'cwwh_first_secret');
+  assert.equal(api.state.webhook.keyHint, 'secret');
+  assert.equal([...storage.values()].join('\n').includes('cwwh_first_secret'), false);
+  assert.deepEqual(JSON.parse(fetchCalls[1].options.body), { enabled: true });
+  assert.equal(fetchCalls[1].options.headers.Authorization, 'Bearer browser-session-token');
+
+  await api.refreshWebhookSettings({ renderAfter: false });
+  assert.equal(api.state.webhook.key, 'cwwh_first_secret');
+  assert.equal(fetchCalls[2].path, '/api/webhook');
+
+  assert.equal(api.requestWebhookKeyRotation({ id: 'webhook-rotate-key-button' }), true);
+  assert.equal(api.state.webhookRotateConfirmOpen, true);
+  assert.match(api.renderAppSettings().innerHTML, /Regenerate webhook key\?/u);
+
+  await api.rotateWebhookKey();
+  assert.equal(fetchCalls[3].path, '/api/webhook/rotate');
+  assert.equal(fetchCalls[3].options.method, 'POST');
+  assert.equal(api.state.webhook.key, 'cwwh_rotated_secret');
+  assert.equal(api.state.webhook.keyHint, 'secret');
+  assert.equal(api.state.webhookRotateConfirmOpen, false);
+  assert.equal([...storage.values()].join('\n').includes('cwwh_rotated_secret'), false);
+
+  api.setLoggedOut();
+  assert.equal(api.state.webhook.loaded, false);
+  assert.equal(api.state.webhook.key, '');
+  assert.equal(api.state.webhookRotateConfirmOpen, false);
+});
+
+test('webhook endpoint and persistent key copy through the shared clipboard helper', async () => {
+  const clipboardWrites = [];
+  const { api, context } = await loadAppHarness();
+  context.window.location.origin = 'https://codex.example';
+  context.navigator.clipboard = {
+    writeText: async (value) => {
+      clipboardWrites.push(value);
+    },
+  };
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'user_member', mode: 'multi', isAdmin: false },
+  };
+  api.state.webhook = {
+    ...api.state.webhook,
+    enabled: true,
+    hasKey: true,
+    key: 'cwwh_copy_secret',
+    keyHint: '00copy',
+    endpointPath: '/api/webhook',
+    loaded: true,
+  };
+  assert.equal(await api.copyWebhookEndpoint(), true);
+  assert.equal(api.state.webhook.endpointCopied, true);
+  assert.equal(await api.copyWebhookKey(), true);
+  assert.equal(api.state.webhook.keyCopied, true);
+  assert.deepEqual(clipboardWrites, [
+    'https://codex.example/api/webhook',
+    'cwwh_copy_secret',
+  ]);
+
 });
 
 test('reasoning options follow the selected model metadata', async () => {
@@ -12093,7 +12285,7 @@ test('desktop session file links open in the right-pane overlay and close back t
   assert.doesNotMatch(chatHtml, /session-file-viewer/u);
 });
 
-test('session topbar keeps New visually neutral and Settings in the rail', async () => {
+test('session topbar keeps New visually neutral and omits the redundant desktop Sessions action', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
   api.state.sortMode = 'favorites';
@@ -12104,7 +12296,7 @@ test('session topbar keeps New visually neutral and Settings in the rail', async
   assert.match(favoritesHtml, /id="open-new-session-button"[\s\S]*>New<\/button>/u);
   assert.doesNotMatch(favoritesHtml, /open-reports-button|>Reports<\/button>/u);
   assert.match(favoritesHtml, /class="ghost compact-button" type="button" id="open-new-session-button"/u);
-  assert.match(railHtml, /id="rail-show-sessions-button"[\s\S]*>Sessions<\/button>/u);
+  assert.doesNotMatch(railHtml, /id="rail-show-sessions-button"|>Sessions<\/button>/u);
   assert.match(railHtml, /class="project-rail-action" type="button" id="open-app-settings-button">Setting<\/button>/u);
   assert.doesNotMatch(favoritesHtml, /id="rail-open-new-session-button"/u);
   assert.doesNotMatch(favoritesHtml, /class="primary compact-button" type="button" id="open-new-session-button"/u);
@@ -15703,9 +15895,18 @@ globalThis.__codexWebTest = {
   toggleSessionFavorite: typeof toggleSessionFavorite === 'function' ? toggleSessionFavorite : null,
   archiveSession: typeof archiveSession === 'function' ? archiveSession : null,
   unarchiveSession: typeof unarchiveSession === 'function' ? unarchiveSession : null,
-	  reloadRuntime: typeof reloadRuntime === 'function' ? reloadRuntime : null,
-	  refreshGlobalSettings: typeof refreshGlobalSettings === 'function' ? refreshGlobalSettings : null,
-	  saveSiteTitle: typeof saveSiteTitle === 'function' ? saveSiteTitle : null,
+  reloadRuntime: typeof reloadRuntime === 'function' ? reloadRuntime : null,
+  refreshGlobalSettings: typeof refreshGlobalSettings === 'function' ? refreshGlobalSettings : null,
+  saveSiteTitle: typeof saveSiteTitle === 'function' ? saveSiteTitle : null,
+  refreshWebhookSettings: typeof refreshWebhookSettings === 'function' ? refreshWebhookSettings : null,
+  setWebhookEnabled: typeof setWebhookEnabled === 'function' ? setWebhookEnabled : null,
+  requestWebhookKeyRotation: typeof requestWebhookKeyRotation === 'function' ? requestWebhookKeyRotation : null,
+  cancelWebhookKeyRotation: typeof cancelWebhookKeyRotation === 'function' ? cancelWebhookKeyRotation : null,
+  rotateWebhookKey: typeof rotateWebhookKey === 'function' ? rotateWebhookKey : null,
+  copyWebhookEndpoint: typeof copyWebhookEndpoint === 'function' ? copyWebhookEndpoint : null,
+  copyWebhookKey: typeof copyWebhookKey === 'function' ? copyWebhookKey : null,
+  webhookEndpointUrl: typeof webhookEndpointUrl === 'function' ? webhookEndpointUrl : null,
+  setLoggedOut: typeof setLoggedOut === 'function' ? setLoggedOut : null,
 	  refreshAdminSessions: typeof refreshAdminSessions === 'function' ? refreshAdminSessions : null,
 	  saveAdminProject: typeof saveAdminProject === 'function' ? saveAdminProject : null,
 	  saveAdminRole: typeof saveAdminRole === 'function' ? saveAdminRole : null,

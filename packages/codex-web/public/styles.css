@@ -852,6 +852,68 @@ button:disabled {
   font-size: 11px;
 }
 
+.webhook-settings-section,
+.webhook-settings-details,
+.webhook-settings-field,
+.webhook-toggle-copy {
+  min-width: 0;
+}
+
+.webhook-toggle-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.webhook-toggle-row > input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+
+.webhook-settings-details {
+  display: grid;
+  gap: 0;
+}
+
+.webhook-value-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.webhook-key-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.webhook-value-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.webhook-settings-error {
+  color: var(--danger);
+}
+
+.webhook-modal-backdrop {
+  place-items: center;
+}
+
+.webhook-dialog {
+  gap: 10px;
+}
+
+.webhook-secret-input {
+  background: var(--bg);
+  color: var(--text);
+}
+
 .theme-picker {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3193,6 +3255,19 @@ pre.command {
 }
 
 @media (max-width: 360px) {
+  .webhook-value-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .webhook-value-row > .compact-button,
+  .webhook-key-actions {
+    width: 100%;
+  }
+
+  .webhook-key-actions .compact-button {
+    flex: 1 1 0;
+  }
+
   .theme-option {
     grid-template-columns: 24px minmax(0, 1fr);
     gap: 4px;

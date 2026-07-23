@@ -26,6 +26,7 @@ import type {
   CodexWebRole,
   CodexWebShare,
   CodexWebUser,
+  CodexWebWebhookCredential,
   FileIdentityStore,
 } from './identity_store.js';
 import { FileReportStore } from './report_store.js';
@@ -95,6 +96,11 @@ interface AuthenticatedRequestContext {
   session: PublicAuthSession;
 }
 
+interface CodexWebWebhookCredentialResult {
+  credential: CodexWebWebhookCredential | null;
+  key: string | null;
+}
+
 interface CodexWebIdentityStoreLike {
   readState(): Promise<CodexWebIdentityState>;
   setMultiUserEnabled?(enabled: boolean): Promise<CodexWebIdentityState>;
@@ -127,6 +133,10 @@ interface CodexWebIdentityStoreLike {
   createShare?(args: { sessionId: string; createdByUserId: string; ttlSeconds?: number }): ReturnType<FileIdentityStore['createShare']>;
   revokeShare?(shareId: string, revokedAt?: string): Promise<CodexWebShare | null>;
   findShareByToken?(token: string): Promise<string | null>;
+  getWebhookCredential?(ownerUserId: string): Promise<CodexWebWebhookCredential | null>;
+  setWebhookEnabled?(ownerUserId: string, enabled: boolean): Promise<CodexWebWebhookCredentialResult>;
+  rotateWebhookKey?(ownerUserId: string): Promise<CodexWebWebhookCredentialResult>;
+  findWebhookCredentialByToken?(token: string): Promise<CodexWebWebhookCredential | null>;
 }
 
 type ArchiveCapableRuntime = CodexWebRuntime & {
@@ -140,6 +150,10 @@ const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 const LOGIN_RATE_LIMIT_WINDOW_MS = 60_000;
 const LOGIN_RATE_LIMIT_PER_CLIENT = 10;
 const LOGIN_RATE_LIMIT_GLOBAL = 100;
+const WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
+const WEBHOOK_RATE_LIMIT_PER_KEY = 10;
+const WEBHOOK_RATE_LIMIT_GLOBAL = 100;
+const WEBHOOK_ENDPOINT_PATH = '/api/webhook';
 const BUILD_ID_PLACEHOLDER = '__CODEX_WEB_BUILD_ID__';
 const DEFAULT_SITE_TITLE = 'Codex Web';
 const STATIC_IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
@@ -201,6 +215,11 @@ export function createCodexWebServer({
     perClientLimit: LOGIN_RATE_LIMIT_PER_CLIENT,
     globalLimit: LOGIN_RATE_LIMIT_GLOBAL,
   });
+  const webhookRateLimiter = new FixedWindowRateLimiter({
+    windowMs: WEBHOOK_RATE_LIMIT_WINDOW_MS,
+    perClientLimit: WEBHOOK_RATE_LIMIT_PER_KEY,
+    globalLimit: WEBHOOK_RATE_LIMIT_GLOBAL,
+  });
   const sessionFileStore = providedSessionFileStore ?? new FileSessionFileStore();
   const sessionSubmissionStore = providedSessionSubmissionStore ?? new FileSessionSubmissionStore({
     stateDir: config.stateDir,
@@ -220,6 +239,7 @@ export function createCodexWebServer({
       sessionSubmissionStore,
       sessionSubmissionOperations,
       loginRateLimiter,
+      webhookRateLimiter,
       registerSseCloser: (close) => {
         activeSseClosers.add(close);
         return () => {
@@ -390,6 +410,7 @@ async function handleRequest({
   sessionSubmissionStore,
   sessionSubmissionOperations,
   loginRateLimiter,
+  webhookRateLimiter,
   registerSseCloser,
   closeSseConnections,
 }: {
@@ -404,6 +425,7 @@ async function handleRequest({
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   loginRateLimiter: FixedWindowRateLimiter;
+  webhookRateLimiter: FixedWindowRateLimiter;
   registerSseCloser: (close: () => void) => () => void;
   closeSseConnections: () => void;
 }): Promise<void> {
@@ -466,6 +488,20 @@ async function handleRequest({
     return;
   }
 
+  if (pathname === WEBHOOK_ENDPOINT_PATH && method === 'POST') {
+    await handleWebhookSessionRequest({
+      request,
+      response,
+      identityStore,
+      runtime,
+      config,
+      sessionSubmissionStore,
+      sessionSubmissionOperations,
+      webhookRateLimiter,
+    });
+    return;
+  }
+
   const shareHandled = await handlePublicShareRequest({
     pathname,
     method,
@@ -493,6 +529,17 @@ async function handleRequest({
 
   const identityState = identityStore ? await identityStore.readState() : null;
   const principal = authContext.session.principal ?? localAdminPrincipal();
+  const webhookManagementHandled = await handleWebhookManagementRequest({
+    request,
+    response,
+    pathname,
+    method,
+    principal,
+    identityStore,
+  });
+  if (webhookManagementHandled) {
+    return;
+  }
   const submissionHandled = await handleSessionSubmissionEndpoint({
     request,
     response,
@@ -1138,6 +1185,262 @@ async function authenticateRequest({
     return null;
   }
   return { token, session };
+}
+
+async function handleWebhookManagementRequest({
+  request,
+  response,
+  pathname,
+  method,
+  principal,
+  identityStore,
+}: {
+  request: IncomingMessage;
+  response: ServerResponse;
+  pathname: string;
+  method: string;
+  principal: CodexWebPrincipal;
+  identityStore: CodexWebIdentityStoreLike | null;
+}): Promise<boolean> {
+  if (pathname === '/api/webhook' && method === 'GET') {
+    if (!identityStore?.getWebhookCredential) {
+      writeJson(response, 501, { error: 'not_supported' });
+      return true;
+    }
+    const credential = await identityStore.getWebhookCredential(principal.userId);
+    writeJson(response, 200, webhookManagementPayload(credential));
+    return true;
+  }
+
+  if (pathname === '/api/webhook' && method === 'PATCH') {
+    if (!identityStore?.setWebhookEnabled) {
+      writeJson(response, 501, { error: 'not_supported' });
+      return true;
+    }
+    const body = await readJsonBody(request);
+    if (typeof body.enabled !== 'boolean') {
+      throw createHttpError(400, 'invalid_webhook_settings', 'enabled must be a boolean.');
+    }
+    const result = await identityStore.setWebhookEnabled(principal.userId, body.enabled);
+    writeJson(response, 200, webhookManagementPayload(result.credential));
+    return true;
+  }
+
+  if (pathname === '/api/webhook/rotate' && method === 'POST') {
+    if (!identityStore?.rotateWebhookKey) {
+      writeJson(response, 501, { error: 'not_supported' });
+      return true;
+    }
+    const result = await identityStore.rotateWebhookKey(principal.userId);
+    writeJson(response, 200, webhookManagementPayload(result.credential));
+    return true;
+  }
+
+  return false;
+}
+
+function webhookManagementPayload(
+  credential: CodexWebWebhookCredential | null,
+): { webhook: Record<string, unknown>; key: string | null } {
+  return {
+    webhook: {
+      enabled: credential?.enabled === true,
+      hasKey: Boolean(credential?.tokenHash),
+      keyHint: credential?.keyHint ?? null,
+      endpointPath: WEBHOOK_ENDPOINT_PATH,
+    },
+    key: credential?.key ?? null,
+  };
+}
+
+async function handleWebhookSessionRequest({
+  request,
+  response,
+  identityStore,
+  runtime,
+  config,
+  sessionSubmissionStore,
+  sessionSubmissionOperations,
+  webhookRateLimiter,
+}: {
+  request: IncomingMessage;
+  response: ServerResponse;
+  identityStore: CodexWebIdentityStoreLike | null;
+  runtime: CodexWebRuntime;
+  config: CodexWebConfig;
+  sessionSubmissionStore: FileSessionSubmissionStore;
+  sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
+  webhookRateLimiter: FixedWindowRateLimiter;
+}): Promise<void> {
+  const token = extractBearerToken(request);
+  const rateLimit = webhookRateLimiter.take(webhookRateLimitClientId(request, token));
+  if (!rateLimit.allowed) {
+    const retryAfterSeconds = Math.ceil(rateLimit.retryAfterMs / 1_000);
+    writeJson(response, 429, {
+      error: 'rate_limited',
+      message: 'Too many webhook requests. Try again later.',
+      retryAfterSeconds,
+    }, {
+      'Retry-After': String(retryAfterSeconds),
+    });
+    return;
+  }
+  if (!token || !identityStore?.findWebhookCredentialByToken) {
+    writeWebhookUnauthorized(response);
+    return;
+  }
+  const credential = await identityStore.findWebhookCredentialByToken(token);
+  if (!credential || credential.enabled !== true) {
+    writeWebhookUnauthorized(response);
+    return;
+  }
+  const identityState = await identityStore.readState();
+  const currentCredential = identityState.webhookCredentials.find((item) => (
+    item.id === credential.id
+    && item.ownerUserId === credential.ownerUserId
+    && item.enabled === true
+    && item.tokenHash === credential.tokenHash
+  ));
+  if (!currentCredential) {
+    writeWebhookUnauthorized(response);
+    return;
+  }
+  const principal = webhookPrincipalForCredential(identityState, currentCredential);
+  if (!principal) {
+    writeWebhookUnauthorized(response);
+    return;
+  }
+
+  const idempotencyKey = normalizeWebhookIdempotencyKey(request.headers['idempotency-key']);
+  const rawBody = await readJsonBody(request);
+  const revalidatedIdentityState = await identityStore.readState();
+  const revalidatedCredential = revalidatedIdentityState.webhookCredentials.find((item) => (
+    item.id === currentCredential.id
+    && item.ownerUserId === currentCredential.ownerUserId
+    && item.enabled === true
+    && item.tokenHash === currentCredential.tokenHash
+  ));
+  const revalidatedPrincipal = revalidatedCredential
+    ? webhookPrincipalForCredential(revalidatedIdentityState, revalidatedCredential)
+    : null;
+  if (!revalidatedCredential || !revalidatedPrincipal) {
+    writeWebhookUnauthorized(response);
+    return;
+  }
+  const body = normalizeWebhookSessionBody(rawBody, revalidatedIdentityState, revalidatedPrincipal);
+  const execution = await submitSessionSubmission({
+    body: {
+      ...body,
+      submissionId: `webhook:${crypto.createHash('sha256').update(idempotencyKey).digest('hex')}`,
+      settings: {},
+    },
+    forcedSessionId: null,
+    principal: revalidatedPrincipal,
+    identityStore,
+    identityState: revalidatedIdentityState,
+    runtime,
+    config,
+    store: sessionSubmissionStore,
+    operations: sessionSubmissionOperations,
+  });
+  writeJson(response, execution.created ? 201 : 200, execution.response);
+}
+
+function webhookRateLimitClientId(request: IncomingMessage, token: string | null): string {
+  if (!token) {
+    return `address:${getClientAddress(request)}`;
+  }
+  return `token:${crypto.createHash('sha256').update(token).digest('base64url')}`;
+}
+
+function webhookPrincipalForCredential(
+  state: CodexWebIdentityState,
+  credential: CodexWebWebhookCredential,
+): CodexWebPrincipal | null {
+  const singlePrincipal = localAdminPrincipal();
+  if (state.settings.multiUserEnabled !== true) {
+    return credential.ownerUserId === singlePrincipal.userId ? singlePrincipal : null;
+  }
+  if (credential.ownerUserId === singlePrincipal.userId) {
+    return null;
+  }
+  const user = state.users.find((item) => item.id === credential.ownerUserId && item.enabled !== false);
+  if (!user) {
+    return null;
+  }
+  return {
+    userId: user.id,
+    username: user.username,
+    roleIds: [...user.roleIds],
+    isAdmin: user.roleIds.some((roleId) => state.roles.some((role) => role.id === roleId && role.isAdmin === true)),
+    mode: 'multi',
+  };
+}
+
+function normalizeWebhookIdempotencyKey(value: string | string[] | undefined): string {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized || normalized.length > 256) {
+    throw createHttpError(
+      400,
+      'invalid_idempotency_key',
+      'Idempotency-Key must contain between 1 and 256 characters.',
+    );
+  }
+  return normalized;
+}
+
+function normalizeWebhookSessionBody(
+  body: Record<string, unknown>,
+  identityState: CodexWebIdentityState,
+  principal: CodexWebPrincipal,
+): Record<string, unknown> {
+  const allowedFields = new Set(['text', 'projectId', 'title']);
+  if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+    throw createHttpError(
+      400,
+      'invalid_webhook_payload',
+      'Webhook session requests only accept text, projectId, and title.',
+    );
+  }
+  if (typeof body.text !== 'string' || !body.text.trim()) {
+    throw createHttpError(400, 'invalid_webhook_payload', 'text is required.');
+  }
+  if (body.title !== undefined && typeof body.title !== 'string') {
+    throw createHttpError(400, 'invalid_webhook_payload', 'title must be a string.');
+  }
+
+  const hasProjectId = Object.prototype.hasOwnProperty.call(body, 'projectId');
+  if (identityState.settings.multiUserEnabled === true) {
+    const projectId = typeof body.projectId === 'string' ? body.projectId.trim() : '';
+    if (!projectId) {
+      throw createHttpError(400, 'invalid_webhook_payload', 'projectId is required in multi-user mode.');
+    }
+    const project = findProject(identityState, projectId);
+    if (
+      !project
+      || project.enabled === false
+      || !canCreateProjectSession(identityState, principal, project.id)
+    ) {
+      throw createHttpError(404, 'project_not_found', 'Project was not found.');
+    }
+    return {
+      text: body.text,
+      projectId: project.id,
+      ...(body.title !== undefined ? { title: body.title } : {}),
+    };
+  }
+
+  if (hasProjectId) {
+    throw createHttpError(400, 'invalid_webhook_payload', 'projectId is not accepted in single-user mode.');
+  }
+  return {
+    text: body.text,
+    ...(body.title !== undefined ? { title: body.title } : {}),
+  };
+}
+
+function writeWebhookUnauthorized(response: ServerResponse): void {
+  writeJson(response, 401, { error: 'Unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
 }
 
 async function handlePublicShareRequest({
@@ -1912,54 +2215,60 @@ async function createSessionForSubmission({
   if (!identityStore || !identityState || !record.sessionId) {
     throw createHttpError(503, 'identity_store_unavailable', 'Multi-user identity state is unavailable.');
   }
-  const freshState = await identityStore.readState();
-  const project = findProject(freshState, record.payload.projectId ?? '');
-  if (!project || !canCreateSubmissionInProject(freshState, principal, project)) {
-    throw createHttpError(404, 'session_not_found', 'Session was not found.');
-  }
-  if (!principal.isAdmin) {
-    const activeSessionLimit = activeSessionLimitForProject(project);
-    if (activeSessionLimit !== null && countActiveSessions(freshState, principal.userId, project.id) >= activeSessionLimit) {
-      throw createHttpError(409, 'active_session_limit_reached', 'Archive an existing session before creating a new one.');
+  return store.withSessionCreationOperationLock(
+    principal.userId,
+    record.payload.projectId ?? '',
+    async () => {
+      const freshState = await identityStore.readState();
+      const project = findProject(freshState, record.payload.projectId ?? '');
+      if (!project || !canCreateSubmissionInProject(freshState, principal, project)) {
+        throw createHttpError(404, 'session_not_found', 'Session was not found.');
+      }
+      if (!principal.isAdmin) {
+        const activeSessionLimit = activeSessionLimitForProject(project);
+        if (activeSessionLimit !== null && countActiveSessions(freshState, principal.userId, project.id) >= activeSessionLimit) {
+          throw createHttpError(409, 'active_session_limit_reached', 'Archive an existing session before creating a new one.');
+        }
+      }
+      const runtimeSession = await runtime.createSession({
+        title: record.payload.title,
+        settings: record.payload.settings,
+        cwd: project.cwd,
+      });
+      const updatedRecord = await store.update(record.ownerUserId, record.id, (value) => ({
+        ...value,
+        runtimeSessionId: runtimeSession.id,
+        status: 'creating',
+        updatedAt: new Date().toISOString(),
+      }));
+      const now = new Date().toISOString();
+      const appSession = await identityStore.upsertSession({
+        id: updatedRecord.sessionId!,
+        codexThreadId: runtimeSession.id,
+        projectId: project.id,
+        ownerUserId: principal.userId,
+        createdAt: now,
+        updatedAt: now,
+        archived: false,
+        archivedAt: null,
+        archivedByUserId: null,
+        archiveSource: null,
+      });
+      await store.update(record.ownerUserId, record.id, (value) => ({
+        ...value,
+        status: 'starting',
+        updatedAt: new Date().toISOString(),
+      }));
+      return {
+        externalSessionId: appSession.id,
+        runtimeSessionId: runtimeSession.id,
+        runtimeSession,
+        appSession,
+        project,
+        identityState: await identityStore.readState(),
+      };
     }
-  }
-  const runtimeSession = await runtime.createSession({
-    title: record.payload.title,
-    settings: record.payload.settings,
-    cwd: project.cwd,
-  });
-  const updatedRecord = await store.update(record.ownerUserId, record.id, (value) => ({
-    ...value,
-    runtimeSessionId: runtimeSession.id,
-    status: 'creating',
-    updatedAt: new Date().toISOString(),
-  }));
-  const now = new Date().toISOString();
-  const appSession = await identityStore.upsertSession({
-    id: updatedRecord.sessionId!,
-    codexThreadId: runtimeSession.id,
-    projectId: project.id,
-    ownerUserId: principal.userId,
-    createdAt: now,
-    updatedAt: now,
-    archived: false,
-    archivedAt: null,
-    archivedByUserId: null,
-    archiveSource: null,
-  });
-  await store.update(record.ownerUserId, record.id, (value) => ({
-    ...value,
-    status: 'starting',
-    updatedAt: new Date().toISOString(),
-  }));
-  return {
-    externalSessionId: appSession.id,
-    runtimeSessionId: runtimeSession.id,
-    runtimeSession,
-    appSession,
-    project,
-    identityState: await identityStore.readState(),
-  };
+  );
 }
 
 async function authorizeStoredSessionSubmission({
@@ -2198,7 +2507,19 @@ async function presentSessionSubmissionResponse({
 }): Promise<Record<string, unknown>> {
   let session: unknown = null;
   if (current.runtimeSessionId) {
-    const runtimeSession = await runtime.readSession(current.runtimeSessionId);
+    // Session details are optional response enrichment; a transient read failure
+    // must not turn an already-persisted submission into an HTTP failure.
+    const runtimeSession = await runtime.readSession(current.runtimeSessionId).catch((error) => {
+      writeInternalWarning({
+        code: 'session_response_hydration_failed',
+        message: error instanceof Error ? error.message : String(error),
+        context: {
+          submissionId: current.id,
+          runtimeSessionId: current.runtimeSessionId!,
+        },
+      });
+      return null;
+    });
     if (runtimeSession) {
       if (isMultiUserSubmission(identityState, principal) && identityStore && current.sessionId) {
         const freshState = await identityStore.readState();
@@ -6144,6 +6465,24 @@ function writeRequestLog({
     message,
   };
   process.stderr.write(`[codex-web] ${JSON.stringify(payload)}\n`);
+}
+
+function writeInternalWarning({
+  code,
+  message,
+  context = {},
+}: {
+  code: string;
+  message: string;
+  context?: Record<string, string>;
+}): void {
+  process.stderr.write(`[codex-web] ${JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'warn',
+    code,
+    message,
+    ...context,
+  })}\n`);
 }
 
 function writeSetupRequiredJson(response: ServerResponse): void {

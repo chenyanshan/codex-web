@@ -10,7 +10,9 @@ const portArgument = process.argv.find((argument) => argument.startsWith('--port
 const port = Number(portArgument?.slice('--port='.length) || process.env.PORT || 41739);
 const fixtureBuildId = '__CODEX_WEB_BUILD_ID__';
 const activeTurnStreams = new Map();
+const webhookSettingsByAuthorization = new Map();
 let activeTurnEventSequence = 100;
+let webhookKeySequence = 0;
 
 const fixtureSession = {
   id: 'session_browser_fixture',
@@ -302,6 +304,56 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (pathname === '/api/webhook' && request.method === 'GET') {
+      const authorization = request.headers.authorization || '';
+      const current = webhookSettingsByAuthorization.get(authorization) ?? emptyWebhookCredentialState();
+      sendJson(response, 200, {
+        webhook: current.webhook,
+        key: current.key,
+      });
+      return;
+    }
+
+    if (pathname === '/api/webhook' && request.method === 'PATCH') {
+      const authorization = request.headers.authorization || '';
+      const body = await readJsonObject(request);
+      const current = webhookSettingsByAuthorization.get(authorization) ?? emptyWebhookCredentialState();
+      const enabled = body.enabled === true;
+      let key = current.key;
+      let webhook = { ...current.webhook, enabled };
+      if (enabled && !current.webhook.hasKey) {
+        key = createFixtureWebhookKey();
+        webhook = { ...webhook, hasKey: true, keyHint: key.slice(-6) };
+      }
+      webhookSettingsByAuthorization.set(authorization, { webhook, key });
+      sendJson(response, 200, {
+        webhook,
+        key,
+      });
+      return;
+    }
+
+    if (pathname === '/api/webhook/rotate' && request.method === 'POST') {
+      const authorization = request.headers.authorization || '';
+      const current = webhookSettingsByAuthorization.get(authorization) ?? emptyWebhookCredentialState();
+      const key = createFixtureWebhookKey();
+      const webhook = {
+        ...current.webhook,
+        enabled: true,
+        hasKey: true,
+        keyHint: key.slice(-6),
+      };
+      webhookSettingsByAuthorization.set(authorization, { webhook, key });
+      sendJson(response, 200, { webhook, key });
+      return;
+    }
+
+    if (pathname === '/__test/reset-webhook' && request.method === 'POST') {
+      webhookSettingsByAuthorization.delete(request.headers.authorization || '');
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
     if (pathname === '/__test/turn-event' && request.method === 'POST') {
       let body = '';
       for await (const chunk of request) {
@@ -457,6 +509,36 @@ function sendText(response, status, body) {
     'Content-Type': 'text/plain; charset=utf-8',
   });
   response.end(body);
+}
+
+async function readJsonObject(request) {
+  let body = '';
+  for await (const chunk of request) {
+    body += chunk;
+  }
+  const parsed = JSON.parse(body || '{}');
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+function emptyWebhookSettings() {
+  return {
+    enabled: false,
+    hasKey: false,
+    keyHint: null,
+    endpointPath: '/api/webhook',
+  };
+}
+
+function emptyWebhookCredentialState() {
+  return {
+    webhook: emptyWebhookSettings(),
+    key: null,
+  };
+}
+
+function createFixtureWebhookKey() {
+  webhookKeySequence += 1;
+  return `cwwh_browser_fixture_${String(webhookKeySequence).padStart(6, '0')}`;
 }
 
 function sendFileContent(response, file, download) {

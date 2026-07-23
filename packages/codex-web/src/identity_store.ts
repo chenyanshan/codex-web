@@ -81,6 +81,17 @@ export interface CodexWebUserSession {
   userId: string;
 }
 
+export interface CodexWebWebhookCredential {
+  id: string;
+  ownerUserId: string;
+  enabled: boolean;
+  key: string | null;
+  tokenHash: string;
+  keyHint: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CodexWebIdentityState {
   settings: {
     multiUserEnabled: boolean;
@@ -92,6 +103,7 @@ export interface CodexWebIdentityState {
   sessions: CodexWebAppSession[];
   shares: CodexWebShare[];
   userSessions: CodexWebUserSession[];
+  webhookCredentials: CodexWebWebhookCredential[];
 }
 
 export interface UpsertUserWithPasswordInput {
@@ -282,6 +294,7 @@ export class FileIdentityStore {
       state.sessions = state.sessions.filter((session) => session.ownerUserId !== normalizedUserId);
       state.shares = state.shares.filter((share) => share.createdByUserId !== normalizedUserId && !removedSessionIds.has(share.sessionId));
       state.userSessions = state.userSessions.filter((session) => session.userId !== normalizedUserId);
+      state.webhookCredentials = state.webhookCredentials.filter((credential) => credential.ownerUserId !== normalizedUserId);
       await this.writeState(state);
     });
   }
@@ -461,6 +474,96 @@ export class FileIdentityStore {
     ))?.id ?? null;
   }
 
+  async getWebhookCredential(ownerUserId: string): Promise<CodexWebWebhookCredential | null> {
+    const normalizedOwnerUserId = normalizeRequiredId(ownerUserId, 'webhook owner user id');
+    const state = await this.readState();
+    return state.webhookCredentials.find((credential) => credential.ownerUserId === normalizedOwnerUserId) ?? null;
+  }
+
+  async setWebhookEnabled(
+    ownerUserId: string,
+    enabled: boolean,
+  ): Promise<{ credential: CodexWebWebhookCredential | null; key: string | null }> {
+    return this.withMutationLock(async () => {
+      const normalizedOwnerUserId = normalizeRequiredId(ownerUserId, 'webhook owner user id');
+      const state = await this.readState();
+      const existing = state.webhookCredentials.find(
+        (credential) => credential.ownerUserId === normalizedOwnerUserId,
+      );
+      if (!existing && !enabled) {
+        return { credential: null, key: null };
+      }
+      if (!existing) {
+        const key = createWebhookKey();
+        const now = new Date().toISOString();
+        const credential: CodexWebWebhookCredential = {
+          id: crypto.randomUUID(),
+          ownerUserId: normalizedOwnerUserId,
+          enabled: true,
+          key,
+          tokenHash: hashToken(key),
+          keyHint: webhookKeyHint(key),
+          createdAt: now,
+          updatedAt: now,
+        };
+        state.webhookCredentials = [...state.webhookCredentials, credential];
+        await this.writeState(state);
+        return { credential, key: credential.key };
+      }
+      if (existing.enabled === enabled) {
+        return { credential: existing, key: existing.key };
+      }
+      const credential: CodexWebWebhookCredential = {
+        ...existing,
+        enabled,
+        updatedAt: new Date().toISOString(),
+      };
+      state.webhookCredentials = upsertById(state.webhookCredentials, credential);
+      await this.writeState(state);
+      return { credential, key: credential.key };
+    });
+  }
+
+  async rotateWebhookKey(
+    ownerUserId: string,
+  ): Promise<{ credential: CodexWebWebhookCredential; key: string }> {
+    return this.withMutationLock(async () => {
+      const normalizedOwnerUserId = normalizeRequiredId(ownerUserId, 'webhook owner user id');
+      const state = await this.readState();
+      const existing = state.webhookCredentials.find(
+        (credential) => credential.ownerUserId === normalizedOwnerUserId,
+      );
+      const key = createWebhookKey();
+      const now = new Date().toISOString();
+      const credential: CodexWebWebhookCredential = {
+        id: existing?.id ?? crypto.randomUUID(),
+        ownerUserId: normalizedOwnerUserId,
+        enabled: existing?.enabled ?? true,
+        key,
+        tokenHash: hashToken(key),
+        keyHint: webhookKeyHint(key),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      state.webhookCredentials = upsertById(state.webhookCredentials, credential);
+      await this.writeState(state);
+      return { credential, key };
+    });
+  }
+
+  async findWebhookCredentialByToken(token: string): Promise<CodexWebWebhookCredential | null> {
+    const normalizedToken = String(token ?? '').trim();
+    if (!isWebhookKey(normalizedToken)) {
+      return null;
+    }
+    const tokenHash = hashToken(normalizedToken);
+    const state = await this.readState();
+    return state.webhookCredentials.find((credential) => (
+      credential.enabled === true
+      && safeEqual(credential.tokenHash, tokenHash)
+    )) ?? null;
+  }
+
   private async writeState(state: CodexWebIdentityState): Promise<void> {
     await fs.mkdir(path.dirname(this.identityPath), { recursive: true, mode: 0o700 });
     const payload = `${JSON.stringify(normalizeState(state), null, 2)}\n`;
@@ -502,6 +605,7 @@ function emptyState(): CodexWebIdentityState {
     sessions: [],
     shares: [],
     userSessions: [],
+    webhookCredentials: [],
   };
 }
 
@@ -514,6 +618,7 @@ function normalizeState(value: unknown): CodexWebIdentityState {
     throw new Error('Invalid identity state: settings must be an object');
   }
   const settings = isRecord(record.settings) ? record.settings : {};
+  const webhookCredentials = normalizeWebhookCredentials(record);
   return {
     settings: {
       multiUserEnabled: settings.multiUserEnabled === true,
@@ -525,6 +630,7 @@ function normalizeState(value: unknown): CodexWebIdentityState {
     sessions: normalizeStateCollection(record, 'sessions', normalizeAppSessionOrNull),
     shares: normalizeStateCollection(record, 'shares', normalizeShareOrNull),
     userSessions: normalizeStateCollection(record, 'userSessions', normalizeUserSessionOrNull),
+    webhookCredentials,
   };
 }
 
@@ -668,6 +774,86 @@ function normalizeUserSession(session: CodexWebUserSession): CodexWebUserSession
   };
 }
 
+function normalizeWebhookCredentialOrNull(value: unknown): CodexWebWebhookCredential | null {
+  if (
+    !isRecord(value)
+    || typeof value.id !== 'string'
+    || !value.id.trim()
+    || typeof value.ownerUserId !== 'string'
+    || !value.ownerUserId.trim()
+    || typeof value.enabled !== 'boolean'
+    || typeof value.tokenHash !== 'string'
+    || !value.tokenHash.trim()
+    || typeof value.keyHint !== 'string'
+    || !value.keyHint.trim()
+    || typeof value.createdAt !== 'string'
+    || !value.createdAt.trim()
+    || typeof value.updatedAt !== 'string'
+    || !value.updatedAt.trim()
+  ) {
+    return null;
+  }
+  const key = value.key === undefined || value.key === null
+    ? null
+    : typeof value.key === 'string'
+      ? value.key.trim()
+      : null;
+  if (
+    value.key !== undefined
+    && value.key !== null
+    && typeof value.key !== 'string'
+  ) {
+    return null;
+  }
+  const tokenHash = value.tokenHash.trim();
+  const keyHint = value.keyHint.trim();
+  if (
+    key !== null
+    && (
+      value.key !== key
+      || value.keyHint !== keyHint
+      || value.tokenHash !== tokenHash
+      || !isWebhookKey(key)
+      || keyHint !== webhookKeyHint(key)
+      || !safeEqual(tokenHash, hashToken(key))
+    )
+  ) {
+    return null;
+  }
+  return {
+    id: value.id.trim(),
+    ownerUserId: value.ownerUserId.trim(),
+    enabled: value.enabled,
+    key,
+    tokenHash,
+    keyHint,
+    createdAt: value.createdAt.trim(),
+    updatedAt: value.updatedAt.trim(),
+  };
+}
+
+function normalizeWebhookCredentials(record: Record<string, any>): CodexWebWebhookCredential[] {
+  const credentials = normalizeStateCollection(record, 'webhookCredentials', normalizeWebhookCredentialOrNull);
+  const ids = new Set<string>();
+  const ownerUserIds = new Set<string>();
+  const tokenHashes = new Set<string>();
+  for (const credential of credentials) {
+    if (ids.has(credential.id)) {
+      throw new Error('Invalid identity state: webhookCredentials contains a duplicate id');
+    }
+    if (ownerUserIds.has(credential.ownerUserId)) {
+      throw new Error('Invalid identity state: webhookCredentials contains a duplicate ownerUserId');
+    }
+    if (tokenHashes.has(credential.tokenHash)) {
+      throw new Error('Invalid identity state: webhookCredentials contains a duplicate tokenHash');
+    }
+    ids.add(credential.id);
+    ownerUserIds.add(credential.ownerUserId);
+    tokenHashes.add(credential.tokenHash);
+  }
+  return credentials;
+}
+
 function normalizeProjectGrants(value: unknown): CodexWebProjectGrant[] {
   if (!Array.isArray(value)) {
     return [];
@@ -794,6 +980,18 @@ function hashPassword(password: string, salt: string, iterations: number): Promi
 
 function createShareToken(): string {
   return `cws_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function createWebhookKey(): string {
+  return `cwwh_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function isWebhookKey(key: string): boolean {
+  return /^cwwh_[A-Za-z0-9_-]{43}$/u.test(key);
+}
+
+function webhookKeyHint(key: string): string {
+  return key.slice(-6);
 }
 
 function hashToken(token: string): string {

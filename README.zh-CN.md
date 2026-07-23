@@ -212,6 +212,31 @@ CODEX_WEB_HOST=127.0.0.1
 `CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS` 配置，最长不超过 7 天。链接被撤销或多人模式
 关闭后也会立即失效。分享 URL 本质上是 bearer capability，必须按凭据保护。
 
+### 用户 Webhook
+
+每个已登录用户都可以在设置中开启一个 webhook key。当前 key 会一直显示在设置页，
+可以随时复制，直到重新生成。为支持这个体验，Codex Web 会在权限为 `0600` 的本机
+`identity.json` 中同时保存可恢复 key 和用于校验的哈希；浏览器只在内存中持有 key，
+不会写入 local storage。旧版仅保存哈希的 key 需要重新生成一次，之后即可持续复制。
+调用时应把 key 放在 `Authorization` header 中，不要放进 URL：
+
+```bash
+curl -X POST https://codex-web.example/api/webhook \
+  -H 'Authorization: Bearer cwwh_REPLACE_ME' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: external-event-123' \
+  -d '{"projectId":"project_main","title":"外部任务","text":"处理这个任务"}'
+```
+
+必须提供 `Idempotency-Key`，相同内容的重试会被去重，不会再创建一个 session。
+多人模式下必须指定 key 所属用户有权创建的 project；单用户模式省略 `projectId`，
+并使用 `CODEX_WEB_DEFAULT_CWD`。
+
+请求会创建 session 并启动第一个 turn。调用方不能覆盖 Codex 权限或 sandbox 设置，
+turn 使用服务端 runtime 默认值；当前默认是 `danger-full-access` 和
+`approvalPolicy=never`。Webhook key 可以在这台 Mac 上触发 Codex 工作，应当按密码
+级别保护。
+
 ### 浏览器缓存与弱网
 
 Codex Web 会先显示本机浏览器缓存的会话摘要，再在后台向宿主机刷新。浏览器还会

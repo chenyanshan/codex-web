@@ -38,6 +38,7 @@ export {
   type CodexWebRole,
   type CodexWebShare,
   type CodexWebUser,
+  type CodexWebWebhookCredential,
   type UpdateUserAccessInput,
 } from './identity_store.js';
 export {

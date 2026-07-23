@@ -241,6 +241,34 @@ default to a 24-hour TTL set by `CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS` and are
 capped at seven days. A share is also invalid after revocation or after
 multi-user mode is disabled. Treat a share URL as a bearer capability.
 
+### User webhooks
+
+Each authenticated user can enable one webhook key from Settings. The current
+key remains visible and copyable there until it is regenerated. To support that,
+Codex Web stores the recoverable key alongside its validation hash in the local
+`identity.json`, which is restricted to mode `0600`; the browser keeps it only in
+memory and never writes it to local storage. Legacy hash-only keys must be
+regenerated once before they can be copied. Send the key in the `Authorization`
+header, not in the URL:
+
+```bash
+curl -X POST https://codex-web.example/api/webhook \
+  -H 'Authorization: Bearer cwwh_REPLACE_ME' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: external-event-123' \
+  -d '{"projectId":"project_main","title":"External task","text":"Handle this task"}'
+```
+
+`Idempotency-Key` is required so matching retries are deduplicated instead of
+creating another session. Multi-user requests must name a project the key owner
+can create in.
+Single-user requests omit `projectId` and use `CODEX_WEB_DEFAULT_CWD`.
+
+The request creates a session and starts its first turn. Callers cannot override
+Codex permission or sandbox settings; the turn uses the server runtime defaults,
+which currently default to `danger-full-access` with `approvalPolicy=never`.
+Treat a webhook key like a password capable of starting Codex work on the Mac.
+
 ### Browser cache and weak networks
 
 Codex Web shows cached session summaries immediately and then refreshes them

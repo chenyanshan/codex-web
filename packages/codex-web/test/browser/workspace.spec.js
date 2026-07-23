@@ -742,6 +742,62 @@ test('settings keep appearance and new-session defaults separated without overfl
   });
 });
 
+test('webhook settings keep the key copyable after enable and rotation', async ({ page, context }, testInfo) => {
+  test.skip(
+    !['mobile-compact', 'desktop'].includes(testInfo.project.name),
+    'One mobile and one desktop viewport cover the webhook flow.',
+  );
+
+  const authorization = `Bearer browser-fixture-token-${testInfo.project.name}-${testInfo.workerIndex}`;
+  await page.request.post('/__test/reset-webhook', { headers: { Authorization: authorization } });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/');
+  if (testInfo.project.name === 'mobile-compact') {
+    await page.locator('#mobile-sidebar-toggle-button').click();
+  }
+  await page.locator('#open-app-settings-button').click();
+
+  const webhookSection = page.locator('.webhook-settings-section');
+  await expect(webhookSection).toBeVisible();
+  const enabledToggle = webhookSection.locator('#webhook-enabled-toggle');
+  await expect(enabledToggle).toBeEnabled();
+  await enabledToggle.check();
+
+  const keyInput = webhookSection.locator('#webhook-key-input');
+  const copyKeyButton = webhookSection.locator('#webhook-copy-key-button');
+  const firstKey = await keyInput.inputValue();
+  expect(firstKey).toMatch(/^cwwh_browser_fixture_/u);
+  await copyKeyButton.click();
+  await expect(copyKeyButton).toHaveText('Copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(firstKey);
+
+  await expect(webhookSection.locator('#webhook-endpoint-input')).toHaveValue(/\/api\/webhook$/u);
+  await webhookSection.getByRole('button', { name: 'Regenerate key' }).click();
+  const rotateDialog = page.getByRole('dialog', { name: 'Regenerate webhook key?' });
+  await expect(rotateDialog).toBeVisible();
+  await rotateDialog.getByRole('button', { name: 'Regenerate', exact: true }).click();
+
+  await expect(copyKeyButton).toHaveText('Copy key');
+  await expect(keyInput).not.toHaveValue(firstKey);
+  const rotatedKey = await keyInput.inputValue();
+  expect(rotatedKey).toMatch(/^cwwh_browser_fixture_/u);
+  expect(rotatedKey).not.toBe(firstKey);
+  await copyKeyButton.click();
+  await expect(copyKeyButton).toHaveText('Copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(rotatedKey);
+
+  const geometry = await webhookSection.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  await webhookSection.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: `/tmp/codex-web-browser-${testInfo.project.name}-webhook-settings.png`,
+    fullPage: true,
+  });
+});
+
 test('mobile session menu opens archive confirmation for an idle session', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile-compact', 'The compact mobile viewport covers this menu flow.');
 

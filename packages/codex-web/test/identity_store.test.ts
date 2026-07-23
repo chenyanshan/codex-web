@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -97,6 +98,165 @@ test('identity store fails closed instead of overwriting malformed persisted sta
 
   await assert.rejects(() => store.setSiteTitle('Must not persist'), /Invalid identity state/u);
   assert.equal(await fs.readFile(identityPath, 'utf8'), malformed);
+});
+
+test('identity store persists a recoverable webhook key in a private identity file', async () => {
+  const identityPath = await tempIdentityPath();
+  const store = new FileIdentityStore({ identityPath });
+
+  const created = await store.setWebhookEnabled('user_alice', true);
+
+  assert.match(created.key ?? '', /^cwwh_[A-Za-z0-9_-]+$/u);
+  assert.equal(created.credential?.enabled, true);
+  assert.equal(created.credential?.key, created.key);
+  assert.equal(created.credential?.keyHint, created.key?.slice(-6));
+  assert.notEqual(created.credential?.tokenHash, created.key);
+  assert.equal((await fs.readFile(identityPath, 'utf8')).includes(created.key!), true);
+  assert.equal((await fs.stat(identityPath)).mode & 0o777, 0o600);
+  const reopened = new FileIdentityStore({ identityPath });
+  assert.equal((await reopened.getWebhookCredential('user_alice'))?.key, created.key);
+  assert.equal((await store.findWebhookCredentialByToken(created.key!))?.ownerUserId, 'user_alice');
+});
+
+test('identity store disables and re-enables an existing webhook credential without changing its key', async () => {
+  const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
+  assert.deepEqual(await store.setWebhookEnabled('user_alice', false), { credential: null, key: null });
+  const created = await store.setWebhookEnabled('user_alice', true);
+  const key = created.key!;
+
+  const disabled = await store.setWebhookEnabled('user_alice', false);
+  assert.equal(disabled.credential?.enabled, false);
+  assert.equal(disabled.credential?.tokenHash, created.credential?.tokenHash);
+  assert.equal(disabled.key, key);
+  assert.equal(await store.findWebhookCredentialByToken(key), null);
+
+  const reenabled = await store.setWebhookEnabled('user_alice', true);
+  assert.equal(reenabled.credential?.enabled, true);
+  assert.equal(reenabled.credential?.tokenHash, created.credential?.tokenHash);
+  assert.equal(reenabled.key, key);
+  assert.equal((await store.findWebhookCredentialByToken(key))?.id, created.credential?.id);
+});
+
+test('identity store rotates webhook keys and immediately invalidates the previous key', async () => {
+  const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
+  const created = await store.setWebhookEnabled('user_alice', true);
+
+  const rotated = await store.rotateWebhookKey('user_alice');
+
+  assert.match(rotated.key, /^cwwh_[A-Za-z0-9_-]+$/u);
+  assert.notEqual(rotated.key, created.key);
+  assert.equal(rotated.credential.id, created.credential?.id);
+  assert.equal(rotated.credential.createdAt, created.credential?.createdAt);
+  assert.equal(await store.findWebhookCredentialByToken(created.key!), null);
+  assert.equal((await store.findWebhookCredentialByToken(rotated.key))?.id, rotated.credential.id);
+});
+
+test('identity store treats a missing webhook credential list as an empty legacy state', async () => {
+  const identityPath = await tempIdentityPath();
+  await fs.writeFile(identityPath, JSON.stringify({
+    settings: { multiUserEnabled: false, siteTitle: 'Legacy' },
+    users: [],
+    roles: [],
+    projects: [],
+    sessions: [],
+    shares: [],
+    userSessions: [],
+  }));
+  const store = new FileIdentityStore({ identityPath });
+
+  assert.deepEqual((await store.readState()).webhookCredentials, []);
+});
+
+test('identity store preserves legacy hash-only webhook credentials until explicit rotation', async () => {
+  const identityPath = await tempIdentityPath();
+  const legacyKey = `cwwh_${'a'.repeat(43)}`;
+  const legacyCredential = {
+    id: 'credential_legacy',
+    ownerUserId: 'user_alice',
+    enabled: true,
+    tokenHash: crypto.createHash('sha256').update(legacyKey).digest('base64url'),
+    keyHint: legacyKey.slice(-6),
+    createdAt: '2026-07-23T00:00:00.000Z',
+    updatedAt: '2026-07-23T00:00:00.000Z',
+  };
+  await fs.writeFile(identityPath, JSON.stringify({ webhookCredentials: [legacyCredential] }), { mode: 0o600 });
+  const store = new FileIdentityStore({ identityPath });
+
+  assert.equal((await store.getWebhookCredential('user_alice'))?.key, null);
+  assert.equal((await store.findWebhookCredentialByToken(legacyKey))?.id, legacyCredential.id);
+  assert.equal((await store.setWebhookEnabled('user_alice', true)).key, null);
+
+  const rotated = await store.rotateWebhookKey('user_alice');
+  assert.notEqual(rotated.key, legacyKey);
+  assert.equal(rotated.credential.key, rotated.key);
+  assert.equal(await store.findWebhookCredentialByToken(legacyKey), null);
+});
+
+test('identity store fails closed on malformed webhook credential state', async () => {
+  const identityPath = await tempIdentityPath();
+  const malformed = JSON.stringify({ webhookCredentials: [{ id: 'credential_1', ownerUserId: 'user_alice' }] });
+  await fs.writeFile(identityPath, malformed);
+  const store = new FileIdentityStore({ identityPath });
+
+  await assert.rejects(() => store.setSiteTitle('Must not persist'), /webhookCredentials\[0\] is malformed/u);
+  assert.equal(await fs.readFile(identityPath, 'utf8'), malformed);
+});
+
+test('identity store fails closed when a persisted webhook key does not match its format, hint, or hash', async () => {
+  const validKey = `cwwh_${'b'.repeat(43)}`;
+  const baseCredential = {
+    id: 'credential_1',
+    ownerUserId: 'user_alice',
+    enabled: true,
+    key: validKey,
+    tokenHash: crypto.createHash('sha256').update(validKey).digest('base64url'),
+    keyHint: validKey.slice(-6),
+    createdAt: '2026-07-23T00:00:00.000Z',
+    updatedAt: '2026-07-23T00:00:00.000Z',
+  };
+  const malformedCredentials = [
+    { ...baseCredential, key: 'cwwh_invalid' },
+    { ...baseCredential, keyHint: 'wrong!' },
+    { ...baseCredential, tokenHash: 'wrong-hash' },
+  ];
+  for (const credential of malformedCredentials) {
+    const identityPath = await tempIdentityPath();
+    await fs.writeFile(identityPath, JSON.stringify({ webhookCredentials: [credential] }));
+    const store = new FileIdentityStore({ identityPath });
+
+    await assert.rejects(() => store.readState(), /webhookCredentials\[0\] is malformed/u);
+  }
+});
+
+test('identity store fails closed on duplicate webhook credential owners, ids, or token hashes', async () => {
+  const baseCredential = {
+    id: 'credential_1',
+    ownerUserId: 'user_alice',
+    enabled: true,
+    tokenHash: 'hash_1',
+    keyHint: 'hint_1',
+    createdAt: '2026-07-23T00:00:00.000Z',
+    updatedAt: '2026-07-23T00:00:00.000Z',
+  };
+  for (const duplicateField of ['id', 'ownerUserId', 'tokenHash'] as const) {
+    const identityPath = await tempIdentityPath();
+    const secondCredential = {
+      ...baseCredential,
+      id: 'credential_2',
+      ownerUserId: 'user_bob',
+      tokenHash: 'hash_2',
+      [duplicateField]: baseCredential[duplicateField],
+    };
+    await fs.writeFile(identityPath, JSON.stringify({
+      webhookCredentials: [baseCredential, secondCredential],
+    }));
+    const store = new FileIdentityStore({ identityPath });
+
+    await assert.rejects(
+      () => store.readState(),
+      new RegExp(`webhookCredentials contains a duplicate ${duplicateField}`, 'u'),
+    );
+  }
 });
 
 test('identity store updates user access without changing password hash', async () => {
@@ -279,7 +439,7 @@ test('identity store persists archive metadata on app sessions', async () => {
   assert.equal(persisted?.archiveSource, 'codex');
 });
 
-test('identity store deletes a user and cleans related sessions, shares, and auth sessions', async () => {
+test('identity store deletes a user and cleans related sessions, shares, auth sessions, and webhook credentials', async () => {
   const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
   await store.upsertUserWithPassword({
     id: 'user_alice',
@@ -308,6 +468,7 @@ test('identity store deletes a user and cleans related sessions, shares, and aut
     lastSeenAt: '2026-05-27T00:00:00.000Z',
     userId: 'user_alice',
   });
+  await store.setWebhookEnabled('user_alice', true);
 
   await store.deleteUser('user_alice');
 
@@ -316,6 +477,7 @@ test('identity store deletes a user and cleans related sessions, shares, and aut
   assert.equal(state.sessions.some((session) => session.ownerUserId === 'user_alice'), false);
   assert.equal(state.shares.some((share) => share.createdByUserId === 'user_alice' || share.sessionId === 'app_alice'), false);
   assert.equal(state.userSessions.some((session) => session.userId === 'user_alice'), false);
+  assert.equal(state.webhookCredentials.some((credential) => credential.ownerUserId === 'user_alice'), false);
 });
 
 test('access control merges role grants and direct user grants', async () => {
