@@ -8672,6 +8672,71 @@ test('turn failures prefer raw details when present', async () => {
   assert.match(html, /429 Too Many Requests/u);
 });
 
+test('impactful HTTP turn failures survive stale compact session reconciliation', async () => {
+  for (const [status, message] of [
+    [401, '401 Unauthorized: provider credentials expired'],
+    [429, '429 Too Many Requests: model rate limit reached'],
+    [503, '503 Service Unavailable: provider temporarily unavailable'],
+  ]) {
+    const sessionId = `session_http_${status}`;
+    const turnId = `turn_http_${status}`;
+    const userItem = {
+      id: `user_${turnId}`,
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'history',
+      text: `Trigger ${status}`,
+      turnId,
+    };
+    const { api } = await loadAppHarness({
+      fetch: async (path: string, options: any = {}) => {
+        if (path === `/api/sessions/${sessionId}/timeline` && options.method === 'POST') {
+          return await new Promise(() => {});
+        }
+        if (path === `/api/sessions/${sessionId}/status`) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ session: { id: sessionId, activeTurnId: null } }),
+          };
+        }
+        if (path === `/api/sessions/${sessionId}/timeline?limit=50`) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              session: { id: sessionId, activeTurnId: null },
+              items: [userItem],
+              hasMore: false,
+            }),
+          };
+        }
+        throw new Error(`unexpected fetch ${path}`);
+      },
+    });
+    api.state.token = 'token';
+    api.state.authSession = { id: 'auth_1', principal: { mode: 'single', isAdmin: true } };
+    api.state.view = 'chat';
+    api.state.sessionId = sessionId;
+    api.state.currentSession = { id: sessionId, cwd: '/repo' };
+    api.state.sessions = [api.state.currentSession];
+    api.state.timeline = [userItem];
+
+    api.applyTurnEvent({ type: 'turn.started', turnId, threadId: sessionId }, null);
+    api.applyTurnEvent({ type: 'turn.failed', turnId, threadId: sessionId, details: message }, null);
+    await api.refreshCurrentSessionMetadata({ hydrateTimeline: true });
+
+    assert.equal(api.state.status, 'Turn failed', `status ${status}`);
+    assert.equal(api.state.statusTone, 'danger', `tone ${status}`);
+    assert.equal(
+      api.state.timeline.find((item) => item.id === `error_${turnId}`)?.text,
+      message,
+      `timeline ${status}`,
+    );
+  }
+});
+
 test('stream failures render a visible timeline error instead of only composer status', async () => {
   const { api } = await loadAppHarness({
     fetch: async () => ({
@@ -9798,19 +9863,25 @@ test('v2 timeline cache migration removes inline and aggregate work while retain
   assert.match(detailsHtml, /aggregate command/u);
 });
 
-test('authoritative timeline merges keep approvals but discard work projections', async () => {
+test('authoritative timeline merges keep approvals and real failures but discard work projections', async () => {
   const { api } = await loadAppHarness();
   const merged = api.mergeAuthoritativeTimelineAuxiliaryEntries(
-    [{ id: 'message_1', kind: 'message', role: 'assistant', text: 'Authoritative answer' }],
+    [{ id: 'message_1', kind: 'message', role: 'user', text: 'Authoritative question' }],
     [
+      { id: 'message_1', kind: 'message', role: 'user', text: 'Authoritative question' },
       { id: 'work_1', kind: 'work', turnId: 'turn_1', batches: [] },
       { id: 'approval_1', kind: 'approval', approvalId: 'approval_1', turnId: 'turn_1' },
+      { id: 'error_turn_1', kind: 'message', role: 'system', label: 'Error', meta: 'failed', severity: 'error', text: '503 Service Unavailable' },
+      { id: 'error_interrupt', kind: 'message', role: 'system', label: 'Error', meta: 'failed', severity: 'error', text: 'Timed out waiting for Codex JSON-RPC response to turn/interrupt' },
     ],
   );
 
   assert.equal(merged.some((item) => item.kind === 'work'), false);
   assert.equal(merged.some((item) => item.kind === 'approval'), true);
   assert.equal(merged.some((item) => item.id === 'message_1'), true);
+  assert.equal(merged.at(-1)?.id, 'error_turn_1');
+  assert.equal(merged.filter((item) => item.id === 'message_1').length, 1);
+  assert.equal(merged.some((item) => item.id === 'error_interrupt'), false);
 });
 
 test('mobile UI refreshes session metadata after turn completion', async () => {

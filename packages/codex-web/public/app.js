@@ -10324,7 +10324,11 @@ function mergeAuthoritativeTimelineAuxiliaryEntries(authoritative, current) {
     .filter((item) => item?.kind !== 'work')
     .map((item) => ({ ...item }));
   const currentItems = Array.isArray(current) ? current : [];
-  const auxiliary = currentItems.filter((item) => item?.kind === 'approval');
+  const authoritativeIdentities = new Set(messages.flatMap(timelineMergeIdentities));
+  const auxiliary = currentItems.filter((item) => (
+    item?.kind === 'approval'
+    || isPersistentTimelineFailure(item)
+  ) && !timelineMergeIdentities(item).some((identity) => authoritativeIdentities.has(identity)));
   if (!auxiliary.length || !messages.length) {
     return [...messages, ...auxiliary.map((item) => ({ ...item }))];
   }
@@ -10358,6 +10362,26 @@ function mergeAuthoritativeTimelineAuxiliaryEntries(authoritative, current) {
     merged.push(item, ...(buckets.get(index) || []));
   });
   return merged;
+}
+
+function timelineMergeIdentities(item) {
+  if (!item || typeof item !== 'object') {
+    return [];
+  }
+  const id = String(item.id || '').trim();
+  const projection = timelineProjectionIdentity(item);
+  return [
+    ...(id ? [`id:${id}`] : []),
+    ...(projection ? [`projection:${projection}`] : []),
+  ];
+}
+
+function isPersistentTimelineFailure(item) {
+  return item?.kind === 'message'
+    && item.role === 'system'
+    && item.severity === 'error'
+    && item.meta === 'failed'
+    && !isTurnInterruptTimeoutMessage(item.text);
 }
 
 function isPreviewOnlySessionHistory() {
@@ -10608,7 +10632,10 @@ function runtimeTurnErrorMessage(turn) {
 }
 
 function latestTimelineTerminalFailure(session) {
-  const items = normalizeSessionTimeline(session?.timeline);
+  const local = state.sessionId && state.sessionId === session?.id
+    ? normalizeSessionTimeline(state.timeline)
+    : [];
+  const items = local.length ? local : normalizeSessionTimeline(session?.timeline);
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item?.kind !== 'message') {
