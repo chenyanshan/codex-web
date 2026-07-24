@@ -525,6 +525,50 @@ test('admin project patch updates active session limits and member work visibili
   }
 });
 
+test('admin project APIs reject duplicate display names case-insensitively', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const create = await fetch(`${server.baseUrl}/api/admin/projects`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'project_duplicate',
+        cwd: '/Users/admin/duplicate',
+        displayName: 'allowed project',
+      }),
+    });
+    assert.equal(create.status, 409);
+    assert.deepEqual(await create.json(), {
+      error: 'project_display_name_conflict',
+      message: 'A project with this display name already exists.',
+    });
+
+    const rename = await fetch(`${server.baseUrl}/api/admin/projects/project_denied`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: 'ALLOWED PROJECT' }),
+    });
+    assert.equal(rename.status, 409);
+    assert.equal((await rename.json()).error, 'project_display_name_conflict');
+
+    const state = await identityStore.readState();
+    assert.equal(state.projects.some((project) => project.id === 'project_duplicate'), false);
+    assert.equal(state.projects.find((project) => project.id === 'project_denied')?.displayName, 'Other Project');
+  } finally {
+    await server.stop();
+  }
+});
+
 test('disabling member work details closes existing streams and restricts subsequent hydration', async () => {
   const identityStore = await createIdentityStore();
   const runtimeSession = {

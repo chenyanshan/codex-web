@@ -339,6 +339,53 @@ test('identity store collapses path-like project display names to the final segm
   assert.equal(project.displayName, 'codex-mobile-web-app');
 });
 
+test('identity store prevents case-insensitive duplicate project display names on create and rename', async () => {
+  const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
+  const first = await store.upsertProject({
+    id: 'project_codex_web',
+    internalName: 'codex-web',
+    cwd: '/Users/alice/codex-web',
+    displayName: 'CodeX Web',
+    enabled: true,
+    activeSessionLimit: null,
+    showWorkDetailsToMembers: true,
+  });
+
+  await assert.rejects(
+    () => store.upsertProject({
+      id: 'project_duplicate',
+      internalName: 'duplicate',
+      cwd: '/Users/alice/duplicate',
+      displayName: 'codex web',
+      enabled: true,
+      activeSessionLimit: null,
+      showWorkDetailsToMembers: true,
+    }),
+    (error: any) => error?.code === 'project_display_name_conflict',
+  );
+
+  const other = await store.upsertProject({
+    id: 'project_other',
+    internalName: 'other',
+    cwd: '/Users/alice/other',
+    displayName: 'Other Project',
+    enabled: true,
+    activeSessionLimit: null,
+    showWorkDetailsToMembers: true,
+  });
+  await assert.rejects(
+    () => store.upsertProject({ ...other, displayName: 'CODEX WEB' }),
+    (error: any) => error?.code === 'project_display_name_conflict',
+  );
+
+  const caseOnlyRename = await store.upsertProject({ ...first, displayName: 'CODEX WEB' });
+  assert.equal(caseOnlyRename.displayName, 'CODEX WEB');
+  assert.deepEqual(
+    (await store.readState()).projects.map((project) => project.displayName).sort(),
+    ['CODEX WEB', 'Other Project'],
+  );
+});
+
 test('identity store defaults project active session limit to 30 and persists explicit overrides', async () => {
   const store = new FileIdentityStore({ identityPath: await tempIdentityPath() });
 

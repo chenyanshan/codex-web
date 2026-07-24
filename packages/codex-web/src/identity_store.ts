@@ -106,6 +106,10 @@ export interface CodexWebIdentityState {
   webhookCredentials: CodexWebWebhookCredential[];
 }
 
+export interface UpsertProjectOptions {
+  allowDisplayNameConflict?: boolean;
+}
+
 export interface UpsertUserWithPasswordInput {
   id?: string;
   username: string;
@@ -334,10 +338,25 @@ export class FileIdentityStore {
     });
   }
 
-  async upsertProject(project: CodexWebProject): Promise<CodexWebProject> {
+  async upsertProject(
+    project: CodexWebProject,
+    options: UpsertProjectOptions = {},
+  ): Promise<CodexWebProject> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
       const normalized = normalizeProject(project);
+      const existing = state.projects.find((item) => item.id === normalized.id);
+      const displayNameChanged = !existing
+        || projectDisplayNameKey(existing.displayName) !== projectDisplayNameKey(normalized.displayName);
+      const displayNameConflict = displayNameChanged && state.projects.some((item) => (
+        item.id !== normalized.id
+        && projectDisplayNameKey(item.displayName) === projectDisplayNameKey(normalized.displayName)
+      ));
+      if (displayNameConflict && options.allowDisplayNameConflict !== true) {
+        const error = new Error('A project with this display name already exists.');
+        (error as Error & { code?: string }).code = 'project_display_name_conflict';
+        throw error;
+      }
       state.projects = upsertById(state.projects, normalized);
       await this.writeState(state);
       return normalized;
@@ -714,6 +733,10 @@ function normalizeProject(project: CodexWebProject): CodexWebProject {
 function cwdLeafName(cwd: string): string {
   const parts = String(cwd || '').split(/[\\/]+/u).filter(Boolean);
   return parts.length ? parts[parts.length - 1]! : '';
+}
+
+export function projectDisplayNameKey(value: string): string {
+  return String(value ?? '').trim().normalize('NFKC').toLowerCase();
 }
 
 function normalizeAppSessionOrNull(value: unknown): CodexWebAppSession | null {

@@ -19,15 +19,16 @@ import type { PublicAuthSession } from './auth_store.js';
 import type { CodexWebConfig } from './config.js';
 import type { CodexWebEventReplay, CodexWebStoredEvent } from './event_bus.js';
 import { presentCodexWebEvent, type CodexWebEventAudience } from './event_model.js';
-import type {
-  CodexWebAppSession,
-  CodexWebIdentityState,
-  CodexWebProject,
-  CodexWebRole,
-  CodexWebShare,
-  CodexWebUser,
-  CodexWebWebhookCredential,
-  FileIdentityStore,
+import {
+  projectDisplayNameKey,
+  type CodexWebAppSession,
+  type CodexWebIdentityState,
+  type CodexWebProject,
+  type CodexWebRole,
+  type CodexWebShare,
+  type CodexWebUser,
+  type CodexWebWebhookCredential,
+  type FileIdentityStore,
 } from './identity_store.js';
 import { FileReportStore } from './report_store.js';
 import type { CodexWebReport } from './report_store.js';
@@ -106,7 +107,7 @@ interface CodexWebIdentityStoreLike {
   setMultiUserEnabled?(enabled: boolean): Promise<CodexWebIdentityState>;
   setSiteTitle?(siteTitle: string): Promise<CodexWebIdentityState>;
   ensureBootstrapAdminFromPasswordHash?: FileIdentityStore['ensureBootstrapAdminFromPasswordHash'];
-  upsertProject?(project: CodexWebProject): Promise<CodexWebProject>;
+  upsertProject?: FileIdentityStore['upsertProject'];
   upsertRole?(role: CodexWebRole): Promise<CodexWebRole>;
   upsertUserWithPassword?(input: {
     id?: string;
@@ -1411,16 +1412,12 @@ function normalizeWebhookSessionBody(
 
   const hasProjectId = Object.prototype.hasOwnProperty.call(body, 'projectId');
   if (identityState.settings.multiUserEnabled === true) {
-    const projectId = typeof body.projectId === 'string' ? body.projectId.trim() : '';
-    if (!projectId) {
+    const projectReference = typeof body.projectId === 'string' ? body.projectId.trim() : '';
+    if (!projectReference) {
       throw createHttpError(400, 'invalid_webhook_payload', 'projectId is required in multi-user mode.');
     }
-    const project = findProject(identityState, projectId);
-    if (
-      !project
-      || project.enabled === false
-      || !canCreateProjectSession(identityState, principal, project.id)
-    ) {
+    const project = resolveWebhookProjectReference(identityState, principal, projectReference);
+    if (!project) {
       throw createHttpError(404, 'project_not_found', 'Project was not found.');
     }
     return {
@@ -1437,6 +1434,33 @@ function normalizeWebhookSessionBody(
     text: body.text,
     ...(body.title !== undefined ? { title: body.title } : {}),
   };
+}
+
+function resolveWebhookProjectReference(
+  state: CodexWebIdentityState,
+  principal: CodexWebPrincipal,
+  reference: string,
+): CodexWebProject | null {
+  const availableProjects = state.projects.filter((project) => (
+    project.enabled !== false
+    && canCreateProjectSession(state, principal, project.id)
+  ));
+  const idMatch = availableProjects.find((project) => project.id === reference);
+  if (idMatch) {
+    return idMatch;
+  }
+  const displayNameKey = projectDisplayNameKey(reference);
+  const displayNameMatches = availableProjects.filter(
+    (project) => projectDisplayNameKey(project.displayName) === displayNameKey,
+  );
+  if (displayNameMatches.length > 1) {
+    throw createHttpError(
+      409,
+      'ambiguous_project_reference',
+      'More than one available project has that display name. Use the internal project id.',
+    );
+  }
+  return displayNameMatches[0] ?? null;
 }
 
 function writeWebhookUnauthorized(response: ServerResponse): void {
@@ -3766,7 +3790,7 @@ async function handleAdminManagementRequest({
     const body = await readJsonBody(request);
     const projectId = String(body.id ?? '');
     const existing = identityState.projects.find((project) => project.id === projectId);
-    const project = await identityStore.upsertProject({
+    const project = await withProjectDisplayNameConflictHttpError(() => identityStore.upsertProject!({
       id: projectId,
       internalName: String(body.internalName ?? ''),
       cwd: String(body.cwd ?? ''),
@@ -3774,7 +3798,7 @@ async function handleAdminManagementRequest({
       enabled: body.enabled !== false,
       activeSessionLimit: body.activeSessionLimit === null ? null : Number(body.activeSessionLimit),
       showWorkDetailsToMembers: body.showWorkDetailsToMembers !== false,
-    });
+    }));
     if (existing && project.showWorkDetailsToMembers !== existing.showWorkDetailsToMembers) {
       closeSseConnections();
     }
@@ -3794,7 +3818,7 @@ async function handleAdminManagementRequest({
       return true;
     }
     const body = await readJsonBody(request);
-    const project = await identityStore.upsertProject({
+    const project = await withProjectDisplayNameConflictHttpError(() => identityStore.upsertProject!({
       ...existing,
       internalName: typeof body.internalName === 'string' ? body.internalName : existing.internalName,
       cwd: typeof body.cwd === 'string' ? body.cwd : existing.cwd,
@@ -3806,7 +3830,7 @@ async function handleAdminManagementRequest({
       showWorkDetailsToMembers: typeof body.showWorkDetailsToMembers === 'boolean'
         ? body.showWorkDetailsToMembers
         : existing.showWorkDetailsToMembers,
-    });
+    }));
     if (project.showWorkDetailsToMembers !== existing.showWorkDetailsToMembers) {
       closeSseConnections();
     }
@@ -4488,7 +4512,7 @@ async function ensureAdminLegacySessionMappings({
     const project = legacyProjectForRuntimeSession(runtimeSession);
     const existingProject = projectsById.get(project.id);
     if (!existingProject) {
-      await identityStore.upsertProject(project);
+      await identityStore.upsertProject(project, { allowDisplayNameConflict: true });
       projectsById.set(project.id, project);
       changed = true;
     } else if (existingProject.enabled === false) {
@@ -5865,6 +5889,22 @@ function isTurnConflictError(error: unknown): boolean {
 function isUsernameConflictError(error: unknown): boolean {
   return error instanceof Error
     && (error as Error & { code?: string }).code === 'username_conflict';
+}
+
+function isProjectDisplayNameConflictError(error: unknown): boolean {
+  return error instanceof Error
+    && (error as Error & { code?: string }).code === 'project_display_name_conflict';
+}
+
+async function withProjectDisplayNameConflictHttpError<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (isProjectDisplayNameConflictError(error)) {
+      throw createHttpError(409, 'project_display_name_conflict', 'A project with this display name already exists.');
+    }
+    throw error;
+  }
 }
 
 function extractActiveTurnId(error: unknown): string | null {

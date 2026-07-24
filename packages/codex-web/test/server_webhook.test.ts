@@ -241,7 +241,7 @@ test('webhook management is self-scoped and a webhook creates one owner-mapped s
     const eventId = 'github:delivery:123';
     const requestBody = {
       text: 'Review the incoming change',
-      projectId: 'project_shared',
+      projectId: 'Shared Project',
       title: 'Webhook review',
     };
     const first = await webhookRequest(server.baseUrl, key, eventId, requestBody);
@@ -289,6 +289,75 @@ test('webhook management is self-scoped and a webhook creates one owner-mapped s
 
     const keyCannotReadApis = await browserRequest(server.baseUrl, '/api/settings', { token: key });
     assert.equal(keyCannotReadApis.status, 401);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('webhook project references ignore display-name case and reject ambiguous legacy names', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-project-name-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  await identityStore.upsertProject({
+    id: 'project_duplicate',
+    internalName: 'duplicate',
+    cwd: '/private/duplicate-project',
+    displayName: 'Shared Project',
+    enabled: true,
+    activeSessionLimit: null,
+    showWorkDetailsToMembers: false,
+  }, { allowDisplayNameConflict: true });
+  const created = await identityStore.setWebhookEnabled('user_alice', true);
+  const key = created.key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const uniqueVisibleName = await webhookRequest(server.baseUrl, key, 'visible-name', {
+      text: 'Use the only accessible project with this name',
+      projectId: 'sHaReD pRoJeCt',
+    });
+    assert.equal(uniqueVisibleName.status, 201);
+    assert.equal((await uniqueVisibleName.json() as any).session.projectId, 'project_shared');
+    assert.equal(runtime.createInputs[0]?.cwd, '/private/shared-project');
+
+    await identityStore.upsertRole({
+      id: 'role_member',
+      name: 'Member',
+      isAdmin: false,
+      projectGrants: [
+        { projectId: 'project_shared', canRead: true, canCreate: true, canWrite: true },
+        { projectId: 'project_duplicate', canRead: true, canCreate: true, canWrite: true },
+      ],
+    });
+    const ambiguousVisibleName = await webhookRequest(server.baseUrl, key, 'ambiguous-name', {
+      text: 'Must not choose a project arbitrarily',
+      projectId: 'Shared Project',
+    });
+    assert.equal(ambiguousVisibleName.status, 409);
+    assert.equal((await ambiguousVisibleName.json() as any).error, 'ambiguous_project_reference');
+    assert.equal(runtime.createInputs.length, 1);
+
+    const exactId = await webhookRequest(server.baseUrl, key, 'exact-project-id', {
+      text: 'Use the exact project id',
+      projectId: 'project_duplicate',
+    });
+    assert.equal(exactId.status, 201);
+    assert.equal((await exactId.json() as any).session.projectId, 'project_duplicate');
+    assert.equal(runtime.createInputs[1]?.cwd, '/private/duplicate-project');
+
+    const unknownName = await webhookRequest(server.baseUrl, key, 'unknown-project-name', {
+      text: 'Unknown projects must not run',
+      projectId: 'Missing Project',
+    });
+    assert.equal(unknownName.status, 404);
+    assert.equal((await unknownName.json() as any).error, 'project_not_found');
+    assert.equal(runtime.createInputs.length, 2);
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });

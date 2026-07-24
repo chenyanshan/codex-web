@@ -69,6 +69,8 @@ Untrusted users must be separated with distinct OS users, containers, or hosts.
   management, and observer mode.
 - Optional read-only share links open a dedicated conversation page. Public
   sharing is disabled by default and must be explicitly enabled by the operator.
+- Per-user webhooks can create a new session and start its first turn from an
+  authenticated external `POST` request.
 - File and image attachments for turns, including direct clipboard paste on
   desktop browsers. The backend stores files locally and passes safe local
   paths to Codex.
@@ -148,6 +150,75 @@ The browser suite uses Playwright and its local fixture server:
 npx playwright install chromium
 npm run test:browser
 ```
+
+## Webhook Quick Start
+
+A webhook request creates a new Codex Web session and immediately starts its
+first turn.
+
+1. Sign in to Codex Web and open **Settings**.
+2. Find **Webhook** and turn on **Enable webhook**.
+3. Copy the endpoint and webhook key. The key remains visible and copyable until
+   you regenerate it.
+4. Send a `POST` request to the copied endpoint:
+
+Single-user example:
+
+```bash
+curl --request POST 'https://codex-web.example/api/webhook' \
+  --header 'Authorization: Bearer cwwh_REPLACE_ME' \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: my-system-event-123' \
+  --data '{"title":"Webhook task","text":"Review the latest changes"}'
+```
+
+Replace the example host and key with the values shown in Settings. In
+single-user mode, the session uses `CODEX_WEB_DEFAULT_CWD` and `projectId` must
+be omitted.
+
+Multi-user example:
+
+```bash
+curl --request POST 'https://codex-web.example/api/webhook' \
+  --header 'Authorization: Bearer cwwh_REPLACE_ME' \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: my-system-event-123' \
+  --data '{"projectId":"CodeX Web","title":"Webhook task","text":"Review the latest changes"}'
+```
+
+In multi-user mode, set `projectId` to the project display name shown in Codex
+Web. Display-name matching is case-insensitive, and new or renamed projects
+cannot share a display name. The exact internal project ID is also accepted for
+backward compatibility. The key owner must have permission to create sessions
+in the selected project.
+
+| JSON field | Required | Description |
+| --- | --- | --- |
+| `text` | Yes | The prompt sent as the first turn. |
+| `title` | No | The new session title. |
+| `projectId` | Multi-user only | Project display name or exact internal ID. Required in multi-user mode and rejected in single-user mode. |
+
+`Idempotency-Key` is required and must be unique for each external event. Retry
+the same payload with the same value after a timeout or network failure; Codex
+Web returns the existing result instead of creating another session. Reusing the
+value with a different payload returns `409 Conflict`.
+
+- `201 Created`: a new session and first turn were created.
+- `200 OK`: an identical request was already accepted.
+- `400 Bad Request`: a header or JSON field is missing or invalid.
+- `401 Unauthorized`: the webhook is disabled or the key is invalid.
+- `404 Not Found`: no enabled project the key owner can create sessions in
+  matches `projectId`.
+- `409 Conflict`: the idempotency key conflicts, a legacy display name is
+  ambiguous, or the active-session limit was reached.
+- `429 Too Many Requests`: the per-key limit of 10 requests per minute was
+  exceeded.
+
+Only `text`, `title`, and the mode-appropriate `projectId` are accepted. The
+caller cannot override the working directory, model, approval policy, sandbox,
+or other runtime settings. The turn uses the server runtime defaults, which are
+currently `danger-full-access` and `approvalPolicy=never`. Treat the webhook key
+like a password because it can start Codex work on the host machine.
 
 ## AI Install
 
@@ -241,33 +312,14 @@ default to a 24-hour TTL set by `CODEX_WEB_PUBLIC_SHARE_TTL_SECONDS` and are
 capped at seven days. A share is also invalid after revocation or after
 multi-user mode is disabled. Treat a share URL as a bearer capability.
 
-### User webhooks
+### Webhook key storage
 
-Each authenticated user can enable one webhook key from Settings. The current
-key remains visible and copyable there until it is regenerated. To support that,
-Codex Web stores the recoverable key alongside its validation hash in the local
-`identity.json`, which is restricted to mode `0600`; the browser keeps it only in
-memory and never writes it to local storage. Legacy hash-only keys must be
-regenerated once before they can be copied. Send the key in the `Authorization`
-header, not in the URL:
-
-```bash
-curl -X POST https://codex-web.example/api/webhook \
-  -H 'Authorization: Bearer cwwh_REPLACE_ME' \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: external-event-123' \
-  -d '{"projectId":"project_main","title":"External task","text":"Handle this task"}'
-```
-
-`Idempotency-Key` is required so matching retries are deduplicated instead of
-creating another session. Multi-user requests must name a project the key owner
-can create in.
-Single-user requests omit `projectId` and use `CODEX_WEB_DEFAULT_CWD`.
-
-The request creates a session and starts its first turn. Callers cannot override
-Codex permission or sandbox settings; the turn uses the server runtime defaults,
-which currently default to `danger-full-access` with `approvalPolicy=never`.
-Treat a webhook key like a password capable of starting Codex work on the Mac.
+Each authenticated user has one webhook key. Codex Web stores the recoverable
+key alongside its validation hash in the local `identity.json`, which is
+restricted to mode `0600`; the browser keeps it only in memory and never writes
+it to local storage. Legacy hash-only keys must be regenerated once before they
+can be copied. See [Webhook Quick Start](#webhook-quick-start) for request
+examples and payload rules.
 
 ### Browser cache and weak networks
 

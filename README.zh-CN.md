@@ -225,12 +225,14 @@ curl -X POST https://codex-web.example/api/webhook \
   -H 'Authorization: Bearer cwwh_REPLACE_ME' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: external-event-123' \
-  -d '{"projectId":"project_main","title":"外部任务","text":"处理这个任务"}'
+  -d '{"projectId":"CodeX Web","title":"外部任务","text":"处理这个任务"}'
 ```
 
 必须提供 `Idempotency-Key`，相同内容的重试会被去重，不会再创建一个 session。
-多人模式下必须指定 key 所属用户有权创建的 project；单用户模式省略 `projectId`，
-并使用 `CODEX_WEB_DEFAULT_CWD`。
+多人模式下，`projectId` 可以直接填写 Codex Web 界面显示的项目名，匹配时不区分
+大小写；也兼容精确的内部项目 ID。新建项目或修改项目名时不允许出现重复显示名，
+并且 key 所属用户必须有权在该项目创建 session。单用户模式省略 `projectId`，并使用
+`CODEX_WEB_DEFAULT_CWD`。
 
 请求会创建 session 并启动第一个 turn。调用方不能覆盖 Codex 权限或 sandbox 设置，
 turn 使用服务端 runtime 默认值；当前默认是 `danger-full-access` 和
