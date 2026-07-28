@@ -25,6 +25,7 @@ export interface CodexWebSessionFileContent {
 
 export interface CodexWebSessionFileScope {
   principalId: string;
+  managedFileUserIds?: string[];
   sessionId: string;
   projectRoot: string;
   projectStorageKey: string;
@@ -291,21 +292,25 @@ function allowedRootsForScope(scope: CodexWebSessionFileScope): AllowedRoot[] {
   const projectRoot = path.resolve(scope.projectRoot);
   const stateDir = path.resolve(scope.stateDir);
   const reportsDir = path.resolve(scope.reportsDir);
-  const userSegment = safePathSegment(scope.principalId);
+  const userSegments = uniqueSafeSegments(
+    scope.managedFileUserIds?.length ? scope.managedFileUserIds : [scope.principalId],
+  );
   const projectStorageKey = safePathSegment(scope.projectStorageKey);
   const roots: AllowedRoot[] = [
-    {
-      path: path.join(projectRoot, 'uploads', userSegment),
-      source: 'upload',
-    },
-    {
-      path: path.join(stateDir, 'uploads', 'projects', projectStorageKey, userSegment),
-      source: 'upload',
-    },
-    ...uniqueSafeSegments(scope.attachmentSessionIds).map((sessionId): AllowedRoot => ({
-      path: path.join(stateDir, 'turn-attachments', userSegment, sessionId),
-      source: 'turn_attachment',
-    })),
+    ...userSegments.flatMap((userSegment): AllowedRoot[] => [
+      {
+        path: path.join(projectRoot, 'uploads', userSegment),
+        source: 'upload',
+      },
+      {
+        path: path.join(stateDir, 'uploads', 'projects', projectStorageKey, userSegment),
+        source: 'upload',
+      },
+      ...uniqueSafeSegments(scope.attachmentSessionIds).map((sessionId): AllowedRoot => ({
+        path: path.join(stateDir, 'turn-attachments', userSegment, sessionId),
+        source: 'turn_attachment',
+      })),
+    ]),
     ...uniquePathSegments(scope.legacyReportKeys).map((projectKey): AllowedRoot => ({
       path: path.join(reportsDir, projectKey),
       source: 'legacy_report',

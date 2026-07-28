@@ -3062,6 +3062,8 @@ async function handleMultiUserRequest({
 
   const adminSessionsMatch = pathname.match(/^\/api\/admin\/sessions(?:\/([^/]+))?$/u);
   const adminSessionEventsMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/turns\/([^/]+)\/events$/u);
+  const adminSessionFileResolveMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/files\/resolve$/u);
+  const adminSessionFileContentMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/files\/([^/]+)\/content$/u);
   if (pathname.startsWith('/api/admin/')) {
     if (!principal.isAdmin) {
       writeJson(response, 403, { error: 'forbidden' });
@@ -3169,6 +3171,70 @@ async function handleMultiUserRequest({
       registerSseCloser,
       audience: 'workspace',
     });
+    return true;
+  }
+
+  if (adminSessionFileResolveMatch && method === 'POST') {
+    const sessionId = decodeURIComponent(adminSessionFileResolveMatch[1]!);
+    const scope = await multiUserSessionFileScope({
+      identityStore,
+      identityState,
+      runtime,
+      principal,
+      config,
+      sessionId,
+      observer: true,
+    });
+    if (!scope) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const body = await readJsonBody(request);
+    const inputPath = typeof body.path === 'string' ? body.path.trim() : '';
+    if (!inputPath) {
+      writeJson(response, 400, { error: 'invalid_file_path', message: 'path is required' });
+      return true;
+    }
+    const file = await resolveSessionFileForResponse({
+      store: sessionFileStore,
+      scope,
+      inputPath,
+      response,
+    });
+    if (!file) {
+      return true;
+    }
+    writeJson(response, 200, {
+      file: presentSessionFileForUser(file, sessionId, { observer: true }),
+    });
+    return true;
+  }
+
+  if (adminSessionFileContentMatch && method === 'GET') {
+    const sessionId = decodeURIComponent(adminSessionFileContentMatch[1]!);
+    const scope = await multiUserSessionFileScope({
+      identityStore,
+      identityState,
+      runtime,
+      principal,
+      config,
+      sessionId,
+      observer: true,
+    });
+    if (!scope) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const content = await readSessionFileForResponse({
+      store: sessionFileStore,
+      scope,
+      fileId: decodeURIComponent(adminSessionFileContentMatch[2]!),
+      response,
+    });
+    if (!content) {
+      return true;
+    }
+    writeSessionFileContent(response, content, url.searchParams.get('download') === '1');
     return true;
   }
 
@@ -4331,6 +4397,7 @@ async function multiUserSessionFileScope({
   principal,
   config,
   sessionId,
+  observer = false,
 }: {
   identityStore: CodexWebIdentityStoreLike;
   identityState: CodexWebIdentityState;
@@ -4338,6 +4405,7 @@ async function multiUserSessionFileScope({
   principal: CodexWebPrincipal;
   config: CodexWebConfig;
   sessionId: string;
+  observer?: boolean;
 }): Promise<CodexWebSessionFileScope | null> {
   const stateForSession = await stateForSessionAccess({
     identityStore,
@@ -4346,9 +4414,18 @@ async function multiUserSessionFileScope({
     principal,
     sessionId,
   });
-  const resolved = resolveReadableWorkspaceAppSession(stateForSession, principal, sessionId);
+  const observedAppSession = observer && principal.isAdmin
+    ? findAppSessionByExternalId(stateForSession, sessionId)
+    : null;
+  const resolved = observedAppSession
+    ? {
+        appSession: observedAppSession,
+        project: findProject(stateForSession, observedAppSession.projectId),
+      }
+    : resolveReadableWorkspaceAppSession(stateForSession, principal, sessionId);
   if (
     !resolved
+    || (observer && !observedAppSession)
     || !resolved.project
     || (!principal.isAdmin && resolved.project.enabled === false)
   ) {
@@ -4365,6 +4442,7 @@ async function multiUserSessionFileScope({
   }
   return {
     principalId: principal.userId,
+    ...(observer ? { managedFileUserIds: [resolved.appSession.ownerUserId] } : {}),
     sessionId,
     projectRoot,
     projectStorageKey: resolved.project.id,
@@ -4447,8 +4525,13 @@ async function readSessionFileForResponse({
   }
 }
 
-function presentSessionFileForUser(file: CodexWebSessionFile, sessionId: string): Record<string, unknown> {
-  const contentUrl = `/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(file.id)}/content`;
+function presentSessionFileForUser(
+  file: CodexWebSessionFile,
+  sessionId: string,
+  { observer = false }: { observer?: boolean } = {},
+): Record<string, unknown> {
+  const sessionBasePath = observer ? '/api/admin/sessions' : '/api/sessions';
+  const contentUrl = `${sessionBasePath}/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(file.id)}/content`;
   return {
     ...file,
     contentUrl,

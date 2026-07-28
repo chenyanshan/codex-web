@@ -10400,6 +10400,7 @@ async function openSessionFileByPath(filePath, { preserveSnapshot = false } = {}
     return;
   }
 
+  const adminObserver = isAdminObservedSession();
   const desktop = isDesktopLayout();
   if (!preserveSnapshot) {
     rememberFocusReturn(document.activeElement);
@@ -10415,7 +10416,9 @@ async function openSessionFileByPath(filePath, { preserveSnapshot = false } = {}
   state.settingsOpen = false;
   state.desktopSettingsOpen = false;
   state.error = '';
-  if (desktop) {
+  if (adminObserver) {
+    state.view = 'file';
+  } else if (desktop) {
     state.view = 'sessions';
     state.desktopOverlay = 'file';
   } else {
@@ -10427,7 +10430,10 @@ async function openSessionFileByPath(filePath, { preserveSnapshot = false } = {}
   }
 
   try {
-    const payload = await apiFetch(`/api/sessions/${encodeURIComponent(state.sessionId)}/files/resolve`, {
+    const sessionFilesPath = adminObserver
+      ? `/api/admin/sessions/${encodeURIComponent(state.sessionId)}/files`
+      : `/api/sessions/${encodeURIComponent(state.sessionId)}/files`;
+    const payload = await apiFetch(`${sessionFilesPath}/resolve`, {
       method: 'POST',
       body: { path: resolvablePath },
       signal: loadController.signal,
@@ -10594,6 +10600,13 @@ function closeSessionFileViewer() {
   clearSessionFileState();
   const snapshot = sessionFileTimelineSnapshot;
   sessionFileTimelineSnapshot = null;
+  if (isAdminObservedSession()) {
+    state.view = isDesktopLayout() ? 'admin' : 'chat';
+    state.error = '';
+    render();
+    restoreTimelineViewport(snapshot);
+    return;
+  }
   if (isDesktopLayout()) {
     state.view = 'sessions';
     state.desktopOverlay = null;
@@ -13812,7 +13825,7 @@ function isSafeSessionFileContentUrl(value) {
     return resolved.origin === origin
       && !resolved.username
       && !resolved.password
-      && /^\/api\/sessions\/[^/]+\/files\/[^/]+\/content$/u.test(resolved.pathname);
+      && /^\/api\/(?:admin\/)?sessions\/[^/]+\/files\/[^/]+\/content$/u.test(resolved.pathname);
   } catch (_error) {
     return false;
   }

@@ -8465,6 +8465,60 @@ test('opening a session markdown path shows loading then fetches content with be
   assert.match(context.document.querySelector('.session-file-viewer')?.innerHTML || '', /<h1>Audit<\/h1>/u);
 });
 
+test('admin observed sessions open documents through scoped read-only routes and return to observer mode', async () => {
+  const calls = [];
+  const { api, context } = await loadAppHarness({
+    viewportWidth: 1280,
+    desktopPointer: true,
+    fetch: async (requestPath, options = {}) => {
+      calls.push({ path: requestPath, options });
+      if (requestPath === '/api/admin/sessions/session_observed/files/resolve') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            file: {
+              id: 'file_observed',
+              name: 'observed.md',
+              kind: 'markdown',
+              mimeType: 'text/markdown',
+              contentUrl: '/api/admin/sessions/session_observed/files/file_observed/content',
+            },
+          }),
+        };
+      }
+      if (requestPath === '/api/admin/sessions/session_observed/files/file_observed/content') {
+        return { ok: true, status: 200, text: async () => '# Observed document' };
+      }
+      throw new Error(`unexpected fetch ${requestPath}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: { userId: 'admin', isAdmin: true, mode: 'multi' },
+  };
+  api.state.view = 'admin';
+  api.state.sessionId = 'session_observed';
+  api.state.currentSession = { id: 'session_observed', mode: 'observer', readOnly: true };
+  api.state.admin.observedSession = api.state.currentSession;
+
+  await api.openSessionFileByPath('docs/observed.md');
+
+  assert.deepEqual(calls.map((call) => call.path), [
+    '/api/admin/sessions/session_observed/files/resolve',
+    '/api/admin/sessions/session_observed/files/file_observed/content',
+  ]);
+  assert.equal(api.state.view, 'file');
+  assert.match(context.document.querySelector('#app').innerHTML, /Observed document/u);
+
+  api.closeSessionFileViewer();
+
+  assert.equal(api.state.view, 'admin');
+  assert.equal(api.state.sessionId, 'session_observed');
+  assert.equal(api.state.currentSession?.mode, 'observer');
+});
+
 test('opening a source link strips its line location before resolving the file', async () => {
   const calls = [];
   const { api } = await loadAppHarness({

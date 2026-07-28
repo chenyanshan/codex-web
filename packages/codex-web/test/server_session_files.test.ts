@@ -489,6 +489,13 @@ test('multi-user session files enforce session ownership, project read access, a
   }
 
   const principals = {
+    admin: {
+      userId: 'user_admin',
+      username: 'admin',
+      roleIds: ['role_admin'],
+      isAdmin: true,
+      mode: 'multi' as const,
+    },
     alice: {
       userId: 'user_alice',
       username: 'alice',
@@ -532,6 +539,28 @@ test('multi-user session files enforce session ownership, project read access, a
     assert.equal(legacy.status, 200);
     assert.equal((await legacy.json() as any).file.source, 'legacy_report');
 
+    const observedProject = await fetch(`${server.baseUrl}/api/admin/sessions/app_alice/files/resolve`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'summary.md' }),
+    });
+    assert.equal(observedProject.status, 200);
+    const observedFile = (await observedProject.json() as any).file;
+    assert.match(observedFile.contentUrl, /^\/api\/admin\/sessions\/app_alice\/files\/[^/]+\/content$/u);
+    const observedContent = await fetch(`${server.baseUrl}${observedFile.contentUrl}`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(observedContent.status, 200);
+    assert.equal(await observedContent.text(), '# Allowed project\n');
+
+    const observedUpload = await fetch(`${server.baseUrl}/api/admin/sessions/app_alice/files/resolve`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: aliceUpload }),
+    });
+    assert.equal(observedUpload.status, 200);
+    assert.equal((await observedUpload.json() as any).file.source, 'upload');
+
     const deniedRequests = await Promise.all([
       resolveFile(server.baseUrl, 'app_bob', 'summary.md', 'alice'),
       resolveFile(server.baseUrl, 'app_alice', 'summary.md', 'bob'),
@@ -539,8 +568,9 @@ test('multi-user session files enforce session ownership, project read access, a
       resolveFile(server.baseUrl, 'app_alice', bobUpload, 'alice'),
       resolveFile(server.baseUrl, 'app_alice', deniedLegacyReport, 'alice'),
       resolveFile(server.baseUrl, 'app_alice', path.join(deniedProject, 'secret.md'), 'alice'),
+      resolveFile(server.baseUrl, 'app_alice', 'summary.md', 'admin'),
     ]);
-    assert.deepEqual(deniedRequests.map((response) => response.status), [404, 404, 404, 404, 404, 404]);
+    assert.deepEqual(deniedRequests.map((response) => response.status), [404, 404, 404, 404, 404, 404, 404]);
 
     const wrongPrincipal = await fetch(
       `${server.baseUrl}/api/sessions/app_bob/files/${encodeURIComponent(allowedFile.id)}/content`,
