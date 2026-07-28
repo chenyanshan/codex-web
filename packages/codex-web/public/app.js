@@ -8032,6 +8032,7 @@ async function streamTurnEvents(turnId, options = {}) {
   cancelStreamReconnect();
   stopStream({ preserveRetryState: true });
   const controller = new AbortController();
+  const observedSessionId = isAdminObservedSession() ? state.sessionId : '';
   state.streamAbortController = controller;
   state.streamIncludesWorkDetails = !shouldRestrictCurrentTurnEvents();
   activeStreamTurnId = turnId;
@@ -8059,7 +8060,10 @@ async function streamTurnEvents(turnId, options = {}) {
       ? `epoch=${encodeURIComponent(state.lastTurnEventEpoch)}`
       : '';
     const query = [after, epoch].filter(Boolean).join('&');
-    const responsePromise = fetch(`/api/turns/${encodeURIComponent(turnId)}/events${query ? `?${query}` : ''}`, {
+    const eventsPath = observedSessionId
+      ? `/api/admin/sessions/${encodeURIComponent(observedSessionId)}/turns/${encodeURIComponent(turnId)}/events`
+      : `/api/turns/${encodeURIComponent(turnId)}/events`;
+    const responsePromise = fetch(`${eventsPath}${query ? `?${query}` : ''}`, {
       headers: {
         Authorization: `Bearer ${state.token}`,
         Accept: 'text/event-stream',
@@ -9274,6 +9278,9 @@ async function refreshCurrentSessionMetadata({
   if (!state.sessionId || isShareContext()) {
     return null;
   }
+  if (isAdminObservedSession()) {
+    return refreshAdminObservedSessionMetadata({ viewportSnapshot, signal });
+  }
   if (!hydrateTimeline && !forceDetail) {
     return refreshCurrentSessionStatus({ viewportSnapshot, signal });
   }
@@ -9354,6 +9361,67 @@ async function refreshCurrentSessionMetadata({
     }
   }
   return null;
+}
+
+function isAdminObservedSession(session = state.currentSession) {
+  return isAdminPrincipal()
+    && session?.mode === 'observer'
+    && state.admin.observedSession?.id === session.id
+    && state.sessionId === session.id;
+}
+
+async function refreshAdminObservedSessionMetadata({ viewportSnapshot = null, signal = null } = {}) {
+  const sessionId = state.sessionId;
+  if (!sessionId || !isAdminObservedSession()) {
+    return null;
+  }
+  const requestGeneration = authRequestGeneration;
+  const snapshot = viewportSnapshot || captureTimelineViewport();
+  try {
+    const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, { signal });
+    if (!isAuthRequestCurrent(requestGeneration) || !payload?.session) {
+      return null;
+    }
+    const session = {
+      ...payload.session,
+      mode: payload.mode || payload.session.mode || 'observer',
+      readOnly: true,
+    };
+    if (state.sessionId !== sessionId || state.admin.observedSession?.id !== sessionId) {
+      return session;
+    }
+    state.admin.observedSession = session;
+    state.currentSession = session;
+    state.cwd = session.cwd || '';
+    applySessionSettings(session);
+    restoreTimelineForSession(session, { fullHistory: true });
+    const runtimeStatus = syncRuntimeStatusFromSession(session);
+    if (runtimeStatus.activeTurnId && state.turnId) {
+      restoreTurnEventCursor(sessionId, state.turnId, { onlyIfUnset: true });
+    }
+    nextTimelineRestoreSnapshot = snapshot;
+    renderChatWithTimelineRestored(() => {});
+    nextTimelineRestoreSnapshot = null;
+    return session;
+  } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration)) {
+      return null;
+    }
+    if (error?.status === 401 || error?.status === 403) {
+      handleApiError(error);
+      return null;
+    }
+    if (isMissingSessionError(error)) {
+      if (state.sessionId === sessionId) {
+        handleMissingSession(error, '');
+      }
+      return null;
+    }
+    if (error?.name !== 'AbortError') {
+      console.warn('[codex-web] observed session refresh failed', error);
+    }
+    return null;
+  }
 }
 
 async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = null } = {}) {

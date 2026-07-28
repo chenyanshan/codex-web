@@ -2001,6 +2001,112 @@ test('admin observed sessions open read-only history from the earliest message',
   assert.match(api.renderChat().innerHTML, /First observed question/u);
 });
 
+test('admin observed sessions stay selected when a running turn completes and metadata refreshes', async () => {
+  const fetchCalls = [];
+  let observedReadCount = 0;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/admin/sessions/session_observed') {
+        observedReadCount += 1;
+        const running = observedReadCount === 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'observer',
+            session: {
+              id: 'session_observed',
+              projectDisplayName: 'Project Alpha',
+              activeTurnId: running ? 'turn_observed' : null,
+              timeline: running
+                ? [{ id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Observed question' }]
+                : [
+                    { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Observed question' },
+                    { id: 'm2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: 'Observed answer' },
+                  ],
+              thread: {
+                turns: [{
+                  id: 'turn_observed',
+                  status: running ? 'in_progress' : 'completed',
+                  items: [],
+                }],
+              },
+            },
+          }),
+        };
+      }
+      if (path === '/api/sessions/session_observed/status') {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ error: 'session_not_found', message: 'session not found' }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: { userId: 'admin', isAdmin: true, mode: 'multi' },
+  };
+
+  await api.openAdminObservedSession('session_observed');
+  assert.equal(api.state.pendingTurn, true);
+
+  await api.refreshCurrentSessionMetadata();
+
+  assert.deepEqual(fetchCalls, [
+    '/api/admin/sessions/session_observed',
+    '/api/admin/sessions/session_observed',
+  ]);
+  assert.equal(api.state.view, 'chat');
+  assert.equal(api.state.sessionId, 'session_observed');
+  assert.equal(api.state.currentSession?.mode, 'observer');
+  assert.equal(api.state.currentSession?.readOnly, true);
+  assert.equal(api.state.admin.observedSession?.id, 'session_observed');
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.error, '');
+  assert.equal(api.state.timeline.some((item) => item.text === 'Observed answer'), true);
+});
+
+test('admin observed sessions stream turns through the scoped observer endpoint', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/admin/sessions/session_observed/turns/turn_observed/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({ read: async () => ({ done: true }) }),
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: { userId: 'admin', isAdmin: true, mode: 'multi' },
+  };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_observed';
+  api.state.currentSession = { id: 'session_observed', mode: 'observer', readOnly: true };
+  api.state.admin.observedSession = api.state.currentSession;
+
+  await api.streamTurnEvents('turn_observed');
+
+  assert.deepEqual(fetchCalls, [
+    '/api/admin/sessions/session_observed/turns/turn_observed/events',
+  ]);
+});
+
 test('returning from an admin observed session restores the session audit page', async () => {
   const { api } = await loadAppHarness({
     fetch: async (path) => {

@@ -1482,7 +1482,10 @@ test('hidden project event streams send safe work categories to members and full
   await server.start();
   try {
     const memberEvents = await readInitialSseEvents(`${server.baseUrl}/api/turns/turn_alice/events`, 'alice');
-    const adminEvents = await readInitialSseEvents(`${server.baseUrl}/api/turns/turn_admin/events`, 'admin');
+    const adminEvents = await readInitialSseEvents(
+      `${server.baseUrl}/api/admin/sessions/app_alice/turns/turn_alice/events`,
+      'admin',
+    );
 
     assert.deepEqual(memberEvents.map((event) => event.type), [
       'stream.ready',

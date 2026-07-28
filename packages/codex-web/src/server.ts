@@ -3061,6 +3061,7 @@ async function handleMultiUserRequest({
   }
 
   const adminSessionsMatch = pathname.match(/^\/api\/admin\/sessions(?:\/([^/]+))?$/u);
+  const adminSessionEventsMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/turns\/([^/]+)\/events$/u);
   if (pathname.startsWith('/api/admin/')) {
     if (!principal.isAdmin) {
       writeJson(response, 403, { error: 'forbidden' });
@@ -3138,6 +3139,37 @@ async function handleMultiUserRequest({
       });
       return true;
     }
+  }
+
+  if (adminSessionEventsMatch && method === 'GET') {
+    if (!principal.isAdmin) {
+      writeJson(response, 403, { error: 'forbidden' });
+      return true;
+    }
+    const adminIdentityState = await ensureAdminLegacySessionMappings({
+      identityStore,
+      identityState,
+      runtime,
+      principal,
+    });
+    const sessionId = decodeURIComponent(adminSessionEventsMatch[1]!);
+    const turnId = decodeURIComponent(adminSessionEventsMatch[2]!);
+    const appSession = adminIdentityState.sessions.find((session) => session.id === sessionId);
+    if (!appSession || runtime.threadIdForTurn?.(turnId) !== appSession.codexThreadId) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    await streamTurnEvents({
+      request,
+      response,
+      runtime,
+      turnId,
+      afterId: normalizeLastEventId(url.searchParams.get('after'), request.headers['last-event-id']),
+      requestedEpoch: normalizeEventEpoch(url.searchParams.get('epoch'), request.headers['x-codex-event-epoch']),
+      registerSseCloser,
+      audience: 'workspace',
+    });
+    return true;
   }
 
   const shareCreateMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/share$/u);
