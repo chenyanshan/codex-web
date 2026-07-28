@@ -1333,7 +1333,6 @@ async function handleWebhookSessionRequest({
     body: {
       ...body,
       submissionId: `webhook:${crypto.createHash('sha256').update(idempotencyKey).digest('hex')}`,
-      settings: {},
     },
     forcedSessionId: null,
     principal: revalidatedPrincipal,
@@ -1395,12 +1394,12 @@ function normalizeWebhookSessionBody(
   identityState: CodexWebIdentityState,
   principal: CodexWebPrincipal,
 ): Record<string, unknown> {
-  const allowedFields = new Set(['text', 'projectId', 'title']);
+  const allowedFields = new Set(['text', 'projectId', 'title', 'model', 'reasoningEffort']);
   if (Object.keys(body).some((key) => !allowedFields.has(key))) {
     throw createHttpError(
       400,
       'invalid_webhook_payload',
-      'Webhook session requests only accept text, projectId, and title.',
+      'Webhook session requests only accept text, projectId, title, model, and reasoningEffort.',
     );
   }
   if (typeof body.text !== 'string' || !body.text.trim()) {
@@ -1409,6 +1408,12 @@ function normalizeWebhookSessionBody(
   if (body.title !== undefined && typeof body.title !== 'string') {
     throw createHttpError(400, 'invalid_webhook_payload', 'title must be a string.');
   }
+  const model = normalizeWebhookOptionalSetting(body, 'model');
+  const reasoningEffort = normalizeWebhookOptionalSetting(body, 'reasoningEffort');
+  const settings = {
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
 
   const hasProjectId = Object.prototype.hasOwnProperty.call(body, 'projectId');
   if (identityState.settings.multiUserEnabled === true) {
@@ -1424,6 +1429,7 @@ function normalizeWebhookSessionBody(
       text: body.text,
       projectId: project.id,
       ...(body.title !== undefined ? { title: body.title } : {}),
+      settings,
     };
   }
 
@@ -1433,7 +1439,22 @@ function normalizeWebhookSessionBody(
   return {
     text: body.text,
     ...(body.title !== undefined ? { title: body.title } : {}),
+    settings,
   };
+}
+
+function normalizeWebhookOptionalSetting(
+  body: Record<string, unknown>,
+  field: 'model' | 'reasoningEffort',
+): string | null {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) {
+    return null;
+  }
+  const value = typeof body[field] === 'string' ? body[field].trim() : '';
+  if (!value) {
+    throw createHttpError(400, 'invalid_webhook_payload', `${field} must be a non-empty string.`);
+  }
+  return value;
 }
 
 function resolveWebhookProjectReference(

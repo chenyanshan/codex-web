@@ -243,6 +243,8 @@ test('webhook management is self-scoped and a webhook creates one owner-mapped s
       text: 'Review the incoming change',
       projectId: 'Shared Project',
       title: 'Webhook review',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
     };
     const first = await webhookRequest(server.baseUrl, key, eventId, requestBody);
     assert.equal(first.status, 201);
@@ -258,11 +260,14 @@ test('webhook management is self-scoped and a webhook creates one owner-mapped s
     assert.deepEqual(runtime.createInputs, [{
       cwd: '/private/shared-project',
       title: 'Webhook review',
-      settings: {},
+      settings: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
     }]);
     assert.equal(runtime.startInputs[0]?.sessionId, 'thread_1');
     assert.equal(runtime.startInputs[0]?.input.text, 'Review the incoming change');
-    assert.deepEqual(runtime.startInputs[0]?.input.settings, {});
+    assert.deepEqual(runtime.startInputs[0]?.input.settings, {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+    });
     assert.match(runtime.startInputs[0]?.input.developerInstructions, /Codex Web context file:/u);
 
     const state = await identityStore.readState();
@@ -275,6 +280,15 @@ test('webhook management is self-scoped and a webhook creates one owner-mapped s
     const replay = await webhookRequest(server.baseUrl, key, eventId, requestBody);
     assert.equal(replay.status, 200);
     assert.equal((await replay.json() as any).turnId, 'turn_1');
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 1);
+
+    const modelConflict = await webhookRequest(server.baseUrl, key, eventId, {
+      ...requestBody,
+      model: 'gpt-5.6-luna',
+    });
+    assert.equal(modelConflict.status, 409);
+    assert.equal((await modelConflict.json() as any).error, 'submission_conflict');
     assert.equal(runtime.createInputs.length, 1);
     assert.equal(runtime.startInputs.length, 1);
 
@@ -499,6 +513,54 @@ test('single-user webhooks use the server default cwd and reject unsupported pay
       attachments: [],
       attachmentIds: [],
     });
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('webhooks accept optional model and reasoning effort as non-empty strings', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-model-settings-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const created = await identityStore.setWebhookEnabled('local-admin', true);
+  const key = created.key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: null }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const invalidBodies = [
+      { text: 'x', model: 42 },
+      { text: 'x', model: '   ' },
+      { text: 'x', reasoningEffort: null },
+      { text: 'x', reasoningEffort: '   ' },
+    ];
+    for (const [index, body] of invalidBodies.entries()) {
+      const response = await webhookRequest(server.baseUrl, key, `invalid-model-setting-${index}`, body);
+      assert.equal(response.status, 400, `model payload ${index} should be rejected`);
+      assert.equal((await response.json() as any).error, 'invalid_webhook_payload');
+    }
+    assert.equal(runtime.createInputs.length, 0);
+
+    const modelOnly = await webhookRequest(server.baseUrl, key, 'model-only', {
+      text: 'Use a selected model',
+      model: '  custom-model  ',
+    });
+    assert.equal(modelOnly.status, 201);
+    assert.deepEqual(runtime.createInputs[0]?.settings, { model: 'custom-model' });
+    assert.deepEqual(runtime.startInputs[0]?.input.settings, { model: 'custom-model' });
+
+    const reasoningOnly = await webhookRequest(server.baseUrl, key, 'reasoning-only', {
+      text: 'Use the default model with selected reasoning',
+      reasoningEffort: '  deep  ',
+    });
+    assert.equal(reasoningOnly.status, 201);
+    assert.deepEqual(runtime.createInputs[1]?.settings, { reasoningEffort: 'deep' });
+    assert.deepEqual(runtime.startInputs[1]?.input.settings, { reasoningEffort: 'deep' });
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });

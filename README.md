@@ -183,7 +183,7 @@ curl --request POST 'https://codex-web.example/api/webhook' \
   --header 'Authorization: Bearer cwwh_REPLACE_ME' \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: my-system-event-123' \
-  --data '{"projectId":"CodeX Web","title":"Webhook task","text":"Review the latest changes"}'
+  --data '{"projectId":"CodeX Web","title":"Webhook task","text":"Review the latest changes","model":"gpt-5.6-sol","reasoningEffort":"high"}'
 ```
 
 In multi-user mode, set `projectId` to the project display name shown in Codex
@@ -197,6 +197,21 @@ in the selected project.
 | `text` | Yes | The prompt sent as the first turn. |
 | `title` | No | The new session title. |
 | `projectId` | Multi-user only | Project display name or exact internal ID. Required in multi-user mode and rejected in single-user mode. |
+| `model` | No | Exact, case-sensitive model ID from the local Codex runtime. |
+| `reasoningEffort` | No | A reasoning value supported by the selected or effective default model. |
+
+Model availability and reasoning choices are dynamic. Use the Model and
+Reasoning options shown in Codex Web, or inspect `GET /api/models` with a normal
+authenticated browser token (`items[].id` and `supportedReasoningEfforts`); a
+webhook key cannot read that private API. Values such as `max` or `ultra` are
+valid only when the selected model advertises them.
+
+When both fields are omitted, the request inherits the Codex configuration for
+the target working directory, not browser-local New Thread defaults. Supplying
+only `model` uses that model's Codex default reasoning effort. Supplying only
+`reasoningEffort` applies it to the target directory's effective default model.
+Unsupported values are passed to the Codex runtime, which may reject the
+request.
 
 `Idempotency-Key` is required and must be unique for each external event. Retry
 the same payload with the same value after a timeout or network failure; Codex
@@ -214,11 +229,12 @@ value with a different payload returns `409 Conflict`.
 - `429 Too Many Requests`: the per-key limit of 10 requests per minute was
   exceeded.
 
-Only `text`, `title`, and the mode-appropriate `projectId` are accepted. The
-caller cannot override the working directory, model, approval policy, sandbox,
-or other runtime settings. The turn uses the server runtime defaults, which are
-currently `danger-full-access` and `approvalPolicy=never`. Treat the webhook key
-like a password because it can start Codex work on the host machine.
+Only `text`, `title`, `model`, `reasoningEffort`, and the mode-appropriate
+`projectId` are accepted. The caller cannot override the working directory,
+approval policy, sandbox, or other runtime settings. The turn uses the server
+runtime permission defaults, which are currently `danger-full-access` and
+`approvalPolicy=never`. Treat the webhook key like a password because it can
+start Codex work on the host machine.
 
 ## AI Install
 

@@ -225,7 +225,7 @@ curl -X POST https://codex-web.example/api/webhook \
   -H 'Authorization: Bearer cwwh_REPLACE_ME' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: external-event-123' \
-  -d '{"projectId":"CodeX Web","title":"外部任务","text":"处理这个任务"}'
+  -d '{"projectId":"CodeX Web","title":"外部任务","text":"处理这个任务","model":"gpt-5.6-sol","reasoningEffort":"high"}'
 ```
 
 必须提供 `Idempotency-Key`，相同内容的重试会被去重，不会再创建一个 session。
@@ -233,6 +233,16 @@ curl -X POST https://codex-web.example/api/webhook \
 大小写；也兼容精确的内部项目 ID。新建项目或修改项目名时不允许出现重复显示名，
 并且 key 所属用户必须有权在该项目创建 session。单用户模式省略 `projectId`，并使用
 `CODEX_WEB_DEFAULT_CWD`。
+
+`model` 和 `reasoningEffort` 都是可选字段。模型 ID 区分大小写，应使用 Codex Web
+设置页展示的选项，或使用普通登录 token 请求 `GET /api/models`，读取 `items[].id` 和
+对应的 `supportedReasoningEfforts`；webhook key 不能读取这个私有接口。可用模型和
+思考强度由当前 Codex CLI 动态提供，`max`、`ultra` 等值并非对所有模型都有效。
+
+两项都省略时，请求继承目标工作目录的 Codex 配置，不读取浏览器本地的“新会话”
+默认值。只提供 `model` 时使用该模型的 Codex 默认思考强度；只提供
+`reasoningEffort` 时应用到目标目录的有效默认模型。不受支持的值会交给 Codex runtime
+校验，并可能导致请求失败。
 
 请求会创建 session 并启动第一个 turn。调用方不能覆盖 Codex 权限或 sandbox 设置，
 turn 使用服务端 runtime 默认值；当前默认是 `danger-full-access` 和
