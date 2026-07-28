@@ -9119,6 +9119,77 @@ test('stream failures render a visible timeline error instead of only composer s
   assert.doesNotMatch(api.renderChat().innerHTML, /composer-error/u);
 });
 
+test('missing observer turn streams reconcile the existing session without showing a false session error', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/admin/sessions/session_observed/turns/turn_stale/events') {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({
+            error: 'session_not_found',
+            message: 'Selected session was not found.',
+          }),
+        };
+      }
+      if (path === '/api/admin/sessions/session_observed') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mode: 'observer',
+            session: {
+              id: 'session_observed',
+              activeTurnId: null,
+              timeline: [
+                { id: 'm1', kind: 'message', role: 'user', label: 'User', meta: 'history', text: 'Observed question' },
+                { id: 'm2', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: 'Observed answer' },
+              ],
+              thread: {
+                turns: [{ id: 'turn_stale', status: 'completed', items: [] }],
+              },
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: { userId: 'admin', isAdmin: true, mode: 'multi' },
+  };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_observed';
+  api.state.currentSession = {
+    id: 'session_observed',
+    activeTurnId: 'turn_stale',
+    mode: 'observer',
+    readOnly: true,
+  };
+  api.state.admin.observedSession = api.state.currentSession;
+  api.state.turnId = 'turn_stale';
+  api.state.pendingTurn = true;
+
+  await api.streamTurnEvents('turn_stale');
+
+  assert.deepEqual(fetchCalls, [
+    '/api/admin/sessions/session_observed/turns/turn_stale/events',
+    '/api/admin/sessions/session_observed',
+  ]);
+  assert.equal(api.state.sessionId, 'session_observed');
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.turnId, null);
+  assert.equal(api.state.status, 'Ready');
+  assert.equal(api.state.statusTone, 'success');
+  assert.equal(api.state.error, '');
+  assert.equal(api.state.timeline.some((item) => item.text === 'Selected session was not found.'), false);
+  assert.equal(api.state.timeline.some((item) => item.text === 'Observed answer'), true);
+});
+
 test('stream failures persist visible errors through the backend session timeline', async () => {
   const fetchCalls: Array<{ path: string; options: any }> = [];
   const { api } = await loadAppHarness({

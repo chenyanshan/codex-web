@@ -8146,6 +8146,15 @@ async function streamTurnEvents(turnId, options = {}) {
       }
       return;
     }
+    if (isMissingSessionError(error) && state.sessionId && state.turnId === turnId) {
+      const sessionId = state.sessionId;
+      markStreamPaused();
+      await refreshCurrentSessionMetadata({ hydrateTimeline: true });
+      if (state.sessionId === sessionId && state.pendingTurn && state.turnId === turnId) {
+        scheduleStreamReconnect();
+      }
+      return;
+    }
     if (isRecoverableBackgroundStreamError(turnId, error)) {
       markStreamPaused();
       void revalidateWorkDetailsPolicyAfterStreamClose();
