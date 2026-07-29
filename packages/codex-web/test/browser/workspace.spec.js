@@ -727,6 +727,38 @@ test('settings keep appearance and new-session defaults separated without overfl
   await expect(settings.getByText('New sessions on this device', { exact: true })).toBeVisible();
   await expect(settings.locator('#default-model-select')).toHaveValue('gpt-5.6-sol');
   await expect(settings.locator('#default-reasoning-select')).toHaveValue('ultra');
+  await expect(settings.locator('[data-app-theme]')).toHaveCount(11);
+
+  for (const [theme, chromeColor] of [
+    ['amber', '#18181b'],
+    ['one-dark', '#21252b'],
+    ['gruvbox', '#1d2021'],
+    ['catppuccin', '#1e1e2e'],
+    ['dracula', '#282a36'],
+  ]) {
+    await settings.locator(`[data-app-theme="${theme}"]`).click();
+    await expect(settings.locator(`[data-app-theme="${theme}"]`)).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => page.evaluate(() => ({
+      theme: document.documentElement.dataset.theme,
+      savedTheme: window.localStorage.getItem('codexWebTheme'),
+      chromeColor: document.querySelector('meta[name="theme-color"]')?.getAttribute('content'),
+      background: window.getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
+      colorScheme: window.getComputedStyle(document.documentElement).colorScheme,
+    }))).toEqual({
+      theme,
+      savedTheme: theme,
+      chromeColor,
+      background: chromeColor,
+      colorScheme: 'dark',
+    });
+  }
+
+  const clippedThemeNames = await settings.locator('.theme-option-name').evaluateAll((elements) => (
+    elements
+      .filter((element) => element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1)
+      .map((element) => element.textContent?.trim())
+  ));
+  expect(clippedThemeNames).toEqual([]);
 
   const geometry = await settings.evaluate((element) => ({
     clientWidth: element.clientWidth,

@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const stylesUrl = new URL('../public/styles.css', import.meta.url);
+const appUrl = new URL('../public/app.js', import.meta.url);
 const themeInitUrl = new URL('../public/theme-init.js', import.meta.url);
 
 const paletteSelectors = new Map([
@@ -13,6 +14,11 @@ const paletteSelectors = new Map([
   ['nord', ':root[data-theme="nord"]'],
   ['forest', ':root[data-theme="forest"]'],
   ['rose', ':root[data-theme="rose"]'],
+  ['amber', ':root[data-theme="amber"]'],
+  ['one-dark', ':root[data-theme="one-dark"]'],
+  ['gruvbox', ':root[data-theme="gruvbox"]'],
+  ['catppuccin', ':root[data-theme="catppuccin"]'],
+  ['dracula', ':root[data-theme="dracula"]'],
 ]);
 
 test('every theme meets contrast targets for text, actions, states, and controls', async () => {
@@ -23,6 +29,7 @@ test('every theme meets contrast targets for text, actions, states, and controls
     for (const token of [
       'bg',
       'panel',
+      'panel-2',
       'border',
       'border-strong',
       'control-border',
@@ -37,6 +44,8 @@ test('every theme meets contrast targets for text, actions, states, and controls
       'danger',
       'code-bg',
       'code-text',
+      'overlay',
+      'shadow',
     ]) {
       assert.ok(tokens[token], `${theme} is missing --${token}`);
     }
@@ -54,6 +63,34 @@ test('every theme meets contrast targets for text, actions, states, and controls
   }
 });
 
+test('theme registries, browser chrome colors, and picker previews stay in sync', async () => {
+  const [css, app, themeInit] = await Promise.all([
+    readFile(stylesUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(themeInitUrl, 'utf8'),
+  ]);
+  const expectedIds = [...paletteSelectors.keys()];
+  const appThemes = [...app.matchAll(
+    /\{ id: '([^']+)', label: '[^']+', chromeColor: '(#[0-9a-f]{6})' \},/gu,
+  )].map((match) => ({ id: match[1], chromeColor: match[2] }));
+  const themeColorsBlock = themeInit.match(/const themeColors = \{([\s\S]*?)\n  \};/u)?.[1] ?? '';
+  const initializedThemes = [...themeColorsBlock.matchAll(
+    /^\s*(?:'([^']+)'|([a-z][a-z-]*)): '(#[0-9a-f]{6})',$/gmu,
+  )].map((match) => ({ id: match[1] || match[2], chromeColor: match[3] }));
+
+  assert.deepEqual(appThemes.map((theme) => theme.id), expectedIds);
+  assert.deepEqual(initializedThemes, appThemes);
+  for (const theme of appThemes) {
+    const selector = paletteSelectors.get(theme.id);
+    assert.ok(selector);
+    assert.equal(parseThemeTokens(css, selector).bg, theme.chromeColor);
+    assert.ok(
+      css.includes(`.theme-option[data-app-theme="${theme.id}"] {`),
+      `${theme.id} is missing its picker preview`,
+    );
+  }
+});
+
 test('sunny keeps dividers quiet while controls retain a visible boundary', async () => {
   const css = await readFile(stylesUrl, 'utf8');
   const sunny = parseThemeTokens(css, ':root');
@@ -67,6 +104,14 @@ test('sunny keeps dividers quiet while controls retain a visible boundary', asyn
   assert.match(css, /\.theme-option\[data-app-theme="sunny"\]\s*\{[^}]*--preview-border:\s*#dfcfac;/su);
 });
 
+test('specialized focus styling follows each theme accent', async () => {
+  const css = await readFile(stylesUrl, 'utf8');
+  const sunny = parseThemeTokens(css, ':root');
+
+  assert.equal(sunny.focus, 'var(--accent)');
+  assert.match(css, /\.submission-retry-button:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus\);/su);
+});
+
 test('pre-style theme initialization restores saved themes and defaults to sunny', async () => {
   const source = await readFile(themeInitUrl, 'utf8');
 
@@ -78,6 +123,10 @@ test('pre-style theme initialization restores saved themes and defaults to sunny
     theme: 'nord',
     chromeColor: '#252a35',
   });
+  assert.deepEqual(runThemeInit(source, 'catppuccin'), {
+    theme: 'catppuccin',
+    chromeColor: '#1e1e2e',
+  });
   assert.deepEqual(runThemeInit(source, 'unsupported'), {
     theme: 'sunny',
     chromeColor: '#f8f3e3',
@@ -88,6 +137,7 @@ test('theme picker and thread settings use stable responsive grids', async () =>
   const css = await readFile(stylesUrl, 'utf8');
 
   assert.match(css, /\.theme-picker\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/su);
+  assert.match(css, /@media \(max-width:\s*420px\)\s*\{[\s\S]*?\.theme-picker\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/su);
   assert.match(css, /\.thread-settings-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/su);
   assert.match(css, /@media \(max-width:\s*420px\)\s*\{[\s\S]*?\.thread-settings-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/su);
 });

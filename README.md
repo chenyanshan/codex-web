@@ -83,8 +83,9 @@ Untrusted users must be separated with distinct OS users, containers, or hosts.
 - macOS launchd service helpers and Linux systemd setup instructions.
 - English and Simplified Chinese UI language setting, plus a backend-managed
   site title for admins/single-user installs.
-- Six contrast-checked themes with Sunlit yellow as the first-run default,
-  including Paper, Graphite, Nordic, Forest, and Rose alternatives.
+- Eleven contrast-checked themes with Sunlit yellow as the first-run default,
+  including Paper, Graphite, Nordic, Forest, Rose, Graphite Amber, One Dark Pro,
+  Gruvbox Dark, Catppuccin Mocha, and Dracula Dark alternatives.
 
 ## Repository Layout
 

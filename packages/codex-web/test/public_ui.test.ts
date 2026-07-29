@@ -2730,12 +2730,28 @@ test('app settings persist theme and default thread settings', async () => {
   assert.equal(storage.get('codexWebTheme'), 'nord');
   assert.equal(context.document.documentElement.dataset.theme, 'nord');
 
+  api.applyTheme('catppuccin');
+  assert.equal(storage.get('codexWebTheme'), 'catppuccin');
+  assert.equal(context.document.documentElement.dataset.theme, 'catppuccin');
+
   api.applyTheme('unsupported');
   assert.equal(storage.get('codexWebTheme'), 'sunny');
   assert.equal(context.document.documentElement.dataset.theme, 'sunny');
 
   const settingsHtml = api.renderAppSettings().innerHTML;
-  for (const theme of ['sunny', 'light', 'dark', 'nord', 'forest', 'rose']) {
+  for (const theme of [
+    'sunny',
+    'light',
+    'dark',
+    'nord',
+    'forest',
+    'rose',
+    'amber',
+    'one-dark',
+    'gruvbox',
+    'catppuccin',
+    'dracula',
+  ]) {
     assert.match(settingsHtml, new RegExp(`data-app-theme="${theme}"`, 'u'));
   }
 
@@ -3237,6 +3253,12 @@ test('Chinese language setting localizes settings, chat, and admin management UI
   assert.match(settingsHtml, /网站标题/u);
   assert.match(settingsHtml, /此设备的新会话/u);
   assert.match(settingsHtml, /退出登录/u);
+  for (const themeName of ['深石墨琥珀', '原子深色', '复古暖色', '摩卡柔彩', '德古拉深色']) {
+    assert.match(settingsHtml, new RegExp(`>${themeName}<`, 'u'));
+  }
+  for (const themeName of ['Graphite Amber', 'One Dark Pro', 'Gruvbox Dark', 'Catppuccin Mocha', 'Dracula Dark']) {
+    assert.doesNotMatch(settingsHtml, new RegExp(`>${themeName}<`, 'u'));
+  }
 
   api.state.view = 'chat';
   api.state.currentSession = { id: 'session_1', cwd: '/repo' };

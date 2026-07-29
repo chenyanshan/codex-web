@@ -6,6 +6,11 @@
     nord: '#252a35',
     forest: '#101613',
     rose: '#f9f4f5',
+    amber: '#18181b',
+    'one-dark': '#21252b',
+    gruvbox: '#1d2021',
+    catppuccin: '#1e1e2e',
+    dracula: '#282a36',
   };
   let theme = 'sunny';
   try {

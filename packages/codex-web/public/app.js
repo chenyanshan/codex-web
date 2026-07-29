@@ -46,6 +46,11 @@ const THEMES = Object.freeze([
   { id: 'nord', label: 'Nordic', chromeColor: '#252a35' },
   { id: 'forest', label: 'Forest', chromeColor: '#101613' },
   { id: 'rose', label: 'Rose', chromeColor: '#f9f4f5' },
+  { id: 'amber', label: 'Graphite Amber', chromeColor: '#18181b' },
+  { id: 'one-dark', label: 'One Dark Pro', chromeColor: '#21252b' },
+  { id: 'gruvbox', label: 'Gruvbox Dark', chromeColor: '#1d2021' },
+  { id: 'catppuccin', label: 'Catppuccin Mocha', chromeColor: '#1e1e2e' },
+  { id: 'dracula', label: 'Dracula Dark', chromeColor: '#282a36' },
 ]);
 const THEME_IDS = THEMES.map((theme) => theme.id);
 const DEFAULT_THEME = 'sunny';
@@ -243,6 +248,11 @@ const UI_TRANSLATIONS = {
     Nordic: '北境蓝',
     Forest: '森林绿',
     Rose: '柔和玫瑰',
+    'Graphite Amber': '深石墨琥珀',
+    'One Dark Pro': '原子深色',
+    'Gruvbox Dark': '复古暖色',
+    'Catppuccin Mocha': '摩卡柔彩',
+    'Dracula Dark': '德古拉深色',
     'Message Size': '消息字号',
     Small: '小',
     Medium: '中',
