@@ -529,8 +529,6 @@ const state = {
   queuedMessages: loadQueuedMessages(),
   submissionOutbox: loadSubmissionOutbox(),
   queuedMessageSending: false,
-  queuedInterruptRequestedTurnId: null,
-  queuedInterruptEligibleTurnId: null,
   composerCanExpand: false,
   composerExpanded: false,
   timelineShouldFollowLatest: true,
@@ -734,7 +732,12 @@ async function restoreAuth() {
   try {
     state.status = 'Restoring session';
     render();
-    const { session } = await apiFetch('/api/auth/me');
+    const authRequest = apiFetch('/api/auth/me');
+    const settingsRequest = preloadApiRequest('/api/settings');
+    const modelsRequest = preloadApiRequest('/api/models');
+    const projectsRequest = preloadApiRequest('/api/projects');
+    const sessionsRequest = preloadApiRequest('/api/sessions');
+    const { session } = await authRequest;
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
@@ -748,10 +751,10 @@ async function restoreAuth() {
     state.statusTone = 'warn';
     render();
     const [settingsPayload, modelsPayload] = await Promise.all([
-      refreshGlobalSettings({ renderAfter: false }).catch(() => null),
-      apiFetch('/api/models').catch(() => ({ items: [], defaults: null })),
-      refreshProjectsList({ renderAfter: false }).catch(() => []),
-      refreshSessionsList({ renderAfter: false, scope: 'all' }).catch(() => null),
+      refreshGlobalSettings({ renderAfter: false, request: settingsRequest }).catch(() => null),
+      modelsRequest.catch(() => ({ items: [], defaults: null })),
+      refreshProjectsList({ renderAfter: false, request: projectsRequest }).catch(() => []),
+      refreshSessionsList({ renderAfter: false, scope: 'all', request: sessionsRequest }).catch(() => null),
     ]);
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
@@ -796,6 +799,12 @@ async function restoreAuth() {
     state.error = error?.payload?.message || error?.message || 'Could not reconnect';
     render();
   }
+}
+
+function preloadApiRequest(path) {
+  const request = apiFetch(path);
+  void request.catch(() => {});
+  return request;
 }
 
 function createCachedAuthSession() {
@@ -3088,7 +3097,7 @@ function renderSessionCards() {
     const activityState = sessionActivityState(session);
     const pendingDelivery = session.localSubmission === true
       ? null
-      : pendingSubmissionEntries().find((entry) => entry.sessionId === session.id);
+      : pendingSubmissionForSessionCard(session);
     const deliveryState = session.localSubmission === true ? session.deliveryState : pendingDelivery?.status || '';
     const deliveryFailureVisible = session.localSubmission === true
       ? session.deliveryFailureVisible === true
@@ -3131,6 +3140,23 @@ function renderSessionCards() {
       </article>
     `;
   }).join('');
+}
+
+function pendingSubmissionForSessionCard(session) {
+  const lastAcceptedInputAt = Math.max(0, Number(session?.lastInputAt) || 0);
+  let latest = null;
+  for (const entry of pendingSubmissionEntries()) {
+    if (entry.sessionId !== session?.id) {
+      continue;
+    }
+    if (lastAcceptedInputAt > Number(entry.updatedAt || 0)) {
+      continue;
+    }
+    if (!latest || Number(entry.updatedAt || 0) >= Number(latest.updatedAt || 0)) {
+      latest = entry;
+    }
+  }
+  return latest;
 }
 
 function renderSessionsError({ compact = false } = {}) {
@@ -3433,6 +3459,12 @@ function visibleTimelineItems() {
       if (item.role === 'system' && isTurnInterruptTimeoutMessage(item.text)) {
         return false;
       }
+      if (item.role === 'system' && (
+        isBackgroundMcpTransportFailure(item.text)
+        || isRecoverableToolRouterFailure(item.text)
+      )) {
+        return false;
+      }
       const display = normalizeTimelineMessageDisplay(item.role, item.text, item.attachments);
       return Boolean(String(display.text || '').trim() || display.attachments.length);
     }
@@ -3579,9 +3611,13 @@ function renderSubmissionDeliveryActions(item, submission) {
   const indicator = submission && submission.retryable !== false
     ? `<button class="submission-retry-button" type="button" data-submission-retry-id="${escapeAttribute(submission.id)}" aria-label="${escapeAttribute(retryLabel)}" title="${escapeAttribute(t('Retry send'))}"><span aria-hidden="true">&#8635;</span></button>`
     : `<span class="submission-failed-indicator" role="img" aria-label="${escapeAttribute(t('Send failed'))}" title="${escapeAttribute(t('Send failed'))}"><span aria-hidden="true">!</span></span>`;
+  const cancel = submission
+    ? `<button class="submission-cancel-button" type="button" data-submission-cancel-id="${escapeAttribute(submission.id)}" aria-label="${escapeAttribute(t('Cancel send'))}" title="${escapeAttribute(t('Cancel send'))}"><span aria-hidden="true">&times;</span></button>`
+    : '';
   return `
         <div class="submission-delivery-actions">
           ${indicator}
+          ${cancel}
         </div>
   `;
 }
@@ -4869,12 +4905,18 @@ function bindGlobalEvents() {
   }
 
   for (const button of document.querySelectorAll('[data-submission-retry-id]')) {
+    if (button.closest('#timeline')) {
+      continue;
+    }
     listenRendered(button, 'click', () => {
       void retrySubmission(button.getAttribute('data-submission-retry-id') || '');
     });
   }
 
   for (const button of document.querySelectorAll('[data-submission-cancel-id]')) {
+    if (button.closest('#timeline')) {
+      continue;
+    }
     listenRendered(button, 'click', () => {
       cancelSubmission(button.getAttribute('data-submission-cancel-id') || '');
     });
@@ -6092,6 +6134,18 @@ function bindTimelineActionEvents({ reset = true } = {}) {
     });
   }
 
+  for (const button of timeline.querySelectorAll?.('[data-submission-retry-id]') || []) {
+    listenTimeline(button, 'click', () => {
+      void retrySubmission(button.getAttribute('data-submission-retry-id') || '');
+    });
+  }
+
+  for (const button of timeline.querySelectorAll?.('[data-submission-cancel-id]') || []) {
+    listenTimeline(button, 'click', () => {
+      cancelSubmission(button.getAttribute('data-submission-cancel-id') || '');
+    });
+  }
+
   for (const control of timeline.querySelectorAll?.('[data-session-file-path]') || []) {
     listenTimeline(control, 'click', (event) => {
       event.preventDefault();
@@ -7074,7 +7128,7 @@ async function onComposerSubmit(event) {
     renderChatAtLatestIfFollowing(() => {});
     return;
   }
-  if (state.pendingTurn && state.sessionId && !isSlashCommandText(text)) {
+  if (state.pendingTurn && state.sessionId) {
     if (readyComposerAttachments().length) {
       state.error = 'Attachments cannot be queued while a turn is running.';
       state.status = 'Turn running';
@@ -7082,16 +7136,58 @@ async function onComposerSubmit(event) {
       renderChatAtLatestIfFollowing(() => {});
       return;
     }
-    enqueueQueuedMessage(state.sessionId, text);
-    state.queuedInterruptRequestedTurnId = state.turnId || null;
-    clearPromptDraftForCurrentSession();
-    state.status = 'Turn running';
-    state.statusTone = 'warn';
-    renderChatAtLatestIfFollowing(() => {});
-    void maybeInterruptRunningTurnForQueuedMessage();
+    if (isSlashCommandText(text)) {
+      queueMessageUntilTurnCompletes(state.sessionId, text);
+      return;
+    }
+    await steerRunningTurn(text);
     return;
   }
   await sendComposerMessage(text);
+}
+
+async function steerRunningTurn(text) {
+  const sessionId = String(state.sessionId || '').trim();
+  const normalizedText = String(text || '').trim();
+  if (!sessionId || !normalizedText) {
+    return null;
+  }
+  if (!String(state.turnId || '').trim()) {
+    queueMessageUntilTurnCompletes(sessionId, normalizedText);
+    return null;
+  }
+  return sendDurableComposerMessage(normalizedText, {
+    sessionId,
+    includeComposerAttachments: false,
+    submissionIdPrefix: 'steer:',
+  });
+}
+
+function queueMessageUntilTurnCompletes(sessionId, text) {
+  enqueueQueuedMessage(sessionId, text);
+  if (state.sessionId !== sessionId) {
+    return;
+  }
+  if (String(state.prompt || '').trim() === String(text || '').trim()) {
+    clearPromptDraftForCurrentSession();
+  }
+  state.status = state.pendingTurn ? 'Turn running' : 'Starting turn';
+  state.statusTone = 'warn';
+  state.error = '';
+  renderChatAtLatestIfFollowing(() => {});
+}
+
+function isActiveTurnNotSteerableError(error) {
+  const payload = error?.payload;
+  const code = String(
+    payload?.code
+      || payload?.error?.code
+      || payload?.error
+      || '',
+  ).trim();
+  return code === 'active_turn_not_steerable'
+    || code === 'activeTurnNotSteerable'
+    || code === 'turn_conflict';
 }
 
 function isSlashCommandText(text) {
@@ -7107,6 +7203,7 @@ function createComposerSubmission(text, {
   queuedMessageId = '',
   sessionId: preferredSessionId = '',
   includeComposerAttachments = true,
+  submissionIdPrefix = '',
 } = {}) {
   const existing = queuedMessageId
     ? pendingSubmissionEntries().find((entry) => entry.queuedMessageId === queuedMessageId)
@@ -7124,7 +7221,7 @@ function createComposerSubmission(text, {
   const sessionId = String(preferredSessionId || state.sessionId || '').trim();
   const attachments = includeComposerAttachments ? readyComposerAttachments() : [];
   return upsertSubmissionOutboxEntry({
-    id: createSubmissionId(),
+    id: `${submissionIdPrefix}${createSubmissionId()}`,
     ownerKey,
     text,
     status: 'pending',
@@ -7155,10 +7252,12 @@ async function sendDurableComposerMessage(text, options = {}) {
     return null;
   }
   const optimisticUserEntry = submissionTimelineItem(submission);
-  state.lastTurnEventSequence = null;
-  state.lastTurnEventEpoch = '';
-  state.lastTurnEventAt = Date.now();
-  state.streamWasBackgrounded = false;
+  if (!isSteerSubmissionEntry(submission)) {
+    state.lastTurnEventSequence = null;
+    state.lastTurnEventEpoch = '';
+    state.lastTurnEventAt = Date.now();
+    state.streamWasBackgrounded = false;
+  }
   appendOrReplace(optimisticUserEntry, (item) => item?.submissionId === submission.id);
   if (state.sessionId) {
     saveCurrentTimeline();
@@ -7273,6 +7372,13 @@ async function deliverSubmission(submissionId, { interactive = false, force = fa
       error = timeoutError;
     }
     state.submissionSending = false;
+    if (
+      isSteerSubmissionEntry(sending)
+      && isActiveTurnNotSteerableError(error)
+      && deferSteerSubmissionUntilTurnCompletes(sending)
+    ) {
+      return null;
+    }
     failSubmissionDelivery(sending, error, { wasActiveDraft });
     return null;
   } finally {
@@ -7355,6 +7461,13 @@ function completeDeliveredSubmission(entry, normalized, payload, { wasActiveDraf
     state.sessionId === entry.sessionId
     || (!state.sessionId && wasActiveDraft)
   ));
+  const continuesActiveTurn = Boolean(
+    isSteerSubmissionEntry(entry)
+    && shouldAdoptSession
+    && state.pendingTurn
+    && state.turnId
+    && state.turnId === normalized.turnId
+  );
   if (shouldAdoptSession) {
     state.sessionId = sessionId;
     state.activeSubmissionId = '';
@@ -7396,12 +7509,18 @@ function completeDeliveredSubmission(entry, normalized, payload, { wasActiveDraf
       state.turnId = normalized.turnId;
       state.latestTurnId = normalized.turnId;
       state.pendingTurn = true;
-      markLocallyStartedTurn(normalized.turnId);
       state.status = 'Turn running';
       state.statusTone = 'warn';
       state.error = '';
       renderChatAtLatest(() => {});
-      void streamTurnEvents(normalized.turnId);
+      if (!continuesActiveTurn) {
+        state.lastTurnEventSequence = null;
+        state.lastTurnEventEpoch = '';
+        state.lastTurnEventAt = Date.now();
+        state.streamWasBackgrounded = false;
+        markLocallyStartedTurn(normalized.turnId);
+        void streamTurnEvents(normalized.turnId);
+      }
     } else {
       renderSessionListAfterBackgroundUpdate();
     }
@@ -7450,8 +7569,20 @@ function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
     state.timeline = [submissionTimelineItem(failed)];
   }
   if (wasActiveDraft || state.sessionId === entry.sessionId) {
-    state.pendingTurn = false;
-    state.status = retrySilently ? 'Waiting to send' : 'Send failed';
+    const preservesActiveTurn = Boolean(
+      isSteerSubmissionEntry(entry)
+      && state.sessionId === entry.sessionId
+      && state.turnId
+      && state.pendingTurn
+    );
+    if (!preservesActiveTurn) {
+      state.pendingTurn = false;
+    }
+    state.status = preservesActiveTurn
+      ? 'Turn running'
+      : retrySilently
+        ? 'Waiting to send'
+        : 'Send failed';
     state.statusTone = retrySilently ? 'warn' : 'danger';
     state.error = retrySilently ? '' : message;
     renderChatAtLatestIfFollowing(() => {});
@@ -7461,6 +7592,26 @@ function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
   if (retrySilently) {
     scheduleSubmissionRetry();
   }
+}
+
+function isSteerSubmissionEntry(entry) {
+  return String(entry?.id || '').startsWith('steer:');
+}
+
+function deferSteerSubmissionUntilTurnCompletes(entry) {
+  if (!entry?.sessionId) {
+    return false;
+  }
+  try {
+    removeSubmissionOutboxEntry(entry.id);
+  } catch (error) {
+    console.warn('[codex-web] could not defer steer submission', error);
+    return false;
+  }
+  state.timeline = state.timeline.filter((item) => item?.submissionId !== entry.id);
+  queueMessageUntilTurnCompletes(entry.sessionId, entry.text);
+  saveCurrentTimeline();
+  return true;
 }
 
 function isSubmissionDeliveryRetryable(error) {
@@ -8746,10 +8897,6 @@ function applyTurnEvent(event, assistantEntry) {
   switch (event.type) {
     case 'turn.started':
       state.terminalTurnIds.delete(event.turnId);
-      if (state.turnId !== event.turnId) {
-        state.queuedInterruptRequestedTurnId = null;
-        state.queuedInterruptEligibleTurnId = null;
-      }
       clearLocallyStartedTurn();
       state.pendingTurn = true;
       state.turnId = event.turnId;
@@ -8765,7 +8912,6 @@ function applyTurnEvent(event, assistantEntry) {
       assistantEntry = upsertAssistantProjection(event, { final: true });
       break;
     case 'batch.started':
-      state.queuedInterruptEligibleTurnId = event.turnId;
       upsertWorkBatch(event.turnId, event.batchId, {
         id: `batch_${event.batchId}`,
         batchId: event.batchId,
@@ -8785,10 +8931,8 @@ function applyTurnEvent(event, assistantEntry) {
         status: event.status || 'completed',
         summary: {},
       });
-      void maybeInterruptRunningTurnForQueuedMessage();
       break;
     case 'approval.requested': {
-      state.queuedInterruptEligibleTurnId = event.turnId;
       const approval = {
         id: `approval_${event.approvalId}`,
         kind: 'approval',
@@ -8823,7 +8967,6 @@ function applyTurnEvent(event, assistantEntry) {
           event.turnId || state.turnId,
         );
       }
-      void maybeInterruptRunningTurnForQueuedMessage();
       break;
     }
     case 'turn.completed':
@@ -8832,8 +8975,6 @@ function applyTurnEvent(event, assistantEntry) {
       state.pendingTurn = false;
       sessionActivityChanged = setSessionSummaryActivity(state.sessionId, null);
       state.streamWasBackgrounded = false;
-      state.queuedInterruptRequestedTurnId = null;
-      state.queuedInterruptEligibleTurnId = null;
       {
         const completedSessionId = state.sessionId;
         restoreStaleQueuedMessagesForSession(completedSessionId);
@@ -8863,8 +9004,6 @@ function applyTurnEvent(event, assistantEntry) {
       state.pendingTurn = false;
       sessionActivityChanged = setSessionSummaryActivity(state.sessionId, null);
       state.streamWasBackgrounded = false;
-      state.queuedInterruptRequestedTurnId = null;
-      state.queuedInterruptEligibleTurnId = null;
       state.status = 'Turn failed';
       state.statusTone = 'danger';
       state.turnId = null;
@@ -9073,71 +9212,6 @@ function workTimelineStatus(batches) {
 
 function upsertWorkApproval(_turnId, approval) {
   appendOrReplace(approval, (item) => item.id === approval.id);
-}
-
-function hasPendingWorkForTurn(turnId = state.turnId) {
-  if (!turnId) {
-    return false;
-  }
-  for (const batch of state.batches.values()) {
-    if (batch?.turnId !== turnId) {
-      continue;
-    }
-    const normalizedStatus = String(batch?.status || '').trim().toLowerCase();
-    if (!normalizedStatus || normalizedStatus === 'started' || normalizedStatus === 'running' || normalizedStatus === 'pending') {
-      return true;
-    }
-  }
-  for (const approval of state.approvals.values()) {
-    if (approval?.resolved !== false) {
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
-async function maybeInterruptRunningTurnForQueuedMessage() {
-  const sessionId = state.sessionId;
-  const turnId = state.turnId;
-  if (!sessionId || !turnId || !state.pendingTurn) {
-    return;
-  }
-  if (!pendingQueuedMessagesForSession(sessionId).length) {
-    return;
-  }
-  if (state.queuedInterruptEligibleTurnId !== turnId) {
-    return;
-  }
-  if (state.queuedInterruptRequestedTurnId && state.queuedInterruptRequestedTurnId !== turnId) {
-    return;
-  }
-  if (hasPendingWorkForTurn(turnId)) {
-    return;
-  }
-  state.queuedInterruptRequestedTurnId = turnId;
-  try {
-    await apiFetch(`/api/turns/${encodeURIComponent(turnId)}/interrupt`, { method: 'POST' });
-    await refreshCurrentSessionMetadata({ hydrateTimeline: true });
-    if (state.sessionId === sessionId && !state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) {
-      void sendNextQueuedMessage(sessionId);
-    }
-  } catch (error) {
-    if (!isTurnInterruptTimeoutMessage(error?.payload?.message || error?.message)) {
-      console.warn('[codex-web] queued turn interrupt was not confirmed', error);
-    }
-    if (state.sessionId !== sessionId) {
-      return;
-    }
-    state.error = '';
-    state.status = 'Turn running';
-    state.statusTone = 'warn';
-    refreshChatDynamicUi();
-    await refreshCurrentSessionMetadata();
-    if (state.sessionId === sessionId && !state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) {
-      void sendNextQueuedMessage(sessionId);
-    }
-  }
 }
 
 function setWorkStatus(turnId, status) {
@@ -9508,18 +9582,20 @@ async function refreshSessionsList({
   renderAfter = true,
   scope = state.sortMode === 'favorites' ? 'favorites' : 'all',
   background = false,
+  request = null,
 } = {}) {
   const requestGeneration = authRequestGeneration;
   const normalizedScope = normalizeSessionScope(scope);
   const path = sessionListPath(normalizedScope);
   if (background) {
-    const payload = await apiFetch(path);
+    const payload = await (request || apiFetch(path));
     if (!isAuthRequestCurrent(requestGeneration)) {
       return [];
     }
     const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
+    discardSupersededFailedSubmissions(sessions);
     syncCurrentWorkDetailsAccessFromSessions(sessions);
     enforceKnownWorkDetailsAccess();
     persistSessionsCache();
@@ -9539,13 +9615,14 @@ async function refreshSessionsList({
     render();
   }
   try {
-    const payload = await apiFetch(path);
+    const payload = await (request || apiFetch(path));
     if (!isAuthRequestCurrent(requestGeneration)) {
       return [];
     }
     const sessions = normalizeSessionsForScope(payload, normalizedScope);
     state.sessionsByScope[normalizedScope] = sessions;
     state.sessionsLoadedByScope[normalizedScope] = true;
+    discardSupersededFailedSubmissions(sessions);
     syncCurrentWorkDetailsAccessFromSessions(sessions);
     enforceKnownWorkDetailsAccess();
     persistSessionsCache();
@@ -9848,10 +9925,10 @@ async function copyWebhookKey() {
   return copied;
 }
 
-async function refreshGlobalSettings({ renderAfter = true } = {}) {
+async function refreshGlobalSettings({ renderAfter = true, request = null } = {}) {
   const requestGeneration = authRequestGeneration;
   try {
-    const payload = await apiFetch('/api/settings');
+    const payload = await (request || apiFetch('/api/settings'));
     if (!isAuthRequestCurrent(requestGeneration)) {
       return null;
     }
@@ -9909,10 +9986,10 @@ async function saveSiteTitle(siteTitle) {
   }
 }
 
-async function refreshProjectsList({ renderAfter = true } = {}) {
+async function refreshProjectsList({ renderAfter = true, request = null } = {}) {
   const requestGeneration = authRequestGeneration;
   try {
-    const payload = await apiFetch('/api/projects');
+    const payload = await (request || apiFetch('/api/projects'));
     if (!isAuthRequestCurrent(requestGeneration)) {
       return [];
     }
@@ -11251,7 +11328,7 @@ function runtimeTurnItemErrorMessage(turn) {
 
 function normalizeRuntimeErrorText(value) {
   if (typeof value === 'string') {
-    const trimmed = value.trim();
+    const trimmed = value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '').trim();
     return trimmed || null;
   }
   if (!value || typeof value !== 'object') {
@@ -11266,6 +11343,16 @@ function normalizeRuntimeErrorText(value) {
     || normalizeRuntimeErrorText(record.stderr)
     || normalizeRuntimeErrorText(record.stack)
     || null;
+}
+
+function isBackgroundMcpTransportFailure(value) {
+  const message = normalizeRuntimeErrorText(value) || '';
+  return /\brmcp::transport::worker\b/iu.test(message)
+    && /\bUnexpectedServerResponse\s*\(\s*["']?HTTP\s+\d{3}\b/iu.test(message);
+}
+
+function isRecoverableToolRouterFailure(value) {
+  return /\bcodex_core::tools::router\b/iu.test(normalizeRuntimeErrorText(value) || '');
 }
 
 function sessionTurns(session) {
@@ -12252,6 +12339,33 @@ function pendingSubmissionEntries() {
     .sort((left, right) => left.createdAt - right.createdAt);
 }
 
+function discardSupersededFailedSubmissions(sessions) {
+  const sessionsById = new Map((Array.isArray(sessions) ? sessions : [])
+    .filter((session) => session?.id)
+    .map((session) => [session.id, session]));
+  for (const entry of pendingSubmissionEntries()) {
+    const session = sessionsById.get(entry.sessionId);
+    const acceptedInputAt = Number(session?.lastInputAt || 0);
+    if (
+      entry.status !== 'failed'
+      || !acceptedInputAt
+      || acceptedInputAt <= Number(entry.updatedAt || 0)
+    ) {
+      continue;
+    }
+    try {
+      removeSubmissionOutboxEntry(entry.id);
+    } catch (_error) {
+      continue;
+    }
+    if (state.sessionId === entry.sessionId) {
+      state.timeline = state.timeline.filter((item) => item?.submissionId !== entry.id);
+      state.sessionHistoryItems = state.sessionHistoryItems.filter((item) => item?.submissionId !== entry.id);
+    }
+    removeSubmissionFromTimelineCache(entry.sessionId, entry.id);
+  }
+}
+
 function upsertSubmissionOutboxEntry(entry) {
   const normalized = normalizeSubmissionOutboxEntry(entry);
   if (!normalized) {
@@ -12362,7 +12476,12 @@ function cancelSubmission(submissionId) {
   if (current.queuedMessageId && current.sessionId) {
     removeQueuedMessage(current.sessionId, current.queuedMessageId);
   }
-  state.timeline = state.timeline.filter((item) => item?.submissionId !== submissionId);
+  if (state.sessionId === current.sessionId || (!current.sessionId && state.activeSubmissionId === submissionId)) {
+    state.timeline = state.timeline.filter((item) => item?.submissionId !== submissionId);
+    state.sessionHistoryItems = state.sessionHistoryItems.filter((item) => item?.submissionId !== submissionId);
+  } else if (current.sessionId) {
+    removeSubmissionFromTimelineCache(current.sessionId, submissionId);
+  }
   if (state.activeSubmissionId === submissionId) {
     state.activeSubmissionId = '';
     state.draftSessionActive = true;
@@ -12370,10 +12489,31 @@ function cancelSubmission(submissionId) {
     state.statusTone = 'success';
     state.error = '';
   }
-  if (state.sessionId) {
+  if (state.sessionId && state.sessionId === current.sessionId) {
     saveCurrentTimeline();
   }
   render();
+  return true;
+}
+
+function removeSubmissionFromTimelineCache(sessionId, submissionId) {
+  const cached = state.timelineCache.get(sessionId);
+  if (!cached) {
+    return false;
+  }
+  const withoutSubmission = (items) => (Array.isArray(items) ? items : [])
+    .filter((item) => item?.submissionId !== submissionId);
+  const timeline = withoutSubmission(cached.timeline);
+  const history = withoutSubmission(cached.history);
+  if (timeline.length === cached.timeline?.length && history.length === cached.history?.length) {
+    return false;
+  }
+  state.timelineCache.set(sessionId, {
+    ...cached,
+    timeline,
+    history,
+  });
+  persistTimelineCache();
   return true;
 }
 
@@ -12508,6 +12648,7 @@ function fullHydratedTimelineFromSession(session) {
         continue;
       }
       const itemId = threadTimelineItemId(item);
+      const clientMessageId = typeof item?.clientMessageId === 'string' ? item.clientMessageId.trim() : '';
       const isFinal = role === 'assistant' && finalAssistantItems.has(item);
       const phase = historicalAssistantProjectionPhase(item, isFinal);
       const normalized = normalizeSessionTimelineItem({
@@ -12521,6 +12662,7 @@ function fullHydratedTimelineFromSession(session) {
         text,
         turnId: turn.id,
         ...(itemId ? { itemId, projectionKey: `${turn.id}\u0000${itemId}` } : {}),
+        ...(clientMessageId ? { clientMessageId } : {}),
         lifecycle: 'completed',
       });
       if (normalized) {
@@ -12730,7 +12872,11 @@ function dedupeTimelineProjectionEntries(entries) {
     if (key && indexes.has(key)) {
       result[indexes.get(key)] = item;
     } else if (timelineEntriesAreTransientDuplicates(result.at(-1), item)) {
-      result[result.length - 1] = preferredTimelineDuplicate(result.at(-1), item);
+      const index = result.length - 1;
+      result[index] = preferredTimelineDuplicate(result.at(-1), item);
+      if (key) {
+        indexes.set(key, index);
+      }
     } else {
       if (key) {
         indexes.set(key, result.length);
@@ -12746,6 +12892,10 @@ function timelineSemanticProjectionKey(item, turnId = timelineTurnId(item)) {
     return '';
   }
   if (item.role === 'user') {
+    const clientMessageId = String(item.clientMessageId || '').trim();
+    if (clientMessageId) {
+      return `semantic:${turnId}\u0000user-client\u0000${clientMessageId}`;
+    }
     return `semantic:${turnId}\u0000user\u0000${timelineMessageIdentity(item)}`;
   }
   const meta = String(item.meta || '').trim().toLowerCase();
@@ -12763,6 +12913,11 @@ function timelineEntriesAreTransientDuplicates(previous, next) {
   const previousPending = previous.meta === 'pending' || Boolean(previous.submissionId);
   const nextPending = next.meta === 'pending' || Boolean(next.submissionId);
   if (!previousPending && !nextPending) {
+    return false;
+  }
+  const previousSubmissionId = String(previous.submissionId || '').trim();
+  const nextSubmissionId = String(next.submissionId || '').trim();
+  if (previousSubmissionId && nextSubmissionId && previousSubmissionId !== nextSubmissionId) {
     return false;
   }
   const previousTurnId = timelineTurnId(previous);
@@ -12796,6 +12951,12 @@ function normalizeSessionTimelineItem(item) {
   if (role === 'system' && isTurnInterruptTimeoutMessage(display.text)) {
     return null;
   }
+  if (role === 'system' && (
+    isBackgroundMcpTransportFailure(display.text)
+    || isRecoverableToolRouterFailure(display.text)
+  )) {
+    return null;
+  }
   if (!role || (!display.text && !display.attachments.length)) {
     return null;
   }
@@ -12811,6 +12972,9 @@ function normalizeSessionTimelineItem(item) {
     ...(typeof item.turnId === 'string' && item.turnId ? { turnId: item.turnId } : {}),
     ...(typeof item.itemId === 'string' && item.itemId ? { itemId: item.itemId } : {}),
     ...(typeof item.projectionKey === 'string' && item.projectionKey ? { projectionKey: item.projectionKey } : {}),
+    ...(typeof item.clientMessageId === 'string' && item.clientMessageId
+      ? { clientMessageId: item.clientMessageId }
+      : {}),
     ...(typeof item.phase === 'string' && item.phase ? { phase: item.phase } : {}),
     ...(typeof item.lifecycle === 'string' && item.lifecycle ? { lifecycle: item.lifecycle } : {}),
     ...(item.streaming === true ? { streaming: true } : {}),
@@ -14865,7 +15029,8 @@ async function checkForAppUpdateOnce() {
     const payload = await response.json();
     const buildId = typeof payload?.buildId === 'string' ? payload.buildId.trim() : '';
     if (buildId && buildId !== APP_BUILD_ID) {
-      window.location.reload();
+      const registration = await navigator.serviceWorker.getRegistration?.();
+      await registration?.update?.();
     }
   } catch (_error) {
   }

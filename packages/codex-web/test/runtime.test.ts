@@ -123,6 +123,50 @@ test('session summary falls back to preview when turns have no user input', asyn
   assert.equal(session?.lastInputAt, 456);
 });
 
+test('runtime gives steered user messages stable privacy-preserving client identities', async () => {
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_steer_history', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_steer_history'),
+      turns: [{
+        id: 'turn_steer_history',
+        status: 'in_progress',
+        error: null,
+        items: [
+          { id: 'item_1', type: 'userMessage', role: 'user', phase: null, text: 'Repeat', raw: { clientId: 'steer:first' } },
+          { id: 'item_2', type: 'userMessage', role: 'user', phase: null, text: 'Repeat', raw: { clientId: 'steer:second' } },
+        ],
+      }],
+    }),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_steer_history',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  const session = await runtime.readSession('thread_steer_history');
+  const userMessages = session?.timeline.filter((item) => item.role === 'user') ?? [];
+
+  assert.equal(userMessages.length, 2);
+  assert.match(userMessages[0]?.clientMessageId ?? '', /^[0-9a-f]{24}$/u);
+  assert.match(userMessages[1]?.clientMessageId ?? '', /^[0-9a-f]{24}$/u);
+  assert.notEqual(userMessages[0]?.clientMessageId, userMessages[1]?.clientMessageId);
+  assert.equal(JSON.stringify(userMessages).includes('steer:first'), false);
+});
+
 test('runtime lists sessions from thread summaries without hydrating every thread', async () => {
   let readThreadCalls = 0;
   const client: CodexWebRuntimeClient = {
@@ -640,6 +684,7 @@ test('runtime reads archived sessions from Codex archived jsonl when live thread
 
     const session = await runtime.readSession(threadId);
 
+    assert.equal(runtime.isSessionArchived(threadId), true);
     assert.equal(session?.id, threadId);
     assert.equal(session?.cwd, '/Users/alice/archived-project');
     assert.equal(session?.projectName, 'alice/archived-project');
@@ -649,6 +694,8 @@ test('runtime reads archived sessions from Codex archived jsonl when live thread
       'Archived question',
       'Archived answer',
     ]);
+    fs.rmSync(archivedPath);
+    assert.equal(runtime.isSessionArchived(threadId), false);
   } finally {
     if (previousCodexHome === undefined) {
       delete process.env.CODEX_HOME;
@@ -3782,4 +3829,182 @@ test('runtime guarded interrupt and approval helpers reject mismatched threads',
     'interrupt:thread_guard:turn_guard',
     'approval:approval_guard:1',
   ]);
+});
+
+test('runtime steers text and attachment input through the owning active turn', async () => {
+  const steerCalls: any[] = [];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async (): Promise<ProviderUsageReport | null> => null,
+    listThreads: async () => ({ items: [createThread('thread_steer')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_steer', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_steer'),
+      runtimeStatus: { type: 'active', activeFlags: [] },
+      turns: [{
+        id: 'turn_steer',
+        status: 'in_progress',
+        error: null,
+        items: [],
+      }],
+    }),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_steer',
+    }),
+    steerTurn: async (args) => {
+      steerCalls.push(args);
+      return { turnId: args.expectedTurnId };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+  await runtime.readSession('thread_steer');
+
+  const result = await runtime.steerTurn('turn_steer', {
+    text: 'Use these updated inputs.',
+    attachments: [
+      {
+        kind: 'file',
+        localPath: '/workspace/uploads/spec.pdf',
+        fileName: 'spec.pdf',
+        mimeType: 'application/pdf',
+      },
+      {
+        kind: 'image',
+        localPath: '/workspace/uploads/diagram.png',
+        fileName: 'diagram.png',
+        mimeType: 'image/png',
+      },
+    ],
+  }, 'webhook:delivery_1');
+
+  assert.deepEqual(result, { turnId: 'turn_steer' });
+  assert.equal(steerCalls.length, 1);
+  assert.equal(steerCalls[0]?.threadId, 'thread_steer');
+  assert.equal(steerCalls[0]?.expectedTurnId, 'turn_steer');
+  assert.equal(steerCalls[0]?.clientUserMessageId, 'webhook:delivery_1');
+  assert.match(steerCalls[0]?.input[0]?.text ?? '', /Use these updated inputs\./u);
+  assert.match(steerCalls[0]?.input[0]?.text ?? '', /path: \/workspace\/uploads\/spec\.pdf/u);
+  assert.deepEqual(steerCalls[0]?.input[1], {
+    type: 'localImage',
+    path: '/workspace/uploads/diagram.png',
+  });
+});
+
+test('runtime guarded steer rejects mismatched and unknown turn ownership before calling Codex', async () => {
+  let steerCalls = 0;
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async (): Promise<ProviderUsageReport | null> => null,
+    listThreads: async () => ({ items: [createThread('thread_owner')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_owner', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_owner'),
+      runtimeStatus: { type: 'active', activeFlags: [] },
+      turns: [{
+        id: 'turn_owned',
+        status: 'in_progress',
+        error: null,
+        items: [],
+      }],
+    }),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_owner',
+    }),
+    steerTurn: async ({ expectedTurnId }) => {
+      steerCalls += 1;
+      return { turnId: expectedTurnId };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+  await runtime.readSession('thread_owner');
+
+  await assert.rejects(
+    runtime.steerTurnForThread('thread_other', 'turn_owned', { text: 'wrong thread' }),
+    /does not belong to thread thread_other/u,
+  );
+  await assert.rejects(
+    runtime.steerTurnForThread('thread_owner', 'turn_unknown', { text: 'unknown turn' }),
+    /does not belong to thread thread_owner/u,
+  );
+  assert.equal(steerCalls, 0);
+});
+
+test('runtime preserves structured active-turn-not-steerable errors from Codex', async () => {
+  const codexError = Object.assign(new Error('cannot steer a review turn'), {
+    code: 'active_turn_not_steerable',
+    rpcCode: -32_000,
+    data: {
+      codexErrorInfo: {
+        activeTurnNotSteerable: { turnKind: 'review' },
+      },
+    },
+  });
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async (): Promise<ProviderUsageReport | null> => null,
+    listThreads: async () => ({ items: [createThread('thread_review')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_review', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_review'),
+      runtimeStatus: { type: 'active', activeFlags: [] },
+      turns: [{
+        id: 'turn_review',
+        status: 'in_progress',
+        error: null,
+        items: [],
+      }],
+    }),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_unused',
+      threadId: 'thread_review',
+    }),
+    steerTurn: async () => {
+      throw codexError;
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+  await runtime.readSession('thread_review');
+
+  await assert.rejects(
+    runtime.steerTurn('turn_review', { text: 'continue after review' }),
+    (error: any) => {
+      assert.equal(error, codexError);
+      assert.equal(error.code, 'active_turn_not_steerable');
+      assert.equal(error.rpcCode, -32_000);
+      assert.equal(error.data.codexErrorInfo.activeTurnNotSteerable.turnKind, 'review');
+      return true;
+    },
+  );
 });

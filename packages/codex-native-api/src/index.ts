@@ -38,6 +38,8 @@ export {
 } from './codex_app_client.js';
 export type {
   CodexTurnInput,
+  CodexTurnSteerParams,
+  CodexTurnSteerResult,
 } from './codex_app_client.js';
 export {
   decodeJwtPayload,

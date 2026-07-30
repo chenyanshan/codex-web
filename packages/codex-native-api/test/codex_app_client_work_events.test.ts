@@ -11,6 +11,96 @@ import {
   type ProviderTurnWorkEvent,
 } from '../src/index.js';
 
+test('app client steers input into the expected active turn', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async (method: string, params: Record<string, unknown>, options) => {
+    assert.equal(method, 'turn/steer');
+    assert.deepEqual(params, {
+      threadId: 'thread_steer',
+      expectedTurnId: 'turn_active',
+      input: [
+        {
+          type: 'text',
+          text: 'Use the new requirement.',
+          text_elements: [],
+        },
+        {
+          type: 'localImage',
+          path: '/tmp/reference.png',
+        },
+      ],
+      clientUserMessageId: 'message_external_1',
+    });
+    assert.deepEqual(options, { timeoutMs: 15_000 });
+    return { turnId: 'turn_active' };
+  };
+
+  const result = await client.steerTurn({
+    threadId: 'thread_steer',
+    expectedTurnId: 'turn_active',
+    input: [
+      {
+        type: 'text',
+        text: 'Use the new requirement.',
+        text_elements: [],
+      },
+      {
+        type: 'localImage',
+        path: '/tmp/reference.png',
+      },
+    ],
+    clientUserMessageId: 'message_external_1',
+  });
+
+  assert.deepEqual(result, { turnId: 'turn_active' });
+});
+
+test('app client omits an unspecified steer message id and requires a response turn id', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    assert.equal(method, 'turn/steer');
+    assert.equal(Object.hasOwn(params, 'clientUserMessageId'), false);
+    return {};
+  };
+
+  await assert.rejects(client.steerTurn({
+    threadId: 'thread_steer',
+    expectedTurnId: 'turn_active',
+    input: [{
+      type: 'text',
+      text: 'Continue.',
+      text_elements: [],
+    }],
+  }), /Codex turn\/steer returned no turn id/);
+});
+
+test('app client preserves structured active-turn-not-steerable JSON-RPC errors', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const rejected = new Promise<never>((_resolve, reject) => {
+    (client as any).pending.set('steer-error', { resolve: () => {}, reject });
+  });
+
+  client.handleMessage(JSON.stringify({
+    id: 'steer-error',
+    error: {
+      code: -32_000,
+      message: 'cannot steer a review turn',
+      data: {
+        codexErrorInfo: {
+          activeTurnNotSteerable: { turnKind: 'review' },
+        },
+      },
+    },
+  }));
+
+  await assert.rejects(rejected, (error: any) => {
+    assert.equal(error.code, 'active_turn_not_steerable');
+    assert.equal(error.rpcCode, -32_000);
+    assert.equal(error.data.codexErrorInfo.activeTurnNotSteerable.turnKind, 'review');
+    return true;
+  });
+});
+
 test('app client sends persisted permission settings when resuming a thread', async () => {
   const client = new CodexAppClient({
     codexCliBin: 'codex',
@@ -2013,6 +2103,102 @@ test('app client fails open turns from Codex stderr runtime errors', async () =>
     }),
     /403 Forbidden/u,
   );
+});
+
+test('app client ignores background MCP transport failures while the turn keeps running', async () => {
+  let now = 0;
+  let readCount = 0;
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollNow: () => now,
+    turnPollSleep: async (ms) => {
+      now += ms;
+    },
+  });
+
+  client.readThread = async () => {
+    readCount += 1;
+    if (readCount === 1) {
+      (client as any).childStderrSequence += 1;
+      (client as any).childStderrTail.push({
+        sequence: (client as any).childStderrSequence,
+        text: '\u001b[31mERROR\u001b[0m \u001b[2mrmcp::transport::worker\u001b[0m: worker quit with fatal: '
+          + 'Transport channel closed, when UnexpectedServerResponse("HTTP 403: Forbidden")',
+      });
+    }
+    return {
+      threadId: 'thread_mcp_failure',
+      path: null,
+      turns: [{
+        id: 'turn_mcp_failure',
+        status: readCount < 2 ? 'inProgress' : 'completed',
+        items: readCount < 2
+          ? []
+          : [{
+              type: 'message',
+              role: 'assistant',
+              phase: 'final_answer',
+              text: 'The main turn completed.',
+            }],
+      }],
+    } as any;
+  };
+
+  const result = await client.waitForTurnResult({
+    threadId: 'thread_mcp_failure',
+    turnId: 'turn_mcp_failure',
+    timeoutMs: 3000,
+  });
+
+  assert.equal(result.outputText, 'The main turn completed.');
+});
+
+test('app client ignores recoverable tool router errors containing provider error text', async () => {
+  let now = 0;
+  let readCount = 0;
+  const client = new CodexAppClient({
+    codexCliBin: 'codex',
+    turnPollNow: () => now,
+    turnPollSleep: async (ms) => {
+      now += ms;
+    },
+  });
+
+  client.readThread = async () => {
+    readCount += 1;
+    if (readCount === 1) {
+      (client as any).childStderrSequence += 1;
+      (client as any).childStderrTail.push({
+        sequence: (client as any).childStderrSequence,
+        text: '\u001b[31mERROR\u001b[0m \u001b[2mcodex_core::tools::router\u001b[0m: error=apply_patch verification failed: '
+          + "Failed to find expected line 'unexpected status 403 Forbidden'",
+      });
+    }
+    return {
+      threadId: 'thread_tool_error',
+      path: null,
+      turns: [{
+        id: 'turn_tool_error',
+        status: readCount < 2 ? 'inProgress' : 'completed',
+        items: readCount < 2
+          ? []
+          : [{
+              type: 'message',
+              role: 'assistant',
+              phase: 'final_answer',
+              text: 'Recovered with a corrected patch.',
+            }],
+      }],
+    } as any;
+  };
+
+  const result = await client.waitForTurnResult({
+    threadId: 'thread_tool_error',
+    turnId: 'turn_tool_error',
+    timeoutMs: 3000,
+  });
+
+  assert.equal(result.outputText, 'Recovered with a corrected patch.');
 });
 
 test('app client ignores stderr runtime errors emitted before a turn wait starts', async () => {

@@ -70,3 +70,8 @@ export {
   type CodexWebSessionSubmissionRecord,
   type CodexWebSessionSubmissionStatus,
 } from './session_submission_store.js';
+export {
+  FileWebhookConversationStore,
+  hashWebhookConversationKey,
+  type CodexWebWebhookConversation,
+} from './webhook_conversation_store.js';

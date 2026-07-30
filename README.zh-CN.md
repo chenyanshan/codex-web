@@ -215,6 +215,9 @@ CODEX_WEB_HOST=127.0.0.1
 
 ### 用户 Webhook
 
+完整的调用步骤、连续对话示例和错误说明见
+[Webhook 使用指南](docs/webhook.md)。
+
 每个已登录用户都可以在设置中开启一个 webhook key。当前 key 会一直显示在设置页，
 可以随时复制，直到重新生成。为支持这个体验，Codex Web 会在权限为 `0600` 的本机
 `identity.json` 中同时保存可恢复 key 和用于校验的哈希；浏览器只在内存中持有 key，
@@ -225,11 +228,26 @@ CODEX_WEB_HOST=127.0.0.1
 curl -X POST https://codex-web.example/api/webhook \
   -H 'Authorization: Bearer cwwh_REPLACE_ME' \
   -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: external-event-123' \
+  -H 'Idempotency-Key: support-conversation-123' \
   -d '{"projectId":"CodeX Web","title":"外部任务","text":"处理这个任务","model":"gpt-5.6-sol","reasoningEffort":"high"}'
 ```
 
-必须提供 `Idempotency-Key`，相同内容的重试会被去重，不会再创建一个 session。
+`Idempotency-Key` 不是单条请求的去重 ID，而是一段对话的路由 key。第一次使用该 key
+会创建 session 并启动第一个 turn；之后继续使用同一个 key，每次 `POST` 都会把一条
+新消息发到原 session，包括内容完全相同的请求。要开始另一段独立对话，应换一个 key：
+
+```bash
+curl -X POST https://codex-web.example/api/webhook \
+  -H 'Authorization: Bearer cwwh_REPLACE_ME' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: support-conversation-123' \
+  -d '{"projectId":"CodeX Web","text":"继续检查，并总结最重要的失败项"}'
+```
+
+该 key 长度必须为 1 到 256 个字符，按 webhook 所属用户隔离，并且会在服务重启和
+webhook key 轮转后继续绑定原 session 和项目。多人模式下，后续请求仍须提供
+`projectId`，且不能把同一个 key 切换到其他项目。
+
 多人模式下，`projectId` 可以直接填写 Codex Web 界面显示的项目名，匹配时不区分
 大小写；也兼容精确的内部项目 ID。新建项目或修改项目名时不允许出现重复显示名，
 并且 key 所属用户必须有权在该项目创建 session。单用户模式省略 `projectId`，并使用
@@ -240,15 +258,26 @@ curl -X POST https://codex-web.example/api/webhook \
 对应的 `supportedReasoningEfforts`；webhook key 不能读取这个私有接口。可用模型和
 思考强度由当前 Codex CLI 动态提供，`max`、`ultra` 等值并非对所有模型都有效。
 
-两项都省略时，请求继承目标工作目录的 Codex 配置，不读取浏览器本地的“新会话”
-默认值。只提供 `model` 时使用该模型的 Codex 默认思考强度；只提供
-`reasoningEffort` 时应用到目标目录的有效默认模型。不受支持的值会交给 Codex runtime
-校验，并可能导致请求失败。
+两项都省略时，第一次请求继承目标工作目录的 Codex 配置，不读取浏览器本地的
+“新会话”默认值；session 空闲后的续聊会保留该 session 当前设置。只提供 `model`
+时使用该模型的 Codex 默认思考强度；只提供 `reasoningEffort` 时应用到有效模型。
+不受支持的值会交给 Codex runtime 校验，并可能导致请求失败。
 
-请求会创建 session 并启动第一个 turn。调用方不能覆盖 Codex 权限或 sandbox 设置，
-turn 使用服务端 runtime 默认值；当前默认是 `danger-full-access` 和
-`approvalPolicy=never`。Webhook key 可以在这台 Mac 上触发 Codex 工作，应当按密码
-级别保护。
+如果原 session 空闲，后续消息会启动一个新 turn；如果普通 turn 正在运行，则通过
+Codex `turn/steer` 把消息加入当前 turn，不会先中断。review 和 compact turn 不能
+steer，此时返回 `409 active_turn_not_steerable`，应等当前 turn 结束后重试。
+`model` 和 `reasoningEffort` 只在启动新 turn 时生效；steer 到运行中 turn 的消息会
+沿用该 turn 当前设置。`title` 只在第一次创建 session 时使用。
+
+首次创建成功返回 `201 Created`；同 key 的后续消息被启动或 steer 后返回
+`202 Accepted`。HTTP 成功响应表示消息已被接受。当前没有额外的单消息去重 ID，若
+请求超时或响应丢失，重试可能把同一条消息发送两次；不能接受重复消息的调用方应先
+核对结果再决定是否重试。映射 session 已归档、已删除或不再有权限时，不会静默创建
+替代 session。
+
+调用方不能覆盖 Codex 权限或 sandbox 设置，turn 使用服务端 runtime 默认值；当前
+默认是 `danger-full-access` 和 `approvalPolicy=never`。Webhook key 可以在这台 Mac
+上触发 Codex 工作，应当按密码级别保护。
 
 ### 浏览器缓存与弱网
 

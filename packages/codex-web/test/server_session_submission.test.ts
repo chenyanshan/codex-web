@@ -959,6 +959,75 @@ test('retryable failed submissions recover accepted turns before retrying startT
   }
 });
 
+test('recovery recognizes an accepted steer by its client message id', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-steer-recovery-'));
+  const runtime = runtimeStub();
+  const submissionId = 'steer:accepted-before-restart';
+  runtime.sessions.set('thread_steer_recovery', {
+    id: 'thread_steer_recovery',
+    cwd: '/tmp/project',
+    firstUserInput: 'initial message',
+    lastUserInput: 'same text may already exist',
+    lastInputAt: Date.now(),
+    activeTurnId: 'turn_active',
+    settings: {},
+    activityState: 'running',
+    thread: {
+      id: 'thread_steer_recovery',
+      turns: [{
+        id: 'turn_active',
+        status: 'inProgress',
+        items: [
+          { type: 'message', role: 'user', phase: null, text: 'same text may already exist', raw: { clientId: 'older-message' } },
+          { type: 'message', role: 'user', phase: null, text: 'same text may already exist', raw: { clientId: submissionId } },
+        ],
+      }],
+    },
+    timeline: [],
+  });
+  const submissionPayload: CodexWebSessionSubmissionPayload = {
+    sessionId: 'thread_steer_recovery',
+    projectId: null,
+    cwd: null,
+    title: null,
+    settings: {},
+    text: 'same text may already exist',
+    attachments: [],
+    attachmentIds: [],
+  };
+  const now = new Date().toISOString();
+  await new FileSessionSubmissionStore({ stateDir }).create({
+    id: submissionId,
+    ownerUserId: 'local-admin',
+    payloadHash: hashSessionSubmissionPayload(submissionPayload),
+    payload: submissionPayload,
+    status: 'starting',
+    sessionId: 'thread_steer_recovery',
+    runtimeSessionId: 'thread_steer_recovery',
+    operation: 'steer',
+    turnBaseline: [],
+    turnId: null,
+    result: null,
+    error: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config: createConfig(stateDir) });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/session-submissions/${encodeURIComponent(submissionId)}`, {
+      headers: { Authorization: 'Bearer token' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as any).turnId, 'turn_active');
+    assert.deepEqual(runtime.calls, { create: 0, start: 0 });
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('independent servers serialize the same submission through the file operation lock', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-cross-process-submission-'));
   const runtime = runtimeStub();
@@ -1059,8 +1128,9 @@ test('command submissions persist and replay command results without requiring a
     id: 'thread_command',
     cwd: '/tmp/project',
     settings: {},
-    activityState: null,
-    thread: { id: 'thread_command', turns: [] },
+    activeTurnId: 'turn_active',
+    activityState: 'running',
+    thread: { id: 'thread_command', turns: [{ id: 'turn_active', status: 'in_progress', items: [] }] },
     timeline: [],
   });
   const server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config: createConfig(stateDir) });

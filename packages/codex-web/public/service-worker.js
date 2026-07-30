@@ -8,6 +8,7 @@ const VERSIONED_STATIC_ASSET_PATHS = new Set([
   '/pwa-pull-refresh.js',
   '/app.js',
   '/manifest.webmanifest',
+  '/icon.svg',
   '/icon-192.png',
   '/icon-512.png',
   '/apple-touch-icon.png',

@@ -64,6 +64,114 @@ test.beforeEach(async ({ page }, testInfo) => {
   }, browserToken);
 });
 
+test('failed session messages can be dismissed without leaving a stuck list badge', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    const submissionId = 'failed_browser_message';
+    const updatedAt = Date.parse('2026-07-15T08:02:00.000Z');
+    const entry = {
+      id: submissionId,
+      ownerKey: 'single',
+      text: 'Message that should not remain stuck',
+      status: 'failed',
+      sessionId: 'session_browser_fixture',
+      projectId: '',
+      cwd: '/Users/test/yanshan_quant',
+      settings: {},
+      attachments: [],
+      createdAt: updatedAt,
+      updatedAt,
+      attempts: 3,
+      nextAttemptAt: 0,
+      error: 'Turn already running',
+      retryable: true,
+      queuedMessageId: '',
+    };
+    const timelineItem = {
+      id: `local_user_${submissionId}`,
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'pending',
+      text: entry.text,
+      submissionId,
+    };
+    window.localStorage.setItem(
+      `codexWebSubmissionOutbox:${encodeURIComponent(submissionId)}`,
+      JSON.stringify({ version: 1, entry }),
+    );
+    window.localStorage.setItem('codexWebTimelineCache', JSON.stringify({
+      version: 3,
+      entries: [{
+        sessionId: entry.sessionId,
+        savedAt: updatedAt,
+        validatedAt: 0,
+        sessionUpdatedAt: 0,
+        timeline: [timelineItem],
+        history: [timelineItem],
+        historyComplete: false,
+        batches: [],
+        approvals: [],
+      }],
+    }));
+  });
+
+  await page.goto('/');
+  const sessionButton = page.locator('[data-session-id="session_browser_fixture"]');
+  await expect(sessionButton).toContainText('Send failed');
+  const statusResponse = page.waitForResponse((response) => (
+    new URL(response.url()).pathname === '/api/sessions/session_browser_fixture/status'
+  ));
+  const timelineResponse = page.waitForResponse((response) => (
+    new URL(response.url()).pathname === '/api/sessions/session_browser_fixture/timeline'
+  ));
+  await sessionButton.click();
+  await Promise.all([statusResponse, timelineResponse]);
+
+  const retry = page.getByRole('button', { name: 'Send failed. Retry send' });
+  const cancel = page.getByRole('button', { name: 'Cancel send' });
+  await expect(retry).toBeVisible();
+  await expect(cancel).toBeVisible();
+  const actions = page.locator('.submission-delivery-actions');
+  let controls = null;
+  await expect.poll(async () => {
+    controls = await actions.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const message = element.closest('.message-card')?.getBoundingClientRect();
+      const containedByMessage = message
+        ? box.left >= message.left && box.right <= message.right
+        : false;
+      return {
+        left: box.left,
+        right: box.right,
+        width: box.width,
+        viewportWidth: window.innerWidth,
+        separatedFromMessage: message ? box.right <= message.left : false,
+        containedByMessage,
+      };
+    });
+    return controls.width;
+  }).toBeGreaterThanOrEqual(60);
+  expect(controls.left).toBeGreaterThanOrEqual(0);
+  expect(controls.right).toBeLessThanOrEqual(controls.viewportWidth);
+  expect(controls.separatedFromMessage || controls.containedByMessage).toBe(true);
+  await page.screenshot({
+    path: `/tmp/codex-web-browser-${testInfo.project.name}-failed-submission.png`,
+    fullPage: true,
+  });
+
+  await cancel.click();
+  await expect(retry).toHaveCount(0);
+  await expect(cancel).toHaveCount(0);
+  expect(await page.evaluate(() => window.localStorage.getItem(
+    'codexWebSubmissionOutbox:failed_browser_message',
+  ))).toBeNull();
+
+  if (testInfo.project.name !== 'desktop') {
+    await page.getByRole('button', { name: 'Sessions' }).click();
+  }
+  await expect(page.locator('[data-session-id="session_browser_fixture"]')).not.toContainText('Send failed');
+});
+
 test('workspace is usable without overflow and exposes work and status semantics', async ({ page }, testInfo) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));

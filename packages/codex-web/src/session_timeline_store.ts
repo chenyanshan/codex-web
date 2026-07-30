@@ -13,6 +13,7 @@ export interface CodexWebTimelineMessage {
   turnId?: string;
   itemId?: string;
   projectionKey?: string;
+  clientMessageId?: string;
   phase?: string;
   lifecycle?: 'started' | 'delta' | 'completed';
   severity?: 'error';
@@ -214,6 +215,7 @@ function normalizeEntryOrNull(value: unknown): CodexWebTimelineMessage | null {
     turnId: optionalString(value.turnId),
     itemId: optionalString(value.itemId),
     projectionKey: optionalString(value.projectionKey),
+    clientMessageId: optionalString(value.clientMessageId),
     phase: optionalString(value.phase),
     lifecycle: normalizeLifecycle(value.lifecycle),
     severity: value.severity === 'error' ? 'error' : undefined,
@@ -232,6 +234,7 @@ function normalizeEntry(entry: CodexWebTimelineMessage): CodexWebTimelineMessage
     turnId: optionalString(entry.turnId),
     itemId: optionalString(entry.itemId),
     projectionKey: optionalString(entry.projectionKey),
+    clientMessageId: optionalString(entry.clientMessageId),
     phase: optionalString(entry.phase),
     lifecycle: normalizeLifecycle(entry.lifecycle),
     severity: entry.severity === 'error' ? 'error' : undefined,

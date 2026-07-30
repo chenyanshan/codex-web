@@ -29,7 +29,7 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.equal(parsedManifest.theme_color, '#f8f3e3');
   assert.equal(parsedManifest.background_color, '#f8f3e3');
   assert.match(index, /<link rel="manifest" href="\/manifest\.webmanifest\?v=__CODEX_WEB_BUILD_ID__">/u);
-  assert.match(index, /<link rel="icon" href="\/icon-192\.png\?v=__CODEX_WEB_BUILD_ID__" type="image\/png">/u);
+  assert.match(index, /<link rel="icon" href="\/icon\.svg\?v=__CODEX_WEB_BUILD_ID__" type="image\/svg\+xml">/u);
   assert.match(index, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png\?v=__CODEX_WEB_BUILD_ID__">/u);
   assert.match(index, /<meta name="theme-color" content="#f8f3e3">/u);
   assert.match(index, /<script src="\/theme-init\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>\s*<link rel="stylesheet"/u);
@@ -44,6 +44,7 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(serviceWorker, /codex-web-static-__CODEX_WEB_BUILD_ID__/u);
   assert.doesNotMatch(app, /runtime-status-v37/u);
   assert.doesNotMatch(serviceWorker, /runtime-status-v37/u);
+  assert.match(serviceWorker, /'\/icon\.svg'/u);
   assert.match(serviceWorker, /'\/icon-192\.png'/u);
   assert.match(serviceWorker, /'\/theme-init\.js'/u);
   assert.match(serviceWorker, /'\/icon-512\.png'/u);
@@ -59,7 +60,19 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(themeInit, /document\.documentElement\.dataset\.theme = theme/u);
 });
 
-test('PWA checks app version on foreground to escape stale standalone caches', async () => {
+test('app shell shows a lightweight loading state before the main module executes', async () => {
+  const [index, styles] = await Promise.all([
+    readFile(indexUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
+
+  assert.match(index, /<div class="boot-shell" role="status" aria-label="Loading Codex">/u);
+  assert.ok(index.indexOf('class="boot-shell"') < index.indexOf('src="/app.js'));
+  assert.match(styles, /\.boot-shell\s*\{/u);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/u);
+});
+
+test('PWA checks for updates without forcing stale cached pages to reload', async () => {
   const app = await readFile(appUrl, 'utf8');
 
   assert.match(app, /const APP_BUILD_ID = /u);
@@ -70,7 +83,9 @@ test('PWA checks app version on foreground to escape stale standalone caches', a
   assert.match(app, /appVersionCheckPromise/u);
   assert.match(app, /APP_VERSION_CHECK_COOLDOWN_MS/u);
   assert.doesNotMatch(app, /version-check=\$\{Date\.now\(\)\}/u);
-  assert.match(app, /window\.location\.reload\(\)/u);
+  assert.match(app, /navigator\.serviceWorker\.getRegistration/u);
+  assert.match(app, /registration\?\.update/u);
+  assert.doesNotMatch(app, /window\.location\.reload\(\)/u);
 });
 
 test('PWA version checks share one request across duplicate foreground events', async () => {
@@ -627,8 +642,8 @@ test('repeat opens with a stored token render the app shell before auth verifica
   assert.doesNotMatch(app, /form\.get\('deviceName'\)/u);
 });
 
-test('bootstrap restores the last cached conversation before auth verification resolves', async () => {
-  let authRequested = false;
+test('bootstrap restores cached conversation and starts sync before auth verification resolves', async () => {
+  const startupRequests: string[] = [];
   const session = {
     id: 'session_cached_boot',
     cwd: '/repo/cached',
@@ -663,13 +678,18 @@ test('bootstrap restores the last cached conversation before auth verification r
       }),
     },
     fetch: async (path) => {
-      assert.equal(path, '/api/auth/me');
-      authRequested = true;
+      startupRequests.push(path);
       return await new Promise(() => {});
     },
   });
 
-  assert.equal(authRequested, true);
+  assert.deepEqual(new Set(startupRequests), new Set([
+    '/api/auth/me',
+    '/api/settings',
+    '/api/models',
+    '/api/projects',
+    '/api/sessions',
+  ]));
   assert.equal(api.state.sessionId, session.id);
   assert.equal(api.state.view, 'chat');
   assert.equal(api.state.timeline[0]?.text, 'Cached answer before auth');
@@ -1399,7 +1419,13 @@ test('admin console stays open while restore auth finishes in the background', a
   const restore = api.restoreAuth();
   await flushMicrotasks();
 
-  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me']);
+  assert.deepEqual(pending.map((request) => request.path), [
+    '/api/auth/me',
+    '/api/settings',
+    '/api/models',
+    '/api/projects',
+    '/api/sessions',
+  ]);
   pending[0]?.resolve({
     ok: true,
     status: 200,
@@ -4245,11 +4271,28 @@ test('running turns keep message sending available and expose Stop only in sessi
   assert.doesNotMatch(app, /function onComposerSubmit\(event\)\s*\{[\s\S]{0,180}if \(state\.pendingTurn\)/u);
 });
 
-test('composer queues a new message while a turn is already running', async () => {
+test('composer steers an active turn instead of queueing and interrupting it', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
       fetchCalls.push({ path, options });
+      if (path === '/api/sessions/session_1/turns') {
+        const body = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({
+            submission: {
+              id: body.submissionId,
+              status: 'submitted',
+              sessionId: 'session_1',
+              turnId: 'turn_1',
+              error: null,
+            },
+            turnId: 'turn_1',
+          }),
+        };
+      }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
@@ -4267,17 +4310,111 @@ test('composer queues a new message while a turn is already running', async () =
     preventDefault() {},
   });
 
-  assert.deepEqual(fetchCalls, []);
+  assert.deepEqual(fetchCalls.map((call) => call.path), ['/api/sessions/session_1/turns']);
+  assert.equal(fetchCalls[0]?.options.method, 'POST');
+  const steerBody = JSON.parse(fetchCalls[0]?.options.body);
+  assert.match(steerBody.submissionId, /^steer:/u);
+  assert.equal(steerBody.text, 'Follow-up while running');
+  assert.equal(fetchCalls.some((call) => call.path.includes('/interrupt')), false);
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.prompt, '');
-  assert.equal(api.queuedMessagesForCurrentSession().map((item) => item.text).join('\n'), 'Follow-up while running');
-  assert.doesNotMatch(api.state.timeline.map((item) => item.text || '').join('\n'), /Follow-up while running/u);
+  assert.equal(api.queuedMessagesForCurrentSession().length, 0);
+  assert.equal(api.state.timeline.at(-1)?.text, 'Follow-up while running');
+  assert.equal(api.state.timeline.at(-1)?.turnId, 'turn_1');
+  assert.equal(api.state.timeline.at(-1)?.deliveryLabel, 'Server received');
 
   const html = api.renderChat().innerHTML;
-  assert.match(html, /class="queued-message-row"/u);
   assert.match(html, /Follow-up while running/u);
-  assert.match(html, /data-queued-message-id=/u);
+  assert.doesNotMatch(html, /class="queued-message-row"|data-queued-message-id=/u);
+});
+
+test('composer queues active-turn messages when steer is unsupported without interrupting', async () => {
+  const cases = [
+    { field: 'error', code: 'active_turn_not_steerable' },
+    { field: 'code', code: 'activeTurnNotSteerable' },
+  ];
+
+  for (const testCase of cases) {
+    const fetchCalls = [];
+    const { api } = await loadAppHarness({
+      fetch: async (path, options = {}) => {
+        fetchCalls.push({ path, options });
+        if (path === '/api/sessions/session_1/turns') {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              [testCase.field]: testCase.code,
+              message: 'The active turn cannot be steered.',
+            }),
+          };
+        }
+        throw new Error(`unexpected fetch ${path}`);
+      },
+    });
+
+    api.state.token = 'token';
+    api.state.authSession = { id: 'auth_1' };
+    api.state.view = 'chat';
+    api.state.sessionId = 'session_1';
+    api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+    api.state.pendingTurn = true;
+    api.state.turnId = 'turn_1';
+    api.state.prompt = `Wait for ${testCase.code}`;
+
+    await api.onComposerSubmit({ preventDefault() {} });
+
+    assert.deepEqual(fetchCalls.map((call) => call.path), ['/api/sessions/session_1/turns']);
+    assert.match(JSON.parse(fetchCalls[0]?.options.body).submissionId, /^steer:/u);
+    assert.equal(fetchCalls.some((call) => call.path.includes('/interrupt')), false);
+    assert.equal(api.state.pendingTurn, true);
+    assert.equal(api.state.turnId, 'turn_1');
+    assert.equal(api.state.prompt, '');
+    assert.equal(
+      JSON.stringify(api.queuedMessagesForCurrentSession().map((item) => item.text)),
+      JSON.stringify([`Wait for ${testCase.code}`]),
+    );
+    assert.equal(api.state.timeline.some((item) => item.text === `Wait for ${testCase.code}`), false);
+  }
+});
+
+test('active-turn steer keeps a durable message when the network response fails', async () => {
+  let rejectSteer = null;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_1/turns') {
+        return await new Promise((_resolve, reject) => {
+          rejectSteer = reject;
+        });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_1';
+  api.state.prompt = 'Durable steer message';
+
+  const sending = api.onComposerSubmit({ preventDefault() {} });
+  await flushMicrotasks();
+  api.state.prompt = 'Next draft stays here';
+  assert.equal(typeof rejectSteer, 'function');
+  rejectSteer(new Error('network unavailable'));
+  await sending;
+
+  const saved = [...api.state.submissionOutbox.values()];
+  assert.equal(saved.length, 1);
+  assert.match(saved[0]?.id ?? '', /^steer:/u);
+  assert.equal(saved[0]?.text, 'Durable steer message');
+  assert.equal(saved[0]?.retryable, true);
+  assert.equal(api.state.prompt, 'Next draft stays here');
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_1');
 });
 
 test('queued composer messages can be deleted before they are sent', async () => {
@@ -4716,60 +4853,11 @@ test('stream completion without a terminal event refreshes session state and sen
   assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Queued after silent stream end');
 });
 
-test('queued follow-up interrupts a running turn after tool batches complete and immediately starts the next turn', async () => {
+test('queued follow-up waits for a running turn after tool batches complete', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
       fetchCalls.push({ path, options });
-      if (path === '/api/turns/turn_1/interrupt') {
-        return {
-          ok: true,
-          status: 202,
-          json: async () => ({}),
-        };
-      }
-      if (path === '/api/sessions/session_1') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            session: {
-              id: 'session_1',
-              cwd: '/repo',
-              settings: { metadata: {} },
-              thread: {
-                turns: [
-                  {
-                    id: 'turn_1',
-                    status: 'interrupted',
-                    items: [
-                      { type: 'message', role: 'user', text: 'Initial running prompt' },
-                    ],
-                  },
-                ],
-              },
-            },
-          }),
-        };
-      }
-      if (path === '/api/sessions/session_1/turns') {
-        return {
-          ok: true,
-          status: 202,
-          json: async () => ({ turnId: 'turn_2' }),
-        };
-      }
-      if (path === '/api/turns/turn_2/events') {
-        return {
-          ok: true,
-          status: 200,
-          body: {
-            getReader: () => ({
-              read: async () => new Promise(() => {}),
-            }),
-          },
-        };
-      }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
@@ -4807,44 +4895,18 @@ test('queued follow-up interrupts a running turn after tool batches complete and
   await flushMicrotasks();
   await flushMicrotasks();
 
-  assert.equal(fetchCalls[0]?.path, '/api/turns/turn_1/interrupt');
-  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/status'));
-  assert.ok(fetchCalls.some((call) => call.path === '/api/sessions/session_1/timeline?limit=50'));
-  assert.ok(fetchCalls.some((call) => call.path === '/api/turns/turn_2/events'));
-  const queuedTurnRequest = fetchCalls.find((call) => call.path === '/api/sessions/session_1/turns');
-  assert.equal(api.state.turnId, 'turn_2');
+  assert.deepEqual(fetchCalls, []);
+  assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.pendingTurn, true);
-  assert.equal(api.queuedMessagesForCurrentSession().length, 0);
-  assert.equal(JSON.parse(queuedTurnRequest.options.body).text, 'Take this new direction');
+  assert.equal(api.queuedMessagesForCurrentSession().length, 1);
+  assert.equal(api.queuedMessagesForCurrentSession()[0]?.text, 'Take this new direction');
 });
 
-test('queued interrupt acknowledgement timeouts stay hidden and keep the session working', async () => {
-  const timeoutMessage = 'Timed out waiting for Codex JSON-RPC response to turn/interrupt';
+test('queued follow-up waits through active-turn approval resolution without interrupting', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path) => {
       fetchCalls.push(path);
-      if (path === '/api/turns/turn_1/interrupt') {
-        return {
-          ok: false,
-          status: 500,
-          json: async () => ({ error: 'runtime_error', message: timeoutMessage }),
-        };
-      }
-      if (path === '/api/sessions/session_1/status') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            session: {
-              id: 'session_1',
-              cwd: '/repo',
-              activeTurnId: 'turn_1',
-              activityState: 'running',
-            },
-          }),
-        };
-      }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
@@ -4860,32 +4922,28 @@ test('queued interrupt acknowledgement timeouts stay hidden and keep the session
   api.enqueueQueuedMessage('session_1', 'Wait for the running turn');
 
   api.applyTurnEvent({
-    type: 'batch.started',
+    type: 'approval.requested',
     turnId: 'turn_1',
-    batchId: 'batch_1',
-    kind: 'command',
-    title: 'npm test',
+    approvalId: 'approval_1',
+    approvalKind: 'command',
+    summary: {},
   }, null);
   api.applyTurnEvent({
-    type: 'batch.completed',
+    type: 'approval.resolved',
     turnId: 'turn_1',
-    batchId: 'batch_1',
-    status: 'completed',
+    approvalId: 'approval_1',
+    decision: 'accept',
   }, null);
   await flushMicrotasks();
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls, [
-    '/api/turns/turn_1/interrupt',
-    '/api/sessions/session_1/status',
-  ]);
+  assert.deepEqual(fetchCalls, []);
   assert.equal(api.state.pendingTurn, true);
   assert.equal(api.state.turnId, 'turn_1');
-  assert.equal(api.state.status, 'Turn running');
+  assert.equal(api.state.status, 'Approval resolved');
   assert.equal(api.state.statusTone, 'warn');
   assert.equal(api.state.error, '');
   assert.equal(api.queuedMessagesForCurrentSession().length, 1);
-  assert.doesNotMatch(api.renderChat().innerHTML, /Timed out waiting|Failed/u);
 });
 
 test('turn interrupt timeout failures are removed from events and hydrated history', async () => {
@@ -4983,46 +5041,11 @@ test('composer renders handled goal slash command results without streaming a tu
   );
 });
 
-test('goal command completion ignores stale stream load failures from a previous running turn', async () => {
+test('slash commands wait for the active turn without stopping its stream', async () => {
   const fetchCalls = [];
-  let rejectStaleFetch = null;
   const { api } = await loadAppHarness({
     fetch: async (path) => {
       fetchCalls.push(path);
-      if (path === '/api/sessions/session_goal/turns') {
-        return {
-          ok: true,
-          status: 202,
-          json: async () => ({
-            type: 'command',
-            command: {
-              name: 'goal',
-              action: 'resume',
-              message: 'Goal resumed: ship slash goal support',
-              goal: {
-                threadId: 'session_goal',
-                objective: 'ship slash goal support',
-                status: 'active',
-              },
-            },
-            session: {
-              id: 'session_goal',
-              cwd: '/repo',
-              settings: { metadata: {} },
-              timeline: [
-                { id: 'command_user_resume', kind: 'message', role: 'user', label: 'You', meta: 'command', text: '/goal resume' },
-                { id: 'command_goal_resume', kind: 'message', role: 'system', label: '/goal', meta: 'resume', text: 'Goal resumed: ship slash goal support' },
-              ],
-              thread: { turns: [] },
-            },
-          }),
-        };
-      }
-      if (path === '/api/turns/turn_stale/events') {
-        return await new Promise((_resolve, reject) => {
-          rejectStaleFetch = () => reject(new Error('Load failed'));
-        });
-      }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
@@ -5037,27 +5060,61 @@ test('goal command completion ignores stale stream load failures from a previous
   api.state.status = 'Turn running';
   api.state.statusTone = 'warn';
   api.state.prompt = '/goal resume';
-
-  const staleStreamPromise = api.streamTurnEvents('turn_stale');
+  const streamController = new AbortController();
+  api.state.streamAbortController = streamController;
 
   await api.onComposerSubmit({
     preventDefault() {},
   });
 
-  assert.equal(typeof rejectStaleFetch, 'function');
-  rejectStaleFetch();
-  await staleStreamPromise;
-
-  assert.deepEqual(fetchCalls.slice(0, 2), [
-    '/api/turns/turn_stale/events',
-    '/api/sessions/session_goal/turns',
-  ]);
-  assert.equal(api.state.pendingTurn, false);
-  assert.equal(api.state.turnId, null);
-  assert.equal(api.state.status, 'Ready');
+  assert.deepEqual(fetchCalls, []);
+  assert.equal(streamController.signal.aborted, false);
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_stale');
+  assert.equal(api.state.status, 'Turn running');
   assert.equal(api.state.error, '');
-  assert.doesNotMatch(api.state.timeline.map((item) => item.text || '').join('\n'), /Load failed/u);
-  assert.match(api.state.timeline.map((item) => item.text || '').join('\n'), /Goal resumed: ship slash goal support/u);
+  assert.equal(api.state.prompt, '');
+  assert.deepEqual(
+    JSON.stringify(api.queuedMessagesForCurrentSession().map((item) => item.text)),
+    JSON.stringify(['/goal resume']),
+  );
+});
+
+test('active-turn slash commands do not consume ready attachments', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_goal';
+  api.state.currentSession = { id: 'session_goal', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_active';
+  api.state.prompt = '/help';
+  api.state.composerAttachments = [{
+    id: 'local_attachment',
+    status: 'ready',
+    fileName: 'notes.txt',
+    uploaded: {
+      id: 'attachment_1',
+      kind: 'file',
+      fileName: 'notes.txt',
+      localPath: '/repo/uploads/notes.txt',
+      storage: 'project',
+    },
+  }];
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  assert.equal(api.state.prompt, '/help');
+  assert.equal(api.state.composerAttachments.length, 1);
+  assert.equal(api.queuedMessagesForCurrentSession().length, 0);
+  assert.equal(api.state.error, 'Attachments cannot be queued while a turn is running.');
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_active');
 });
 
 test('composer renders handled help slash command results inline', async () => {
@@ -9397,7 +9454,91 @@ test('retryable submission failures stay quiet until three delivery attempts fai
   assert.match(failedHtml, /delivery-failed/u);
   assert.match(failedHtml, /data-submission-retry-id=/u);
   assert.match(failedHtml, /aria-label="Send failed\. Retry send"/u);
-  assert.doesNotMatch(failedHtml, /submission-delivery-status|data-submission-cancel-id/u);
+  assert.match(failedHtml, /data-submission-cancel-id=/u);
+  assert.doesNotMatch(failedHtml, /submission-delivery-status/u);
+
+  assert.equal(api.cancelSubmission(failed.id), true);
+  assert.equal(api.state.submissionOutbox.has(failed.id), false);
+  assert.equal(api.state.timeline.some((item) => item.submissionId === failed.id), false);
+});
+
+test('session cards stop showing an older failure after a later input succeeds', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessions = [{
+    id: 'session_recovered',
+    firstUserInput: 'Original request',
+    lastUserInput: 'Later successful message',
+    lastInputAt: 300,
+    updatedAt: 300,
+    settings: { metadata: {} },
+  }];
+  api.state.submissionOutbox.set('old_failure', {
+    id: 'old_failure',
+    ownerKey: 'single',
+    text: 'Older failed message',
+    status: 'failed',
+    sessionId: 'session_recovered',
+    projectId: '',
+    cwd: '/repo',
+    settings: {},
+    attachments: [],
+    createdAt: 100,
+    updatedAt: 200,
+    attempts: 3,
+    nextAttemptAt: 0,
+    error: 'Turn already running',
+    retryable: true,
+    queuedMessageId: '',
+  });
+
+  assert.doesNotMatch(api.renderSessionCards(), /Send failed/u);
+
+  api.state.sessions[0].lastInputAt = 150;
+  assert.match(api.renderSessionCards(), /Send failed/u);
+});
+
+test('canceling a failed background-session message clears its cached timeline', async () => {
+  const { api, storage } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessionId = 'session_current';
+  api.state.currentSession = { id: 'session_current', settings: { metadata: {} } };
+  const failed = {
+    id: 'failed_background',
+    ownerKey: 'single',
+    text: 'Do not retry this',
+    status: 'failed',
+    sessionId: 'session_background',
+    projectId: '',
+    cwd: '/repo',
+    settings: {},
+    attachments: [],
+    createdAt: 100,
+    updatedAt: 200,
+    attempts: 3,
+    nextAttemptAt: 0,
+    error: 'Turn already running',
+    retryable: true,
+    queuedMessageId: '',
+  };
+  api.state.submissionOutbox.set(failed.id, failed);
+  storage.set(api.submissionOutboxEntryStorageKey(failed.id), JSON.stringify({ version: 1, entry: failed }));
+  api.state.timelineCache.set(failed.sessionId, {
+    savedAt: 200,
+    validatedAt: 0,
+    sessionUpdatedAt: 0,
+    timeline: [{ id: `local_user_${failed.id}`, kind: 'message', role: 'user', submissionId: failed.id, text: failed.text }],
+    history: [{ id: `local_user_${failed.id}`, kind: 'message', role: 'user', submissionId: failed.id, text: failed.text }],
+    historyComplete: false,
+    batches: new Map(),
+    approvals: new Map(),
+  });
+
+  assert.equal(api.cancelSubmission(failed.id), true);
+  assert.equal(api.state.submissionOutbox.has(failed.id), false);
+  assert.equal(storage.has(api.submissionOutboxEntryStorageKey(failed.id)), false);
+  assert.equal(api.state.timelineCache.get(failed.sessionId)?.timeline.length, 0);
+  assert.equal(api.state.timelineCache.get(failed.sessionId)?.history.length, 0);
 });
 
 test('existing-session optimistic messages persist before the turn request can finish', async () => {
@@ -9656,6 +9797,91 @@ test('independent submission storage keys prevent stale tabs from overwriting ea
   assert.deepEqual(stored, ['message from tab A', 'message from tab B']);
 });
 
+test('a newer accepted session input clears an older failed submission', async () => {
+  const failedEntry = failedSessionSubmission({
+    id: 'submission_superseded',
+    sessionId: 'session_progressed',
+    updatedAt: 200,
+  });
+  const storageKey = `codexWebSubmissionOutbox:${encodeURIComponent(failedEntry.id)}`;
+  const { api, storage } = await loadAppHarness({
+    storage: {
+      [storageKey]: JSON.stringify({ version: 1, entry: failedEntry }),
+    },
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [{
+            id: 'session_progressed',
+            cwd: '/repo',
+            firstUserInput: 'First input',
+            lastUserInput: 'A newer accepted input',
+            lastInputAt: 300,
+            updatedAt: 400,
+            settings: {},
+          }],
+        }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessionId = 'session_progressed';
+  api.state.timeline = [{
+    id: 'local_user_submission_superseded',
+    kind: 'message',
+    role: 'user',
+    label: 'You',
+    meta: 'pending',
+    text: failedEntry.text,
+    submissionId: failedEntry.id,
+  }];
+
+  await api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+
+  assert.equal(api.state.submissionOutbox.has(failedEntry.id), false);
+  assert.equal(storage.has(storageKey), false);
+  assert.equal(api.state.timeline.some((item) => item.submissionId === failedEntry.id), false);
+  assert.doesNotMatch(api.renderSessionCards(), /Send failed/u);
+});
+
+test('session activity without a newer user input keeps a failed submission retryable', async () => {
+  const failedEntry = failedSessionSubmission({
+    id: 'submission_still_pending',
+    sessionId: 'session_same_input',
+    updatedAt: 200,
+  });
+  const storageKey = `codexWebSubmissionOutbox:${encodeURIComponent(failedEntry.id)}`;
+  const { api, storage } = await loadAppHarness({
+    storage: {
+      [storageKey]: JSON.stringify({ version: 1, entry: failedEntry }),
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [{
+          id: 'session_same_input',
+          lastInputAt: 150,
+          updatedAt: 400,
+          settings: {},
+        }],
+      }),
+    }),
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+
+  await api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+
+  assert.equal(api.state.submissionOutbox.has(failedEntry.id), true);
+  assert.equal(storage.has(storageKey), true);
+  assert.match(api.renderSessionCards(), /Send failed/u);
+});
+
 test('submission storage events synchronize another tab without replacing its entries', async () => {
   const { api, context } = await loadAppHarness();
   const entry = {
@@ -9906,8 +10132,7 @@ test('logout during delivery resets sending state for a later login', async () =
 
 test('network failures during auth restore preserve the cached login and token', async () => {
   const { api } = await loadAppHarness({
-    fetch: async (path) => {
-      assert.equal(path, '/api/auth/me');
+    fetch: async () => {
       throw new Error('network unavailable');
     },
   });
@@ -10728,6 +10953,74 @@ test('history hydration includes failed turns as durable error messages', async 
   assert.equal(errorItem?.severity, 'error');
   assert.equal(errorItem?.label, 'Error');
   assert.match(api.renderTimelineItem(errorItem), /message-card system error-message/u);
+});
+
+test('history hydration drops background MCP transport failures from older timelines', async () => {
+  const { api } = await loadAppHarness();
+  const timeline = api.hydrateTimelineFromSession({
+    id: 'session_mcp_transport',
+    timeline: [
+      {
+        id: 'history_user',
+        kind: 'message',
+        role: 'user',
+        label: 'You',
+        meta: 'history',
+        text: 'Keep the main turn running',
+      },
+      {
+        id: 'error_mcp_transport',
+        kind: 'message',
+        role: 'system',
+        label: 'Error',
+        meta: 'failed',
+        severity: 'error',
+        text: '\u001b[31mERROR\u001b[0m rmcp::transport::worker: worker quit with fatal: '
+          + 'UnexpectedServerResponse("HTTP 403: Forbidden")',
+      },
+      {
+        id: 'error_tool_router',
+        kind: 'message',
+        role: 'system',
+        label: 'Error',
+        meta: 'failed',
+        severity: 'error',
+        text: '\u001b[31mERROR\u001b[0m codex_core::tools::router: '
+          + "apply_patch verification failed near 'unexpected status 403 Forbidden'",
+      },
+    ],
+    thread: { turns: [] },
+  });
+
+  assert.equal(JSON.stringify(timeline.map((item) => item.id)), JSON.stringify(['history_user']));
+});
+
+test('cached non-terminal runtime diagnostics stay hidden before session hydration', async () => {
+  const { api } = await loadAppHarness();
+  api.state.timeline = [
+    {
+      id: 'cached_mcp_error',
+      kind: 'message',
+      role: 'system',
+      label: 'Error',
+      meta: 'failed',
+      severity: 'error',
+      text: '\u001b[2mrmcp::transport::worker\u001b[0m: '
+        + 'UnexpectedServerResponse("HTTP 403: Forbidden")',
+    },
+    {
+      id: 'cached_tool_error',
+      kind: 'message',
+      role: 'system',
+      label: 'Error',
+      meta: 'failed',
+      severity: 'error',
+      text: '\u001b[2mcodex_core::tools::router\u001b[0m: apply_patch verification failed',
+    },
+  ];
+
+  assert.equal(api.visibleTimelineItems().length, 0);
+  assert.doesNotMatch(api.renderTimeline(), /403|apply_patch/u);
 });
 
 test('session refresh keeps historical failed turn messages when later turns succeed', async () => {
@@ -12110,7 +12403,7 @@ test('desktop composer refresh button refreshes the current session without rely
   assert.equal(api.state.timeline.some((item) => item.text === 'Refreshed answer'), true);
 });
 
-test('desktop queued-message rerenders keep the current scroll position when not following latest', async () => {
+test('desktop active-turn steer brings the submitted message into view', async () => {
   const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
   api.state.authSession = { id: 'auth_1' };
@@ -12135,8 +12428,8 @@ test('desktop queued-message rerenders keep the current scroll position when not
   await api.onComposerSubmit({ preventDefault() {} });
 
   const restoredTimeline = context.document.querySelector('#timeline');
-  assert.equal(api.state.timelineShouldFollowLatest, false);
-  assert.ok(restoredTimeline.scrollTop < restoredTimeline.scrollHeight);
+  assert.equal(api.state.timelineShouldFollowLatest, true);
+  assert.equal(restoredTimeline.scrollTop, restoredTimeline.scrollHeight);
 });
 
 test('single-pane desktop timeline wheel at the top expands older session history', async () => {
@@ -12835,7 +13128,13 @@ test('session restore renders recents first and loads favorites only on demand',
   const restore = api.restoreAuth();
   await flushMicrotasks();
 
-  assert.deepEqual(pending.map((request) => request.path), ['/api/auth/me']);
+  assert.deepEqual(pending.map((request) => request.path), [
+    '/api/auth/me',
+    '/api/settings',
+    '/api/models',
+    '/api/projects',
+    '/api/sessions',
+  ]);
   pending[0]?.resolve({
     ok: true,
     status: 200,
@@ -14106,6 +14405,42 @@ test('history hydration deduplicates the same turn message across unstable provi
     ['user', 'Send this once'],
     ['assistant', 'Received once'],
   ]));
+});
+
+test('history hydration preserves identical steer messages with distinct client message ids', async () => {
+  const { api } = await loadAppHarness();
+  const timeline = api.hydrateTimelineFromSession({
+    id: 'session_repeated_steer',
+    timeline: [
+      {
+        id: 'user_steer_1',
+        kind: 'message',
+        role: 'user',
+        label: 'You',
+        meta: 'history',
+        text: 'Repeat this direction',
+        turnId: 'turn_steer',
+        clientMessageId: 'client_message_1',
+      },
+      {
+        id: 'user_steer_2',
+        kind: 'message',
+        role: 'user',
+        label: 'You',
+        meta: 'history',
+        text: 'Repeat this direction',
+        turnId: 'turn_steer',
+        clientMessageId: 'client_message_2',
+      },
+    ],
+    thread: { turns: [] },
+  });
+
+  assert.equal(timeline.length, 2);
+  assert.deepEqual(
+    JSON.stringify(timeline.map((item) => item.clientMessageId)),
+    JSON.stringify(['client_message_1', 'client_message_2']),
+  );
 });
 
 test('initial SSE replay replaces active-turn history instead of duplicating it', async () => {
@@ -16073,6 +16408,7 @@ globalThis.__codexWebTest = {
   previewInputForSession: typeof previewInputForSession === 'function' ? previewInputForSession : null,
   renderSessionCards: typeof renderSessionCards === 'function' ? renderSessionCards : null,
   renderSessionList: typeof renderSessionList === 'function' ? renderSessionList : null,
+  refreshSessionsList: typeof refreshSessionsList === 'function' ? refreshSessionsList : null,
   renderNewSession: typeof renderNewSession === 'function' ? renderNewSession : null,
   renderAppSettings: typeof renderAppSettings === 'function' ? renderAppSettings : null,
   renderAdminConsole: typeof renderAdminConsole === 'function' ? renderAdminConsole : null,
@@ -16082,6 +16418,7 @@ globalThis.__codexWebTest = {
   renderSessionFileViewer: typeof renderSessionFileViewer === 'function' ? renderSessionFileViewer : null,
   renderSessionFileViewerContent: typeof renderSessionFileViewerContent === 'function' ? renderSessionFileViewerContent : null,
   renderTimelineItem: typeof renderTimelineItem === 'function' ? renderTimelineItem : null,
+  renderTimeline: typeof renderTimeline === 'function' ? renderTimeline : null,
   renderComposerStatus: typeof renderComposerStatus === 'function' ? renderComposerStatus : null,
 	  renderWorkDetailsDialog: typeof renderWorkDetailsDialog === 'function' ? renderWorkDetailsDialog : null,
 	  mergeAuthoritativeTimelineAuxiliaryEntries: typeof mergeAuthoritativeTimelineAuxiliaryEntries === 'function' ? mergeAuthoritativeTimelineAuxiliaryEntries : null,
@@ -16208,4 +16545,26 @@ async function flushMicrotasks() {
 
 function submissionStorageEntries(storage) {
   return [...storage.entries()].filter(([key]) => key.startsWith('codexWebSubmissionOutbox:'));
+}
+
+function failedSessionSubmission(overrides = {}) {
+  return {
+    id: 'submission_failed',
+    ownerKey: 'single',
+    text: 'Follow-up still needs delivery',
+    status: 'failed',
+    sessionId: 'session_1',
+    projectId: '',
+    cwd: '',
+    settings: {},
+    attachments: [],
+    createdAt: 100,
+    updatedAt: 200,
+    attempts: 3,
+    nextAttemptAt: 0,
+    error: 'A turn is already running.',
+    retryable: true,
+    queuedMessageId: '',
+    ...overrides,
+  };
 }

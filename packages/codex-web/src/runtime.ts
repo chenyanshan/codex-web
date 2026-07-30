@@ -151,6 +151,12 @@ export interface CodexWebRuntimeClient {
     onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
     timeoutMs?: number;
   }): Promise<ProviderTurnResult>;
+  steerTurn?(args: {
+    threadId: string;
+    expectedTurnId: string;
+    input: CodexTurnInput[];
+    clientUserMessageId?: string | null;
+  }): Promise<{ turnId: string }>;
   waitForTurnResult?(args: {
     threadId: string;
     turnId: string;
@@ -230,6 +236,10 @@ export type CodexWebStartTurnResult = { turnId: string } | CodexWebCommandResult
 interface CodexWebTurnConflictError extends Error {
   code: 'turn_conflict';
   activeTurnId: string;
+}
+
+interface CodexWebActiveTurnNotSteerableError extends Error {
+  code: 'active_turn_not_steerable';
 }
 
 export interface ListSessionsOptions {
@@ -432,6 +442,10 @@ export class CodexWebRuntime {
     const session = this.toSession(thread);
     this.observeRecoveredTurn(session);
     return this.withThreadGoal(session);
+  }
+
+  isSessionArchived(sessionId: string): boolean {
+    return this.readArchivedThreadSummary(sessionId) !== null;
   }
 
   async readSessionStatus(
@@ -850,6 +864,18 @@ export class CodexWebRuntime {
     await this.client.interruptTurn({ threadId: sessionId, turnId });
   }
 
+  async steerTurn(
+    turnId: string,
+    input: StartTurnInput,
+    clientUserMessageId: string | null = null,
+  ): Promise<{ turnId: string }> {
+    const sessionId = this.turnToThread.get(turnId);
+    if (!sessionId) {
+      throw new Error(`Unknown turn: ${turnId}`);
+    }
+    return this.steerTurnForThread(sessionId, turnId, input, clientUserMessageId);
+  }
+
   threadIdForTurn(turnId: string): string | null {
     return this.turnToThread.get(turnId) ?? null;
   }
@@ -865,6 +891,53 @@ export class CodexWebRuntime {
       throw new Error(`Turn ${turnId} does not belong to thread ${threadId}.`);
     }
     await this.client.interruptTurn({ threadId, turnId });
+  }
+
+  async steerTurnForThread(
+    threadId: string,
+    expectedTurnId: string,
+    input: StartTurnInput,
+    clientUserMessageId: string | null = null,
+  ): Promise<{ turnId: string }> {
+    const steerTurn = this.client.steerTurn;
+    if (typeof steerTurn !== 'function') {
+      throw createActiveTurnNotSteerableError('This Codex runtime does not support turn steering.');
+    }
+    const ownerThreadId = this.threadIdForTurn(expectedTurnId);
+    if (ownerThreadId !== threadId) {
+      throw new Error(`Turn ${expectedTurnId} does not belong to thread ${threadId}.`);
+    }
+    try {
+      const result = await steerTurn.call(this.client, {
+        threadId,
+        expectedTurnId,
+        input: buildCodexTurnInput(input.text, input.attachments) ?? [{
+          type: 'text',
+          text: input.text,
+          text_elements: [],
+        }],
+        clientUserMessageId,
+      });
+      if (result.turnId !== expectedTurnId) {
+        throw new Error(`Codex turn/steer returned unexpected turn id ${result.turnId}.`);
+      }
+      this.rememberTurnThread(expectedTurnId, threadId);
+      this.rememberActiveTurn(threadId, expectedTurnId);
+      this.markThreadSummaryActive(threadId);
+      this.logDebug('turn_steered', {
+        sessionId: threadId,
+        turnId: expectedTurnId,
+        textLength: input.text.length,
+        attachmentCount: Array.isArray(input.attachments) ? input.attachments.length : 0,
+        clientUserMessageId,
+      });
+      return { turnId: expectedTurnId };
+    } catch (error) {
+      if (isActiveTurnNotSteerableError(error)) {
+        throw preserveActiveTurnNotSteerableError(error);
+      }
+      throw error;
+    }
   }
 
   async resolveApproval(
@@ -1681,6 +1754,10 @@ export function summarizeCodexWebSessionInputText(text: string | null | undefine
   return `${normalized.slice(0, SESSION_INPUT_PREVIEW_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
+export function isCodexWebSlashCommandText(text: string | null | undefined): boolean {
+  return Boolean(parseHelpSlashCommand(String(text ?? '')) || parseGoalSlashCommand(String(text ?? '')));
+}
+
 interface ParsedGoalSlashCommand {
   action: 'show' | 'set' | 'pause' | 'resume' | 'clear';
   objective?: string;
@@ -1890,6 +1967,7 @@ function timelineMessagesFromThread(thread: ProviderThreadSummary): CodexWebTime
         continue;
       }
       const itemId = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : null;
+      const clientMessageId = timelineClientMessageId(item);
       const isFinal = role === 'assistant'
         && (explicitFinalIndexes.has(itemIndex) || fallbackFinalIndex === itemIndex);
       const phase = role === 'assistant' ? historicalTimelineAssistantPhase(item, isFinal) : null;
@@ -1905,6 +1983,7 @@ function timelineMessagesFromThread(thread: ProviderThreadSummary): CodexWebTime
           itemId,
           projectionKey: `${turn.id}\u0000${itemId}`,
         } : {}),
+        ...(clientMessageId ? { clientMessageId } : {}),
         ...(phase ? { phase } : {}),
         lifecycle: 'completed',
       });
@@ -1937,6 +2016,11 @@ function timelineMessagesFromThread(thread: ProviderThreadSummary): CodexWebTime
     }
   }
   return items;
+}
+
+function timelineClientMessageId(item: ProviderThreadTurnItem): string | null {
+  const clientId = typeof item.raw?.clientId === 'string' ? item.raw.clientId.trim() : '';
+  return clientId ? crypto.createHash('sha256').update(clientId).digest('hex').slice(0, 24) : null;
 }
 
 function normalizeTimelineMessageRole(role: string | null | undefined, type: string | null | undefined): 'user' | 'assistant' | null {
@@ -2159,6 +2243,33 @@ function createTurnConflictError(sessionId: string, activeTurnId: string): Codex
   error.code = 'turn_conflict';
   error.activeTurnId = activeTurnId;
   return error;
+}
+
+function createActiveTurnNotSteerableError(message: string): CodexWebActiveTurnNotSteerableError {
+  const error = new Error(message) as CodexWebActiveTurnNotSteerableError;
+  error.code = 'active_turn_not_steerable';
+  return error;
+}
+
+function preserveActiveTurnNotSteerableError(error: unknown): CodexWebActiveTurnNotSteerableError {
+  if (!(error instanceof Error)) {
+    return createActiveTurnNotSteerableError(String(error));
+  }
+  const preserved = error as Error & { code?: string };
+  preserved.code = 'active_turn_not_steerable';
+  return preserved as CodexWebActiveTurnNotSteerableError;
+}
+
+function isActiveTurnNotSteerableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = String((error as Error & { code?: unknown }).code ?? '').toLowerCase();
+  const message = error.message;
+  return code === 'active_turn_not_steerable'
+    || code === 'activeturnnotsteerable'
+    || /active.?turn.?not.?steerable/iu.test(message)
+    || /cannot steer (?:a )?(?:review|compact) turn/iu.test(message);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

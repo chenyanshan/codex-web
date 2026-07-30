@@ -8,6 +8,12 @@ import test from 'node:test';
 import type { CodexWebPrincipal } from '../src/access_control.js';
 import { FileIdentityStore } from '../src/identity_store.js';
 import { createCodexWebServer } from '../src/server.js';
+import {
+  FileSessionSubmissionStore,
+  hashSessionSubmissionPayload,
+  type CodexWebSessionSubmissionPayload,
+} from '../src/session_submission_store.js';
+import { FileWebhookConversationStore } from '../src/webhook_conversation_store.js';
 
 function createConfig(stateDir: string, defaultCwd = '/tmp/webhook-default') {
   return {
@@ -59,12 +65,16 @@ function authFor(principals: Record<string, CodexWebPrincipal | null>) {
 
 function runtimeStub() {
   const sessions = new Map<string, any>();
+  const archivedSessionIds = new Set<string>();
   const createInputs: any[] = [];
   const startInputs: Array<{ sessionId: string; input: any }> = [];
+  const steerInputs: Array<{ sessionId: string; turnId: string; input: any; clientUserMessageId: string | null }> = [];
   return {
     sessions,
+    archivedSessionIds,
     createInputs,
     startInputs,
+    steerInputs,
     listModels: async () => [],
     readUsage: async () => null,
     listSessions: async () => [...sessions.values()],
@@ -76,6 +86,7 @@ function runtimeStub() {
         cwd: input.cwd ?? null,
         title: input.title ?? null,
         settings: input.settings ?? {},
+        activeTurnId: null,
         activityState: null,
         thread: { id, turns: [] },
         timeline: [],
@@ -84,6 +95,7 @@ function runtimeStub() {
       return session;
     },
     readSession: async (id: string) => sessions.get(id) ?? null,
+    isSessionArchived: (id: string) => archivedSessionIds.has(id),
     archiveSession: async () => true,
     updateSessionFavorite: async () => null,
     updateSessionSettings: async () => null,
@@ -91,6 +103,15 @@ function runtimeStub() {
     startTurn: async (sessionId: string, input: any) => {
       startInputs.push({ sessionId, input });
       return { turnId: `turn_${startInputs.length}` };
+    },
+    steerTurnForThread: async (
+      sessionId: string,
+      turnId: string,
+      input: any,
+      clientUserMessageId: string | null,
+    ) => {
+      steerInputs.push({ sessionId, turnId, input, clientUserMessageId });
+      return { turnId };
     },
     interruptTurn: async () => {},
     resolveApproval: async () => {},
@@ -194,7 +215,7 @@ function streamingWebhookRequest(
   return { request, response };
 }
 
-test('webhook management is self-scoped and a webhook creates one owner-mapped session and turn', async () => {
+test('webhook management is self-scoped and one key keeps routing turns to the same owner session', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-multi-'));
   const identityStore = await createMultiUserStore(stateDir);
   const runtime = runtimeStub();
@@ -277,32 +298,473 @@ test('webhook management is self-scoped and a webhook creates one owner-mapped s
     assert.equal(state.webhookCredentials[0]?.tokenHash.includes(key), false);
     assert.equal(state.webhookCredentials[0]?.key, key);
 
-    const replay = await webhookRequest(server.baseUrl, key, eventId, requestBody);
-    assert.equal(replay.status, 200);
-    assert.equal((await replay.json() as any).turnId, 'turn_1');
-    assert.equal(runtime.createInputs.length, 1);
-    assert.equal(runtime.startInputs.length, 1);
-
-    const modelConflict = await webhookRequest(server.baseUrl, key, eventId, {
+    runtime.sessions.get('thread_1').activeTurnId = 'turn_1';
+    const steered = await webhookRequest(server.baseUrl, key, eventId, {
       ...requestBody,
+      text: 'Include the latest requirement',
       model: 'gpt-5.6-luna',
     });
-    assert.equal(modelConflict.status, 409);
-    assert.equal((await modelConflict.json() as any).error, 'submission_conflict');
+    assert.equal(steered.status, 202);
+    assert.equal((await steered.json() as any).turnId, 'turn_1');
     assert.equal(runtime.createInputs.length, 1);
     assert.equal(runtime.startInputs.length, 1);
+    assert.equal(runtime.steerInputs.length, 1);
+    assert.equal(runtime.steerInputs[0]?.sessionId, 'thread_1');
+    assert.equal(runtime.steerInputs[0]?.turnId, 'turn_1');
+    assert.equal(runtime.steerInputs[0]?.input.text, 'Include the latest requirement');
+    assert.match(runtime.steerInputs[0]?.clientUserMessageId ?? '', /^webhook:/u);
 
-    const conflict = await webhookRequest(server.baseUrl, key, eventId, {
+    runtime.sessions.get('thread_1').activeTurnId = null;
+    const continuedBody = {
       ...requestBody,
-      text: 'Different content',
-    });
-    assert.equal(conflict.status, 409);
-    assert.equal((await conflict.json() as any).error, 'submission_conflict');
+      text: 'Run the follow-up checks',
+      model: 'gpt-5.6-luna',
+    };
+    const continued = await webhookRequest(server.baseUrl, key, eventId, continuedBody);
+    assert.equal(continued.status, 202);
+    assert.equal((await continued.json() as any).turnId, 'turn_2');
     assert.equal(runtime.createInputs.length, 1);
-    assert.equal(runtime.startInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 2);
+    assert.equal(runtime.startInputs[1]?.sessionId, 'thread_1');
+    assert.equal(runtime.startInputs[1]?.input.text, 'Run the follow-up checks');
+    assert.deepEqual(runtime.startInputs[1]?.input.settings, {
+      model: 'gpt-5.6-luna',
+      reasoningEffort: 'high',
+    });
+
+    const repeatedText = await webhookRequest(server.baseUrl, key, eventId, continuedBody);
+    assert.equal(repeatedText.status, 202);
+    assert.equal((await repeatedText.json() as any).turnId, 'turn_3');
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 3);
+    assert.equal(runtime.startInputs[2]?.sessionId, 'thread_1');
+    assert.equal(runtime.startInputs[2]?.input.text, 'Run the follow-up checks');
+
+    const anotherConversation = await webhookRequest(server.baseUrl, key, 'github:delivery:other', requestBody);
+    assert.equal(anotherConversation.status, 201);
+    assert.equal(runtime.createInputs.length, 2);
+    assert.equal(runtime.startInputs.length, 4);
+    assert.equal(runtime.startInputs[3]?.sessionId, 'thread_2');
 
     const keyCannotReadApis = await browserRequest(server.baseUrl, '/api/settings', { token: key });
     assert.equal(keyCannotReadApis.status, 401);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('the same webhook conversation key is isolated between different owners', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-owner-isolation-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  await identityStore.upsertUserWithPassword({
+    id: 'user_bob',
+    username: 'bob',
+    password: 'bob-password',
+    roleIds: ['role_member'],
+    directProjectGrants: [],
+  });
+  const aliceCredential = await identityStore.setWebhookEnabled('user_alice', true);
+  const bobCredential = await identityStore.setWebhookEnabled('user_bob', true);
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const conversationKey = 'shared-external-conversation-id';
+    const aliceFirst = await webhookRequest(server.baseUrl, aliceCredential.key!, conversationKey, {
+      projectId: 'Shared Project',
+      text: 'Alice first message',
+    });
+    const bobFirst = await webhookRequest(server.baseUrl, bobCredential.key!, conversationKey, {
+      projectId: 'Shared Project',
+      text: 'Bob first message',
+    });
+    assert.equal(aliceFirst.status, 201);
+    assert.equal(bobFirst.status, 201);
+    const alicePayload = await aliceFirst.json() as any;
+    const bobPayload = await bobFirst.json() as any;
+    assert.notEqual(alicePayload.session.id, bobPayload.session.id);
+    assert.equal(alicePayload.session.ownerUserId, 'user_alice');
+    assert.equal(bobPayload.session.ownerUserId, 'user_bob');
+
+    const aliceContinued = await webhookRequest(server.baseUrl, aliceCredential.key!, conversationKey, {
+      projectId: 'Shared Project',
+      text: 'Alice second message',
+    });
+    assert.equal(aliceContinued.status, 202);
+    assert.equal(runtime.createInputs.length, 2);
+    assert.equal(runtime.startInputs[2]?.sessionId, 'thread_1');
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('webhook conversation routing survives a server restart', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-restart-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  const runtime = runtimeStub();
+  const config = createConfig(stateDir);
+  const createServer = () => createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config,
+  });
+
+  const firstServer = createServer();
+  await firstServer.start();
+  let key = '';
+  try {
+    const enabled = await browserRequest(firstServer.baseUrl, '/api/webhook', {
+      method: 'PATCH',
+      body: { enabled: true },
+    });
+    key = String((await enabled.json() as any).key);
+    const first = await webhookRequest(firstServer.baseUrl, key, 'conversation-after-restart', {
+      projectId: 'Shared Project',
+      text: 'First message',
+    });
+    assert.equal(first.status, 201);
+  } finally {
+    await firstServer.stop();
+  }
+
+  const restarted = createServer();
+  await restarted.start();
+  try {
+    const continued = await webhookRequest(restarted.baseUrl, key, 'conversation-after-restart', {
+      projectId: 'Shared Project',
+      text: 'Second message',
+    });
+    assert.equal(continued.status, 202);
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 2);
+    assert.equal(runtime.startInputs[1]?.sessionId, 'thread_1');
+  } finally {
+    await restarted.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('server startup migrates successful legacy webhook submissions into conversation routing', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-legacy-migration-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const created = await identityStore.setWebhookEnabled('local-admin', true);
+  const key = created.key!;
+  const idempotencyKey = 'legacy-webhook-delivery';
+  const keyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
+  const legacyPayload: CodexWebSessionSubmissionPayload = {
+    sessionId: null,
+    projectId: null,
+    cwd: null,
+    title: 'Legacy webhook',
+    settings: {},
+    text: 'Original message',
+    attachments: [],
+    attachmentIds: [],
+  };
+  const submissionStore = new FileSessionSubmissionStore({ stateDir });
+  const conversationStore = new FileWebhookConversationStore({ stateDir });
+  await submissionStore.create({
+    id: `webhook:${keyHash}`,
+    ownerUserId: 'local-admin',
+    payloadHash: hashSessionSubmissionPayload(legacyPayload),
+    payload: legacyPayload,
+    status: 'submitted',
+    sessionId: 'thread_legacy',
+    runtimeSessionId: 'thread_legacy',
+    turnBaseline: null,
+    turnId: 'turn_legacy',
+    result: { turnId: 'turn_legacy' },
+    error: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:01.000Z',
+  });
+  const runtime = runtimeStub();
+  runtime.sessions.set('thread_legacy', {
+    id: 'thread_legacy',
+    cwd: '/tmp/webhook-default',
+    title: 'Legacy webhook',
+    settings: {},
+    activeTurnId: null,
+    activityState: null,
+    thread: { id: 'thread_legacy', turns: [] },
+    timeline: [],
+  });
+  const server = createCodexWebServer({
+    auth: authFor({ browser: null }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+    sessionSubmissionStore: submissionStore,
+    webhookConversationStore: conversationStore,
+  });
+  await server.start();
+  try {
+    const migrated = await conversationStore.read('local-admin', keyHash);
+    assert.equal(migrated?.sessionId, 'thread_legacy');
+    assert.equal(migrated?.projectId, null);
+
+    const continued = await webhookRequest(server.baseUrl, key, idempotencyKey, {
+      text: 'Continue after the upgrade',
+    });
+    assert.equal(continued.status, 202);
+    assert.equal(runtime.createInputs.length, 0);
+    assert.equal(runtime.startInputs.length, 1);
+    assert.equal(runtime.startInputs[0]?.sessionId, 'thread_legacy');
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('mapped single-user webhook sessions fail closed when archived or missing', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-mapped-session-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const created = await identityStore.setWebhookEnabled('local-admin', true);
+  const key = created.key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: null }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const first = await webhookRequest(server.baseUrl, key, 'mapped-session', { text: 'First message' });
+    assert.equal(first.status, 201);
+    runtime.archivedSessionIds.add('thread_1');
+
+    const archived = await webhookRequest(server.baseUrl, key, 'mapped-session', { text: 'Archived follow-up' });
+    assert.equal(archived.status, 409);
+    assert.equal((await archived.json() as any).error, 'session_archived');
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 1);
+
+    runtime.archivedSessionIds.delete('thread_1');
+    runtime.sessions.delete('thread_1');
+    const missing = await webhookRequest(server.baseUrl, key, 'mapped-session', { text: 'Missing follow-up' });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json() as any).error, 'session_not_found');
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 1);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('rotating the webhook credential keeps conversation routing for its owner', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-rotation-routing-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const enabled = await browserRequest(server.baseUrl, '/api/webhook', {
+      method: 'PATCH',
+      body: { enabled: true },
+    });
+    const firstKey = String((await enabled.json() as any).key);
+    const first = await webhookRequest(server.baseUrl, firstKey, 'rotation-conversation', {
+      projectId: 'Shared Project',
+      text: 'First message',
+    });
+    assert.equal(first.status, 201);
+
+    const rotated = await browserRequest(server.baseUrl, '/api/webhook/rotate', { method: 'POST' });
+    const secondKey = String((await rotated.json() as any).key);
+    const continued = await webhookRequest(server.baseUrl, secondKey, 'rotation-conversation', {
+      projectId: 'Shared Project',
+      text: 'Second message',
+    });
+    assert.equal(continued.status, 202);
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 2);
+    assert.equal(runtime.startInputs[1]?.sessionId, 'thread_1');
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('existing webhook conversations require write access but not permission to create another session', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-write-access-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  const created = await identityStore.setWebhookEnabled('user_alice', true);
+  const key = created.key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const first = await webhookRequest(server.baseUrl, key, 'write-only-continuation', {
+      projectId: 'Shared Project',
+      text: 'First message',
+    });
+    assert.equal(first.status, 201);
+    await identityStore.upsertRole({
+      id: 'role_member',
+      name: 'Member',
+      isAdmin: false,
+      projectGrants: [{ projectId: 'project_shared', canRead: true, canCreate: false, canWrite: true }],
+    });
+
+    const continued = await webhookRequest(server.baseUrl, key, 'write-only-continuation', {
+      projectId: 'Shared Project',
+      text: 'Continue the existing session',
+    });
+    assert.equal(continued.status, 202);
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.at(-1)?.sessionId, 'thread_1');
+
+    const newConversation = await webhookRequest(server.baseUrl, key, 'cannot-create-another', {
+      projectId: 'Shared Project',
+      text: 'Must not create another session',
+    });
+    assert.equal(newConversation.status, 404);
+    assert.equal((await newConversation.json() as any).error, 'project_not_found');
+    assert.equal(runtime.createInputs.length, 1);
+
+    await identityStore.upsertRole({
+      id: 'role_member',
+      name: 'Member',
+      isAdmin: false,
+      projectGrants: [{ projectId: 'project_shared', canRead: true, canCreate: true, canWrite: false }],
+    });
+    const writeDenied = await webhookRequest(server.baseUrl, key, 'write-only-continuation', {
+      projectId: 'Shared Project',
+      text: 'Must not write after access is revoked',
+    });
+    assert.equal(writeDenied.status, 404);
+    assert.equal((await writeDenied.json() as any).error, 'session_not_found');
+    assert.equal(runtime.startInputs.length, 2);
+    assert.equal(runtime.steerInputs.length, 0);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('a webhook conversation key cannot move its session to another project', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-project-binding-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  await identityStore.upsertProject({
+    id: 'project_other',
+    internalName: 'other',
+    cwd: '/private/other-project',
+    displayName: 'Other Project',
+    enabled: true,
+    activeSessionLimit: null,
+    showWorkDetailsToMembers: false,
+  });
+  await identityStore.upsertRole({
+    id: 'role_member',
+    name: 'Member',
+    isAdmin: false,
+    projectGrants: [
+      { projectId: 'project_shared', canRead: true, canCreate: true, canWrite: true },
+      { projectId: 'project_other', canRead: true, canCreate: true, canWrite: true },
+    ],
+  });
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const enabled = await browserRequest(server.baseUrl, '/api/webhook', {
+      method: 'PATCH',
+      body: { enabled: true },
+    });
+    const key = String((await enabled.json() as any).key);
+    const first = await webhookRequest(server.baseUrl, key, 'bound-project', {
+      projectId: 'Shared Project',
+      text: 'First message',
+    });
+    assert.equal(first.status, 201);
+
+    const conflict = await webhookRequest(server.baseUrl, key, 'bound-project', {
+      projectId: 'Other Project',
+      text: 'Move this conversation',
+    });
+    assert.equal(conflict.status, 409);
+    assert.equal((await conflict.json() as any).error, 'webhook_conversation_conflict');
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 1);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('non-steerable webhook conversations return a retryable conflict without interrupting', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-non-steerable-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  const runtime = runtimeStub();
+  let interrupts = 0;
+  runtime.interruptTurn = async () => {
+    interrupts += 1;
+  };
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const enabled = await browserRequest(server.baseUrl, '/api/webhook', {
+      method: 'PATCH',
+      body: { enabled: true },
+    });
+    const key = String((await enabled.json() as any).key);
+    const first = await webhookRequest(server.baseUrl, key, 'review-conversation', {
+      projectId: 'Shared Project',
+      text: 'Start review',
+    });
+    assert.equal(first.status, 201);
+
+    runtime.sessions.get('thread_1').activeTurnId = 'turn_review';
+    runtime.steerTurnForThread = async () => {
+      const error = new Error('cannot steer a review turn') as Error & { code?: string };
+      error.code = 'active_turn_not_steerable';
+      throw error;
+    };
+    const blocked = await webhookRequest(server.baseUrl, key, 'review-conversation', {
+      projectId: 'Shared Project',
+      text: 'New requirement',
+    });
+    assert.equal(blocked.status, 409);
+    assert.equal((await blocked.json() as any).error, 'active_turn_not_steerable');
+    assert.equal(interrupts, 0);
+
+    runtime.sessions.get('thread_1').activeTurnId = null;
+    const retry = await webhookRequest(server.baseUrl, key, 'review-conversation', {
+      projectId: 'Shared Project',
+      text: 'New requirement',
+    });
+    assert.equal(retry.status, 202);
+    assert.equal(runtime.startInputs.at(-1)?.sessionId, 'thread_1');
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });

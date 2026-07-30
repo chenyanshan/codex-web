@@ -1351,6 +1351,56 @@ test('admin normal access to another owner session is hidden and cannot start tu
   }
 });
 
+test('multi-user steer hides another owner turn without steering or interrupting it', async () => {
+  const identityStore = await createIdentityStore();
+  const calls: string[] = [];
+  const runtime = {
+    ...runtimeStub(),
+    threadIdForTurn: (turnId: string) => {
+      calls.push(`lookup:${turnId}`);
+      return turnId === 'turn_bob' ? 'thread_bob' : null;
+    },
+    steerTurnForThread: async (threadId: string, turnId: string) => {
+      calls.push(`steer:${threadId}:${turnId}`);
+      return { turnId };
+    },
+    interruptTurnForThread: async (threadId: string, turnId: string) => {
+      calls.push(`interrupt:${threadId}:${turnId}`);
+    },
+    interruptTurn: async (turnId: string) => {
+      calls.push(`legacy-interrupt:${turnId}`);
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/turns/turn_bob/steer`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer alice',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text: 'Do not allow this' }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      error: 'session_not_found',
+      message: 'Selected session was not found.',
+    });
+    assert.deepEqual(calls, ['lookup:turn_bob']);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('admin normal event stream access to another owner session is hidden', async () => {
   const identityStore = await createIdentityStore();
   const runtime = {

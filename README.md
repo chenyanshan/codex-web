@@ -69,8 +69,8 @@ Untrusted users must be separated with distinct OS users, containers, or hosts.
   management, and observer mode.
 - Optional read-only share links open a dedicated conversation page. Public
   sharing is disabled by default and must be explicitly enabled by the operator.
-- Per-user webhooks can create a new session and start its first turn from an
-  authenticated external `POST` request.
+- Per-user webhooks can start a session and keep sending messages to the same
+  conversation from authenticated external `POST` requests.
 - File and image attachments for turns, including direct clipboard paste on
   desktop browsers. The backend stores files locally and passes safe local
   paths to Codex.
@@ -154,8 +154,12 @@ npm run test:browser
 
 ## Webhook Quick Start
 
-A webhook request creates a new Codex Web session and immediately starts its
-first turn.
+A complete Chinese usage guide is available in
+[docs/webhook.md](docs/webhook.md).
+
+A webhook conversation is identified by its `Idempotency-Key`. The first
+request creates a Codex Web session and starts its first turn. Every later
+request with the same key sends a new message to that same session.
 
 1. Sign in to Codex Web and open **Settings**.
 2. Find **Webhook** and turn on **Enable webhook**.
@@ -169,9 +173,21 @@ Single-user example:
 curl --request POST 'https://codex-web.example/api/webhook' \
   --header 'Authorization: Bearer cwwh_REPLACE_ME' \
   --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: my-system-event-123' \
+  --header 'Idempotency-Key: support-conversation-123' \
   --data '{"title":"Webhook task","text":"Review the latest changes"}'
 ```
+
+Continue the same conversation by reusing the key:
+
+```bash
+curl --request POST 'https://codex-web.example/api/webhook' \
+  --header 'Authorization: Bearer cwwh_REPLACE_ME' \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: support-conversation-123' \
+  --data '{"text":"Now summarize the most important failures"}'
+```
+
+Use a different `Idempotency-Key` when you want a separate session.
 
 Replace the example host and key with the values shown in Settings. In
 single-user mode, the session uses `CODEX_WEB_DEFAULT_CWD` and `projectId` must
@@ -183,7 +199,7 @@ Multi-user example:
 curl --request POST 'https://codex-web.example/api/webhook' \
   --header 'Authorization: Bearer cwwh_REPLACE_ME' \
   --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: my-system-event-123' \
+  --header 'Idempotency-Key: support-conversation-123' \
   --data '{"projectId":"CodeX Web","title":"Webhook task","text":"Review the latest changes","model":"gpt-5.6-sol","reasoningEffort":"high"}'
 ```
 
@@ -195,11 +211,11 @@ in the selected project.
 
 | JSON field | Required | Description |
 | --- | --- | --- |
-| `text` | Yes | The prompt sent as the first turn. |
-| `title` | No | The new session title. |
+| `text` | Yes | The new message sent to the conversation. |
+| `title` | No | The session title, used only when the key first creates a session. |
 | `projectId` | Multi-user only | Project display name or exact internal ID. Required in multi-user mode and rejected in single-user mode. |
-| `model` | No | Exact, case-sensitive model ID from the local Codex runtime. |
-| `reasoningEffort` | No | A reasoning value supported by the selected or effective default model. |
+| `model` | No | Exact, case-sensitive model ID for a newly started turn. |
+| `reasoningEffort` | No | A supported reasoning value for a newly started turn. |
 
 Model availability and reasoning choices are dynamic. Use the Model and
 Reasoning options shown in Codex Web, or inspect `GET /api/models` with a normal
@@ -207,28 +223,43 @@ authenticated browser token (`items[].id` and `supportedReasoningEfforts`); a
 webhook key cannot read that private API. Values such as `max` or `ultra` are
 valid only when the selected model advertises them.
 
-When both fields are omitted, the request inherits the Codex configuration for
-the target working directory, not browser-local New Thread defaults. Supplying
-only `model` uses that model's Codex default reasoning effort. Supplying only
-`reasoningEffort` applies it to the target directory's effective default model.
-Unsupported values are passed to the Codex runtime, which may reject the
-request.
+When both fields are omitted, the first request inherits the Codex configuration
+for the target working directory, not browser-local New Thread defaults. Later
+idle continuations retain the session's current settings. Supplying only
+`model` uses that model's Codex default reasoning effort. Supplying only
+`reasoningEffort` applies it to the effective model. Unsupported values are
+passed to the Codex runtime, which may reject the request.
 
-`Idempotency-Key` is required and must be unique for each external event. Retry
-the same payload with the same value after a timeout or network failure; Codex
-Web returns the existing result instead of creating another session. Reusing the
-value with a different payload returns `409 Conflict`.
+`Idempotency-Key` is required, contains 1 to 256 characters, and acts as a
+conversation routing key. It is scoped to the webhook owner, survives service
+restarts and webhook-key rotation, and remains bound to its original session
+and project. Every accepted `POST` is a new message, even if its JSON body is
+identical to an earlier request.
+
+When the mapped session is idle, Codex Web starts a new turn. When a normal turn
+is already running, it uses Codex `turn/steer` to add the message to that turn
+without interrupting it. Review and compact turns cannot be steered; retry after
+they finish. `model` and `reasoningEffort` apply when a new turn is started. A
+message steered into an active turn inherits that turn's current settings.
+
+HTTP success confirms that the message was accepted. There is no separate
+per-message deduplication identifier: after a connection timeout or lost
+response, retrying may send the message twice. Callers that cannot tolerate
+duplicates should reconcile the result before retrying.
 
 - `201 Created`: a new session and first turn were created.
-- `200 OK`: an identical request was already accepted.
+- `202 Accepted`: a new message was started or steered in the existing session.
 - `400 Bad Request`: a header or JSON field is missing or invalid.
 - `401 Unauthorized`: the webhook is disabled or the key is invalid.
 - `404 Not Found`: no enabled project the key owner can create sessions in
-  matches `projectId`.
-- `409 Conflict`: the idempotency key conflicts, a legacy display name is
-  ambiguous, or the active-session limit was reached.
-- `429 Too Many Requests`: the per-key limit of 10 requests per minute was
-  exceeded.
+  matches `projectId`, or the mapped session no longer exists or is no longer
+  writable by the key owner.
+- `409 Conflict`: the key is already bound to another project, the mapped
+  session is archived, the current review/compact turn cannot be steered, a
+  legacy display name is ambiguous, or the active-session limit was reached
+  while creating the first session.
+- `429 Too Many Requests`: the per-webhook-credential limit of 10 requests per
+  minute was exceeded.
 
 Only `text`, `title`, `model`, `reasoningEffort`, and the mode-appropriate
 `projectId` are accepted. The caller cannot override the working directory,

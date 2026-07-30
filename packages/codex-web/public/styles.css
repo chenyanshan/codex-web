@@ -329,6 +329,56 @@ button:disabled {
   overflow: hidden;
 }
 
+.boot-shell {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  background: var(--bg);
+  color: var(--text);
+}
+
+.boot-wordmark {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.boot-progress {
+  width: 64px;
+  height: 2px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.boot-progress > span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  animation: boot-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes boot-progress {
+  from {
+    transform: translateX(-110%);
+  }
+
+  to {
+    transform: translateX(360%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-progress > span {
+    width: 100%;
+    animation: none;
+  }
+}
+
 .shell {
   height: 100dvh;
   overflow: hidden;
@@ -2002,9 +2052,12 @@ button:disabled {
   position: absolute;
   right: calc(100% + 8px);
   bottom: 8px;
+  display: flex;
+  gap: 4px;
 }
 
 .submission-retry-button,
+.submission-cancel-button,
 .submission-failed-indicator {
   width: 28px;
   height: 28px;
@@ -2019,19 +2072,41 @@ button:disabled {
   line-height: 1;
 }
 
-.submission-retry-button {
+.submission-retry-button,
+.submission-cancel-button {
   padding: 0;
   cursor: pointer;
 }
 
+.submission-cancel-button {
+  background: var(--panel);
+  color: var(--danger);
+}
+
 .submission-retry-button:hover,
-.submission-retry-button:focus-visible {
+.submission-retry-button:focus-visible,
+.submission-cancel-button:hover,
+.submission-cancel-button:focus-visible {
   background: color-mix(in srgb, var(--danger) 84%, black);
+  color: white;
 }
 
 .submission-retry-button:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+.submission-cancel-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 360px) {
+  .submission-delivery-actions {
+    position: static;
+    margin-top: 8px;
+    justify-content: flex-start;
+  }
 }
 
 .inline-work-row {

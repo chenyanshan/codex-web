@@ -41,6 +41,7 @@ export interface CodexWebSessionSubmissionRecord {
   status: CodexWebSessionSubmissionStatus;
   sessionId: string | null;
   runtimeSessionId: string | null;
+  operation?: 'start' | 'steer';
   turnBaseline: string[] | null;
   turnId: string | null;
   result: Record<string, unknown> | null;
@@ -84,6 +85,11 @@ export class FileSessionSubmissionStore {
   async read(ownerUserId: string, submissionId: string): Promise<CodexWebSessionSubmissionRecord | null> {
     const file = await this.readFile();
     return file.submissions[submissionKey(ownerUserId, submissionId)] ?? null;
+  }
+
+  async list(): Promise<CodexWebSessionSubmissionRecord[]> {
+    const file = await this.readFile();
+    return Object.values(file.submissions);
   }
 
   async create(
@@ -217,6 +223,7 @@ function normalizeRecord(record: CodexWebSessionSubmissionRecord): CodexWebSessi
     status,
     sessionId: nullableString(record.sessionId),
     runtimeSessionId: nullableString(record.runtimeSessionId),
+    operation: record.operation === 'steer' ? 'steer' : record.operation === 'start' ? 'start' : undefined,
     turnBaseline: normalizeTurnBaseline(record.turnBaseline),
     turnId: nullableString(record.turnId),
     result: isRecord(record.result) ? record.result : null,

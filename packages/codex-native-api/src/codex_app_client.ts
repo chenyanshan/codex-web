@@ -342,6 +342,17 @@ export interface CodexLocalImageTurnInput {
 
 export type CodexTurnInput = CodexTextTurnInput | CodexLocalImageTurnInput;
 
+export interface CodexTurnSteerParams {
+  threadId: string;
+  expectedTurnId: string;
+  input: CodexTurnInput[];
+  clientUserMessageId?: string | null;
+}
+
+export interface CodexTurnSteerResult {
+  turnId: string;
+}
+
 export class CodexAppClient extends EventEmitter {
   codexCliBin: string;
 
@@ -789,6 +800,25 @@ export class CodexAppClient extends EventEmitter {
     } finally {
       stopEarlyTurnEventCapture(this, earlyEventCapture);
     }
+  }
+
+  async steerTurn({
+    threadId,
+    expectedTurnId,
+    input,
+    clientUserMessageId,
+  }: CodexTurnSteerParams): Promise<CodexTurnSteerResult> {
+    const result: any = await this.request('turn/steer', {
+      threadId,
+      expectedTurnId,
+      input,
+      ...(clientUserMessageId === undefined ? {} : { clientUserMessageId }),
+    }, { timeoutMs: 15_000 });
+    const turnId = normalizeNullableString(result?.turnId);
+    if (!turnId) {
+      throw new Error('Codex turn/steer returned no turn id');
+    }
+    return { turnId };
   }
 
   async interruptTurn({ threadId, turnId }: { threadId: string; turnId: string }): Promise<void> {
@@ -1344,7 +1374,18 @@ export class CodexAppClient extends EventEmitter {
       }
       this.pending.delete(String(message.id));
       if (message.error) {
-        pending.reject(new Error(message.error.message || 'JSON-RPC error'));
+        const error = new Error(message.error.message || 'JSON-RPC error') as Error & {
+          code?: string;
+          rpcCode?: unknown;
+          data?: unknown;
+        };
+        error.rpcCode = message.error.code;
+        error.data = message.error.data;
+        const codexErrorInfo = message.error.data?.codexErrorInfo ?? message.error.data?.codex_error_info;
+        if (codexErrorInfo?.activeTurnNotSteerable || codexErrorInfo?.active_turn_not_steerable) {
+          error.code = 'active_turn_not_steerable';
+        }
+        pending.reject(error);
         return;
       }
       pending.resolve(message.result);
@@ -2886,6 +2927,15 @@ function summarizeRpcParams(method: string, params: any) {
         collaborationMode: params?.collaborationMode?.mode ?? null,
         inputSummary: summarizeTurnInput(Array.isArray(params?.input) ? params.input : []),
       };
+    case 'turn/steer':
+      return {
+        threadId: String(params?.threadId ?? ''),
+        expectedTurnId: String(params?.expectedTurnId ?? ''),
+        clientUserMessageId: typeof params?.clientUserMessageId === 'string'
+          ? params.clientUserMessageId
+          : null,
+        inputSummary: summarizeTurnInput(Array.isArray(params?.input) ? params.input : []),
+      };
     case 'turn/interrupt':
       return {
         threadId: String(params?.threadId ?? ''),
@@ -2922,6 +2972,10 @@ function summarizeRpcResult(method: string, result: any) {
       return {
         turnId: String(result?.turn?.id ?? ''),
         status: String(result?.turn?.status ?? ''),
+      };
+    case 'turn/steer':
+      return {
+        turnId: String(result?.turnId ?? ''),
       };
     default:
       return summarizePlainObject(result);
@@ -5825,8 +5879,15 @@ function findCodexStderrRuntimeError(stderrTail: CodexStderrEntry[], baselineSeq
 }
 
 function normalizeCodexStderrRuntimeError(line: unknown): string | null {
-  const text = String(line ?? '').trim().replace(/^■\s*/u, '').trim();
+  const text = String(line ?? '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '')
+    .trim()
+    .replace(/^■\s*/u, '')
+    .trim();
   if (!text) {
+    return null;
+  }
+  if (isBackgroundMcpTransportFailure(text) || isRecoverableToolRouterFailure(text)) {
     return null;
   }
   if (/unexpected status\s+\d{3}\b/iu.test(text)) {
@@ -5837,6 +5898,15 @@ function normalizeCodexStderrRuntimeError(line: unknown): string | null {
     return text;
   }
   return null;
+}
+
+function isBackgroundMcpTransportFailure(message: string): boolean {
+  return /\brmcp::transport::worker\b/iu.test(message)
+    && /\bUnexpectedServerResponse\s*\(\s*["']?HTTP\s+\d{3}\b/iu.test(message);
+}
+
+function isRecoverableToolRouterFailure(message: string): boolean {
+  return /\bcodex_core::tools::router\b/iu.test(message);
 }
 
 function createCodexAppServerLaunchSpec({

@@ -806,9 +806,8 @@ test('static root is public', async () => {
     assert.match(scriptResponse.headers.get('content-type') ?? '', /^application\/javascript\b/i);
     const script = await scriptResponse.text();
     assert.match(script, /localStorage|codexWebToken|fetch/u);
-    const buildIdMatch = script.match(/const APP_BUILD_ID = '([^']+)'/u);
+    const buildIdMatch = html.match(/\/app\.js\?v=([a-f0-9]{20})/u);
     assert.ok(buildIdMatch?.[1]);
-    assert.notEqual(buildIdMatch?.[1], '__CODEX_WEB_BUILD_ID__');
     const buildId = buildIdMatch[1];
     assert.match(html, new RegExp(`/app\\.js\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/styles\\.css\\?v=${buildId}`, 'u'));
@@ -827,7 +826,8 @@ test('static root is public', async () => {
     const styleResponse = await fetch(`${server.baseUrl}/styles.css`);
     assert.equal(styleResponse.status, 200);
     assert.match(styleResponse.headers.get('content-type') ?? '', /^text\/css\b/i);
-    assert.match(await styleResponse.text(), /body|--bg|font-family/u);
+    const style = await styleResponse.text();
+    assert.match(style, /body|--bg|font-family/u);
     const gzipStyleResponse = await fetch(`${server.baseUrl}/styles.css?v=${buildId}`, {
       headers: { 'Accept-Encoding': 'gzip' },
     });
@@ -850,7 +850,7 @@ test('static root is public', async () => {
     const versionResponse = await fetch(`${server.baseUrl}/version.json`);
     assert.equal(versionResponse.status, 200);
     assert.equal(versionResponse.headers.get('cache-control'), 'no-cache');
-    assert.deepEqual(await versionResponse.json(), { buildId });
+    assert.deepEqual(await versionResponse.json(), {});
     const versionEtag = versionResponse.headers.get('etag');
     assert.ok(versionEtag);
     const unchangedVersionResponse = await fetch(`${server.baseUrl}/version.json`, {
@@ -866,6 +866,12 @@ test('static root is public', async () => {
     assert.match(serviceWorker, new RegExp(`codex-web-static-${buildIdMatch?.[1]}`.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
     assert.doesNotMatch(serviceWorker, /__CODEX_WEB_BUILD_ID__/u);
     assert.equal(serviceWorkerResponse.headers.get('cache-control'), 'no-cache');
+
+    const svgIconResponse = await fetch(`${server.baseUrl}/icon.svg?v=${buildId}`);
+    assert.equal(svgIconResponse.status, 200);
+    assert.match(svgIconResponse.headers.get('content-type') ?? '', /^image\/svg\+xml\b/i);
+    assert.equal(svgIconResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.match(await svgIconResponse.text(), /<svg\b/u);
 
     const iconResponse = await fetch(`${server.baseUrl}/icon-192.png`);
     assert.equal(iconResponse.status, 200);
@@ -884,9 +890,9 @@ test('default static build id is stable across server restarts', async () => {
     });
     await server.start();
     try {
-      const response = await fetch(`${server.baseUrl}/version.json`);
+      const response = await fetch(`${server.baseUrl}/`);
       assert.equal(response.status, 200);
-      return String(((await response.json()) as any).buildId);
+      return (await response.text()).match(/\/app\.js\?v=([a-f0-9]{20})/u)?.[1] ?? '';
     } finally {
       await server.stop();
     }
@@ -1112,6 +1118,218 @@ test('POST /api/sessions/:id/turns returns 409 when the session already has an a
     });
     assert.deepEqual(calls, [
       'startTurn:thread_busy',
+    ]);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('POST /api/turns/:turnId/steer steers the active single-user turn without interrupting it', async () => {
+  const calls: string[] = [];
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      threadIdForTurn: (turnId: string) => {
+        calls.push(`lookup:${turnId}`);
+        return turnId === 'turn_active' ? 'thread_1' : null;
+      },
+      steerTurnForThread: async (threadId: string, turnId: string, input: { text: string }) => {
+        calls.push(`steer:${threadId}:${turnId}:${input.text}`);
+        return { turnId };
+      },
+      interruptTurn: async (turnId: string) => {
+        calls.push(`interrupt:${turnId}`);
+      },
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/turns/turn_active/steer`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text: 'Continue with this direction' }),
+    });
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { turnId: 'turn_active' });
+    assert.deepEqual(calls, [
+      'lookup:turn_active',
+      'steer:thread_1:turn_active:Continue with this direction',
+    ]);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('durable steer submissions retry without steering the active turn twice', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-durable-steer-'));
+  const calls: string[] = [];
+  const activeSession = {
+    id: 'thread_1',
+    cwd: '/tmp',
+    activeTurnId: 'turn_active',
+    thread: {
+      turns: [{ id: 'turn_active', status: 'in_progress', error: null, items: [] }],
+    },
+    timeline: [],
+  };
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      readSession: async () => activeSession,
+      startTurn: async () => {
+        calls.push('start');
+        return { turnId: 'turn_new' };
+      },
+      steerTurnForThread: async (
+        threadId: string,
+        turnId: string,
+        input: { text: string },
+        clientUserMessageId: string,
+      ) => {
+        calls.push(`steer:${threadId}:${turnId}:${input.text}:${clientUserMessageId}`);
+        return { turnId };
+      },
+      interruptTurn: async () => {
+        calls.push('interrupt');
+      },
+    } as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  try {
+    const request = () => fetch(`${server.baseUrl}/api/sessions/thread_1/turns`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        submissionId: 'steer:ui_message_1',
+        text: 'Continue durably',
+      }),
+    });
+    const first = await request();
+    const retried = await request();
+
+    assert.equal(first.status, 202);
+    assert.equal(retried.status, 200);
+    assert.equal((await first.json() as any).submission.turnId, 'turn_active');
+    assert.equal((await retried.json() as any).submission.turnId, 'turn_active');
+    assert.deepEqual(calls, [
+      'steer:thread_1:turn_active:Continue durably:steer:ui_message_1',
+    ]);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('durable existing-session messages steer when the browser active-turn state is stale', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-stale-active-turn-'));
+  const calls: string[] = [];
+  const activeSession = {
+    id: 'thread_1',
+    cwd: '/tmp',
+    activeTurnId: 'turn_active',
+    thread: {
+      turns: [{ id: 'turn_active', status: 'in_progress', error: null, items: [] }],
+    },
+    timeline: [],
+  };
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      readSession: async () => activeSession,
+      startTurn: async () => {
+        calls.push('start');
+        return { turnId: 'turn_new' };
+      },
+      steerTurnForThread: async (
+        threadId: string,
+        turnId: string,
+        input: { text: string },
+        clientUserMessageId: string,
+      ) => {
+        calls.push(`steer:${threadId}:${turnId}:${input.text}:${clientUserMessageId}`);
+        return { turnId };
+      },
+    } as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions/thread_1/turns`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        submissionId: 'ui_message_from_stale_state',
+        text: 'Continue even though the browser missed the active turn',
+      }),
+    });
+
+    assert.equal(response.status, 202);
+    assert.equal((await response.json() as any).submission.turnId, 'turn_active');
+    assert.deepEqual(calls, [
+      'steer:thread_1:turn_active:Continue even though the browser missed the active turn:ui_message_from_stale_state',
+    ]);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/turns/:turnId/steer returns 409 for a non-steerable turn without interrupting it', async () => {
+  const calls: string[] = [];
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      threadIdForTurn: (turnId: string) => {
+        calls.push(`lookup:${turnId}`);
+        return 'thread_1';
+      },
+      steerTurnForThread: async (threadId: string, turnId: string) => {
+        calls.push(`steer:${threadId}:${turnId}`);
+        const error = new Error('Cannot steer a review turn.');
+        (error as Error & { code?: string }).code = 'activeTurnNotSteerable';
+        throw error;
+      },
+      interruptTurn: async (turnId: string) => {
+        calls.push(`interrupt:${turnId}`);
+      },
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/turns/turn_review/steer`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer cw_token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text: 'Follow up after review' }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      error: 'active_turn_not_steerable',
+      message: 'Cannot steer a review turn.',
+    });
+    assert.deepEqual(calls, [
+      'lookup:turn_review',
+      'steer:thread_1:turn_review',
     ]);
   } finally {
     await server.stop();
