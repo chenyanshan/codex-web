@@ -8,6 +8,7 @@ import {
   type ProviderApprovalRequest,
   type ProviderConfigDefaults,
   type ProviderModelInfo,
+  type ProviderSkillsListResult,
   type ProviderThreadGoal,
   type ProviderThreadListResult,
   type ProviderThreadStartResult,
@@ -99,13 +100,19 @@ export interface CodexWebRuntimeClient {
     sandboxMode?: string;
     approvalPolicy?: string;
     ephemeral?: boolean | null;
+    runtimeEnv?: Record<string, string | null>;
   }): Promise<ProviderThreadStartResult>;
   readThread(threadId: string, includeTurns?: boolean): Promise<ProviderThreadSummary | null>;
   resumeThread?(args: {
     threadId: string;
     approvalPolicy?: string | null;
     sandboxMode?: string | null;
+    runtimeEnv?: Record<string, string | null>;
   }): Promise<unknown>;
+  listSkills?(args?: {
+    cwd?: string | null;
+    forceReload?: boolean;
+  }): Promise<ProviderSkillsListResult>;
   getPendingApprovals?(args?: {
     threadId?: string | null;
     turnId?: string | null;
@@ -187,6 +194,7 @@ export interface CreateSessionInput {
   cwd?: string | null;
   title?: string | null;
   settings?: Partial<ProviderTurnSessionSettings>;
+  runtimeEnv?: Record<string, string | null>;
 }
 
 export interface UpdateSessionSettingsInput {
@@ -208,6 +216,7 @@ export interface StartTurnInput {
   attachmentIds?: string[];
   settings?: Partial<ProviderTurnSessionSettings>;
   developerInstructions?: string;
+  runtimeEnv?: Record<string, string | null>;
 }
 
 export interface AppendSessionTimelineEntryInput {
@@ -332,6 +341,19 @@ export class CodexWebRuntime {
     return this.client.readUsage();
   }
 
+  async hasAvailableSkill(name: string, cwd: string | null = null): Promise<boolean> {
+    if (typeof this.client.listSkills !== 'function') {
+      return false;
+    }
+    try {
+      const result = await this.client.listSkills({ cwd, forceReload: false });
+      return result.skills.some((skill) => skill.enabled && skill.name === name);
+    } catch (error) {
+      this.logger.warn?.(`Could not read Codex skill catalog: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
   async stop(): Promise<void> {
     this.unsubscribeApprovalRequests?.();
     this.unsubscribeApprovalRequests = null;
@@ -421,6 +443,7 @@ export class CodexWebRuntime {
       sandboxMode: initialSettings.sandboxMode ?? 'danger-full-access',
       approvalPolicy: initialSettings.approvalPolicy ?? 'never',
       ephemeral: false,
+      ...(input.runtimeEnv ? { runtimeEnv: input.runtimeEnv } : {}),
     });
     const thread = await this.requireThread(started.threadId);
     const effectiveSettings = mergeEffectiveModelSettings(initialSettings, started);
@@ -598,7 +621,7 @@ export class CodexWebRuntime {
     }
     const helpCommand = parseHelpSlashCommand(input.text);
     if (helpCommand) {
-      await this.ensureThreadReadyForTurn(sessionId);
+      await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
       const result = createHelpCommandResult();
       this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread).length);
       return {
@@ -608,7 +631,7 @@ export class CodexWebRuntime {
     }
     const goalCommand = parseGoalSlashCommand(input.text);
     if (goalCommand) {
-      await this.ensureThreadReadyForTurn(sessionId);
+      await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
       const result = await this.handleGoalCommand(sessionId, goalCommand);
       this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread).length);
       return {
@@ -622,7 +645,7 @@ export class CodexWebRuntime {
     }
     let settings = this.mergeSettings(sessionId, input.settings);
     this.persistSessionSettings(sessionId, settings);
-    await this.ensureThreadReadyForTurn(sessionId);
+    await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
     settings = this.getSessionSettings(sessionId);
     this.logDebug('turn_start_requested', {
       sessionId,
@@ -1251,12 +1274,15 @@ export class CodexWebRuntime {
     return null;
   }
 
-  private async ensureThreadReadyForTurn(threadId: string): Promise<void> {
+  private async ensureThreadReadyForTurn(
+    threadId: string,
+    runtimeEnv: Record<string, string | null> | undefined = undefined,
+  ): Promise<void> {
     if (typeof this.client.resumeThread !== 'function') {
       return;
     }
     try {
-      await this.resumeThreadWithSessionSettings(threadId);
+      await this.resumeThreadWithSessionSettings(threadId, runtimeEnv);
     } catch (error) {
       if (isMissingRolloutError(error)) {
         return;
@@ -1265,7 +1291,10 @@ export class CodexWebRuntime {
     }
   }
 
-  private async resumeThreadWithSessionSettings(threadId: string): Promise<void> {
+  private async resumeThreadWithSessionSettings(
+    threadId: string,
+    runtimeEnv: Record<string, string | null> | undefined = undefined,
+  ): Promise<void> {
     if (typeof this.client.resumeThread !== 'function') {
       return;
     }
@@ -1275,6 +1304,7 @@ export class CodexWebRuntime {
       threadId,
       approvalPolicy: permissions.approvalPolicy,
       sandboxMode: permissions.sandboxMode,
+      runtimeEnv: runtimeEnv ?? { CODEX_WEB_CONTEXT_FILE: null },
     });
     const effectiveSettings = mergeEffectiveModelSettings(settings, resumed);
     if (effectiveSettings !== settings) {

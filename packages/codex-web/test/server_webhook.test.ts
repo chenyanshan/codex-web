@@ -278,11 +278,17 @@ test('webhook management is self-scoped and one key keeps routing turns to the s
     assert.equal(firstPayload.session.projectId, 'project_shared');
     assert.equal(firstPayload.session.cwd, undefined);
     assert.equal(firstPayload.turnId, 'turn_1');
-    assert.deepEqual(runtime.createInputs, [{
+    assert.equal(runtime.createInputs.length, 1);
+    const { runtimeEnv, ...createInput } = runtime.createInputs[0];
+    assert.deepEqual(createInput, {
       cwd: '/private/shared-project',
       title: 'Webhook review',
       settings: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
-    }]);
+    });
+    assert.match(
+      runtimeEnv?.CODEX_WEB_CONTEXT_FILE,
+      new RegExp(`${firstPayload.session.id}-[0-9a-f]{16}\\.json$`, 'u'),
+    );
     assert.equal(runtime.startInputs[0]?.sessionId, 'thread_1');
     assert.equal(runtime.startInputs[0]?.input.text, 'Review the incoming change');
     assert.deepEqual(runtime.startInputs[0]?.input.settings, {

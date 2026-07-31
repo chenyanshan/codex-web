@@ -2149,6 +2149,7 @@ async function advanceSessionSubmission({
         identityStore,
         identityState,
         runtime,
+        config,
         store,
       });
       current = await store.read(record.ownerUserId, record.id) ?? current;
@@ -2189,12 +2190,15 @@ async function advanceSessionSubmission({
       throw createHttpError(404, 'session_not_found', 'Session was not found.');
     }
     if (multiUser && target.appSession) {
-      input.developerInstructions = await projectCodexWebRuntimeContext({
+      const runtimeContext = await projectCodexWebRuntimeContext({
         config,
+        runtime,
         appSession: target.appSession,
         user: target.identityState?.users.find((item) => item.id === target.appSession?.ownerUserId) ?? null,
         project: target.project,
       });
+      input.developerInstructions = runtimeContext.developerInstructions;
+      input.runtimeEnv = runtimeContext.runtimeEnv;
     }
     const baselineSession = await runtime.readSession(target.runtimeSessionId) ?? target.runtimeSession;
     const activeTurnId = sessionSubmissionCanSteerActiveTurn(current)
@@ -2426,6 +2430,7 @@ async function createSessionForSubmission({
   identityStore,
   identityState,
   runtime,
+  config,
   store,
 }: {
   record: CodexWebSessionSubmissionRecord;
@@ -2433,6 +2438,7 @@ async function createSessionForSubmission({
   identityStore: CodexWebIdentityStoreLike | null;
   identityState: CodexWebIdentityState | null;
   runtime: CodexWebRuntime;
+  config: CodexWebConfig;
   store: FileSessionSubmissionStore;
 }): Promise<SessionSubmissionTarget> {
   const multiUser = isMultiUserSubmission(identityState, principal);
@@ -2480,6 +2486,7 @@ async function createSessionForSubmission({
         title: record.payload.title,
         settings: record.payload.settings,
         cwd: project.cwd,
+        runtimeEnv: codexWebRuntimeContextEnvironment(config, record.sessionId!),
       });
       const updatedRecord = await store.update(record.ownerUserId, record.id, (value) => ({
         ...value,
@@ -3232,13 +3239,15 @@ async function handleMultiUserRequest({
         return true;
       }
     }
+    const appSessionId = crypto.randomUUID();
     const runtimeSession = await runtime.createSession({
       ...(body as CreateSessionInput),
       cwd: project.cwd,
+      runtimeEnv: codexWebRuntimeContextEnvironment(config, appSessionId),
     });
     const now = new Date().toISOString();
     const appSession = await identityStore.upsertSession({
-      id: crypto.randomUUID(),
+      id: appSessionId,
       codexThreadId: runtimeSession.id,
       projectId: project.id,
       ownerUserId: principal.userId,
@@ -3917,12 +3926,15 @@ async function handleMultiUserRequest({
       writeSessionNotFound(response);
       return true;
     }
-    input.developerInstructions = await projectCodexWebRuntimeContext({
+    const runtimeContext = await projectCodexWebRuntimeContext({
       config,
+      runtime,
       appSession: resolved.appSession,
       user: identityState.users.find((item) => item.id === resolved.appSession.ownerUserId) ?? null,
       project: resolved.project,
     });
+    input.developerInstructions = runtimeContext.developerInstructions;
+    input.runtimeEnv = runtimeContext.runtimeEnv;
     const turn = await startSessionTurn({
       runtime,
       sessionId: resolved.appSession.codexThreadId,
@@ -5688,17 +5700,22 @@ async function steerSessionTurn({
 
 async function projectCodexWebRuntimeContext({
   config,
+  runtime,
   appSession,
   user,
   project,
 }: {
   config: CodexWebConfig;
+  runtime: CodexWebRuntime;
   appSession: CodexWebAppSession;
   user: CodexWebUser | null;
   project: CodexWebProject | null;
-}): Promise<string> {
-  const runtimeContextDir = path.join(config.stateDir, 'runtime-context', 'sessions');
-  const contextPath = path.join(runtimeContextDir, `${safePathSegment(appSession.id)}.json`);
+}): Promise<{
+  canonicalContextPath: string;
+  developerInstructions: string;
+  runtimeEnv: Record<string, string>;
+}> {
+  const { contextPath, canonicalContextPath } = resolveCodexWebRuntimeContextPaths(config, appSession.id);
   const payload = {
     schemaVersion: 1,
     appSessionId: appSession.id,
@@ -5715,19 +5732,98 @@ async function projectCodexWebRuntimeContext({
     updatedAt: new Date().toISOString(),
   };
   const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+  const skillAvailable = await codexWebUserContextSkillIsAvailable(runtime, project?.cwd ?? null);
   return withStorageQuotaHttpError(() => withManagedStateStorageCapacity({
     config,
     incomingBytes: Buffer.byteLength(serialized),
     operation: async () => {
-      await fs.mkdir(runtimeContextDir, { recursive: true, mode: 0o700 });
-      await fs.writeFile(contextPath, serialized, { mode: 0o600 });
-      return [
-        'This turn is running under Codex Web.',
-        `Codex Web context file: ${contextPath}`,
-        'Use the codex-web-user-context skill if the current web user context is needed.',
-      ].join('\n');
+      await writePrivateRuntimeContextFile(contextPath, serialized);
+      return {
+        canonicalContextPath,
+        developerInstructions: [
+          'This turn is running under Codex Web.',
+          `Codex Web context file: ${canonicalContextPath}`,
+          skillAvailable
+            ? 'Use the codex-web-user-context skill if the current web user context is needed.'
+            : 'Use CODEX_WEB_CONTEXT_FILE when the current Codex Web user context is needed.',
+        ].join('\n'),
+        runtimeEnv: {
+          CODEX_WEB_CONTEXT_FILE: canonicalContextPath,
+        },
+      };
     },
   }));
+}
+
+function codexWebRuntimeContextEnvironment(
+  config: CodexWebConfig,
+  appSessionId: string,
+): Record<string, string> {
+  return {
+    CODEX_WEB_CONTEXT_FILE: resolveCodexWebRuntimeContextPaths(config, appSessionId).canonicalContextPath,
+  };
+}
+
+function resolveCodexWebRuntimeContextPaths(
+  config: CodexWebConfig,
+  appSessionId: string,
+): { contextPath: string; canonicalContextPath: string } {
+  const runtimeContextHostDir = path.resolve(config.stateDir, 'runtime-context', 'sessions');
+  const runtimeContextDir = path.resolve(
+    normalizeOptionalString(config.runtimeContextDir) || runtimeContextHostDir,
+  );
+  const contextFileName = `${safePathSegment(appSessionId)}-${stableIdHash(appSessionId, 16)}.json`;
+  return {
+    contextPath: path.join(runtimeContextHostDir, contextFileName),
+    canonicalContextPath: path.join(runtimeContextDir, contextFileName),
+  };
+}
+
+async function codexWebUserContextSkillIsAvailable(
+  runtime: CodexWebRuntime,
+  cwd: string | null,
+): Promise<boolean> {
+  const hasAvailableSkill = (runtime as Partial<CodexWebRuntime>).hasAvailableSkill;
+  if (typeof hasAvailableSkill !== 'function') {
+    return false;
+  }
+  return hasAvailableSkill.call(runtime, 'codex-web-user-context', cwd);
+}
+
+async function writePrivateRuntimeContextFile(filePath: string, serialized: string): Promise<void> {
+  const directory = path.dirname(filePath);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryStats = await fs.lstat(directory);
+  if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) {
+    throw new Error('Codex Web runtime context directory must be a regular directory.');
+  }
+
+  const tempPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
+  );
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
+    handle = await fs.open(
+      tempPath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollow,
+      0o600,
+    );
+    await handle.writeFile(serialized, 'utf8');
+    await handle.chmod(0o600);
+    await handle.close();
+    handle = null;
+    await fs.rename(tempPath, filePath);
+    await fs.chmod(filePath, 0o600);
+    const stats = await fs.lstat(filePath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error('Codex Web runtime context must be a regular file.');
+    }
+  } finally {
+    await handle?.close().catch(() => {});
+    await fs.unlink(tempPath).catch(() => {});
+  }
 }
 
 async function storeSessionAttachments({

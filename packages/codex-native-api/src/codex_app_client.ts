@@ -554,6 +554,7 @@ export class CodexAppClient extends EventEmitter {
     sandboxMode = 'workspace-write',
     approvalPolicy = 'on-request',
     ephemeral = null,
+    runtimeEnv = {},
   }: {
     cwd?: string | null;
     title?: string | null;
@@ -562,6 +563,7 @@ export class CodexAppClient extends EventEmitter {
     sandboxMode?: string;
     approvalPolicy?: string;
     ephemeral?: boolean | null;
+    runtimeEnv?: Record<string, string | null>;
   } = {}): Promise<ProviderThreadStartResult> {
     const result: any = await this.request('thread/start', {
       cwd,
@@ -571,7 +573,7 @@ export class CodexAppClient extends EventEmitter {
       modelProvider: null,
       serviceTier,
       sandbox: sandboxMode,
-      config: null,
+      config: buildRuntimeEnvironmentConfig(runtimeEnv),
       serviceName: null,
       baseInstructions: null,
       developerInstructions: null,
@@ -596,10 +598,12 @@ export class CodexAppClient extends EventEmitter {
     threadId,
     approvalPolicy = null,
     sandboxMode = null,
+    runtimeEnv = {},
   }: {
     threadId: string;
     approvalPolicy?: string | null;
     sandboxMode?: string | null;
+    runtimeEnv?: Record<string, string | null>;
   }): Promise<ProviderConfigDefaults> {
     const result: any = await this.request('thread/resume', {
       threadId,
@@ -607,7 +611,7 @@ export class CodexAppClient extends EventEmitter {
       approvalPolicy,
       baseInstructions: null,
       developerInstructions: null,
-      config: null,
+      config: buildRuntimeEnvironmentConfig(runtimeEnv),
       sandbox: sandboxMode,
       model: null,
       modelProvider: null,
@@ -2348,6 +2352,19 @@ export class CodexAppClient extends EventEmitter {
       this.off('approval_request', onApprovalEvent);
     }
   }
+}
+
+function buildRuntimeEnvironmentConfig(runtimeEnv: Record<string, string | null>): Record<string, unknown> {
+  const entries = Object.entries(runtimeEnv);
+  if (entries.length === 0) {
+    return {};
+  }
+  return {
+    shell_environment_policy: {
+      filters: Object.fromEntries(entries.map(([name]) => [name, 'exclude'])),
+      set: Object.fromEntries(entries.filter((entry): entry is [string, string] => entry[1] !== null)),
+    },
+  };
 }
 
 function beginEarlyTurnEventCapture(

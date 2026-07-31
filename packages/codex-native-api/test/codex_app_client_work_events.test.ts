@@ -121,6 +121,60 @@ test('app client sends persisted permission settings when resuming a thread', as
   });
 });
 
+test('app client projects runtime environment into new and resumed thread shell policies', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const calls: Array<{ method: string; config: unknown }> = [];
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    calls.push({ method, config: params.config });
+    return method === 'thread/start'
+      ? { thread: { id: 'thread_first_turn' }, cwd: '/workspace' }
+      : {};
+  };
+
+  await client.startThread({
+    cwd: '/workspace',
+    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/first-turn.json' },
+  });
+  await client.resumeThread({
+    threadId: 'thread_alice',
+    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/app-alice.json' },
+  });
+  await client.resumeThread({
+    threadId: 'thread_new',
+    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: null },
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: 'thread/start',
+      config: {
+        shell_environment_policy: {
+          filters: { CODEX_WEB_CONTEXT_FILE: 'exclude' },
+          set: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/first-turn.json' },
+        },
+      },
+    },
+    {
+      method: 'thread/resume',
+      config: {
+        shell_environment_policy: {
+          filters: { CODEX_WEB_CONTEXT_FILE: 'exclude' },
+          set: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/app-alice.json' },
+        },
+      },
+    },
+    {
+      method: 'thread/resume',
+      config: {
+        shell_environment_policy: {
+          filters: { CODEX_WEB_CONTEXT_FILE: 'exclude' },
+          set: {},
+        },
+      },
+    },
+  ]);
+});
+
 test('app client replays pending approvals and stops delivery after unsubscribe', () => {
   const client = new CodexAppClient({ codexCliBin: 'codex' });
   client.handleMessage(JSON.stringify({

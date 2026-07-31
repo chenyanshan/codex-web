@@ -1302,6 +1302,78 @@ test('runtime forwards developer instructions to the native turn client', async 
   assert.equal(startTurnCalls[0]?.developerInstructions, 'Use the codex-web-user-context skill when needed.');
 });
 
+test('runtime scopes context environment to each resumed session and clears it for a new session', async () => {
+  const resumeCalls: any[] = [];
+  const threads = [createThread('thread_context'), createThread('thread_new')];
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: threads, nextCursor: null }),
+    startThread: async () => ({ threadId: 'unused', cwd: '/workspace', title: 'Thread' }),
+    readThread: async (threadId) => threads.find((thread) => thread.threadId === threadId) ?? null,
+    resumeThread: async (args) => {
+      resumeCalls.push(args);
+      return {};
+    },
+    writeConfigValue: async () => {},
+    startTurn: async (args) => {
+      const turnId = `turn_${args.threadId}`;
+      await args.onTurnStarted?.({ turnId, threadId: args.threadId });
+      return { outputText: 'done', status: 'completed', turnId, threadId: args.threadId };
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+  });
+
+  await runtime.startTurn('thread_context', {
+    text: 'read context',
+    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/alice.json' },
+  });
+  await runtime.startTurn('thread_new', { text: 'new session' });
+
+  assert.deepEqual(resumeCalls.map((call) => ({
+    threadId: call.threadId,
+    runtimeEnv: call.runtimeEnv,
+  })), [
+    {
+      threadId: 'thread_context',
+      runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/alice.json' },
+    },
+    {
+      threadId: 'thread_new',
+      runtimeEnv: { CODEX_WEB_CONTEXT_FILE: null },
+    },
+  ]);
+});
+
+test('runtime reports a user-context skill only when it is enabled in the current catalog', async () => {
+  let enabled = false;
+  const client = {
+    listSkills: async () => ({
+      cwd: '/workspace',
+      skills: [{
+        name: 'codex-web-user-context',
+        description: '',
+        enabled,
+        path: '/skills/codex-web-user-context/SKILL.md',
+        scope: 'user',
+      }],
+      errors: [],
+    }),
+  } as unknown as CodexWebRuntimeClient;
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+
+  assert.equal(await runtime.hasAvailableSkill('codex-web-user-context', '/workspace'), false);
+  enabled = true;
+  assert.equal(await runtime.hasAvailableSkill('codex-web-user-context', '/workspace'), true);
+});
+
 test('runtime persists session favorite state and exposes it on session summaries', async () => {
   let storedSettings: any = null;
   const client: CodexWebRuntimeClient = {

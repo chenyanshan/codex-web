@@ -383,9 +383,14 @@ ln -s "$(pwd)/skills/codex-web-user-context" ~/.codex/skills/codex-web-user-cont
 ```
 
 这个 skill 和前面的配套 skill 一样，仓库内自带，安装目标也是本机系统 Codex
-skills 目录 `~/.codex/skills/`。在 Codex Web turn 里，服务端会把当前会话的
-runtime context 文件路径注入到 turn 指令中，skill 再通过这个文件读取当前登录
-用户、邮箱和项目上下文。
+skills 目录 `~/.codex/skills/`。在 Codex Web turn 里，服务端会把同一个
+runtime context 绝对路径同时写入 turn 指令和 `CODEX_WEB_CONTEXT_FILE`；只有当前
+Codex catalog 中确实启用了该 skill，提示词才会要求使用它。
+
+如果 Codex 运行在文件系统命名空间不同的容器或 VM 中，需要把宿主机
+`<state-dir>/runtime-context/sessions` 挂载到运行时，并将
+`CODEX_WEB_RUNTIME_CONTEXT_DIR` 设置为运行时内的绝对目录。此时提示词和环境变量
+使用运行时路径；Codex 直接在宿主机运行时默认使用 state 目录下的路径。
 
 ## Runtime 状态
 

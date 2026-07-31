@@ -492,8 +492,15 @@ ln -s "$(pwd)/skills/codex-web-user-context" ~/.codex/skills/codex-web-user-cont
 This skill is bundled in the repository and should be installed into the local
 system Codex skills directory at `~/.codex/skills/` like the other shipped
 skills. During Codex Web turns, the server projects a small runtime context
-file and injects its absolute path into the turn instructions so the skill can
-discover the current authenticated Codex Web user, email, and project context.
+file and passes one canonical absolute path through both the turn instructions
+and `CODEX_WEB_CONTEXT_FILE`. The skill instruction is included only when that
+skill is enabled in the current Codex catalog.
+
+When Codex runs in a container or VM with a different filesystem namespace,
+mount the host directory `<state-dir>/runtime-context/sessions` into the
+runtime and set `CODEX_WEB_RUNTIME_CONTEXT_DIR` to that runtime-side absolute
+directory. The prompt and `CODEX_WEB_CONTEXT_FILE` then use the runtime path;
+the default for direct host execution is the host state directory itself.
 
 ## Runtime Status
 

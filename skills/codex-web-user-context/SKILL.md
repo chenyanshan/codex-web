@@ -22,19 +22,19 @@ Use this skill when the current turn needs details such as:
 - the Codex Web app session id
 - the current Codex Web project display name
 
-The server injects a short `developerInstructions` hint with the context file
-path for Codex Web turns.
+The server sets `CODEX_WEB_CONTEXT_FILE` for the current Codex thread and also
+injects the same path in a short `developerInstructions` hint.
 
 ## Workflow
 
-1. Read the `developerInstructions` for the current turn.
-2. Look for a line in the form:
+1. Read `CODEX_WEB_CONTEXT_FILE` from the turn's runtime environment.
+2. Confirm that the `developerInstructions` path, when present, is the same:
 
 ```text
-Codex Web context file: /absolute/path/to/.codex-web/runtime-context/sessions/<appSessionId>.json
+Codex Web context file: <absolute-runtime-path-to-session-context.json>
 ```
 
-3. Read that JSON file.
+3. Read exactly that JSON file.
 4. Use only the projected fields you need.
 
 ## Expected Context Shape
@@ -65,3 +65,5 @@ Codex Web context file: /absolute/path/to/.codex-web/runtime-context/sessions/<a
   to be present.
 - If the file is missing, say that the current turn does not expose Codex Web
   runtime context.
+- Do not scan the runtime-context directory or use another session's file when
+  the variable is missing or the projected field is `null`.

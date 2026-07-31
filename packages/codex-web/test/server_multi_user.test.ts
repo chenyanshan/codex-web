@@ -18,6 +18,7 @@ interface TestConfig {
   authPath: string;
   reportsDir: string;
   reportIndexPath: string;
+  runtimeContextDir: string;
   envPath: string;
   debug: boolean;
   publicSharesEnabled: boolean;
@@ -35,6 +36,7 @@ function createConfig(overrides: Partial<TestConfig> = {}): TestConfig {
     authPath: path.join(stateDir, 'auth.json'),
     reportsDir: path.join(stateDir, 'reports'),
     reportIndexPath: path.join(stateDir, 'report-index.json'),
+    runtimeContextDir: path.resolve(stateDir, 'runtime-context', 'sessions'),
     envPath: '/tmp/service.env',
     debug: false,
     publicSharesEnabled: true,
@@ -418,6 +420,12 @@ test('multi-user read and write reject sessions owned by another user', async ()
 test('multi-user session create uses project cwd and stores app session mapping', async () => {
   const identityStore = await createIdentityStore();
   const runtime = runtimeStub();
+  let createInput: any = null;
+  runtime.createSession = async (input: any) => {
+    createInput = input;
+    runtime.calls.push(`create:${input.cwd}`);
+    return { id: 'thread_new', cwd: input.cwd, settings: input.settings, thread: { turns: [] }, timeline: [] } as any;
+  };
   const server = createCodexWebServer({
     auth: authFor({
       alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
@@ -439,6 +447,7 @@ test('multi-user session create uses project cwd and stores app session mapping'
     assert.equal(payload.session.projectDisplayName, 'Allowed Project');
     assert.equal(payload.session.cwd, undefined);
     assert.deepEqual(runtime.calls, ['create:/Users/alice/secret-repo']);
+    assert.match(createInput.runtimeEnv.CODEX_WEB_CONTEXT_FILE, new RegExp(`${payload.session.id}-[0-9a-f]{16}\\.json$`, 'u'));
     const state = await identityStore.readState();
     assert.equal(state.sessions.some((session) => session.codexThreadId === 'thread_new'), true);
   } finally {
@@ -2761,7 +2770,7 @@ test('legacy admin tokens continue writing admin-owned sessions after multi-user
   }
 });
 
-test('starting a writable app session turn projects codex web runtime context and passes developer instructions', async () => {
+test('starting a writable app session turn securely projects one canonical runtime context', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-runtime-context-'));
   const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
   await identityStore.setMultiUserEnabled(true);
@@ -2796,6 +2805,7 @@ test('starting a writable app session turn projects codex web runtime context an
   });
 
   const startTurnInputs: any[] = [];
+  let skillAvailable = false;
   const server = createCodexWebServer({
     auth: authFor({
       alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
@@ -2803,6 +2813,7 @@ test('starting a writable app session turn projects codex web runtime context an
     identityStore,
     runtime: {
       ...runtimeStub(),
+      hasAvailableSkill: async () => skillAvailable,
       startTurn: async (_threadId: string, input: any) => {
         startTurnInputs.push(input);
         return { turnId: 'turn_1' };
@@ -2819,14 +2830,159 @@ test('starting a writable app session turn projects codex web runtime context an
     });
     assert.equal(response.status, 202);
 
-    const contextPath = path.join(stateDir, 'runtime-context', 'sessions', 'app_alice.json');
+    const contextPath = startTurnInputs[0]?.runtimeEnv?.CODEX_WEB_CONTEXT_FILE;
+    assert.equal(typeof contextPath, 'string');
+    assert.equal(path.isAbsolute(contextPath), true);
+    assert.match(contextPath, /app_alice-[0-9a-f]{16}\.json$/u);
+    assert.match(startTurnInputs[0]?.developerInstructions, new RegExp(`Codex Web context file: ${contextPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}`, 'u'));
+    assert.match(startTurnInputs[0]?.developerInstructions, /Use CODEX_WEB_CONTEXT_FILE/u);
+    assert.doesNotMatch(startTurnInputs[0]?.developerInstructions, /Use the codex-web-user-context skill/u);
     const raw = await fs.readFile(contextPath, 'utf8');
     const projected = JSON.parse(raw);
     assert.equal(projected.owner.username, 'alice');
     assert.equal(projected.owner.email, 'alice@example.com');
     assert.equal(projected.project.displayName, 'Allowed Project');
-    assert.match(String(startTurnInputs[0]?.developerInstructions || ''), /codex-web-user-context/u);
-    assert.match(String(startTurnInputs[0]?.developerInstructions || ''), /app_alice\.json/u);
+    assert.equal(Object.hasOwn(projected, 'token'), false);
+    assert.equal(Object.hasOwn(projected, 'cookie'), false);
+    assert.equal(Object.hasOwn(projected, 'authorization'), false);
+    const stats = await fs.lstat(contextPath);
+    assert.equal(stats.isFile(), true);
+    assert.equal(stats.isSymbolicLink(), false);
+    assert.equal(stats.mode & 0o777, 0o600);
+
+    const symlinkTarget = path.join(stateDir, 'must-not-be-overwritten.json');
+    await fs.writeFile(symlinkTarget, '{"safe":true}\n');
+    await fs.unlink(contextPath);
+    await fs.symlink(symlinkTarget, contextPath);
+    skillAvailable = true;
+    const secondResponse = await fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'read it again' }),
+    });
+    assert.equal(secondResponse.status, 202);
+    assert.equal(startTurnInputs[1]?.runtimeEnv?.CODEX_WEB_CONTEXT_FILE, contextPath);
+    assert.match(startTurnInputs[1]?.developerInstructions, /Use the codex-web-user-context skill/u);
+    assert.equal(await fs.readFile(symlinkTarget, 'utf8'), '{"safe":true}\n');
+    const rewrittenStats = await fs.lstat(contextPath);
+    assert.equal(rewrittenStats.isFile(), true);
+    assert.equal(rewrittenStats.isSymbolicLink(), false);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('concurrent sessions keep distinct owners and a missing email never falls back to another context', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-runtime-context-isolation-'));
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertUserWithPassword({
+    id: 'user_bob',
+    username: 'bob',
+    password: 'bob-password',
+    roleIds: ['role_user'],
+    directProjectGrants: [],
+  });
+  const runtimeContextDir = path.join(stateDir, 'runtime-context', 'sessions');
+  await fs.mkdir(runtimeContextDir, { recursive: true });
+  await fs.writeFile(path.join(runtimeContextDir, 'unrelated-latest.json'), JSON.stringify({
+    owner: { userId: 'other', username: 'other', email: 'other@example.com' },
+  }));
+  const starts: Array<{ threadId: string; input: any }> = [];
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      bob: { userId: 'user_bob', username: 'bob', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: {
+      ...runtimeStub(),
+      hasAvailableSkill: async () => false,
+      startTurn: async (threadId: string, input: any) => {
+        starts.push({ threadId, input });
+        return { turnId: `turn_${threadId}` };
+      },
+    } as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  try {
+    const responses = await Promise.all([
+      fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'alice context' }),
+      }),
+      fetch(`${server.baseUrl}/api/sessions/app_bob/turns`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer bob', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'bob context' }),
+      }),
+    ]);
+    assert.deepEqual(responses.map((response) => response.status), [202, 202]);
+
+    const aliceStart = starts.find((start) => start.threadId === 'thread_alice');
+    const bobStart = starts.find((start) => start.threadId === 'thread_bob');
+    const alicePath = aliceStart?.input.runtimeEnv.CODEX_WEB_CONTEXT_FILE;
+    const bobPath = bobStart?.input.runtimeEnv.CODEX_WEB_CONTEXT_FILE;
+    assert.notEqual(alicePath, bobPath);
+    assert.notEqual(alicePath, path.join(runtimeContextDir, 'unrelated-latest.json'));
+    assert.notEqual(bobPath, path.join(runtimeContextDir, 'unrelated-latest.json'));
+
+    const [aliceContext, bobContext] = await Promise.all([
+      fs.readFile(alicePath, 'utf8').then(JSON.parse),
+      fs.readFile(bobPath, 'utf8').then(JSON.parse),
+    ]);
+    assert.deepEqual(aliceContext.owner, {
+      userId: 'user_alice',
+      username: 'alice',
+      email: null,
+    });
+    assert.deepEqual(bobContext.owner, {
+      userId: 'user_bob',
+      username: 'bob',
+      email: null,
+    });
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime context path uses the configured runtime namespace instead of the host state path', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-runtime-context-map-'));
+  const identityStore = await createIdentityStore();
+  const starts: any[] = [];
+  const runtimeContextDir = '/codex-runtime/codex-web-contexts';
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: {
+      ...runtimeStub(),
+      startTurn: async (_threadId: string, input: any) => {
+        starts.push(input);
+        return { turnId: 'turn_mapped' };
+      },
+    } as any,
+    config: createConfig({ stateDir, runtimeContextDir }),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions/app_alice/turns`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'mapped context' }),
+    });
+    assert.equal(response.status, 202);
+
+    const canonicalPath = starts[0]?.runtimeEnv?.CODEX_WEB_CONTEXT_FILE;
+    assert.equal(path.dirname(canonicalPath), runtimeContextDir);
+    assert.equal(starts[0]?.developerInstructions.includes(canonicalPath), true);
+    assert.equal(starts[0]?.developerInstructions.includes(stateDir), false);
+    const hostPath = path.join(stateDir, 'runtime-context', 'sessions', path.basename(canonicalPath));
+    assert.equal(JSON.parse(await fs.readFile(hostPath, 'utf8')).owner.userId, 'user_alice');
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });
