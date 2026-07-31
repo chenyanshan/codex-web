@@ -9171,9 +9171,35 @@ function upsertWorkBatch(turnId, batchId, patch) {
     ...current,
     ...patch,
     turnId: current.turnId || turnId,
-    summary: { ...current.summary, ...(patch.summary || {}) },
+    summary: mergeWorkSummaryPatch(current.summary, patch.summary),
   };
   state.batches.set(batchId, next);
+}
+
+function mergeWorkSummaryPatch(currentSummary, patchSummary) {
+  const current = currentSummary && typeof currentSummary === 'object' ? currentSummary : {};
+  const patch = patchSummary && typeof patchSummary === 'object' ? patchSummary : {};
+  const merged = { ...current, ...patch };
+  for (const key of ['output', 'stdout', 'stderr']) {
+    const delta = typeof patch[`${key}Delta`] === 'string' ? patch[`${key}Delta`] : '';
+    if (!delta || typeof patch[key] === 'string') {
+      continue;
+    }
+    const previous = typeof current[key] === 'string' ? current[key] : '';
+    merged[key] = truncateLiveWorkText(`${previous}${delta}`);
+  }
+  return merged;
+}
+
+function truncateLiveWorkText(value) {
+  const maxCharacters = 256 * 1024;
+  if (value.length <= maxCharacters) {
+    return value;
+  }
+  const marker = '\n...[truncated]...\n';
+  const contentLength = maxCharacters - marker.length;
+  const headLength = Math.floor(contentLength * 0.6);
+  return `${value.slice(0, headLength)}${marker}${value.slice(-(contentLength - headLength))}`;
 }
 
 function buildWorkTimelineItem(turnId, batches, terminalStatus = '', approvals = []) {

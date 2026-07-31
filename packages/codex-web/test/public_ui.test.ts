@@ -7741,6 +7741,38 @@ test('work batches retain compact recovery metadata without raw transport payloa
   assert.doesNotMatch(html, /item\/started/u);
 });
 
+test('work batches merge live stream deltas without cumulative SSE snapshots', async () => {
+  const { api } = await loadAppHarness();
+
+  api.applyTurnEvent({
+    type: 'batch.started',
+    turnId: 'turn_delta',
+    batchId: 'command_delta',
+    kind: 'command',
+    title: 'npm test',
+  }, null);
+  for (const outputDelta of ['first line\n', 'second line\n']) {
+    api.applyTurnEvent({
+      type: 'batch.updated',
+      turnId: 'turn_delta',
+      batchId: 'command_delta',
+      summary: { outputDelta },
+    }, null);
+  }
+
+  assert.equal(
+    api.state.batches.get('command_delta')?.summary?.output,
+    'first line\nsecond line\n',
+  );
+  api.applyTurnEvent({
+    type: 'batch.updated',
+    turnId: 'turn_delta',
+    batchId: 'command_delta',
+    summary: { output: 'snapshot output' },
+  }, null);
+  assert.equal(api.state.batches.get('command_delta')?.summary?.output, 'snapshot output');
+});
+
 test('file-change batches surface changed paths and line counts', async () => {
   const { api } = await loadAppHarness();
 

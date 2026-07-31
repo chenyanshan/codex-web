@@ -25,6 +25,10 @@ import {
 } from '@codex-mobile-web-app/codex-native-api';
 import { CodexWebEventBus } from './event_bus.js';
 import {
+  historyWorkSummary,
+  mergeBoundedWorkSummary,
+} from './event_memory.js';
+import {
   createBatchCompletedEvent,
   isTerminalProviderTurnResult,
   normalizeApprovalBatchEvent,
@@ -1070,13 +1074,14 @@ export class CodexWebRuntime {
     const turnWorkSummaries = this.workSummaries.get(turnId) ?? new Map<string, Record<string, unknown>>();
     this.workSummaries.set(turnId, turnWorkSummaries);
     const existing = turnWorkSummaries.get(event.itemId) ?? {};
-    mergeWorkSummary(existing, event.summary ?? {});
+    const update = event.summary ?? {};
+    mergeBoundedWorkSummary(existing, update);
     turnWorkSummaries.set(event.itemId, existing);
     for (const normalized of normalizeWorkBatchEvents({
       turnId,
       event: {
         ...event,
-        summary: { ...existing },
+        summary: historyWorkSummary(update, existing, event.type),
       },
     })) {
       this.append(turnId, normalized);
@@ -2376,33 +2381,6 @@ function summarizeRuntimeEvent(event: CodexWebEvent): Record<string, unknown> {
   };
 }
 
-function mergeWorkSummary(
-  target: Record<string, unknown>,
-  update: Record<string, unknown>,
-): void {
-  const streamKeys = ['output', 'stdout', 'stderr'] as const;
-  const handled = new Set<string>();
-  for (const key of streamKeys) {
-    const deltaKey = `${key}Delta`;
-    const previous = typeof target[key] === 'string' ? target[key] : '';
-    const incoming = typeof update[key] === 'string' ? update[key] : '';
-    const delta = typeof update[deltaKey] === 'string' ? update[deltaKey] : '';
-    if (incoming || delta) {
-      target[key] = mergeStreamText(previous, incoming, delta);
-    }
-    if (delta) {
-      target[deltaKey] = delta;
-    }
-    handled.add(key);
-    handled.add(deltaKey);
-  }
-  for (const [key, value] of Object.entries(update)) {
-    if (!handled.has(key)) {
-      target[key] = value;
-    }
-  }
-}
-
 function finalAnswerItemIdFromResult(result: Partial<ProviderTurnResult>): string | null {
   const responseItems = Array.isArray(result.responseItems) ? result.responseItems : [];
   const outputText = normalizeComparableAssistantText(result.outputText ?? result.previewText);
@@ -2476,23 +2454,6 @@ function responseItemText(value: unknown): string {
 
 function normalizeComparableAssistantText(value: unknown): string {
   return String(value ?? '').trim().replace(/\r\n/gu, '\n');
-}
-
-function mergeStreamText(previous: string, incoming: string, delta: string): string {
-  if (!previous) {
-    return incoming || delta;
-  }
-  if (incoming === previous || (incoming && previous.endsWith(incoming))) {
-    return previous;
-  }
-  if (incoming.startsWith(previous)) {
-    return incoming;
-  }
-  const addition = delta || incoming;
-  if (!addition || previous.endsWith(addition)) {
-    return previous;
-  }
-  return `${previous}${addition}`;
 }
 
 function summarizeRuntimeError(error: unknown): Record<string, unknown> {

@@ -128,12 +128,50 @@ test('SSE slow-consumer reset retains events that arrive while the snapshot is b
 
   await waitFor(() => response.chunks.some((chunk) => chunk.includes(`id: ${afterSnapshot.sequence}`)));
   const output = response.chunks.join('');
+  response.emit('close');
   assert.match(output, /"reason":"slow_consumer"/u);
-  assert.match(output, /"text":"70"/u);
+  assert.match(output, /"text":"0123456789[0-9]+70"/u);
   assert.match(output, new RegExp(`id: ${afterSnapshot.sequence}\\n`, 'u'));
   assert.match(output, /"delta":" after snapshot"/u);
+});
 
-  response.emit('close');
+test('SSE reconnects release every turn listener and queued event reference', async () => {
+  const bus = new CodexWebEventBus({ epoch: 'epoch_reconnect' });
+  const runtime = {
+    eventBus: bus,
+    getTurnEvents: (turnId: string, after?: string | number | null) => bus.list(turnId, after),
+    getTurnEventReplay: (turnId: string, after?: string | number | null, epoch?: string | null) => (
+      bus.replay(turnId, after, epoch)
+    ),
+    getTurnEventSnapshot: (turnId: string) => bus.snapshot(turnId),
+    subscribeToTurn: (turnId: string, listener: any) => bus.subscribe(turnId, listener),
+  };
+
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const response = new FakeSseResponse();
+    const request = new EventEmitter() as EventEmitter & { socket: { destroy(): void } };
+    request.socket = { destroy: () => {} };
+    await streamTurnEvents({
+      request: request as any,
+      response: response as any,
+      runtime: runtime as any,
+      turnId: 'turn_reconnect',
+      afterId: null,
+      requestedEpoch: 'epoch_reconnect',
+      registerSseCloser: () => () => {},
+    });
+    assert.equal(bus.retentionStats().listeners, 1);
+    bus.append('turn_reconnect', {
+      id: `evt_${attempt}`,
+      type: 'batch.updated',
+      turnId: 'turn_reconnect',
+      batchId: 'command_reconnect',
+      summary: { outputDelta: `${attempt}\n` },
+    });
+    response.emit('close');
+    assert.equal(bus.retentionStats().listeners, 0);
+    assert.equal(response.writableEnded, true);
+  }
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

@@ -39,6 +39,10 @@ import type {
 const APP_SERVER_CONNECT_TIMEOUT_MS = 20_000;
 const INITIAL_TURN_MATERIALIZATION_SETTLE_MS = 2_000;
 const INITIAL_TURN_MATERIALIZATION_POLL_MS = 250;
+const MAX_WORK_STREAM_BYTES = 256 * 1024;
+const MAX_WORK_DELTA_BYTES = 64 * 1024;
+const MAX_EARLY_TURN_EVENTS = 256;
+const MAX_EARLY_TURN_EVENT_BYTES = 1024 * 1024;
 
 interface CodexAppLogger {
   debug?: (message: string) => void;
@@ -300,6 +304,7 @@ interface EarlyTurnEventCapture {
   threadId: string;
   turnId: string | null;
   events: BufferedTurnEvent[];
+  eventBytes: number;
   onNotification: (notification: any) => void;
   onApprovalRequest: (request: ProviderApprovalRequest) => void;
   stopped: boolean;
@@ -2377,6 +2382,7 @@ function beginEarlyTurnEventCapture(
     threadId,
     turnId: null,
     events: [],
+    eventBytes: 0,
     onNotification: () => {},
     onApprovalRequest: () => {},
     stopped: false,
@@ -2390,13 +2396,13 @@ function beginEarlyTurnEventCapture(
     ) {
       return;
     }
-    capture.events.push({ type: 'notification', value: notification });
+    appendEarlyTurnEvent(capture, { type: 'notification', value: notification });
   };
   capture.onApprovalRequest = (request: ProviderApprovalRequest) => {
     if (request.threadId !== threadId) {
       return;
     }
-    capture.events.push({ type: 'approval_request', value: request });
+    appendEarlyTurnEvent(capture, { type: 'approval_request', value: request });
   };
   captures.add(capture);
   client.on('notification', capture.onNotification);
@@ -2414,7 +2420,11 @@ function stopEarlyTurnEventCapture(
   capture.stopped = true;
   client.off('notification', capture.onNotification);
   client.off('approval_request', capture.onApprovalRequest);
-  earlyTurnEventCapturesByClient.get(client)?.delete(capture);
+  const captures = earlyTurnEventCapturesByClient.get(client);
+  captures?.delete(capture);
+  if (captures?.size === 0) {
+    earlyTurnEventCapturesByClient.delete(client);
+  }
 }
 
 function stopAllEarlyTurnEventCaptures(client: CodexAppClient): void {
@@ -2456,7 +2466,32 @@ function claimEarlyTurnEvents(
       && (!notificationTurnId || notificationTurnId === turnId);
   });
   capture.events = [];
+  capture.eventBytes = 0;
   return events;
+}
+
+function appendEarlyTurnEvent(capture: EarlyTurnEventCapture, event: BufferedTurnEvent): void {
+  const bytes = estimateBufferedTurnEventBytes(event);
+  capture.events.push(event);
+  capture.eventBytes += bytes;
+  while (
+    capture.events.length > MAX_EARLY_TURN_EVENTS
+    || capture.eventBytes > MAX_EARLY_TURN_EVENT_BYTES
+  ) {
+    const removed = capture.events.shift();
+    if (!removed) {
+      break;
+    }
+    capture.eventBytes = Math.max(0, capture.eventBytes - estimateBufferedTurnEventBytes(removed));
+  }
+}
+
+function estimateBufferedTurnEventBytes(event: BufferedTurnEvent): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(event.value));
+  } catch {
+    return MAX_EARLY_TURN_EVENT_BYTES;
+  }
 }
 
 function mapPendingApproval(message: any): PendingApproval | null {
@@ -4764,13 +4799,13 @@ function extractWorkEventUpdate(
     if (!itemId) {
       return null;
     }
-    const summary = buildWorkSummary(item, params);
+    const summary = boundCommandWorkSummary(buildWorkSummary(item, params));
     const previous = startedWorkEvents.get(itemId);
     const kind = previous?.kind ?? classifyWorkEventKind(item, params);
     if (kind === 'command') {
       const output = typeof summary.output === 'string' ? summary.output : null;
       if (output !== null) {
-        workOutputTexts.set(itemId, output);
+        workOutputTexts.set(itemId, truncateWorkText(output, MAX_WORK_STREAM_BYTES));
       } else if (method === 'item/completed' && workOutputTexts.has(itemId)) {
         summary.output = workOutputTexts.get(itemId)!;
       }
@@ -4788,7 +4823,10 @@ function extractWorkEventUpdate(
       raw: notification,
     };
     if (event.type === 'started') {
-      startedWorkEvents.set(itemId, event);
+      startedWorkEvents.set(itemId, { ...event, summary: undefined, raw: undefined });
+    } else {
+      startedWorkEvents.delete(itemId);
+      workOutputTexts.delete(itemId);
     }
     return event;
   }
@@ -4819,17 +4857,59 @@ function extractWorkEventUpdate(
     if (!itemId || !delta) {
       return null;
     }
-    const output = `${workOutputTexts.get(itemId) ?? ''}${delta}`;
+    const output = truncateWorkText(
+      `${workOutputTexts.get(itemId) ?? ''}${delta}`,
+      MAX_WORK_STREAM_BYTES,
+    );
     workOutputTexts.set(itemId, output);
     return {
       type: 'updated',
       itemId,
       kind: 'command',
-      summary: { output, outputDelta: delta },
+      summary: { outputDelta: truncateWorkText(delta, MAX_WORK_DELTA_BYTES) },
       raw: notification,
     };
   }
   return null;
+}
+
+function boundCommandWorkSummary(summary: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ['output', 'stdout', 'stderr'] as const) {
+    if (typeof summary[key] === 'string') {
+      summary[key] = truncateWorkText(summary[key], MAX_WORK_STREAM_BYTES);
+    }
+    const deltaKey = `${key}Delta`;
+    if (typeof summary[deltaKey] === 'string') {
+      summary[deltaKey] = truncateWorkText(summary[deltaKey], MAX_WORK_DELTA_BYTES);
+    }
+  }
+  return summary;
+}
+
+function truncateWorkText(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value) <= maxBytes) {
+    return value;
+  }
+  const marker = '\n...[truncated]...\n';
+  const contentBudget = Math.max(0, maxBytes - Buffer.byteLength(marker));
+  const head = sliceWorkTextByBytes(value, Math.floor(contentBudget * 0.6), false);
+  const tail = sliceWorkTextByBytes(value, Math.ceil(contentBudget * 0.4), true);
+  return `${head}${marker}${tail}`;
+}
+
+function sliceWorkTextByBytes(value: string, maxBytes: number, fromEnd: boolean): string {
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const length = Math.ceil((low + high) / 2);
+    const candidate = fromEnd ? value.slice(value.length - length) : value.slice(0, length);
+    if (Buffer.byteLength(candidate) <= maxBytes) {
+      low = length;
+    } else {
+      high = length - 1;
+    }
+  }
+  return fromEnd ? value.slice(value.length - low) : value.slice(0, low);
 }
 
 function emitWorkEventsFromTurnSnapshot({

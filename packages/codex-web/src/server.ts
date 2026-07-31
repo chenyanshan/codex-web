@@ -18,6 +18,7 @@ import {
 import type { PublicAuthSession } from './auth_store.js';
 import type { CodexWebConfig } from './config.js';
 import type { CodexWebEventReplay, CodexWebStoredEvent } from './event_bus.js';
+import { retainedEventSize } from './event_memory.js';
 import { presentCodexWebEvent, type CodexWebEventAudience } from './event_model.js';
 import {
   projectDisplayNameKey,
@@ -6527,8 +6528,11 @@ export async function streamTurnEvents({
   audience?: CodexWebEventAudience;
 }): Promise<void> {
   const maxQueuedLiveEvents = 64;
+  const maxQueuedLiveBytes = 2 * 1024 * 1024;
   const pendingLiveEvents: CodexWebStoredEvent[] = [];
   const liveEvents: CodexWebStoredEvent[] = [];
+  let pendingLiveBytes = 0;
+  let liveEventBytes = 0;
   let sentThroughSequence = 0;
   let replaying = true;
   let closed = false;
@@ -6653,6 +6657,7 @@ export async function streamTurnEvents({
           // The snapshot covers earlier appends; clear first so appends during a blocked write stay queued.
           slowConsumerResetPending = false;
           liveEvents.length = 0;
+          liveEventBytes = 0;
           const currentReplay = readReplay(null, runtime.eventBus.epoch);
           const resetControl = snapshotControl(currentReplay, 'slow_consumer');
           snapshotThroughSequence = Math.max(snapshotThroughSequence, resetControl.throughSequence);
@@ -6663,6 +6668,7 @@ export async function streamTurnEvents({
         }
         const entry = liveEvents.shift();
         if (entry) {
+          liveEventBytes = Math.max(0, liveEventBytes - retainedEventSize(entry.event));
           await writeEvent(entry);
           continue;
         }
@@ -6690,22 +6696,34 @@ export async function streamTurnEvents({
     if (slowConsumerResetPending) {
       return;
     }
-    if (liveEvents.length >= maxQueuedLiveEvents) {
+    const entryBytes = retainedEventSize(entry.event);
+    if (
+      liveEvents.length >= maxQueuedLiveEvents
+      || liveEventBytes + entryBytes > maxQueuedLiveBytes
+    ) {
       liveEvents.length = 0;
+      liveEventBytes = 0;
       slowConsumerResetPending = true;
     } else {
       liveEvents.push(entry);
+      liveEventBytes += entryBytes;
     }
     void flushLiveEvents();
   };
 
   const unsubscribe = runtime.subscribeToTurn(turnId, (entry) => {
     if (replaying) {
-      if (pendingLiveEvents.length >= maxQueuedLiveEvents) {
+      const entryBytes = retainedEventSize(entry.event);
+      if (
+        pendingLiveEvents.length >= maxQueuedLiveEvents
+        || pendingLiveBytes + entryBytes > maxQueuedLiveBytes
+      ) {
         pendingLiveEvents.length = 0;
+        pendingLiveBytes = 0;
         slowConsumerResetPending = true;
       } else if (!slowConsumerResetPending) {
         pendingLiveEvents.push(entry);
+        pendingLiveBytes += entryBytes;
       }
       return;
     }
@@ -6723,6 +6741,8 @@ export async function streamTurnEvents({
     }
     pendingLiveEvents.length = 0;
     liveEvents.length = 0;
+    pendingLiveBytes = 0;
+    liveEventBytes = 0;
     unsubscribe();
     unregisterForcedClose?.();
     unregisterForcedClose = null;
@@ -6774,6 +6794,7 @@ export async function streamTurnEvents({
     enqueueLiveEvent(entry);
   }
   pendingLiveEvents.length = 0;
+  pendingLiveBytes = 0;
   heartbeat = setInterval(() => {
     heartbeatPending = true;
     void flushLiveEvents();

@@ -3075,19 +3075,30 @@ test('runtime appends command stream deltas into cumulative batch output', async
 
   await runtime.startTurn('thread_1', { text: 'run tests' });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const latestUpdate = runtime.getTurnEvents('turn_output')
+  const updates = runtime.getTurnEvents('turn_output')
     .map((entry) => entry.event)
-    .filter((event) => event.type === 'batch.updated')
-    .at(-1);
+    .filter((event) => event.type === 'batch.updated');
+  const latestUpdate = updates.at(-1);
   assert.equal(latestUpdate?.type, 'batch.updated');
   assert.deepEqual(latestUpdate?.summary, {
     command: 'npm test',
     output: 'one two',
-    outputDelta: 'two',
     stdout: 'AB',
-    stdoutDelta: 'B',
     stderr: 'EF',
-    stderrDelta: 'F',
+  });
+  assert.deepEqual(updates.slice(1, 3).map((event) => event.summary), [
+    { outputDelta: 'one ', stdoutDelta: 'A', stderrDelta: 'E' },
+    { outputDelta: 'two', stdoutDelta: 'B', stderrDelta: 'F' },
+  ]);
+  const projectedUpdate = runtime.getTurnEventSnapshot('turn_output')
+    .map((entry) => entry.event)
+    .find((event) => event.type === 'batch.updated');
+  assert.equal(projectedUpdate?.type, 'batch.updated');
+  assert.deepEqual(projectedUpdate.summary, {
+    command: 'npm test',
+    output: 'one two',
+    stdout: 'AB',
+    stderr: 'EF',
   });
 });
 
@@ -3558,6 +3569,14 @@ test('runtime emits command and file work events from native work callbacks', as
     cwd: '/workspace',
   });
   assert.deepEqual((events[3] as any).summary, {
+    output: '42 passing',
+    exitCode: 0,
+  });
+  const projectedCommand = runtime.getTurnEventSnapshot('turn_1')
+    .map((entry) => entry.event)
+    .find((event) => event.type === 'batch.updated' && event.batchId === 'cmd_1');
+  assert.equal(projectedCommand?.type, 'batch.updated');
+  assert.deepEqual(projectedCommand.summary, {
     command: 'npm test',
     cwd: '/workspace',
     output: '42 passing',
@@ -3726,7 +3745,7 @@ test('runtime publishes live work update summaries to subscribers', async () => 
 
   assert.deepEqual(published, [
     JSON.stringify({ command: 'rg TODO', cwd: '/workspace' }),
-    JSON.stringify({ command: 'rg TODO', cwd: '/workspace', output: 'src/app.ts:12: TODO' }),
+    JSON.stringify({ output: 'src/app.ts:12: TODO' }),
     JSON.stringify({ command: 'rg TODO', cwd: '/workspace', output: 'src/app.ts:12: TODO', exitCode: 0 }),
   ]);
 });

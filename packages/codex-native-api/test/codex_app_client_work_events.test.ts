@@ -809,7 +809,8 @@ test('app client replays turn events emitted before turn start acknowledgement',
     'Early after ack.',
     'Early after ack.',
   ]);
-  assert.equal(workEvents[1]?.summary?.output, 'running\n');
+  assert.equal(workEvents[1]?.summary?.output, undefined);
+  assert.equal(workEvents[1]?.summary?.outputDelta, 'running\n');
   assert.deepEqual(approvals.map((request) => request.requestId), ['approval_early']);
   assert.equal(JSON.stringify({ progressEvents, workEvents, approvals }).includes('must not leak'), false);
   assert.equal(client.listenerCount('notification'), 0);
@@ -1142,7 +1143,7 @@ test('app client prefers matching task_complete output over a stale interrupted 
   assert.equal(result.status, 'completed');
 });
 
-test('app client accumulates current command execution output deltas', async () => {
+test('app client emits command deltas without cumulative snapshots and completes with full output', async () => {
   const client = new CodexAppClient({
     codexCliBin: 'codex',
     turnPollSleep: async () => {},
@@ -1226,12 +1227,80 @@ test('app client accumulates current command execution output deltas', async () 
     'updated',
     'completed',
   ]);
-  assert.equal(workEvents[1]?.summary?.output, 'first line\n');
+  assert.equal(workEvents[1]?.summary?.output, undefined);
   assert.equal(workEvents[1]?.summary?.outputDelta, 'first line\n');
-  assert.equal(workEvents[2]?.summary?.output, 'first line\nsecond line\n');
+  assert.equal(workEvents[2]?.summary?.output, undefined);
   assert.equal(workEvents[2]?.summary?.outputDelta, 'second line\n');
   assert.equal(workEvents[3]?.summary?.output, 'first line\nsecond line\n');
   assert.equal(workEvents[3]?.summary?.exitCode, 0);
+});
+
+test('app client bounds long command output while preserving delta-only updates', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex', turnPollSleep: async () => {} });
+  const workEvents: ProviderTurnWorkEvent[] = [];
+  let emitted = false;
+  client.readThread = async () => {
+    if (!emitted) {
+      emitted = true;
+      client.emit('notification', {
+        method: 'item/started',
+        params: {
+          threadId: 'thread_long_output',
+          turnId: 'turn_long_output',
+          item: { type: 'commandExecution', id: 'command_long', command: 'yes', status: 'inProgress' },
+        },
+      });
+      for (let index = 0; index < 4_000; index += 1) {
+        client.emit('notification', {
+          method: 'item/commandExecution/outputDelta',
+          params: {
+            threadId: 'thread_long_output',
+            turnId: 'turn_long_output',
+            itemId: 'command_long',
+            delta: `${String(index).padStart(4, '0')}:${'x'.repeat(94)}\n`,
+          },
+        });
+      }
+      client.emit('notification', {
+        method: 'item/completed',
+        params: {
+          threadId: 'thread_long_output',
+          turnId: 'turn_long_output',
+          item: {
+            type: 'commandExecution',
+            id: 'command_long',
+            command: 'yes',
+            status: 'completed',
+            aggregatedOutput: null,
+            exitCode: 0,
+          },
+        },
+      });
+    }
+    return {
+      threadId: 'thread_long_output',
+      turns: [{
+        id: 'turn_long_output',
+        status: 'completed',
+        items: [{ type: 'agentMessage', role: 'assistant', phase: 'final_answer', text: 'Done.' }],
+      }],
+    } as any;
+  };
+
+  await client.waitForTurnResult({
+    threadId: 'thread_long_output',
+    turnId: 'turn_long_output',
+    timeoutMs: 1000,
+    onWorkEvent: (event) => workEvents.push(event),
+  });
+
+  const updates = workEvents.filter((event) => event.type === 'updated');
+  assert.equal(updates.length, 4_000);
+  assert.equal(updates.every((event) => event.summary?.output === undefined), true);
+  const completedOutput = String(workEvents.at(-1)?.summary?.output ?? '');
+  assert.ok(Buffer.byteLength(completedOutput) <= 256 * 1024);
+  assert.match(completedOutput, /\.\.\.\[truncated\]\.\.\./u);
+  assert.match(completedOutput, /3999:/u);
 });
 
 test('app client maps file change patch updates with nested change kinds', async () => {

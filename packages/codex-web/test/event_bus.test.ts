@@ -251,3 +251,93 @@ test('event bus uses a compact snapshot for a fresh subscription without a curso
     'evt_delta_2',
   ]);
 });
+
+test('event bus retains command deltas in history and one cumulative projection', () => {
+  const bus = new CodexWebEventBus({ maxEventsPerTurn: 500, epoch: 'epoch_command_delta' });
+  let output = '';
+  for (let index = 0; index < 500; index += 1) {
+    const delta = `${index}: output\n`;
+    output += delta;
+    bus.append('turn_command', {
+      id: `evt_${index}`,
+      type: 'batch.updated',
+      turnId: 'turn_command',
+      batchId: 'command_1',
+      summary: { output, outputDelta: delta },
+    });
+  }
+
+  const updates = bus.list('turn_command').map((entry) => entry.event);
+  assert.equal(updates.every((event) => (
+    event.type === 'batch.updated'
+    && event.summary.output === undefined
+    && typeof event.summary.outputDelta === 'string'
+  )), true);
+  const projected = bus.snapshot('turn_command')[0]?.event;
+  assert.equal(projected?.type, 'batch.updated');
+  assert.equal(projected.summary.output, output);
+});
+
+test('event bus enforces event, turn, and global byte budgets', () => {
+  const bus = new CodexWebEventBus({
+    maxEventsPerTurn: 500,
+    maxTurns: 20,
+    maxEventBytes: 2 * 1024,
+    maxBytesPerTurn: 4 * 1024,
+    maxTotalBytes: 8 * 1024,
+    epoch: 'epoch_bytes',
+  });
+  for (let turn = 0; turn < 10; turn += 1) {
+    for (let event = 0; event < 20; event += 1) {
+      bus.append(`turn_${turn}`, {
+        id: `evt_${turn}_${event}`,
+        type: 'batch.updated',
+        turnId: `turn_${turn}`,
+        batchId: `command_${event}`,
+        summary: { output: 'x'.repeat(16 * 1024) },
+        raw: { output: 'y'.repeat(16 * 1024) },
+      });
+    }
+  }
+
+  const stats = bus.retentionStats();
+  assert.ok(stats.totalBytes <= 8 * 1024, `retained ${stats.totalBytes} bytes`);
+  assert.ok(stats.turns < 10);
+  for (let turn = 0; turn < 10; turn += 1) {
+    for (const entry of [...bus.list(`turn_${turn}`), ...bus.snapshot(`turn_${turn}`)]) {
+      assert.ok(Buffer.byteLength(JSON.stringify(entry.event)) <= 2 * 1024);
+    }
+  }
+});
+
+test('live listeners do not prevent old turn state from being evicted', () => {
+  const bus = new CodexWebEventBus({ maxTurns: 1 });
+  const seen: string[] = [];
+  const unsubscribe = bus.subscribe('turn_old', (entry) => seen.push(entry.event.id));
+  bus.append('turn_old', {
+    id: 'evt_old',
+    type: 'turn.started',
+    turnId: 'turn_old',
+    threadId: 'thread_old',
+  });
+  bus.append('turn_new', {
+    id: 'evt_new',
+    type: 'turn.started',
+    turnId: 'turn_new',
+    threadId: 'thread_new',
+  });
+
+  assert.deepEqual(bus.list('turn_old'), []);
+  bus.append('turn_old', {
+    id: 'evt_old_live',
+    type: 'assistant.delta',
+    turnId: 'turn_old',
+    threadId: 'thread_old',
+    text: 'still live',
+    delta: 'still live',
+    phase: 'commentary',
+  });
+  assert.deepEqual(seen, ['evt_old', 'evt_old_live']);
+  unsubscribe();
+  assert.equal(bus.retentionStats().listeners, 0);
+});
