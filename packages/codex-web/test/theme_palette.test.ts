@@ -145,12 +145,12 @@ test('specialized focus styling follows each theme accent', async () => {
   assert.match(css, /\.submission-retry-button:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus\);/su);
 });
 
-test('pre-style theme initialization restores saved themes and defaults to retro', async () => {
+test('pre-style theme initialization restores saved themes and defaults to fresh light', async () => {
   const source = await readFile(themeInitUrl, 'utf8');
 
   assert.deepEqual(runThemeInit(source, null), {
-    theme: 'retro',
-    chromeColor: '#fcf9f2',
+    theme: 'fresh-light',
+    chromeColor: '#f4f5f7',
   });
   assert.deepEqual(runThemeInit(source, 'dark-gold'), {
     theme: 'dark-gold',
@@ -161,8 +161,8 @@ test('pre-style theme initialization restores saved themes and defaults to retro
     chromeColor: '#000000',
   });
   assert.deepEqual(runThemeInit(source, 'unsupported'), {
-    theme: 'retro',
-    chromeColor: '#fcf9f2',
+    theme: 'fresh-light',
+    chromeColor: '#f4f5f7',
   });
 });
 

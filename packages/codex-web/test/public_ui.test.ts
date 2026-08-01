@@ -31,12 +31,12 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.equal(parsedManifest.display, 'standalone');
   assert.equal(parsedManifest.orientation, undefined);
   assert.equal(parsedManifest.start_url, '/');
-  assert.equal(parsedManifest.theme_color, '#fcf9f2');
-  assert.equal(parsedManifest.background_color, '#fcf9f2');
+  assert.equal(parsedManifest.theme_color, '#f4f5f7');
+  assert.equal(parsedManifest.background_color, '#f4f5f7');
   assert.match(index, /<link rel="manifest" href="\/manifest\.webmanifest\?v=__CODEX_WEB_BUILD_ID__">/u);
   assert.match(index, /<link rel="icon" href="\/icon\.svg\?v=__CODEX_WEB_BUILD_ID__" type="image\/svg\+xml">/u);
   assert.match(index, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png\?v=__CODEX_WEB_BUILD_ID__">/u);
-  assert.match(index, /<meta name="theme-color" content="#fcf9f2">/u);
+  assert.match(index, /<meta name="theme-color" content="#f4f5f7">/u);
   assert.match(index, /<script src="\/theme-init\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>\s*<link rel="stylesheet"/u);
   assert.match(index, /<script src="\/ui-kit\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(index, /<script src="\/ui-copy\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
@@ -72,7 +72,7 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(serviceWorker, /cache\.put\(request, response\.clone\(\)\)/u);
   assert.match(serviceWorker, /VERSIONED_STATIC_ASSET_PATHS\.has\(url\.pathname\)/u);
   assert.match(serviceWorker, /url\.searchParams\.get\('v'\)/u);
-  assert.match(themeInit, /let theme = 'retro'/u);
+  assert.match(themeInit, /let theme = 'fresh-light'/u);
   assert.match(themeInit, /document\.documentElement\.dataset\.theme = theme/u);
 });
 
@@ -2835,7 +2835,7 @@ test('mobile settings page title is centered with back on the left', async () =>
 test('app settings persist theme and default thread settings', async () => {
   const { api, storage, context } = await loadAppHarness();
 
-  assert.equal(api.state.theme, 'retro');
+  assert.equal(api.state.theme, 'fresh-light');
 
   api.state.models = [
     { id: 'gpt-5.4', label: 'GPT 5.4' },
@@ -2855,8 +2855,8 @@ test('app settings persist theme and default thread settings', async () => {
   assert.equal(context.document.documentElement.dataset.theme, 'oled-black');
 
   api.applyTheme('unsupported');
-  assert.equal(storage.get('codexWebTheme'), 'retro');
-  assert.equal(context.document.documentElement.dataset.theme, 'retro');
+  assert.equal(storage.get('codexWebTheme'), 'fresh-light');
+  assert.equal(context.document.documentElement.dataset.theme, 'fresh-light');
 
   const settingsHtml = api.renderAppSettings().innerHTML;
   for (const theme of [

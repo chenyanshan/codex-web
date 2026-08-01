@@ -66,7 +66,7 @@ const THEMES = Object.freeze([
   { id: 'fresh-light', label: 'Fresh Light', chromeColor: '#f4f5f7' },
 ]);
 const THEME_IDS = THEMES.map((theme) => theme.id);
-const DEFAULT_THEME = 'retro';
+const DEFAULT_THEME = 'fresh-light';
 const DEFAULT_SITE_TITLE = 'Codex Web';
 const DEFAULT_MESSAGE_FONT_SIZE = 'medium';
 const DEFAULT_LANGUAGE = 'en';

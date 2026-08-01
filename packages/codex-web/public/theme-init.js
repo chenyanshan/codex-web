@@ -5,7 +5,7 @@
     'oled-black': '#000000',
     'fresh-light': '#f4f5f7',
   };
-  let theme = 'retro';
+  let theme = 'fresh-light';
   try {
     const savedTheme = localStorage.getItem('codexWebTheme');
     if (savedTheme && Object.prototype.hasOwnProperty.call(themeColors, savedTheme)) {
