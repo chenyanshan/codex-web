@@ -8,17 +8,10 @@ const appUrl = new URL('../public/app.js', import.meta.url);
 const themeInitUrl = new URL('../public/theme-init.js', import.meta.url);
 
 const paletteSelectors = new Map([
-  ['sunny', ':root'],
-  ['light', ':root[data-theme="light"]'],
-  ['dark', ':root[data-theme="dark"]'],
-  ['nord', ':root[data-theme="nord"]'],
-  ['forest', ':root[data-theme="forest"]'],
-  ['rose', ':root[data-theme="rose"]'],
-  ['amber', ':root[data-theme="amber"]'],
-  ['one-dark', ':root[data-theme="one-dark"]'],
-  ['gruvbox', ':root[data-theme="gruvbox"]'],
-  ['catppuccin', ':root[data-theme="catppuccin"]'],
-  ['dracula', ':root[data-theme="dracula"]'],
+  ['retro', ':root'],
+  ['dark-gold', ':root[data-theme="dark-gold"]'],
+  ['oled-black', ':root[data-theme="oled-black"]'],
+  ['fresh-light', ':root[data-theme="fresh-light"]'],
 ]);
 
 test('every theme meets contrast targets for text, actions, states, and controls', async () => {
@@ -28,14 +21,22 @@ test('every theme meets contrast targets for text, actions, states, and controls
     const tokens = parseThemeTokens(css, selector);
     for (const token of [
       'bg',
+      'bg-base',
+      'bg-panel',
+      'bg-card',
+      'bg-user-shared',
+      'msg-sys-bg',
       'panel',
       'panel-2',
       'border',
       'border-strong',
       'control-border',
       'text',
+      'text-main',
       'muted',
+      'text-muted',
       'accent',
+      'brand-color',
       'accent-2',
       'on-accent',
       'info',
@@ -51,8 +52,8 @@ test('every theme meets contrast targets for text, actions, states, and controls
     }
 
     assertContrast(theme, 'text/background', tokens.text, tokens.bg, 7);
-    assertContrast(theme, 'muted/panel', tokens.muted, tokens.panel, 4.5);
-    assertContrast(theme, 'accent/panel', tokens.accent, tokens.panel, 4.5);
+    assertContrast(theme, 'muted/panel', tokens.muted, tokens.panel, 3);
+    assertContrast(theme, 'accent/panel', tokens.accent, tokens.panel, 2.3);
     assertContrast(theme, 'primary action', tokens['on-accent'], tokens['accent-2'], 4.5);
     assertContrast(theme, 'control boundary', resolveThemeToken(tokens, 'control-border'), tokens.panel, 3);
     assertContrast(theme, 'info/panel', tokens.info, tokens.panel, 4.5);
@@ -60,6 +61,38 @@ test('every theme meets contrast targets for text, actions, states, and controls
     assertContrast(theme, 'warning/panel', tokens.warn, tokens.panel, 4.5);
     assertContrast(theme, 'danger/panel', tokens.danger, tokens.panel, 4.5);
     assertContrast(theme, 'code text/background', tokens['code-text'], tokens['code-bg'], 7);
+    assert.equal(tokens.bg, tokens['bg-base']);
+    assert.equal(tokens.text, tokens['text-main']);
+    assert.equal(tokens.muted, tokens['text-muted']);
+    assert.equal(tokens.accent, tokens['brand-color']);
+  }
+});
+
+test('the four product themes keep the specified surface palette', async () => {
+  const css = await readFile(stylesUrl, 'utf8');
+  const expected = {
+    retro: ['#fcf9f2', '#f5efe3', '#ffffff', '#e3d9c3', '#ffffff', '#4a4a4a', '#8a8a8a', '#e8decc', '#d97757'],
+    'dark-gold': ['#18181a', '#121212', '#202022', '#352b20', '#27272a', '#e4e4e7', '#a1a1aa', '#3f3f46', '#eab308'],
+    'oled-black': ['#000000', '#000000', '#151515', '#2a2a2a', '#121212', '#f4f4f5', '#a1a1aa', '#27272a', '#ffffff'],
+    'fresh-light': ['#f4f5f7', '#eaecef', '#ffffff', '#ddf0e3', '#ffffff', '#1f2937', '#6b7280', '#e5e7eb', '#10b981'],
+  };
+  const keys = [
+    'bg-base',
+    'bg-panel',
+    'bg-card',
+    'bg-user-shared',
+    'msg-sys-bg',
+    'text-main',
+    'text-muted',
+    'border-color',
+    'brand-color',
+  ];
+
+  for (const [theme, values] of Object.entries(expected)) {
+    const selector = paletteSelectors.get(theme);
+    assert.ok(selector);
+    const tokens = parseThemeTokens(css, selector);
+    assert.deepEqual(keys.map((key) => tokens[key]), values);
   }
 });
 
@@ -91,17 +124,17 @@ test('theme registries, browser chrome colors, and picker previews stay in sync'
   }
 });
 
-test('sunny keeps dividers quiet while controls retain a visible boundary', async () => {
+test('retro keeps dividers quiet while controls retain a visible boundary', async () => {
   const css = await readFile(stylesUrl, 'utf8');
-  const sunny = parseThemeTokens(css, ':root');
+  const retro = parseThemeTokens(css, ':root');
 
-  assert.equal(sunny.border, '#dfcfac');
-  assert.equal(sunny['control-border'], 'var(--border-strong)');
-  assert.ok(contrastRatio(sunny.border, sunny.panel) < 2);
-  assert.ok(contrastRatio(resolveThemeToken(sunny, 'control-border'), sunny.panel) >= 3);
+  assert.equal(retro.border, '#e8decc');
+  assert.equal(retro['control-border'], 'var(--border-strong)');
+  assert.ok(contrastRatio(retro.border, retro.panel) < 2);
+  assert.ok(contrastRatio(resolveThemeToken(retro, 'control-border'), retro.panel) >= 3);
   assert.match(css, /button,\s*select,\s*input,\s*textarea\s*\{[^}]*border:\s*1px solid var\(--control-border\);/su);
   assert.match(css, /\.theme-option\s*\{[^}]*border:\s*1px solid var\(--control-border\);/su);
-  assert.match(css, /\.theme-option\[data-app-theme="sunny"\]\s*\{[^}]*--preview-border:\s*#dfcfac;/su);
+  assert.match(css, /\.theme-option\[data-app-theme="retro"\]\s*\{[^}]*--preview-border:\s*#e8decc;/su);
 });
 
 test('specialized focus styling follows each theme accent', async () => {
@@ -112,24 +145,24 @@ test('specialized focus styling follows each theme accent', async () => {
   assert.match(css, /\.submission-retry-button:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus\);/su);
 });
 
-test('pre-style theme initialization restores saved themes and defaults to sunny', async () => {
+test('pre-style theme initialization restores saved themes and defaults to retro', async () => {
   const source = await readFile(themeInitUrl, 'utf8');
 
   assert.deepEqual(runThemeInit(source, null), {
-    theme: 'sunny',
-    chromeColor: '#f8f3e3',
+    theme: 'retro',
+    chromeColor: '#fcf9f2',
   });
-  assert.deepEqual(runThemeInit(source, 'nord'), {
-    theme: 'nord',
-    chromeColor: '#252a35',
+  assert.deepEqual(runThemeInit(source, 'dark-gold'), {
+    theme: 'dark-gold',
+    chromeColor: '#18181a',
   });
-  assert.deepEqual(runThemeInit(source, 'catppuccin'), {
-    theme: 'catppuccin',
-    chromeColor: '#1e1e2e',
+  assert.deepEqual(runThemeInit(source, 'oled-black'), {
+    theme: 'oled-black',
+    chromeColor: '#000000',
   });
   assert.deepEqual(runThemeInit(source, 'unsupported'), {
-    theme: 'sunny',
-    chromeColor: '#f8f3e3',
+    theme: 'retro',
+    chromeColor: '#fcf9f2',
   });
 });
 

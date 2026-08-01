@@ -1,18 +1,11 @@
 (() => {
   const themeColors = {
-    sunny: '#f8f3e3',
-    light: '#f6f8fa',
-    dark: '#181a1f',
-    nord: '#252a35',
-    forest: '#101613',
-    rose: '#f9f4f5',
-    amber: '#18181b',
-    'one-dark': '#21252b',
-    gruvbox: '#1d2021',
-    catppuccin: '#1e1e2e',
-    dracula: '#282a36',
+    retro: '#fcf9f2',
+    'dark-gold': '#18181a',
+    'oled-black': '#000000',
+    'fresh-light': '#f4f5f7',
   };
-  let theme = 'sunny';
+  let theme = 'retro';
   try {
     const savedTheme = localStorage.getItem('codexWebTheme');
     if (savedTheme && Object.prototype.hasOwnProperty.call(themeColors, savedTheme)) {

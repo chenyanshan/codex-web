@@ -455,7 +455,9 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const relativePath = pathname === '/' ? 'index.html' : decodeURIComponent(pathname.slice(1));
+    const relativePath = pathname === '/' || /^\/share\/[^/]+$/u.test(pathname)
+      ? 'index.html'
+      : decodeURIComponent(pathname.slice(1));
     const filePath = path.resolve(publicRoot, relativePath);
     if (!filePath.startsWith(`${path.resolve(publicRoot)}${path.sep}`)) {
       sendText(response, 403, 'forbidden');

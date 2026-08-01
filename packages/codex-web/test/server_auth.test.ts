@@ -812,6 +812,11 @@ test('static root is public', async () => {
     assert.match(html, new RegExp(`/app\\.js\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/styles\\.css\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/theme-init\\.js\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/ui-kit\\.js\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/ui-copy\\.js\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/attachment-utils\\.js\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/markdown-renderer\\.js\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/admin-ui\\.js\\?v=${buildId}`, 'u'));
     assert.equal(scriptResponse.headers.get('cache-control'), 'no-cache');
 
     const versionedScriptResponse = await fetch(`${server.baseUrl}/app.js?v=${buildId}`, {
@@ -839,6 +844,11 @@ test('static root is public', async () => {
     assert.equal(themeInitResponse.status, 200);
     assert.match(themeInitResponse.headers.get('content-type') ?? '', /^application\/javascript\b/i);
     assert.match(await themeInitResponse.text(), /codexWebTheme|dataset\.theme/u);
+
+    const attachmentUtilsResponse = await fetch(`${server.baseUrl}/attachment-utils.js?v=${buildId}`);
+    assert.equal(attachmentUtilsResponse.status, 200);
+    assert.equal(attachmentUtilsResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.match(await attachmentUtilsResponse.text(), /CodexWebAttachments|parseAttachmentPromptText/u);
 
     const manifestResponse = await fetch(`${server.baseUrl}/manifest.webmanifest`);
     assert.equal(manifestResponse.status, 200);

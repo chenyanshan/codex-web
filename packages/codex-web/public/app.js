@@ -1,4 +1,24 @@
 const APP_BUILD_ID = '__CODEX_WEB_BUILD_ID__';
+const UI = globalThis.CodexWebUi || {
+  icon: () => '',
+  segmentedControl: () => '',
+};
+const {
+  fileNameFromPath,
+  formatAttachmentSize,
+  mergeTimelineAttachments,
+  normalizeTimelineAttachments,
+  parseAttachmentPromptText,
+} = globalThis.CodexWebAttachments;
+const {
+  decodeHtmlEntityText,
+  isLegacyReportPath,
+  isSessionFilePath,
+  stripSessionFileLocationSuffix,
+} = globalThis.CodexWebMarkdown;
+const MARKDOWN_RENDERER = globalThis.CodexWebMarkdown.createRenderer({
+  canRenderSessionFileLink: (value) => canRenderSessionFileLink(value),
+});
 const TOKEN_KEY = 'codexWebToken';
 const SESSIONS_CACHE_KEY = 'codexWebSessionsCache';
 const TIMELINE_CACHE_KEY = 'codexWebTimelineCache';
@@ -40,20 +60,13 @@ const DEFAULT_PERMISSION_PRESET = 'full-access';
 const DEFAULT_APPROVAL_POLICY = 'never';
 const DEFAULT_SANDBOX_MODE = 'danger-full-access';
 const THEMES = Object.freeze([
-  { id: 'sunny', label: 'Sunlit', chromeColor: '#f8f3e3' },
-  { id: 'light', label: 'Paper', chromeColor: '#f6f8fa' },
-  { id: 'dark', label: 'Graphite', chromeColor: '#181a1f' },
-  { id: 'nord', label: 'Nordic', chromeColor: '#252a35' },
-  { id: 'forest', label: 'Forest', chromeColor: '#101613' },
-  { id: 'rose', label: 'Rose', chromeColor: '#f9f4f5' },
-  { id: 'amber', label: 'Graphite Amber', chromeColor: '#18181b' },
-  { id: 'one-dark', label: 'One Dark Pro', chromeColor: '#21252b' },
-  { id: 'gruvbox', label: 'Gruvbox Dark', chromeColor: '#1d2021' },
-  { id: 'catppuccin', label: 'Catppuccin Mocha', chromeColor: '#1e1e2e' },
-  { id: 'dracula', label: 'Dracula Dark', chromeColor: '#282a36' },
+  { id: 'retro', label: 'Retro', chromeColor: '#fcf9f2' },
+  { id: 'dark-gold', label: 'Dark Gold', chromeColor: '#18181a' },
+  { id: 'oled-black', label: 'OLED Black', chromeColor: '#000000' },
+  { id: 'fresh-light', label: 'Fresh Light', chromeColor: '#f4f5f7' },
 ]);
 const THEME_IDS = THEMES.map((theme) => theme.id);
-const DEFAULT_THEME = 'sunny';
+const DEFAULT_THEME = 'retro';
 const DEFAULT_SITE_TITLE = 'Codex Web';
 const DEFAULT_MESSAGE_FONT_SIZE = 'medium';
 const DEFAULT_LANGUAGE = 'en';
@@ -109,329 +122,7 @@ const NON_RUNTIME_STATUS_LABELS = new Set([
   'Attachment uploaded',
   'Upload failed',
 ]);
-const UI_TRANSLATIONS = {
-  'zh-CN': {
-    'Checking auth': '正在检查登录',
-    Loading: '正在加载',
-    'Restoring session': '正在恢复会话',
-    'Syncing sessions': '正在同步会话',
-    'Could not update sessions.': '无法更新会话。',
-    Retry: '重试',
-    'Logging in': '正在登录',
-    'Login required': '需要登录',
-    Refreshing: '正在刷新',
-    'Starting session': '正在启动会话',
-    'Loading session': '正在加载会话',
-    'Starting turn': '正在开始',
-    'Saved on this device': '已保存在本机',
-    'Sending to server': '正在发送',
-    'Server received': '服务器已接收',
-    'Send failed': '发送失败',
-    'Waiting to send': '等待发送',
-    'Retry send': '重试发送',
-    'Cancel send': '取消发送',
-    'Offline': '网络不可用',
-    'Too many messages are waiting to send. Retry or cancel one before sending another.': '待发送消息已达上限。请先重试或取消一条消息。',
-    'Waiting for first response': '正在等待首次响应',
-    'Request failed': '请求失败',
-    'Stream failed': '连接流失败',
-    'Reloading runtime': '正在重载运行时',
-    'Runtime reloaded': '运行时已重载',
-    'Approval sent': '已发送审批',
-    'Approval resolved': '审批已处理',
-    'Interrupt requested': '已请求停止',
-    'Session archived': '会话已归档',
-    'Session favorited': '已收藏会话',
-    'Favorite removed': '已取消收藏',
-    'Creating share link': '正在创建分享链接',
-    'Share link copied': '分享链接已复制',
-    'Share link ready': '分享链接已准备好',
-    'Uploading attachment': '正在上传附件',
-    'Attachment uploaded': '附件已上传',
-    'Upload failed': '上传失败',
-    Ready: '就绪',
-    Active: '活动中',
-    'Needs approval': '等待审批',
-    Reconnecting: '正在重连',
-    Working: '工作中',
-    'Running command': '执行命令',
-    'Editing files': '修改文件',
-    'Using tool': '使用工具',
-    'Work details': '工作详情',
-    'Close work details': '关闭工作详情',
-    'Members can view work details': '普通成员可查看工作详情',
-    'Admin only': '仅管理员',
-    Members: '普通成员',
-    'Close session menu': '关闭会话菜单',
-    'Turn running': '正在运行',
-    'Stream paused': '连接流已暂停',
-    'Turn failed': '运行失败',
-    'Turn interrupted': '运行已中断',
-    'Turn stopped': '已停止',
-    Paused: '已暂停',
-    Running: '运行中',
-    Failed: '失败',
-    Done: '完成',
-    Stopped: '已停止',
-    Idle: '空闲',
-    'Setup required': '需要初始化',
-    'Password not configured.': '尚未配置密码。',
-    'Password login for this device.': '使用密码登录此设备。',
-    Username: '用户名',
-    Password: '密码',
-    'Log in': '登录',
-    Sessions: '会话',
-    Open: '打开',
-    New: '新建',
-    Setting: '设置',
-    Settings: '设置',
-    Appearance: '外观',
-    Advanced: '高级',
-    Account: '账户',
-    Webhook: 'Webhook',
-    'Enable webhook': '启用 Webhook',
-    'Webhook endpoint': 'Webhook 接口地址',
-    'Webhook key': 'Webhook 密钥',
-    'Regenerate key': '重新生成密钥',
-    'Regenerate webhook key?': '重新生成 Webhook 密钥？',
-    'Copy key': '复制密钥',
-    'The current key will stop working immediately.': '当前密钥将立即失效。',
-    'Webhook endpoint copied.': '已复制 Webhook 接口地址。',
-    'Webhook key copied.': 'Webhook 密钥已复制。',
-    'Loading webhook settings...': '正在加载 Webhook 设置...',
-    'Webhook is disabled.': 'Webhook 已停用。',
-    'Webhook key is not available.': 'Webhook 密钥不可用。',
-    'Regenerate this legacy key once to make it copyable.': '请重新生成一次旧密钥，之后即可随时复制。',
-    'Could not load webhook settings.': '无法加载 Webhook 设置。',
-    'Could not update webhook settings.': '无法更新 Webhook 设置。',
-    'Could not regenerate webhook key.': '无法重新生成 Webhook 密钥。',
-    Regenerate: '重新生成',
-    'Could not copy webhook endpoint.': '无法复制 Webhook 接口地址。',
-    'Could not copy webhook key.': '无法复制 Webhook 密钥。',
-    Rotate: '轮换',
-    Copied: '已复制',
-    Administration: '管理',
-    'Current session': '当前会话',
-    'Current session is running': '当前会话正在运行',
-    'Current session is idle': '当前会话已空闲',
-    'Model and reasoning': '模型与推理',
-    Behavior: '行为',
-    'Behavior and permissions': '行为与权限',
-    Actions: '操作',
-    Language: '语言',
-    English: 'English',
-    'Chinese (Simplified)': '中文',
-    'No active session': '没有活动会话',
-    'Select a session in the middle pane or start a new one.': '请选择一个会话，或新建会话。',
-    'Start a new session': '新建会话',
-    Favorites: '收藏',
-    Recents: '最近',
-    favorite: '收藏',
-    File: '文件',
-    'File not loaded.': '文件尚未加载。',
-    'File preview': '文件预览',
-    'Loading file...': '正在加载文件...',
-    'Could not open this file.': '无法打开此文件。',
-    'File not found.': '文件不存在或已被清理。',
-    'File access denied.': '无法访问此文件。',
-    'This file cannot be previewed.': '此文件无法预览。',
-    'This file is too large to open.': '文件过大，无法打开。',
-    'File preview is busy. Try again.': '文件预览繁忙，请重试。',
-    Download: '下载',
-    Close: '关闭',
-    'Website title': '网站标题',
-    'Browser title': '浏览器标题',
-    Theme: '主题',
-    Sunlit: '日光黄',
-    Paper: '纸白',
-    Graphite: '石墨',
-    Nordic: '北境蓝',
-    Forest: '森林绿',
-    Rose: '柔和玫瑰',
-    'Graphite Amber': '深石墨琥珀',
-    'One Dark Pro': '原子深色',
-    'Gruvbox Dark': '复古暖色',
-    'Catppuccin Mocha': '摩卡柔彩',
-    'Dracula Dark': '德古拉深色',
-    'Message Size': '消息字号',
-    Small: '小',
-    Medium: '中',
-    Large: '大',
-    'New Thread': '默认新会话',
-    'New sessions on this device': '此设备的新会话',
-    'Use Codex default': '跟随 Codex 配置',
-    Model: '模型',
-    Reasoning: '推理',
-    Mode: '模式',
-    Default: '默认',
-    Plan: '计划',
-    Permissions: '权限',
-    Read: '只读',
-    Ask: '询问',
-    Full: '完全',
-    'Ask before changes': '修改前询问',
-    'Full access': '完全访问',
-    Admin: '管理',
-    'Log out': '退出登录',
-    System: '系统',
-    'Multi-user mode': '多用户模式',
-    'Loading admin settings...': '正在加载管理设置...',
-    'Admin Console': '管理控制台',
-    'Loading admin console...': '正在加载管理控制台...',
-    'Project Management': '项目管理',
-    'Role Management': '角色管理',
-    'User Management': '用户管理',
-    'Session Audit': '会话审计',
-    'Admin sections': '管理分区',
-    User: '用户',
-    Project: '项目',
-    'All users': '所有用户',
-    'All projects': '所有项目',
-    'Display Name': '显示名称',
-    'auto from CWD': '从 CWD 自动生成',
-    CWD: 'CWD',
-    Enabled: '启用',
-    'Save Project': '保存项目',
-    Cancel: '取消',
-    'Role ID': '角色 ID',
-    Name: '名称',
-    Writer: '写作者',
-    'Save Role': '保存角色',
-    'User ID': '用户 ID',
-    'At least 8 chars': '至少 8 个字符',
-    Role: '角色',
-    'Save User': '保存用户',
-    'No roles available': '暂无可用角色',
-    'No role': '无角色',
-    Projects: '项目',
-    'No projects available.': '暂无可用项目。',
-    'No projects configured.': '尚未配置项目。',
-    Action: '操作',
-    Edit: '编辑',
-    'No users configured.': '尚未配置用户。',
-    Save: '保存',
-    Enable: '启用',
-    Disable: '停用',
-    Delete: '删除',
-    'No roles configured.': '尚未配置角色。',
-    admin: '管理员',
-    'No sessions found.': '未找到会话。',
-    'Observer Mode': '观察模式',
-    'New Session': '新会话',
-    Start: '开始',
-    'Loading projects...': '正在加载项目...',
-    'No projects available': '暂无可用项目',
-    'Ask an admin to assign a project before starting a session.': '开始会话前请让管理员分配项目。',
-    'Project path': '项目路径',
-    'Use server default': '使用服务端默认值',
-    'Session menu': '会话菜单',
-    'Share link': '分享链接',
-    'Copied to clipboard.': '已复制到剪贴板。',
-    'Copy this read-only session link.': '复制此只读会话链接。',
-    Copy: '复制',
-    'Delete queued message': '删除排队消息',
-    'Queued messages': '排队消息',
-    'Shared link': '分享链接',
-    'Observer mode': '观察模式',
-    'Read only': '只读',
-    Attachments: '附件',
-    'Attach files': '添加文件',
-    'Refresh session': '刷新会话',
-    Refresh: '刷新',
-    Send: '发送',
-    Message: '输入消息',
-    Uploading: '上传中',
-    Saved: '已保存',
-    Image: '图片',
-    upload: '上传',
-    'Expand message editor': '展开消息编辑器',
-    'Collapse message editor': '收起消息编辑器',
-    Runtime: '运行时',
-    Reload: '重载',
-    Share: '分享',
-    'Checking sharing availability': '正在检查分享可用性',
-    'Public sharing is disabled': '公开分享尚未启用',
-    'Available in trusted-team mode': '仅在可信团队模式下可用',
-    'Current turn is running.': '当前任务正在运行。',
-    Stop: '停止',
-    'No context yet.': '暂无上下文。',
-    Error: '错误',
-    'Approval requested': '请求审批',
-    Accept: '接受',
-    Session: '会话',
-    Deny: '拒绝',
-    Work: '工作',
-    'Turn activity': '本轮活动',
-    'In progress': '进行中',
-    'Files changed': '修改的文件',
-    Requested: '等待处理',
-    Added: '新增',
-    Deleted: '删除',
-    Modified: '修改',
-    'Show {count} earlier': '查看更早的 {count} 条',
-    '{count} hidden': '已隐藏 {count} 条',
-    '{count} new activity': '{count} 条新活动',
-    '{count} new activities': '{count} 条新活动',
-    'Read {count}': '读取 {count}',
-    'Ran {count}': '执行 {count}',
-    'Edited {count}': '修改 {count} 个文件',
-    'Approval {count}': '审批 {count}',
-    'Exit {code}': '退出码 {code}',
-    'No tool activity yet.': '暂无工具活动。',
-    'No additional details.': '暂无更多详情。',
-    Output: '输出',
-    Diff: '差异',
-    Ran: '运行',
-    Edited: '编辑',
-    Approval: '审批',
-    Tool: '工具',
-    Batch: '批次',
-    'Default model': '默认模型',
-    Unfavorite: '取消收藏',
-    Favorite: '收藏',
-    Archive: '归档',
-    Unarchive: '取消归档',
-    'Archive session?': '归档会话？',
-    'No prompt preview': '无提示预览',
-    'No cwd': '无 CWD',
-    'All Sessions': '所有会话',
-    Archived: '归档',
-    'No archived sessions yet.': '暂无已归档会话。',
-    'Active sessions': '活动会话',
-    'Archived sessions': '已归档会话',
-    'Untitled Project': '未命名项目',
-    'Unknown project': '未知项目',
-    unknown: '未知',
-    You: '你',
-    Assistant: '助手',
-    Command: '命令',
-    completed: '已完成',
-    final: '最终',
-    streaming: '流式输出',
-    history: '历史',
-    pending: '等待中',
-    preview: '预览',
-    failed: '失败',
-    started: '已开始',
-    running: '运行中',
-    low: '低',
-    medium: '中',
-    high: '高',
-    xhigh: '极高',
-    'Remove failed uploads before sending.': '发送前请移除上传失败的附件。',
-    'Wait for uploads to finish before sending.': '请等待附件上传完成后再发送。',
-    'Wait for the current turn to finish before attaching files.': '请等待当前任务结束后再添加附件。',
-    'Wait for the current attachment upload to finish.': '请等待当前附件上传完成。',
-    'Attachments cannot be queued while a turn is running.': '任务运行中不能排队发送附件。',
-    'No projects are available for this account.': '此账号暂无可用项目。',
-    'Selected session was unavailable. Choose another session or create a new one.': '所选会话不可用。请选择其他会话或新建会话。',
-    'Selected session was unavailable and was removed from the list.': '所选会话不可用，已从列表移除。',
-    'Share link was not returned.': '未返回分享链接。',
-    'Remove {fileName}': '移除 {fileName}',
-    'Favorite {label}': '收藏 {label}',
-    'Unfavorite {label}': '取消收藏 {label}',
-  },
-};
+const UI_TRANSLATIONS = globalThis.CodexWebCopy;
 
 const INITIAL_SITE_TITLE = normalizeSiteTitle(readBootstrapSiteTitle() || localStorage.getItem(SITE_TITLE_KEY));
 
@@ -451,7 +142,7 @@ const state = {
     users: [],
     roles: [],
     sessions: [],
-    page: 'projects',
+    page: 'sessions',
     filterUserId: '',
     filterProjectId: '',
     filterState: 'all',
@@ -563,6 +254,34 @@ const state = {
   workDetailsFollowLatest: true,
   workDetailsPolicyPendingSessionId: '',
 };
+
+const ADMIN_UI = globalThis.CodexWebAdminUi.createRenderer({
+  getState: () => state,
+  document,
+  t,
+  escapeHtml,
+  escapeAttribute,
+  localizeElement,
+  renderPageNav,
+  renderAdminSettingsSection,
+  currentAdminPage,
+  adminEditingProject,
+  adminEditingRole,
+  adminEditingUser,
+  adminRoleProjectIds,
+  adminUserRoleId,
+  adminProjectVisibleName,
+  adminProjectNameById,
+  adminUserName,
+  adminUserMeta,
+  adminAuditProjects,
+  projectVisibleName,
+  sortedAdminSessions,
+  formatShortDateTime,
+  shorten,
+  isDesktopLayout,
+  renderChatContent,
+});
 
 const app = document.querySelector('#app');
 let composerResizeObserver = null;
@@ -933,7 +652,7 @@ function setLoggedOut(message = '') {
     users: [],
     roles: [],
     sessions: [],
-    page: 'projects',
+    page: 'sessions',
     filterUserId: '',
     filterProjectId: '',
     filterState: 'all',
@@ -1567,7 +1286,6 @@ function renderDesktopProjectRail() {
     <aside class="desktop-project-rail">
       <header class="project-rail-header">
         <div class="project-rail-brand">${escapeHtml(state.siteTitle)}</div>
-        <div class="project-rail-meta">${escapeHtml(currentProjectScopeTitle())}</div>
       </header>
       <nav class="project-rail-list" aria-label="${escapeAttribute(t('Projects'))}" data-i18n-skip>
         ${renderWorkspaceProjectList()}
@@ -1727,41 +1445,38 @@ function renderSessionListHeader({ desktop = false } = {}) {
           <button class="ghost page-back-button mobile-sidebar-toggle-button" type="button" id="mobile-sidebar-toggle-button" aria-label="Projects">${renderSidebarButtonIcon()}</button>
           <div class="mobile-session-actions">
             ${sortToggle}
-            <button class="ghost icon-button mobile-new-session-button" type="button" id="open-new-session-button" aria-label="New session" title="New session"><span aria-hidden="true">+</span></button>
+            <button class="ghost icon-button mobile-new-session-button" type="button" id="open-new-session-button" aria-label="New session" title="New session">${UI.icon('plus', { className: 'button-icon' })}</button>
           </div>
         </div>
       </header>
   `;
   }
   return `
-      <header class="topbar page-topbar${desktop ? ' desktop-session-pane-topbar' : ''}">
-        <div class="topbar-main">
-          <div class="page-title">Sessions</div>
-          <div class="topbar-actions">
-            <button class="ghost compact-button" type="button" id="open-new-session-button">New</button>
-          </div>
-        </div>
-        <div class="list-actions">
+      <header class="topbar page-topbar desktop-session-pane-topbar">
+        <div class="session-pane-toolbar">
           ${sortToggle}
+          <button class="ghost icon-button mobile-new-session-button" type="button" id="open-new-session-button" aria-label="New session" title="New session">${UI.icon('plus', { className: 'button-icon' })}</button>
         </div>
       </header>
   `;
 }
 
 function renderSessionSortToggle({ mobile = false } = {}) {
-  return `
-          <div class="toggle sort-toggle${mobile ? ' mobile-session-sort-toggle' : ''}">
-            <button type="button" data-sort-mode="favorites" aria-pressed="${String(state.sortMode === 'favorites')}">Favorites</button>
-            <button type="button" data-sort-mode="time" aria-pressed="${String(state.sortMode === 'time')}">Recents</button>
-            <button class="archive-sort-button" type="button" data-sort-mode="archived" aria-pressed="${String(state.sortMode === 'archived')}" aria-label="Archived sessions" title="Archived sessions">
-              <svg class="archive-sort-icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
-                <path d="M224 322.6h576c16.6 0 30-13.4 30-30s-13.4-30-30-30H224c-16.6 0-30 13.4-30 30 0 16.5 13.5 30 30 30zM290.1 178.4h443.8c16.6 0 30-13.4 30-30s-13.4-30-30-30H290.1c-16.6 0-30 13.4-30 30s13.4 30 30 30zM629.6 613.9H394.4c-16.6 0-30 13.4-30 30s13.4 30 30 30h235.2c16.6 0 30-13.4 30-30s-13.4-30-30-30z"></path>
-                <path d="M850.3 403.9H173.7c-33 0-60 27-60 60v360c0 33 27 60 60 60h676.6c33 0 60-27 60-60v-360c0-33-27-60-60-60z m-0.1 419.8l-0.1 0.1H173.9l-0.1-0.1V464l0.1-0.1h676.2l0.1 0.1v359.7z"></path>
-              </svg>
-              <span class="visually-hidden">Archived</span>
-            </button>
-          </div>
-        `;
+  return UI.segmentedControl({
+    className: `sort-toggle${mobile ? ' mobile-session-sort-toggle' : ''}`,
+    items: [
+      { value: 'favorites', label: t('Favorites'), pressed: state.sortMode === 'favorites' },
+      { value: 'time', label: t('Recents'), pressed: state.sortMode === 'time' },
+      {
+        value: 'archived',
+        label: '',
+        icon: 'archive',
+        ariaLabel: t('Archived sessions'),
+        title: t('Archived sessions'),
+        pressed: state.sortMode === 'archived',
+      },
+    ],
+  });
 }
 
 function renderDesktopSessionFileOverlay() {
@@ -2060,419 +1775,30 @@ function renderAdminSettingsSection({ title = 'System', showLoadingNote = false 
             <span class="meta">Multi-user mode</span>
             <input id="admin-multi-user-toggle" type="checkbox"${state.admin.settings?.multiUserEnabled === true ? ' checked' : ''}${adminSettingsLoaded ? '' : ' disabled'}>
           </label>
+          ${adminSettingsLoaded ? `<div class="admin-mode-label"><span class="status-dot"></span>${escapeHtml(t(state.admin.settings?.multiUserEnabled === true ? 'Trusted team mode' : 'Single-user mode'))}</div>` : ''}
           ${showLoadingNote && !adminSettingsLoaded ? '<div class="meta">Loading admin settings...</div>' : ''}
         </section>
   `;
 }
 
 function renderAdminConsole() {
-  const shell = document.createElement('div');
-  shell.className = 'shell';
-  shell.innerHTML = `
-    <div class="screen page-screen admin-console-screen">
-      ${renderPageNav('Admin Console')}
-      <main class="admin-console-page">
-        ${renderAdminSections()}
-      </main>
-    </div>
-  `;
-  return localizeElement(shell);
-}
-
-function renderAdminSections() {
-  if (state.admin.loading && !state.admin.loaded) {
-    return localizeFragment('<div class="empty-state">Loading admin console...</div>');
-  }
-  return `
-        ${renderAdminSettingsSection()}
-        <div class="admin-layout">
-          ${renderAdminSidebar()}
-          <section class="admin-content">
-            ${renderAdminContent()}
-          </section>
-          ${renderAdminObservedSessionPanel()}
-        </div>
-  `;
-}
-
-function renderAdminSidebar() {
-  const page = currentAdminPage();
-  const pages = [
-    ['projects', 'Project Management'],
-    ['roles', 'Role Management'],
-    ['users', 'User Management'],
-    ['sessions', 'Session Audit'],
-  ];
-  return `
-    <nav class="admin-sidebar" aria-label="Admin sections">
-      ${pages.map(([id, label]) => `
-        <button class="admin-sidebar-button" type="button" data-admin-page="${escapeAttribute(id)}" aria-pressed="${String(page === id)}">${escapeHtml(t(label))}</button>
-      `).join('')}
-    </nav>
-  `;
-}
-
-function renderAdminContent() {
-  switch (currentAdminPage()) {
-    case 'roles':
-      return renderAdminRolePage();
-    case 'users':
-      return renderAdminUserPage();
-    case 'sessions':
-      return renderAdminSessionAuditPage();
-    case 'projects':
-    default:
-      return renderAdminProjectPage();
-  }
-}
-
-function renderAdminProjectPage() {
-  return `
-        <section class="settings-section">
-          <div class="settings-section-title">${escapeHtml(t('Project Management'))}</div>
-          ${renderAdminProjectForm()}
-          <div class="admin-list" data-i18n-skip>${renderAdminProjects()}</div>
-        </section>
-  `;
-}
-
-function renderAdminRolePage() {
-  return `
-        <section class="settings-section">
-          <div class="settings-section-title">${escapeHtml(t('Role Management'))}</div>
-          ${renderAdminRoleForm()}
-          <div class="admin-list" data-i18n-skip>${renderAdminRoles()}</div>
-        </section>
-  `;
-}
-
-function renderAdminUserPage() {
-  return `
-        <section class="settings-section">
-          <div class="settings-section-title">${escapeHtml(t('User Management'))}</div>
-          ${renderAdminUserForm()}
-          <div class="admin-list" data-i18n-skip>${renderAdminUsers()}</div>
-        </section>
-        `;
+  return ADMIN_UI.renderAdminConsole();
 }
 
 function renderBackButtonIcon() {
-  return `
-    <svg class="button-icon button-icon-back" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
-      <path d="M631.04 161.941333a42.666667 42.666667 0 0 1 63.061333 57.386667l-2.474666 2.730667-289.962667 292.245333 289.706667 287.402667a42.666667 42.666667 0 0 1 2.730666 57.6l-2.474666 2.752a42.666667 42.666667 0 0 1-57.6 2.709333l-2.752-2.474667-320-317.44a42.666667 42.666667 0 0 1-2.709334-57.6l2.474667-2.752 320-322.56z"></path>
-    </svg>
-  `;
+  return UI.icon('arrowLeft', { className: 'button-icon button-icon-back' });
 }
 
 function renderDownloadButtonIcon() {
-  return `
-    <svg class="button-icon button-icon-download" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-    </svg>
-  `;
+  return UI.icon('download', { className: 'button-icon button-icon-download' });
 }
 
 function renderMoreButtonIcon() {
-  return `
-    <svg class="button-icon button-icon-more" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
-      <path d="M288 512m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z"></path>
-      <path d="M512 512m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z"></path>
-      <path d="M736 512m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z"></path>
-    </svg>
-  `;
+  return UI.icon('more', { className: 'button-icon button-icon-more' });
 }
 
 function renderSidebarButtonIcon() {
-  return `
-    <svg class="button-icon button-icon-sidebar" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
-      <path d="M66.488889 211.781818h891.022222c28.198788 0 50.980202-22.238384 50.980202-49.648485 0-27.397172-22.768485-49.648485-50.980202-49.648485H66.488889C38.341818 112.484848 15.508687 134.723232 15.508687 162.133333s22.833131 49.648485 50.980202 49.648485z m891.009293 248.242424H66.488889C38.277172 460.024242 15.508687 482.262626 15.508687 509.672727s22.768485 49.648485 50.980202 49.648485h891.022222c28.198788 0 50.980202-22.238384 50.980202-49.648485-0.012929-27.410101-22.923636-49.648485-50.993131-49.648485z m0 351.63798H66.488889c-28.134141 0-50.980202 22.238384-50.980202 49.648485s22.833131 49.648485 50.980202 49.648485h891.022222c28.198788 0 50.980202-22.238384 50.980202-49.648485-0.012929-27.397172-22.781414-49.648485-50.993131-49.648485z m0 0"></path>
-    </svg>
-  `;
-}
-
-function renderAdminSessionAuditPage() {
-  return `
-        <section class="settings-section">
-          <div class="settings-section-title">${escapeHtml(t('Session Audit'))}</div>
-          <div class="admin-filter-row">
-            <label class="field" for="admin-session-user-filter">
-              <span>${escapeHtml(t('User'))}</span>
-              <select id="admin-session-user-filter" name="adminUserFilter" data-i18n-skip>
-                <option value="">${escapeHtml(t('All users'))}</option>
-                ${state.admin.users.map((user) => `
-              <option value="${escapeAttribute(user.id)}"${state.admin.filterUserId === user.id ? ' selected' : ''} data-i18n-skip>${escapeHtml(user.username || user.id)}</option>
-                `).join('')}
-              </select>
-            </label>
-            <label class="field" for="admin-session-project-filter">
-              <span>${escapeHtml(t('Project'))}</span>
-              <select id="admin-session-project-filter" name="adminProjectFilter" data-i18n-skip>
-                <option value="">${escapeHtml(t('All projects'))}</option>
-                ${adminAuditProjects().map((project) => `
-                  <option value="${escapeAttribute(project.id)}"${state.admin.filterProjectId === project.id ? ' selected' : ''} data-i18n-skip>${escapeHtml(projectVisibleName(project, project.id))}</option>
-                `).join('')}
-              </select>
-            </label>
-            <label class="field" for="admin-session-state-filter">
-              <span>${escapeHtml(t('Session'))}</span>
-              <select id="admin-session-state-filter" name="adminSessionStateFilter" data-i18n-skip>
-                <option value="all"${state.admin.filterState === 'all' ? ' selected' : ''}>${escapeHtml(t('All Sessions'))}</option>
-                <option value="active"${state.admin.filterState === 'active' ? ' selected' : ''}>${escapeHtml(t('Active sessions'))}</option>
-                <option value="archived"${state.admin.filterState === 'archived' ? ' selected' : ''}>${escapeHtml(t('Archived sessions'))}</option>
-              </select>
-            </label>
-          </div>
-          <div class="admin-list" data-i18n-skip>${renderAdminSessions()}</div>
-        </section>
-  `;
-}
-
-function renderAdminObservedSessionPanel() {
-  if (currentAdminPage() !== 'sessions' || !isDesktopLayout()) {
-    return '';
-  }
-  if (state.admin.observedSessionLoading && !state.admin.observedSession) {
-    return `
-      <section class="admin-observed-panel">
-        <div class="empty-state">${escapeHtml(t('Loading session'))}</div>
-      </section>
-    `;
-  }
-  if (!state.admin.observedSession) {
-    return '';
-  }
-  return `
-      <section class="admin-observed-panel" data-i18n-skip>
-        ${renderChatContent({ desktop: true })}
-      </section>
-  `;
-}
-
-function renderLegacyAdminSections() {
-  return `
-        <section class="settings-section">
-          <div class="settings-section-title">Sessions</div>
-          <div class="field">
-            <label for="admin-session-user-filter">User</label>
-            <select id="admin-session-user-filter" name="adminUserFilter">
-              <option value="">All users</option>
-              ${state.admin.users.map((user) => `
-                <option value="${escapeAttribute(user.id)}"${state.admin.filterUserId === user.id ? ' selected' : ''} data-i18n-skip>${escapeHtml(user.username || user.id)}</option>
-              `).join('')}
-            </select>
-          </div>
-          <div class="admin-list">${renderAdminSessions()}</div>
-        </section>
-  `;
-}
-
-function renderAdminProjectForm() {
-  const project = adminEditingProject();
-  return `
-    <form class="admin-form" id="admin-project-form">
-      <div class="admin-form-grid">
-        <label class="field">
-          <span>Display Name</span>
-          <input name="displayName" autocomplete="off" placeholder="auto from CWD" value="${escapeAttribute(project?.displayName || '')}">
-        </label>
-        <label class="field">
-          <span>CWD</span>
-          <input name="cwd" autocomplete="off" placeholder="/Users/name/repo" value="${escapeAttribute(project?.cwd || '')}">
-        </label>
-        <label class="field">
-          <span>Active sessions</span>
-          <input name="activeSessionLimit" type="number" min="1" inputmode="numeric" placeholder="30" value="${escapeAttribute(project?.activeSessionLimit == null ? '' : String(project.activeSessionLimit))}">
-        </label>
-      </div>
-      <label class="admin-check-row">
-        <input name="enabled" type="checkbox"${project?.enabled === false ? '' : ' checked'}>
-        <span>Enabled</span>
-      </label>
-      <label class="admin-check-row">
-        <input name="showWorkDetailsToMembers" type="checkbox"${project?.showWorkDetailsToMembers === false ? '' : ' checked'}>
-        <span>Members can view work details</span>
-      </label>
-      <div class="admin-form-actions">
-        <button class="primary compact-button" type="submit">Save Project</button>
-        ${project ? '<button class="ghost compact-button" type="button" id="admin-project-edit-cancel">Cancel</button>' : ''}
-      </div>
-    </form>
-  `;
-}
-
-function renderAdminRoleForm() {
-  const role = adminEditingRole();
-  return `
-    <form class="admin-form" id="admin-role-form">
-      <div class="admin-form-grid">
-        <label class="field">
-          <span>Role ID</span>
-          <input name="id" autocomplete="off" placeholder="role_writer" value="${escapeAttribute(role?.id || '')}">
-        </label>
-        <label class="field">
-          <span>Name</span>
-          <input name="name" autocomplete="off" placeholder="Writer" value="${escapeAttribute(role?.name || '')}">
-        </label>
-      </div>
-      ${renderAdminProjectCheckboxes(adminRoleProjectIds(role))}
-      <div class="admin-form-actions">
-        <button class="primary compact-button" type="submit">Save Role</button>
-        ${role ? '<button class="ghost compact-button" type="button" id="admin-role-edit-cancel">Cancel</button>' : ''}
-      </div>
-    </form>
-  `;
-}
-
-function renderAdminUserForm() {
-  const user = adminEditingUser();
-  const isEditing = Boolean(user);
-  return `
-    <form class="admin-form" id="admin-user-form">
-      <div class="admin-form-grid">
-        <label class="field">
-          <span>Username</span>
-          <input name="username" autocomplete="username" placeholder="writer" value="${escapeAttribute(user?.username || '')}"${isEditing ? ' readonly' : ''}>
-        </label>
-        <label class="field">
-          <span>Email</span>
-          <input name="email" type="email" autocomplete="email" placeholder="writer@example.com" value="${escapeAttribute(user?.email || '')}">
-        </label>
-        ${isEditing ? '' : `
-        <label class="field">
-          <span>Password</span>
-          <input name="password" type="password" autocomplete="new-password" placeholder="At least 8 chars">
-        </label>
-        `}
-      </div>
-      <label class="admin-check-row">
-        <input name="enabled" type="checkbox"${user?.enabled === false ? '' : ' checked'}>
-        <span>Enabled</span>
-      </label>
-      <label class="field">
-        <span>Role</span>
-        ${renderAdminRoleSelect({ id: 'admin-user-role-select', name: 'roleId', value: adminUserRoleId(user) })}
-      </label>
-      <div class="admin-form-actions">
-        <button class="primary compact-button" type="submit">${escapeHtml(t(isEditing ? 'Save' : 'Save User'))}</button>
-        ${isEditing ? '<button class="ghost compact-button" type="button" id="admin-user-edit-cancel">Cancel</button>' : ''}
-      </div>
-    </form>
-  `;
-}
-
-function renderAdminRoleSelect({ id = 'admin-user-role-select', name = 'roleId', value = '' } = {}) {
-  if (!state.admin.roles.length) {
-    return `<select id="${escapeAttribute(id)}" name="${escapeAttribute(name)}" data-i18n-skip><option value="">${escapeHtml(t('No roles available'))}</option></select>`;
-  }
-  const selectedValue = String(value || '');
-  return `
-    <select id="${escapeAttribute(id)}" name="${escapeAttribute(name)}" data-i18n-skip>
-      <option value=""${selectedValue ? '' : ' selected'}>${escapeHtml(t('No role'))}</option>
-      ${state.admin.roles.map((role) => `
-        <option value="${escapeAttribute(role.id)}"${role.id === selectedValue ? ' selected' : ''} data-i18n-skip>${escapeHtml(role.name || role.id)}</option>
-      `).join('')}
-    </select>
-  `;
-}
-
-function renderAdminProjectCheckboxes(selectedProjectIds = [], { name = 'projectIds', legend = 'Projects' } = {}) {
-  if (!state.admin.projects.length) {
-    return `<div class="meta">${escapeHtml(t('No projects available.'))}</div>`;
-  }
-  const selected = new Set(selectedProjectIds);
-  return `
-    <fieldset class="admin-fieldset">
-      <legend>${escapeHtml(t(legend))}</legend>
-      ${state.admin.projects.map((project) => `
-        <label class="admin-check-row">
-          <input name="${escapeAttribute(name)}" type="checkbox" value="${escapeAttribute(project.id)}"${selected.has(project.id) ? ' checked' : ''}>
-          <span data-i18n-skip>${escapeHtml(adminProjectVisibleName(project))}</span>
-        </label>
-      `).join('')}
-    </fieldset>
-  `;
-}
-
-function renderAdminProjects() {
-  if (!state.admin.projects.length) {
-    return `<div class="meta">${escapeHtml(t('No projects configured.'))}</div>`;
-  }
-  return `
-    <table class="admin-table admin-project-table">
-      <thead>
-        <tr>
-          <th>${escapeHtml(t('CWD'))}</th>
-          <th>${escapeHtml(t('Display Name'))}</th>
-          <th>${escapeHtml(t('Work details'))}</th>
-          <th>${escapeHtml(t('Action'))}</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${state.admin.projects.map((project) => `
-          <tr>
-            <td data-label="${escapeAttribute(t('CWD'))}" data-i18n-skip>${escapeHtml(project.cwd || project.id || '')}</td>
-            <td data-label="${escapeAttribute(t('Display Name'))}" data-i18n-skip>${escapeHtml(adminProjectVisibleName(project))}</td>
-            <td data-label="${escapeAttribute(t('Work details'))}">${escapeHtml(t(project.showWorkDetailsToMembers === false ? 'Admin only' : 'Members'))}</td>
-            <td data-label="${escapeAttribute(t('Action'))}"><button class="ghost compact-button" type="button" data-admin-edit-project="${escapeAttribute(project.id || '')}">${escapeHtml(t('Edit'))}</button></td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-  `;
-}
-
-function renderAdminUsers() {
-  if (!state.admin.users.length) {
-    return `<div class="meta">${escapeHtml(t('No users configured.'))}</div>`;
-  }
-  return state.admin.users.map((user) => {
-    return `
-      <article class="admin-row admin-user-row">
-        <div>
-          <span class="admin-row-main" data-i18n-skip>${escapeHtml(user.username || user.id)}</span>
-          <span class="admin-row-meta" data-i18n-skip>${escapeHtml(adminUserMeta(user))}</span>
-        </div>
-        <div class="admin-user-action-row">
-          <button class="ghost compact-button" type="button" data-admin-edit-user="${escapeAttribute(user.id || '')}">${escapeHtml(t('Edit'))}</button>
-          <button class="ghost compact-button" type="button" data-admin-toggle-user-id="${escapeAttribute(user.id || '')}" data-admin-toggle-user-enabled="${user?.enabled === false ? 'true' : 'false'}">${escapeHtml(t(user?.enabled === false ? 'Enable' : 'Disable'))}</button>
-          <button class="danger compact-button" type="button" data-admin-delete-user-id="${escapeAttribute(user.id || '')}">${escapeHtml(t('Delete'))}</button>
-        </div>
-      </article>
-    `;
-  }).join('');
-}
-
-function renderAdminRoles() {
-  if (!state.admin.roles.length) {
-    return `<div class="meta">${escapeHtml(t('No roles configured.'))}</div>`;
-  }
-  return state.admin.roles.map((role) => `
-    <article class="admin-row">
-      <span class="admin-row-main" data-i18n-skip>${escapeHtml(role.name || role.id)}</span>
-      <span class="admin-row-meta"${role.isAdmin ? '' : ' data-i18n-skip'}>${role.isAdmin ? escapeHtml(t('admin')) : escapeHtml(role.id || '')}</span>
-      <button class="ghost compact-button" type="button" data-admin-edit-role="${escapeAttribute(role.id || '')}">${escapeHtml(t('Edit'))}</button>
-    </article>
-  `).join('');
-}
-
-function renderAdminSessions() {
-  if (!state.admin.sessions.length) {
-    return `<div class="meta">${escapeHtml(t('No sessions found.'))}</div>`;
-  }
-  return sortedAdminSessions().map((session) => {
-    const owner = adminUserName(session.ownerUserId || session.userId);
-    const modeLabel = session.archived === true ? t('Read only') : t('Observer Mode');
-    const summary = String(session.summary || '').trim();
-    return `
-      <article class="admin-row admin-session-row">
-        <button class="admin-session-open" type="button" data-admin-session-id="${escapeAttribute(session.id)}">
-          <span class="admin-row-main" data-i18n-skip>${escapeHtml(adminProjectNameById(session.projectId, session.projectDisplayName))}</span>
-          ${summary ? `<span class="admin-session-summary" data-i18n-skip>${escapeHtml(summary)}</span>` : ''}
-          <span class="admin-row-meta"><span data-i18n-skip>${escapeHtml(`${owner} · ${session.id}`)}</span> · ${escapeHtml(modeLabel)}</span>
-        </button>
-      </article>
-    `;
-  }).join('');
+  return UI.icon('menu', { className: 'button-icon button-icon-sidebar' });
 }
 
 function renderNewSession() {
@@ -2508,13 +1834,16 @@ function renderNewSessionContent({ desktop = false } = {}) {
         ${renderPageNav('New Session')}
       `}
     <main class="new-session-page${desktop ? ' desktop-new-session-page' : ''}">
-      <form class="panel stack" id="new-session-form">
-        ${sessionTargetPicker}
-        <div class="actions">
-          ${desktop ? '<button class="ghost compact-button" type="button" id="back-to-list-button">Sessions</button>' : ''}
-          <button class="${desktop ? 'primary compact-button' : 'primary primary-action'}" type="submit"${startDisabled ? ' disabled' : ''}>Start</button>
-        </div>
-      </form>
+      <div class="new-session-hero">
+        <h1 class="new-session-heading" data-i18n-skip>开启新会话</h1>
+        <form class="panel stack new-session-card bg-shared ring-theme" id="new-session-form">
+          ${sessionTargetPicker}
+          <div class="actions new-session-actions">
+            <button class="ghost compact-button new-session-secondary-button" type="button" id="new-session-cancel-button">Back</button>
+            <button class="primary ${desktop ? 'compact-button' : 'primary-action'} new-session-start-button" type="submit"${startDisabled ? ' disabled' : ''}>Start</button>
+          </div>
+        </form>
+      </div>
     </main>
   `);
 }
@@ -2585,6 +1914,11 @@ function renderChat() {
 function renderChatContent({ desktop = false } = {}) {
   const composerClassName = composerStateClassName();
   const readOnly = isReadOnlySession(state.currentSession);
+  const emptyDraft = state.draftSessionActive
+    && !state.sessionId
+    && !state.activeSubmissionId
+    && state.timeline.length === 0
+    && !state.pendingTurn;
   return localizeFragment(`
       <header class="topbar chat-topbar${desktop ? ' desktop-chat-topbar' : ''}">
         <div class="chat-nav">
@@ -2596,11 +1930,24 @@ function renderChatContent({ desktop = false } = {}) {
           ${renderChatHeaderActions({ readOnly })}
         </div>
       </header>
-      <main class="timeline" id="timeline" data-i18n-skip>${renderTimeline()}</main>
-      ${readOnly ? renderReadOnlyComposerNotice(state.currentSession) : renderComposer(composerClassName, { desktop })}
+      ${emptyDraft
+        ? renderNewSessionEmptyState(composerClassName, { desktop })
+        : `
+          <main class="timeline" id="timeline" data-i18n-skip>${renderTimeline()}</main>
+          ${readOnly ? renderReadOnlyComposerNotice(state.currentSession) : renderComposer(composerClassName, { desktop })}
+        `}
       ${renderShareDialog()}
       ${renderWorkDetailsDialog()}
   `);
+}
+
+function renderNewSessionEmptyState(composerClassName, { desktop = false } = {}) {
+  return `
+      <main class="new-session-empty-state">
+        <h1 class="new-session-slogan" data-i18n-skip>AI 只是工具，其回答未必正确无误。</h1>
+        ${renderComposer(composerClassName, { desktop, centered: true })}
+      </main>
+  `;
 }
 
 function renderChatHeaderActions({ readOnly }) {
@@ -2680,7 +2027,7 @@ function renderWorkDetailsDialog() {
         <section class="confirm-dialog work-details-dialog" role="dialog" aria-modal="true" aria-labelledby="work-details-title" data-focus-scope="work-details">
           <header class="work-details-header">
             <h2 id="work-details-title">${escapeHtml(t('Turn activity'))}</h2>
-            <button class="ghost icon-button work-details-close" type="button" id="close-work-details-button" aria-label="Close work details" title="Close work details" data-initial-focus><span aria-hidden="true">&times;</span></button>
+            <button class="ghost icon-button work-details-close" type="button" id="close-work-details-button" aria-label="Close work details" title="Close work details" data-initial-focus>${UI.icon('x', { className: 'button-icon' })}</button>
           </header>
           <div class="work-details-list">
             ${renderWorkItem(workItem, currentWorkDetailsWindow(workItem))}
@@ -2690,19 +2037,21 @@ function renderWorkDetailsDialog() {
   `;
 }
 
-function renderComposer(composerClassName, { desktop = false } = {}) {
+function renderComposer(composerClassName, { desktop = false, centered = false } = {}) {
+  const desktopComposer = desktop || hasDesktopPointer();
+  const centeredClassName = centered ? ' is-centered' : '';
   return `
-      <div class="composer-wrap ${composerClassName}">
-        ${state.composerExpanded ? '' : renderComposerStatus()}
+      <div class="composer-wrap ${composerClassName}${centeredClassName}">
+        ${state.composerExpanded || centered ? '' : renderComposerStatus()}
         ${renderQueuedMessages()}
-        <form class="composer ${composerClassName}" id="composer-form">
+        <form class="composer bg-shared ring-theme ${composerClassName}${centeredClassName}" id="composer-form">
           ${state.settingsOpen && !state.composerExpanded ? renderSettingsDrawer() : ''}
           ${state.error && !state.composerExpanded ? `<div class="composer-error" role="alert">${escapeHtml(shorten(state.error, 96))}</div>` : ''}
           ${renderAttachmentTray()}
           <input class="visually-hidden" id="attachment-input" type="file" multiple aria-label="Upload files">
           <div class="compact-composer-row">
-            ${renderComposerLeadingControls()}
-            ${renderMessageEditor({ desktop })}
+            ${desktopComposer ? '' : renderComposerLeadingControls()}
+            ${renderMessageEditor({ desktop: desktopComposer })}
           </div>
         </form>
       </div>
@@ -2841,12 +2190,12 @@ function composerStateClassName() {
 function renderComposerLeadingControls() {
   let expandButton = '';
   if (!isDesktopLayout()) {
-    expandButton = `<button class="ghost icon-button" type="button" id="composer-expand-button" aria-label="${state.composerExpanded ? 'Collapse message editor' : 'Expand message editor'}" aria-expanded="${String(state.composerExpanded)}"${state.composerCanExpand || state.composerExpanded ? '' : ' hidden'}>${state.composerExpanded ? 'v' : '^'}</button>`;
+    expandButton = `<button class="ghost icon-button composer-expand-button${state.composerExpanded ? ' is-expanded' : ''}" type="button" id="composer-expand-button" aria-label="${state.composerExpanded ? 'Collapse message editor' : 'Expand message editor'}" aria-expanded="${String(state.composerExpanded)}"${state.composerCanExpand || state.composerExpanded ? '' : ' hidden'}>${UI.icon('chevronDown', { className: 'button-icon' })}</button>`;
   }
   const attachDisabled = state.pendingTurn || state.submissionSending || hasUploadingComposerAttachments() ? ' disabled' : '';
   const attachButton = state.composerExpanded
     ? ''
-    : `<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled}>+</button>`;
+    : `<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled}>${UI.icon('attachment', { className: 'button-icon' })}</button>`;
   return `
     <div class="composer-leading-controls">
       ${expandButton}
@@ -2858,16 +2207,24 @@ function renderComposerLeadingControls() {
 function renderMessageEditor({ desktop = false } = {}) {
   const composerClassName = composerStateClassName();
   const sendDisabled = state.submissionSending || hasUploadingComposerAttachments() ? ' disabled' : '';
-  const actionButtons = desktop
-    ? `<div class="composer-action-buttons">
-        <button class="ghost compact-refresh" type="button" id="composer-refresh-button" aria-label="Refresh session">Refresh</button>
-        <button class="primary compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${sendDisabled}>Send</button>
-      </div>`
-    : `<button class="primary compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${sendDisabled}>Send</button>`;
+  if (!desktop) {
+    return `
+    <div class="message-editor-shell ${composerClassName}">
+      <textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">${escapeHtml(state.prompt)}</textarea>
+      <button class="primary icon-button compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${sendDisabled}>${UI.icon('send', { className: 'button-icon' })}<span class="visually-hidden">Send</span></button>
+    </div>
+  `;
+  }
   return `
     <div class="message-editor-shell ${composerClassName}">
       <textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">${escapeHtml(state.prompt)}</textarea>
-      ${actionButtons}
+      <div class="composer-toolbar">
+        ${renderComposerLeadingControls()}
+        <div class="composer-action-buttons">
+          <button class="ghost icon-button compact-refresh" type="button" id="composer-refresh-button" aria-label="Refresh session" title="Refresh session">${UI.icon('refresh', { className: 'button-icon' })}<span class="visually-hidden">Refresh</span></button>
+          <button class="primary icon-button compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${sendDisabled}>${UI.icon('send', { className: 'button-icon' })}<span class="visually-hidden">Send</span></button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -2898,7 +2255,7 @@ function renderAttachmentChip(attachment) {
                 <span class="attachment-meta">${escapeHtml(sizeLabel)}</span>
               </button>
               <span class="attachment-status">${escapeHtml(t(statusLabel))}</span>
-              <button class="ghost attachment-remove" type="button" data-attachment-remove-id="${escapeAttribute(attachment.id || '')}" aria-label="${escapeAttribute(t('Remove {fileName}', { fileName }))}">x</button>
+              <button class="ghost attachment-remove" type="button" data-attachment-remove-id="${escapeAttribute(attachment.id || '')}" aria-label="${escapeAttribute(t('Remove {fileName}', { fileName }))}">${UI.icon('x', { className: 'button-icon' })}</button>
             </div>
   `;
 }
@@ -2913,20 +2270,6 @@ function attachmentStatusLabel(attachment) {
   }
   const storage = String(attachment?.uploaded?.storage || '').trim();
   return storage === 'state' ? 'Saved' : 'Ready';
-}
-
-function formatAttachmentSize(sizeBytes) {
-  const size = Number(sizeBytes);
-  if (!Number.isFinite(size) || size <= 0) {
-    return '';
-  }
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
-  }
-  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 function hasUploadingComposerAttachments() {
@@ -2957,123 +2300,6 @@ function normalizeTimelineMessageDisplay(role, text, attachments) {
       parsed.attachments,
     ),
   };
-}
-
-function parseAttachmentPromptText(text) {
-  const rawText = typeof text === 'string' ? text.trim() : '';
-  const footer = 'Use the local file paths above when you inspect these attachments.';
-  const footerIndex = rawText.lastIndexOf(`\n${footer}`);
-  if (footerIndex < 0) {
-    return { text: rawText, attachments: [] };
-  }
-  const beforeFooter = rawText.slice(0, footerIndex).trimEnd();
-  const marker = '\n\nAttachments:\n';
-  let markerIndex = beforeFooter.lastIndexOf(marker);
-  let blockStart = markerIndex >= 0 ? markerIndex + marker.length : -1;
-  if (markerIndex < 0 && beforeFooter.startsWith('Attachments:\n')) {
-    markerIndex = 0;
-    blockStart = 'Attachments:\n'.length;
-  }
-  if (markerIndex < 0 || blockStart < 0) {
-    return { text: rawText, attachments: [] };
-  }
-  const parsedAttachments = parseAttachmentPromptBlock(beforeFooter.slice(blockStart));
-  if (!parsedAttachments.length) {
-    return { text: rawText, attachments: [] };
-  }
-  const displayText = beforeFooter.slice(0, markerIndex).trim();
-  return {
-    text: displayText === 'User sent attachments without additional text.' ? '' : displayText,
-    attachments: parsedAttachments,
-  };
-}
-
-function parseAttachmentPromptBlock(blockText) {
-  const attachments = [];
-  let current = null;
-  const pushCurrent = () => {
-    if (!current?.localPath) {
-      return;
-    }
-    attachments.push({
-      kind: current.kind === 'image' ? 'image' : 'file',
-      localPath: current.localPath,
-      fileName: current.fileName || fileNameFromPath(current.localPath),
-      mimeType: current.mimeType || null,
-    });
-  };
-  for (const line of String(blockText || '').split('\n')) {
-    const itemMatch = line.match(/^\d+\.\s+(.+?)\s*$/u);
-    if (itemMatch) {
-      pushCurrent();
-      const label = String(itemMatch[1] || '').toLowerCase();
-      current = {
-        kind: label.includes('image') ? 'image' : 'file',
-        localPath: '',
-        fileName: '',
-        mimeType: '',
-      };
-      continue;
-    }
-    const fieldMatch = line.match(/^\s+(path|filename|mime):\s*(.*?)\s*$/u);
-    if (!fieldMatch || !current) {
-      continue;
-    }
-    const value = String(fieldMatch[2] || '').trim();
-    if (fieldMatch[1] === 'path') {
-      current.localPath = value;
-    } else if (fieldMatch[1] === 'filename') {
-      current.fileName = value;
-    } else if (fieldMatch[1] === 'mime') {
-      current.mimeType = value;
-    }
-  }
-  pushCurrent();
-  return attachments;
-}
-
-function normalizeTimelineAttachments(attachments) {
-  return (Array.isArray(attachments) ? attachments : [])
-    .map((attachment) => normalizeTimelineAttachment(attachment))
-    .filter(Boolean);
-}
-
-function normalizeTimelineAttachment(attachment) {
-  if (!attachment || typeof attachment !== 'object') {
-    return null;
-  }
-  const localPath = typeof attachment.localPath === 'string' ? attachment.localPath.trim() : '';
-  const fileName = typeof attachment.fileName === 'string' ? attachment.fileName.trim() : '';
-  const mimeType = typeof attachment.mimeType === 'string' ? attachment.mimeType.trim() : '';
-  if (!localPath && !fileName) {
-    return null;
-  }
-  return {
-    kind: attachment.kind === 'image' ? 'image' : 'file',
-    localPath,
-    fileName: fileName || fileNameFromPath(localPath) || 'upload',
-    mimeType: mimeType || null,
-    sizeBytes: Number.isFinite(attachment.sizeBytes) ? Number(attachment.sizeBytes) : null,
-  };
-}
-
-function mergeTimelineAttachments(...attachmentGroups) {
-  const merged = [];
-  const seen = new Set();
-  for (const attachment of attachmentGroups.flatMap((group) => normalizeTimelineAttachments(group))) {
-    const key = attachment.localPath || `${attachment.kind}:${attachment.fileName}:${attachment.mimeType || ''}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    merged.push(attachment);
-  }
-  return merged;
-}
-
-function fileNameFromPath(filePath) {
-  const parts = String(filePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : '';
 }
 
 function renderSessionCards() {
@@ -3313,7 +2539,7 @@ function renderSettingsDrawer() {
     <div class="settings-drawer" role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings">
       <div class="settings-drawer-header">
         <span class="settings-drawer-title">Current session</span>
-        <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus><span aria-hidden="true">×</span></button>
+        <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus>${UI.icon('x', { className: 'button-icon' })}</button>
       </div>
       ${renderStopTurnSettingsControl()}
       ${renderSessionActionsSettingsSection()}
@@ -5110,6 +4336,13 @@ function bindGlobalEvents() {
     });
   }
 
+  const newSessionCancelButton = document.querySelector('#new-session-cancel-button');
+  if (newSessionCancelButton) {
+    listenRendered(newSessionCancelButton, 'click', () => {
+      showSessionList();
+    });
+  }
+
   bindSessionCardEvents();
 
   for (const button of document.querySelectorAll('[data-sort-mode]')) {
@@ -5153,7 +4386,27 @@ function bindGlobalEvents() {
   const adminMultiUserToggle = document.querySelector('#admin-multi-user-toggle');
   if (adminMultiUserToggle) {
     listenRendered(adminMultiUserToggle, 'change', (event) => {
+      if (!event.target.checked
+        && typeof window.confirm === 'function'
+        && !window.confirm(t('Disable multi-user mode?'))) {
+        event.target.checked = true;
+        return;
+      }
       void updateAdminSettings({ multiUserEnabled: event.target.checked });
+    });
+  }
+
+  const adminSessionRefresh = document.querySelector('#admin-session-refresh');
+  if (adminSessionRefresh) {
+    listenRendered(adminSessionRefresh, 'click', () => {
+      void refreshAdminSessions({ renderAfter: true });
+    });
+  }
+
+  const adminSessionClearFilters = document.querySelector('#admin-session-clear-filters');
+  if (adminSessionClearFilters) {
+    listenRendered(adminSessionClearFilters, 'click', () => {
+      void refreshAdminSessions({ userId: '', projectId: '', state: 'all', renderAfter: true });
     });
   }
 
@@ -5178,7 +4431,7 @@ function bindGlobalEvents() {
     });
   }
 
-  for (const button of document.querySelectorAll('[data-admin-page]')) {
+  for (const button of document.querySelectorAll('button[data-admin-page]')) {
     listenRendered(button, 'click', () => {
       state.admin.page = normalizeAdminPage(button.getAttribute('data-admin-page') || '');
       render();
@@ -5262,7 +4515,13 @@ function bindGlobalEvents() {
 
   for (const button of document.querySelectorAll('[data-admin-delete-user-id]')) {
     listenRendered(button, 'click', () => {
-      void deleteAdminUser(button.getAttribute('data-admin-delete-user-id') || '');
+      const userId = button.getAttribute('data-admin-delete-user-id') || '';
+      const userName = adminUserById(userId)?.username || userId;
+      if (typeof window.confirm === 'function'
+        && !window.confirm(t('Delete user {name}?', { name: userName }))) {
+        return;
+      }
+      void deleteAdminUser(userId);
     });
   }
 
@@ -5623,7 +4882,8 @@ function syncComposerPresentation() {
     composerExpandButton.hidden = !showExpandButton;
     composerExpandButton.setAttribute('aria-expanded', String(state.composerExpanded));
     composerExpandButton.setAttribute('aria-label', state.composerExpanded ? 'Collapse message editor' : 'Expand message editor');
-    composerExpandButton.textContent = state.composerExpanded ? 'v' : '^';
+    composerExpandButton.classList?.toggle?.('is-expanded', state.composerExpanded);
+    composerExpandButton.innerHTML = UI.icon('chevronDown', { className: 'button-icon' });
   }
   syncComposerAttachButton();
 }
@@ -5643,7 +4903,7 @@ function syncComposerAttachButton() {
     attachButton.disabled = attachDisabled;
     return;
   }
-  const button = htmlToElement(`<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled ? ' disabled' : ''}>+</button>`);
+  const button = htmlToElement(`<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled ? ' disabled' : ''}>${UI.icon('attachment', { className: 'button-icon' })}</button>`);
   listenRendered(button, 'click', openAttachmentPicker);
   leadingControls.appendChild(button);
 }
@@ -13437,17 +12697,20 @@ function currentSelectedProject() {
 }
 
 function sessionProjectScope(session) {
-  const projectId = String(session?.projectId || '').trim();
+  const persistedProjectId = String(session?.projectId || '').trim();
+  const managedProject = matchingManagedProjectForSession(session);
+  const projectId = String(managedProject?.id || persistedProjectId).trim();
   const displayName = cwdLeafName(session?.projectDisplayName || '');
   const cwdName = cwdLeafName(session?.cwd || '');
   const projectName = cwdLeafName(session?.projectName || '');
-  const legacyLabel = displayName || cwdName || projectName || String(session?.title || '').trim() || 'Untitled Project';
+  const managedLabel = managedProject ? projectVisibleName(managedProject, projectId) : '';
+  const legacyLabel = managedLabel || displayName || cwdName || projectName || String(session?.title || '').trim() || 'Untitled Project';
   if (projectId) {
     return {
       key: projectId,
       id: projectId,
       label: displayName || legacyLabel || projectId,
-      defaultCwd: typeof session?.cwd === 'string' ? session.cwd : '',
+      defaultCwd: typeof session?.cwd === 'string' && session.cwd ? session.cwd : managedProject?.cwd || '',
       latestAt: lastInputAtForSession(session),
     };
   }
@@ -13462,35 +12725,62 @@ function sessionProjectScope(session) {
   };
 }
 
+function matchingManagedProjectForSession(session) {
+  const projects = Array.isArray(state.projects) ? state.projects : [];
+  const projectId = String(session?.projectId || '').trim();
+  const exact = projectId ? projects.find((project) => String(project?.id || '').trim() === projectId) : null;
+  if (exact) {
+    return exact;
+  }
+  const sessionCwd = String(session?.cwd || '').trim();
+  const names = new Set([
+    session?.projectDisplayName,
+    session?.projectName,
+    cwdLeafName(sessionCwd),
+  ].map((value) => String(value || '').trim().toLocaleLowerCase()).filter(Boolean));
+  const matches = projects.filter((project) => {
+    const projectCwd = String(project?.cwd || '').trim();
+    if (sessionCwd && projectCwd && sessionCwd === projectCwd) {
+      return true;
+    }
+    const projectName = projectVisibleName(project, project?.id || '').trim().toLocaleLowerCase();
+    return Boolean(projectName && names.has(projectName));
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function renderWorkspaceProjectList() {
   const currentKey = String(currentSelectedProject().key || '');
-  const entries = [
-    {
-      key: '',
-      id: '',
-      label: t('All Sessions'),
-      sessionCount: sessionListCandidates().length,
-      favorite: false,
-      source: 'all',
-    },
-    ...workspaceProjects(),
-  ];
-  return entries.map((project) => {
+  const allSessions = {
+    key: '',
+    id: '',
+    label: t('All Sessions'),
+    sessionCount: sessionListCandidates().length,
+    source: 'all',
+  };
+  const projects = workspaceProjects();
+  const renderProject = (project) => {
     const isActive = project.key === currentKey;
     const count = project.sessionCount ? String(project.sessionCount) : project.source === 'all' ? String(sessionListCandidates().length) : '0';
     const canFavorite = project.source !== 'all' && Boolean(project.id);
     const favorite = Boolean(project.favorite);
-    const favoriteLabel = `${favorite ? 'Unfavorite' : 'Favorite'} ${project.label}`;
+    const favoriteLabel = t(favorite ? 'Unfavorite {label}' : 'Favorite {label}', { label: project.label });
     return `
     <div class="project-rail-item${canFavorite ? ' has-favorite-control' : ''}${isActive ? ' is-active' : ''}${favorite ? ' is-favorite' : ''}">
       <button class="project-rail-select-button" type="button" data-project-scope-key="${escapeAttribute(project.key)}" aria-pressed="${String(isActive)}">
+        <span class="project-rail-marker" aria-hidden="true"></span>
         <span class="project-rail-item-main"${project.source === 'all' ? '' : ' data-i18n-skip'}>${escapeHtml(project.label)}</span>
         <span class="project-rail-item-meta">${escapeHtml(count)}</span>
       </button>
-      ${canFavorite ? `<button class="project-rail-favorite-button${favorite ? ' is-favorite' : ''}" type="button" data-project-favorite-id="${escapeAttribute(project.id)}" aria-pressed="${String(favorite)}" aria-label="${escapeAttribute(t(favorite ? 'Unfavorite {label}' : 'Favorite {label}', { label: project.label }))}" title="${escapeAttribute(t(favorite ? 'Unfavorite {label}' : 'Favorite {label}', { label: project.label }))}">${favorite ? '★' : '☆'}</button>` : ''}
+      ${canFavorite ? `<button class="project-rail-favorite-button${favorite ? ' is-favorite' : ''}" type="button" data-project-favorite-id="${escapeAttribute(project.id)}" aria-pressed="${String(favorite)}" aria-label="${escapeAttribute(favoriteLabel)}" title="${escapeAttribute(favoriteLabel)}">${UI.icon('star', { className: 'project-rail-favorite-icon' })}</button>` : ''}
     </div>
   `;
-  }).join('');
+  };
+  return `
+    <div class="project-rail-group-label">${escapeHtml(t('Views'))}</div>
+    ${renderProject(allSessions)}
+    ${projects.length ? `<div class="project-rail-group-label">${escapeHtml(t('Projects'))}</div>${projects.map(renderProject).join('')}` : ''}
+  `;
 }
 
 function renderWorkspaceRailActions({ mobile = false } = {}) {
@@ -13498,13 +12788,13 @@ function renderWorkspaceRailActions({ mobile = false } = {}) {
   const settingsActive = state.view === 'settings' || state.desktopSettingsOpen;
   if (mobile) {
     return `
-    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">Setting</button>
-    ${showAdmin ? '<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">Admin Console</button>' : ''}
+    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">${UI.icon('settings', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Setting'))}</span></button>
+    ${showAdmin ? `<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">${UI.icon('admin', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Admin Console'))}</span></button>` : ''}
   `;
   }
   return `
-    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">Setting</button>
-    ${showAdmin ? '<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">Admin Console</button>' : ''}
+    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">${UI.icon('settings', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Setting'))}</span></button>
+    ${showAdmin ? `<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">${UI.icon('admin', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Admin Console'))}</span></button>` : ''}
   `;
 }
 
@@ -13739,7 +13029,7 @@ function resetAdminState() {
   state.admin.users = [];
   state.admin.roles = [];
   state.admin.sessions = [];
-  state.admin.page = 'projects';
+  state.admin.page = 'sessions';
   state.admin.filterUserId = '';
   state.admin.filterProjectId = '';
   state.admin.filterState = 'all';
@@ -13941,7 +13231,7 @@ function currentAdminPage() {
 
 function normalizeAdminPage(page) {
   const value = String(page || '').trim();
-  return ['projects', 'roles', 'users', 'sessions'].includes(value) ? value : 'projects';
+  return ['projects', 'roles', 'users', 'sessions'].includes(value) ? value : 'sessions';
 }
 
 function projectNameForSession(session, fallbackCwd = '') {
@@ -15463,298 +14753,11 @@ function shorten(value, maxLength) {
 }
 
 function renderMarkdown(value) {
-  const text = String(value || '').replace(/\r\n?/gu, '\n');
-  const lines = text.split('\n');
-  const blocks = [];
-  let paragraph = [];
-  let listItems = [];
-  let quoteLines = [];
-  let codeLines = [];
-  let inCode = false;
-
-  const flushParagraph = () => {
-    if (!paragraph.length) {
-      return;
-    }
-    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (!listItems.length) {
-      return;
-    }
-    blocks.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ul>`);
-    listItems = [];
-  };
-  const flushQuote = () => {
-    if (!quoteLines.length) {
-      return;
-    }
-    blocks.push(`<blockquote>${quoteLines.map((line) => `<p>${renderInlineMarkdown(line)}</p>`).join('')}</blockquote>`);
-    quoteLines = [];
-  };
-  const flushCode = () => {
-    blocks.push(`<pre><code>${escapeHtml(`${codeLines.join('\n')}\n`)}</code></pre>`);
-    codeLines = [];
-  };
-  const flushTextBlocks = () => {
-    flushParagraph();
-    flushList();
-    flushQuote();
-  };
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^```/u.test(line.trim())) {
-      if (inCode) {
-        flushCode();
-        inCode = false;
-      } else {
-        flushTextBlocks();
-        inCode = true;
-        codeLines = [];
-      }
-      continue;
-    }
-    if (inCode) {
-      codeLines.push(line);
-      continue;
-    }
-    if (!line.trim()) {
-      flushTextBlocks();
-      continue;
-    }
-    const table = parseMarkdownTable(lines, index);
-    if (table) {
-      flushTextBlocks();
-      blocks.push(renderMarkdownTable(table.header, table.rows, table.alignments));
-      index = table.lastLineIndex;
-      continue;
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/u);
-    if (heading) {
-      flushTextBlocks();
-      const level = heading[1].length;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
-      continue;
-    }
-    const listItem = line.match(/^\s*[-*]\s+(.+)$/u);
-    if (listItem) {
-      flushParagraph();
-      flushQuote();
-      listItems.push(listItem[1]);
-      continue;
-    }
-    const quote = line.match(/^>\s?(.+)$/u);
-    if (quote) {
-      flushParagraph();
-      flushList();
-      quoteLines.push(quote[1]);
-      continue;
-    }
-    flushList();
-    flushQuote();
-    paragraph.push(line.trim());
-  }
-  if (inCode) {
-    flushCode();
-  } else {
-    flushTextBlocks();
-  }
-  return blocks.join('');
-}
-
-function parseMarkdownTable(lines, startIndex) {
-  const header = parseMarkdownTableRow(lines[startIndex]);
-  if (!header || startIndex + 1 >= lines.length) {
-    return null;
-  }
-  const alignments = parseMarkdownTableDivider(lines[startIndex + 1], header.length);
-  if (!alignments) {
-    return null;
-  }
-
-  const rows = [];
-  let cursor = startIndex + 2;
-  while (cursor < lines.length) {
-    const row = parseMarkdownTableRow(lines[cursor]);
-    if (!row || row.length !== header.length) {
-      break;
-    }
-    rows.push(row);
-    cursor += 1;
-  }
-
-  return {
-    header,
-    alignments,
-    rows,
-    lastLineIndex: cursor - 1,
-  };
-}
-
-function parseMarkdownTableRow(line) {
-  const trimmed = String(line || '').trim();
-  if (!trimmed || !trimmed.includes('|')) {
-    return null;
-  }
-  const cells = [];
-  let current = '';
-  let index = trimmed.startsWith('|') ? 1 : 0;
-  let codeDelimiterLength = 0;
-  let endedWithDelimiter = false;
-
-  while (index < trimmed.length) {
-    const character = trimmed[index];
-    const nextCharacter = trimmed[index + 1];
-    if (codeDelimiterLength === 0 && character === '\\' && nextCharacter === '|') {
-      current += '|';
-      index += 2;
-      endedWithDelimiter = false;
-      continue;
-    }
-    if (character === '`') {
-      const runLength = countRepeatedCharacter(trimmed, index, '`');
-      if (codeDelimiterLength === 0) {
-        codeDelimiterLength = runLength;
-      } else if (runLength === codeDelimiterLength) {
-        codeDelimiterLength = 0;
-      }
-      current += '`'.repeat(runLength);
-      index += runLength;
-      endedWithDelimiter = false;
-      continue;
-    }
-    if (codeDelimiterLength === 0 && character === '|') {
-      cells.push(current.trim());
-      current = '';
-      index += 1;
-      endedWithDelimiter = true;
-      continue;
-    }
-    current += character;
-    index += 1;
-    endedWithDelimiter = false;
-  }
-  if (!endedWithDelimiter || current.length > 0) {
-    cells.push(current.trim());
-  }
-  if (cells.length < 2) {
-    return null;
-  }
-  return cells;
-}
-
-function countRepeatedCharacter(value, startIndex, character) {
-  let index = startIndex;
-  while (index < value.length && value[index] === character) {
-    index += 1;
-  }
-  return index - startIndex;
-}
-
-function parseMarkdownTableDivider(line, expectedColumns) {
-  const cells = parseMarkdownTableRow(line);
-  if (!cells || cells.length !== expectedColumns) {
-    return null;
-  }
-  const alignments = [];
-  for (const cell of cells) {
-    if (!/^:?-{3,}:?$/u.test(cell)) {
-      return null;
-    }
-    const leftAligned = cell.startsWith(':');
-    const rightAligned = cell.endsWith(':');
-    if (leftAligned && rightAligned) {
-      alignments.push('center');
-    } else if (rightAligned) {
-      alignments.push('right');
-    } else {
-      alignments.push('left');
-    }
-  }
-  return alignments;
-}
-
-function renderMarkdownTable(header, rows, alignments = []) {
-  const getAlignmentStyle = (index) => ` style="text-align: ${escapeAttribute(alignments[index] || 'left')};"`;
-  const headHtml = header.map((cell, index) => `<th${getAlignmentStyle(index)}>${renderInlineMarkdown(cell)}</th>`).join('');
-  const bodyHtml = rows.map((row) => `<tr>${row.map((cell, index) => `<td${getAlignmentStyle(index)}>${renderInlineMarkdown(cell)}</td>`).join('')}</tr>`).join('');
-  return `<div class="markdown-table"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
-}
-
-function renderInlineMarkdown(value) {
-  const tokens = [];
-  const reserve = (html) => {
-    const token = `\u0001${tokens.length}\u0002`;
-    tokens.push(html);
-    return token;
-  };
-  let source = String(value || '');
-  source = source.replace(/\[([^\]]+)\]\(([^)\s]+)\)/gu, (match, label, href) => {
-    const decodedHref = decodeHtmlEntityText(href);
-    if (/^https?:\/\//iu.test(decodedHref)) {
-      return reserve(`<a href="${escapeAttribute(decodedHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
-    }
-    if (isSessionFilePath(decodedHref) && canRenderSessionFileLink(decodedHref)) {
-      return reserve(renderSessionFileLink(escapeHtml(label), decodedHref));
-    }
-    return match;
-  });
-  source = source.replace(/`([^`]+)`/gu, (_match, code) => {
-    return reserve(`<code>${linkPlainSessionFilePaths(escapeHtml(code))}</code>`);
-  });
-  let html = escapeHtml(source)
-    .replace(/\*\*([^*]+)\*\*/gu, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/gu, '<em>$1</em>');
-  html = linkPlainSessionFilePaths(html);
-  return html.replace(/\u0001(\d+)\u0002/gu, (_match, index) => tokens[Number(index)] || '');
-}
-
-function linkPlainSessionFilePaths(html) {
-  return String(html || '').replace(
-    /(^|[\s:：>（(])((?:(?:~?\/|\.\.?\/)?(?:[^\s\/<>"'`()]+\/)*[^\s\/<>"'`(),，。！？!?；;]+\.(?:md|markdown|html?|pdf|png|jpe?g|gif|webp|bmp|avif|tiff?)))(?=$|[\s<),，。！？!?；;:：])/giu,
-    (_match, prefix, filePath) => {
-      if (!isSessionFilePath(filePath) || !canRenderSessionFileLink(filePath)) {
-        return `${prefix}${filePath}`;
-      }
-      return `${prefix}${renderSessionFileLink(filePath, filePath)}`;
-    },
-  );
-}
-
-function renderSessionFileLink(label, href) {
-  const filePath = decodeHtmlEntityText(href);
-  return `<a href="#" class="session-file-link" data-session-file-path="${escapeAttribute(filePath)}">${label}</a>`;
-}
-
-function isSessionFilePath(value) {
-  const filePath = stripSessionFileLocationSuffix(decodeHtmlEntityText(value).trim());
-  if (!filePath || /^(?:[a-z][a-z\d+.-]*:|#)/iu.test(filePath)) {
-    return false;
-  }
-  return /\.(?:md|markdown|html?|pdf|png|jpe?g|gif|webp|bmp|avif|tiff?|[cm]?[jt]sx?|jsonc?|ya?ml|toml|css|scss|less|sh|bash|zsh|fish|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp)(?:[?#][^\s]*)?$/iu.test(filePath);
-}
-
-function stripSessionFileLocationSuffix(value) {
-  return String(value || '').replace(/:\d+(?::\d+)?$/u, '');
+  return MARKDOWN_RENDERER.renderMarkdown(value);
 }
 
 function canRenderSessionFileLink(value) {
   return !isShareContext() || isLegacyReportPath(value);
-}
-
-function isLegacyReportPath(value) {
-  return /(?:^|[\\/])\.codex-web[\\/]reports[\\/].+\.(?:md|markdown|html?)$/iu.test(decodeHtmlEntityText(value));
-}
-
-function decodeHtmlEntityText(value) {
-  return String(value || '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
 }
 
 function escapeHtml(value) {

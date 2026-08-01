@@ -193,6 +193,18 @@ test('workspace is usable without overflow and exposes work and status semantics
     const chatPaneBox = await chatPane.boundingBox();
     expect(chatPaneBox).not.toBeNull();
     expect(chatPaneBox.width).toBeGreaterThanOrEqual(640);
+    const topbarGeometry = await page.evaluate(() => [
+      document.querySelector('.desktop-project-rail > .project-rail-header'),
+      document.querySelector('.desktop-session-pane-topbar'),
+      document.querySelector('.desktop-chat-topbar'),
+    ].map((element) => {
+      const box = element?.getBoundingClientRect();
+      return box ? { height: box.height, bottom: box.bottom } : null;
+    }));
+    expect(topbarGeometry.every(Boolean)).toBe(true);
+    expect(topbarGeometry.every((box) => Math.abs(box.height - 66) <= 1)).toBe(true);
+    const topbarBottoms = topbarGeometry.map((box) => box.bottom);
+    expect(Math.max(...topbarBottoms) - Math.min(...topbarBottoms)).toBeLessThanOrEqual(1);
   }
 
   const newSessionButton = page.locator('#open-new-session-button');
@@ -202,15 +214,19 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(sessionButton).toBeVisible();
   await expect(sessionButton).toContainText('yanshan_quant');
   await expect(sessionButton).toContainText('Active');
-  for (const selector of ['.session-title', '.session-card-meta']) {
-    await expect(sessionButton.locator(selector)).toHaveCSS('font-weight', '400');
-  }
+  await expect(sessionButton.locator('.session-title')).toHaveCSS('font-weight', '500');
+  await expect(sessionButton.locator('.session-project')).toHaveCSS('font-weight', '650');
+  const projectFavoriteButton = page.locator('[data-project-favorite-id="project_browser_fixture"]');
+  await expect(projectFavoriteButton).toHaveCount(1);
+  await expect(projectFavoriteButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(projectFavoriteButton.locator('.project-rail-favorite-icon')).toHaveCount(1);
   await expect(page.locator('[data-session-id="session_browser_history"] .session-preview'))
     .toHaveCSS('font-weight', '400');
   if (testInfo.project.name.startsWith('mobile-')) {
     for (const locator of [
       page.locator('#mobile-sidebar-toggle-button'),
       page.locator('#open-new-session-button'),
+      page.locator('[data-sort-mode="archived"]'),
       page.locator('[data-sort-mode="time"]'),
       page.locator('[data-session-favorite-id="session_browser_fixture"]'),
     ]) {
@@ -218,8 +234,9 @@ test('workspace is usable without overflow and exposes work and status semantics
     }
     const filterButtons = page.locator('.mobile-session-sort-toggle [data-sort-mode]');
     await expect(filterButtons).toHaveCount(3);
+    await expectTouchTarget(page.locator('[data-sort-mode="archived"]'));
     await expect(page.locator('[data-sort-mode="archived"]')).toHaveAttribute('aria-label', 'Archived sessions');
-    await expect(page.locator('[data-sort-mode="archived"] .archive-sort-icon')).toBeVisible();
+    await expect(page.locator('[data-sort-mode="archived"]')).toHaveText('');
     const filterBoxes = await filterButtons.evaluateAll((buttons) => buttons.map((button) => {
       const box = button.getBoundingClientRect();
       return {
@@ -234,7 +251,6 @@ test('workspace is usable without overflow and exposes work and status semantics
     const recentsBox = filterBoxes.find((box) => box.mode === 'time');
     const archivedBox = filterBoxes.find((box) => box.mode === 'archived');
     expect(Math.abs(favoritesBox.width - recentsBox.width)).toBeLessThanOrEqual(1);
-    expect(archivedBox.width).toBeLessThan(favoritesBox.width);
     expect(archivedBox.width).toBeGreaterThanOrEqual(44);
     expect(filterBoxes.every((box) => box.height >= 44)).toBe(true);
     expect(filterBoxes.every((box) => box.scrollWidth <= box.clientWidth + 1)).toBe(true);
@@ -243,12 +259,27 @@ test('workspace is usable without overflow and exposes work and status semantics
       const filters = document.querySelector('.mobile-session-sort-toggle')?.getBoundingClientRect();
       const create = document.querySelector('#open-new-session-button')?.getBoundingClientRect();
       return menu && filters && create
-        ? { menuRight: menu.right, filtersLeft: filters.left, filtersRight: filters.right, createLeft: create.left }
+        ? {
+            menuRight: menu.right,
+            filtersLeft: filters.left,
+            filtersRight: filters.right,
+            createLeft: create.left,
+            centerSpread: Math.max(
+              menu.top + menu.height / 2,
+              filters.top + filters.height / 2,
+              create.top + create.height / 2,
+            ) - Math.min(
+              menu.top + menu.height / 2,
+              filters.top + filters.height / 2,
+              create.top + create.height / 2,
+            ),
+          }
         : null;
     });
     expect(topbarGeometry).not.toBeNull();
-    expect(topbarGeometry.filtersLeft).toBeGreaterThanOrEqual(topbarGeometry.menuRight);
+    expect(topbarGeometry.menuRight).toBeLessThanOrEqual(topbarGeometry.filtersLeft);
     expect(topbarGeometry.filtersRight).toBeLessThanOrEqual(topbarGeometry.createLeft);
+    expect(topbarGeometry.centerSpread).toBeLessThanOrEqual(1);
   }
 
   const sessionListLayout = await page.evaluate(() => ({
@@ -327,6 +358,9 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
   const promptInput = page.locator('#prompt-input');
   await expect(promptInput).toHaveCSS('font-weight', '400');
+  await promptInput.focus();
+  await expect(promptInput).toHaveCSS('outline-style', 'none');
+  await expect(page.locator('#composer-form')).toHaveCSS('border-radius', '32px');
   await expect(page.locator('.message-card .message-text, .message-card .markdown-body').first())
     .toHaveCSS('font-weight', '400');
   if (testInfo.project.name.startsWith('mobile-')) {
@@ -335,7 +369,7 @@ test('workspace is usable without overflow and exposes work and status semantics
   if (testInfo.project.name.startsWith('desktop')) {
     const promptBox = await promptInput.boundingBox();
     expect(promptBox).not.toBeNull();
-    expect(promptBox.height).toBeGreaterThanOrEqual(96);
+    expect(promptBox.height).toBeGreaterThanOrEqual(92);
   }
   if (testInfo.project.name === 'desktop') {
     await expect(sessionButton).toContainText('Needs approval');
@@ -349,6 +383,21 @@ test('workspace is usable without overflow and exposes work and status semantics
     ]) {
       await expectTouchTarget(locator);
     }
+    const composerGeometry = await page.locator('#composer-form').evaluate((composer) => {
+      const controls = [
+        composer.querySelector('#prompt-input'),
+        composer.querySelector('#attach-button'),
+        composer.querySelector('#composer-refresh-button'),
+        composer.querySelector('#send-button'),
+      ].map((element) => element?.getBoundingClientRect()).filter(Boolean);
+      const centers = controls.map((rect) => rect.top + rect.height / 2);
+      return {
+        height: composer.getBoundingClientRect().height,
+        centerSpread: Math.max(...centers) - Math.min(...centers),
+      };
+    });
+    expect(composerGeometry.height).toBeLessThanOrEqual(64);
+    expect(composerGeometry.centerSpread).toBeLessThanOrEqual(2);
   }
 
   const layout = await page.evaluate(() => ({
@@ -397,6 +446,138 @@ test('workspace is usable without overflow and exposes work and status semantics
   });
   await menuCloseButton.click();
   await expect(page.locator('.settings-drawer')).toHaveCount(0);
+});
+
+test('mobile composer expands after four lines and restores the compact attachment row', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-compact');
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  const promptInput = page.locator('#prompt-input');
+  await expect(promptInput).toBeVisible();
+  await promptInput.fill('First line\nSecond line\nThird line\nFourth line');
+
+  const expandButton = page.getByRole('button', { name: 'Expand message editor' });
+  await expect(expandButton).toBeVisible();
+  await expandButton.click();
+
+  const composer = page.locator('#composer-form');
+  await expect(composer).toHaveClass(/\bis-expanded\b/u);
+  await expect(page.getByRole('button', { name: 'Collapse message editor' })).toBeVisible();
+  await expect(page.locator('#attach-button')).toHaveCount(0);
+  const expandedGeometry = await composer.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    viewportHeight: window.innerHeight,
+  }));
+  expect(expandedGeometry.height).toBeGreaterThanOrEqual(expandedGeometry.viewportHeight * 0.75);
+  await page.screenshot({
+    path: '/tmp/codex-web-expanded-composer-mobile-compact.png',
+    fullPage: true,
+  });
+
+  await page.getByRole('button', { name: 'Collapse message editor' }).click();
+  await expect(composer).not.toHaveClass(/\bis-expanded\b/u);
+  await expect(page.locator('#attach-button')).toBeVisible();
+});
+
+test('narrow desktop browser keeps the web composer in the single-session layout', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop');
+
+  await page.setViewportSize({ width: 900, height: 844 });
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_fixture"]').click();
+
+  await expect(page.locator('.desktop-workspace')).toHaveCount(0);
+  await expect(page.locator('.mobile-session-topbar')).toHaveCount(0);
+  await expect(page.locator('.composer-toolbar')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Attach files' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Refresh session' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+  const promptBox = await page.locator('#prompt-input').boundingBox();
+  expect(promptBox).not.toBeNull();
+  expect(promptBox.height).toBeGreaterThanOrEqual(92);
+});
+
+test('new session stays focused and usable on phone and desktop', async ({ page }, testInfo) => {
+  test.skip(!['mobile-compact', 'desktop'].includes(testInfo.project.name));
+
+  await page.goto('/');
+  await page.locator('#open-new-session-button').click();
+
+  const pageSurface = page.locator('.new-session-page');
+  const form = page.locator('#new-session-form');
+  const pathInput = page.locator('#new-cwd-input');
+  await expect(pageSurface).toBeVisible();
+  await expect(form).toBeVisible();
+  await expect(pathInput).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
+
+  const layout = await page.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    bodyScrollWidth: document.body.scrollWidth,
+    documentScrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(Math.max(layout.bodyScrollWidth, layout.documentScrollWidth))
+    .toBeLessThanOrEqual(layout.viewportWidth + 1);
+
+  const formBox = await form.boundingBox();
+  const inputBox = await pathInput.boundingBox();
+  expect(formBox).not.toBeNull();
+  expect(inputBox).not.toBeNull();
+  expect(inputBox.height).toBeGreaterThanOrEqual(92);
+  if (testInfo.project.name === 'desktop') {
+    expect(formBox.width).toBeLessThanOrEqual(560);
+    await expect(page.locator('.desktop-new-pane')).toBeVisible();
+    await expect(page.locator('#new-session-cancel-button')).toHaveText('Back');
+  } else {
+    await expectTouchTarget(page.locator('#back-to-list-button'));
+    await expect(page.locator('#new-session-cancel-button')).toHaveText('Back');
+    await expect(page.locator('.desktop-new-pane')).toHaveCount(0);
+  }
+
+  await page.screenshot({
+    path: `/tmp/codex-web-new-session-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  const emptyState = page.locator('.new-session-empty-state');
+  const centeredComposer = page.locator('.composer-wrap.is-centered');
+  await expect(emptyState).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI 只是工具，其回答未必正确无误。' })).toBeVisible();
+  await expect(centeredComposer).toBeVisible();
+  await expect(page.locator('#timeline')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+  const emptyLayout = await emptyState.evaluate((element) => {
+    const stateBox = element.getBoundingClientRect();
+    const composerBox = element.querySelector('.composer-wrap.is-centered')?.getBoundingClientRect();
+    return composerBox ? {
+      stateWidth: stateBox.width,
+      composerWidth: composerBox.width,
+      composerLeft: composerBox.left,
+      composerRight: composerBox.right,
+      stateLeft: stateBox.left,
+      stateRight: stateBox.right,
+    } : null;
+  });
+  expect(emptyLayout).not.toBeNull();
+  expect(emptyLayout.composerWidth).toBeLessThanOrEqual(760);
+  expect(emptyLayout.composerLeft).toBeGreaterThanOrEqual(emptyLayout.stateLeft - 1);
+  expect(emptyLayout.composerRight).toBeLessThanOrEqual(emptyLayout.stateRight + 1);
+  await page.screenshot({
+    path: `/tmp/codex-web-new-session-empty-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+
+  if (testInfo.project.name === 'mobile-compact') {
+    await page.locator('#prompt-input').fill('First line\nSecond line\nThird line\nFourth line');
+    await page.getByRole('button', { name: 'Expand message editor' }).click();
+    await expect(page.locator('#composer-form')).toHaveClass(/\bis-expanded\b/u);
+    await expect(page.locator('.new-session-slogan')).toBeHidden();
+    const expandedBox = await page.locator('#composer-form').boundingBox();
+    expect(expandedBox).not.toBeNull();
+    expect(expandedBox.height).toBeGreaterThanOrEqual(420);
+  }
 });
 
 test('reasoning summaries use plain message borders without timeline ornaments', async ({ page }, testInfo) => {
@@ -611,11 +792,11 @@ test('sandboxed HTML preview blocks scripts, remote assets, and refresh navigati
   await expect(htmlLink).toBeFocused();
 });
 
-test('archived sessions use a compact filter and a clear restore icon', async ({ page }, testInfo) => {
+test('archived sessions use a visible filter and a clear restore icon', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile-compact', 'The compact mobile viewport covers archive controls.');
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Archived sessions' }).click();
+  await page.locator('[data-sort-mode="archived"]').click();
 
   await expect(page.locator('[data-session-id="session_browser_archived"]')).toBeVisible();
   const restoreButton = page.getByRole('button', { name: 'Unarchive' });
@@ -632,7 +813,7 @@ test('opening an archived session never restores it to recents', async ({ page }
   test.skip(testInfo.project.name !== 'mobile-portrait', 'One phone viewport covers archive scope isolation.');
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Archived sessions' }).click();
+  await page.locator('[data-sort-mode="archived"]').click();
   await page.locator('[data-session-id="session_browser_archived"]').click();
   await expect(page.locator('.read-only-composer-wrap')).toBeVisible();
 
@@ -759,7 +940,8 @@ test('Chinese work details render symbols and activity labels without escaped en
   await expect(dialog).toContainText('本轮活动');
   await expect(dialog).toContainText('执行 1 · 修改 2 个文件');
   await expect(dialog).toContainText('packages/codex-web/public/styles.css +1');
-  await expect(page.locator('#close-work-details-button')).toHaveText('×');
+  await expect(page.locator('#close-work-details-button')).toHaveAttribute('aria-label', '关闭工作详情');
+  await expect(page.locator('#close-work-details-button .button-icon')).toBeVisible();
   await expect(dialog).not.toContainText(/&(?:times|middot|#\d+);/u);
   await page.screenshot({
     path: '/tmp/codex-web-work-dialog-zh-mobile-compact.png',
@@ -835,14 +1017,13 @@ test('settings keep appearance and new-session defaults separated without overfl
   await expect(settings.getByText('New sessions on this device', { exact: true })).toBeVisible();
   await expect(settings.locator('#default-model-select')).toHaveValue('gpt-5.6-sol');
   await expect(settings.locator('#default-reasoning-select')).toHaveValue('ultra');
-  await expect(settings.locator('[data-app-theme]')).toHaveCount(11);
+  await expect(settings.locator('[data-app-theme]')).toHaveCount(4);
 
-  for (const [theme, chromeColor] of [
-    ['amber', '#18181b'],
-    ['one-dark', '#21252b'],
-    ['gruvbox', '#1d2021'],
-    ['catppuccin', '#1e1e2e'],
-    ['dracula', '#282a36'],
+  for (const [theme, chromeColor, colorScheme] of [
+    ['retro', '#fcf9f2', 'light'],
+    ['dark-gold', '#18181a', 'dark'],
+    ['oled-black', '#000000', 'dark'],
+    ['fresh-light', '#f4f5f7', 'light'],
   ]) {
     await settings.locator(`[data-app-theme="${theme}"]`).click();
     await expect(settings.locator(`[data-app-theme="${theme}"]`)).toHaveAttribute('aria-pressed', 'true');
@@ -857,7 +1038,7 @@ test('settings keep appearance and new-session defaults separated without overfl
       savedTheme: theme,
       chromeColor,
       background: chromeColor,
-      colorScheme: 'dark',
+      colorScheme,
     });
   }
 
@@ -880,6 +1061,120 @@ test('settings keep appearance and new-session defaults separated without overfl
     path: `/tmp/codex-web-browser-${testInfo.project.name}-settings.png`,
     fullPage: true,
   });
+});
+
+test('four themes keep canvas and chat surfaces aligned', async ({ page }, testInfo) => {
+  test.skip(!['mobile-compact', 'desktop'].includes(testInfo.project.name), 'One mobile and one desktop viewport cover theme surfaces.');
+
+  await page.goto('/');
+  for (const theme of ['retro', 'dark-gold', 'oled-black', 'fresh-light']) {
+    await page.evaluate((nextTheme) => {
+      window.localStorage.setItem('codexWebTheme', nextTheme);
+      window.localStorage.removeItem('codexWebWorkspaceState');
+    }, theme);
+    await page.reload();
+    await expect(page.locator('.session-list').first()).toBeVisible();
+
+    await page.locator('#open-new-session-button').click();
+    await expect(page.getByRole('heading', { name: '开启新会话' })).toBeVisible();
+    await expect(page.locator('#new-session-form')).toBeVisible();
+    const newSessionSurfaces = await page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      const pageElement = document.querySelector('.new-session-page');
+      const hero = document.querySelector('.new-session-hero');
+      const card = document.querySelector('.new-session-card');
+      const field = document.querySelector('#new-project-select, #new-cwd-input');
+      const pageBox = pageElement.getBoundingClientRect();
+      const heroBox = hero.getBoundingClientRect();
+      return {
+        shared: root.getPropertyValue('--bg-user-shared').trim(),
+        base: root.getPropertyValue('--bg-base').trim(),
+        card: getComputedStyle(card).backgroundColor,
+        field: getComputedStyle(field).backgroundColor,
+        centerDelta: Math.abs((heroBox.top + heroBox.height / 2) - (pageBox.top + pageBox.height / 2)),
+      };
+    });
+    const newSessionExpected = await page.evaluate(({ shared, base }) => {
+      const probe = document.createElement('div');
+      document.body.appendChild(probe);
+      probe.style.backgroundColor = shared;
+      const sharedColor = getComputedStyle(probe).backgroundColor;
+      probe.style.backgroundColor = base;
+      const baseColor = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return { sharedColor, baseColor };
+    }, newSessionSurfaces);
+    expect(newSessionSurfaces.card).toBe(newSessionExpected.sharedColor);
+    expect(newSessionSurfaces.field).toBe(newSessionExpected.baseColor);
+    expect(newSessionSurfaces.centerDelta).toBeLessThanOrEqual(2);
+    await page.screenshot({
+      path: '/tmp/codex-web-new-form-' + theme + '-' + testInfo.project.name + '.png',
+      fullPage: true,
+    });
+    await page.locator('#new-session-cancel-button').click();
+    await expect(page.locator('.session-list').first()).toBeVisible();
+
+    const listSurfaces = await page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      const projectRail = document.querySelector('.desktop-project-rail, .mobile-project-drawer');
+      return {
+        base: root.getPropertyValue('--bg-base').trim(),
+        panel: root.getPropertyValue('--bg-panel').trim(),
+        card: root.getPropertyValue('--bg-card').trim(),
+        list: getComputedStyle(document.querySelector('.session-list')).backgroundColor,
+        projectRail: getComputedStyle(projectRail).backgroundColor,
+        normalCard: getComputedStyle(document.querySelector('.session-card:not(.is-active)')).backgroundColor,
+      };
+    });
+
+    await page.locator('[data-session-id="session_browser_history"]').click();
+    await expect(page.locator('.message-card.user').last()).toBeVisible();
+    await expect(page.locator('.message-card.assistant').last()).toBeVisible();
+    const chatSurfaces = await page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      const chatCanvas = document.querySelector('#timeline')?.closest('.desktop-chat-pane, .screen');
+      return {
+        base: root.getPropertyValue('--bg-base').trim(),
+        shared: root.getPropertyValue('--bg-user-shared').trim(),
+        system: root.getPropertyValue('--msg-sys-bg').trim(),
+        canvas: getComputedStyle(chatCanvas).backgroundColor,
+        user: getComputedStyle(document.querySelector('.message-card.user')).backgroundColor,
+        assistant: getComputedStyle(document.querySelector('.message-card.assistant')).backgroundColor,
+        composer: getComputedStyle(document.querySelector('#composer-form')).backgroundColor,
+      };
+    });
+
+    const expectedColors = await page.evaluate((tokens) => {
+      const probe = document.createElement('div');
+      document.body.appendChild(probe);
+      const resolved = {};
+      for (const [key, token] of Object.entries(tokens)) {
+        probe.style.backgroundColor = token;
+        resolved[key] = getComputedStyle(probe).backgroundColor;
+      }
+      probe.remove();
+      return resolved;
+    }, {
+      base: listSurfaces.base,
+      panel: listSurfaces.panel,
+      card: listSurfaces.card,
+      shared: chatSurfaces.shared,
+      system: chatSurfaces.system,
+    });
+
+    expect(listSurfaces.list).toBe(expectedColors.base);
+    expect(listSurfaces.projectRail).toBe(expectedColors.panel);
+    expect(listSurfaces.normalCard).toBe(expectedColors.card);
+    expect(chatSurfaces.canvas).toBe(expectedColors.base);
+    expect(chatSurfaces.user).toBe(expectedColors.shared);
+    expect(chatSurfaces.composer).toBe(expectedColors.shared);
+    expect(chatSurfaces.assistant).toBe(expectedColors.system);
+
+    await page.screenshot({
+      path: '/tmp/codex-web-final-' + theme + '-' + testInfo.project.name + '.png',
+      fullPage: true,
+    });
+  }
 });
 
 test('webhook settings keep the key copyable after enable and rotation', async ({ page, context }, testInfo) => {

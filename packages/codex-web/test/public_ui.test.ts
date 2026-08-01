@@ -10,6 +10,11 @@ const manifestUrl = new URL('../public/manifest.webmanifest', import.meta.url);
 const serviceWorkerUrl = new URL('../public/service-worker.js', import.meta.url);
 const pwaPullRefreshUrl = new URL('../public/pwa-pull-refresh.js', import.meta.url);
 const themeInitUrl = new URL('../public/theme-init.js', import.meta.url);
+const uiCopyUrl = new URL('../public/ui-copy.js', import.meta.url);
+const uiKitUrl = new URL('../public/ui-kit.js', import.meta.url);
+const attachmentUtilsUrl = new URL('../public/attachment-utils.js', import.meta.url);
+const markdownRendererUrl = new URL('../public/markdown-renderer.js', import.meta.url);
+const adminUiUrl = new URL('../public/admin-ui.js', import.meta.url);
 
 test('mobile UI exposes iOS PWA install metadata and registers a service worker', async () => {
   const [index, app, manifest, serviceWorker, themeInit] = await Promise.all([
@@ -26,13 +31,19 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.equal(parsedManifest.display, 'standalone');
   assert.equal(parsedManifest.orientation, undefined);
   assert.equal(parsedManifest.start_url, '/');
-  assert.equal(parsedManifest.theme_color, '#f8f3e3');
-  assert.equal(parsedManifest.background_color, '#f8f3e3');
+  assert.equal(parsedManifest.theme_color, '#fcf9f2');
+  assert.equal(parsedManifest.background_color, '#fcf9f2');
   assert.match(index, /<link rel="manifest" href="\/manifest\.webmanifest\?v=__CODEX_WEB_BUILD_ID__">/u);
   assert.match(index, /<link rel="icon" href="\/icon\.svg\?v=__CODEX_WEB_BUILD_ID__" type="image\/svg\+xml">/u);
   assert.match(index, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png\?v=__CODEX_WEB_BUILD_ID__">/u);
-  assert.match(index, /<meta name="theme-color" content="#f8f3e3">/u);
+  assert.match(index, /<meta name="theme-color" content="#fcf9f2">/u);
   assert.match(index, /<script src="\/theme-init\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>\s*<link rel="stylesheet"/u);
+  assert.match(index, /<script src="\/ui-kit\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script src="\/ui-copy\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script src="\/attachment-utils\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script src="\/markdown-renderer\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script src="\/admin-ui\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.ok(index.indexOf('src="/attachment-utils.js') < index.indexOf('src="/app.js'));
   assert.doesNotMatch(index, /screen-orientation|x5-orientation/u);
   assert.match(index, /<meta name="apple-mobile-web-app-capable" content="yes">/u);
   assert.match(index, /<meta name="apple-mobile-web-app-title" content="Codex">/u);
@@ -47,6 +58,11 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(serviceWorker, /'\/icon\.svg'/u);
   assert.match(serviceWorker, /'\/icon-192\.png'/u);
   assert.match(serviceWorker, /'\/theme-init\.js'/u);
+  assert.match(serviceWorker, /'\/ui-kit\.js'/u);
+  assert.match(serviceWorker, /'\/ui-copy\.js'/u);
+  assert.match(serviceWorker, /'\/attachment-utils\.js'/u);
+  assert.match(serviceWorker, /'\/markdown-renderer\.js'/u);
+  assert.match(serviceWorker, /'\/admin-ui\.js'/u);
   assert.match(serviceWorker, /'\/icon-512\.png'/u);
   assert.match(serviceWorker, /'\/apple-touch-icon\.png'/u);
   assert.match(serviceWorker, /self\.addEventListener\('install'/u);
@@ -56,7 +72,7 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(serviceWorker, /cache\.put\(request, response\.clone\(\)\)/u);
   assert.match(serviceWorker, /VERSIONED_STATIC_ASSET_PATHS\.has\(url\.pathname\)/u);
   assert.match(serviceWorker, /url\.searchParams\.get\('v'\)/u);
-  assert.match(themeInit, /let theme = 'sunny'/u);
+  assert.match(themeInit, /let theme = 'retro'/u);
   assert.match(themeInit, /document\.documentElement\.dataset\.theme = theme/u);
 });
 
@@ -1482,17 +1498,17 @@ test('mobile keeps New visible while secondary actions live in the project drawe
   api.state.mobileSidebarOpen = true;
 
   const html = api.renderSessionList().innerHTML;
-  const topbarMain = html.match(/<div class="topbar-main">([\s\S]*?)<\/div>\s*<\/header>/u)?.[1] || '';
+  const topbar = html.match(/<header class="topbar page-topbar mobile-session-topbar">([\s\S]*?)<\/header>/u)?.[1] || '';
   const drawerFooter = html.match(/<div class="project-rail-footer">([\s\S]*?)<\/div>/u)?.[1] || '';
 
-  assert.match(topbarMain, /mobile-sidebar-toggle-button[\s\S]*mobile-session-sort-toggle/u);
-  assert.doesNotMatch(topbarMain, /open-reports-button/u);
-  assert.match(topbarMain, /open-new-session-button/u);
-  assert.doesNotMatch(topbarMain, /open-app-settings-button/u);
+  assert.match(topbar, /mobile-sidebar-toggle-button[\s\S]*mobile-session-sort-toggle/u);
+  assert.doesNotMatch(topbar, /open-reports-button/u);
+  assert.match(topbar, /open-new-session-button/u);
+  assert.doesNotMatch(topbar, /open-app-settings-button/u);
   assert.doesNotMatch(drawerFooter, /open-reports-button|>Reports<\/button>/u);
   assert.doesNotMatch(drawerFooter, /open-new-session-button/u);
-  assert.match(drawerFooter, /id="open-app-settings-button"[\s\S]*>Setting<\/button>/u);
-  assert.match(drawerFooter, /id="open-admin-console-button"[\s\S]*>Admin Console<\/button>/u);
+  assert.match(drawerFooter, /id="open-app-settings-button"[\s\S]*<span>Setting<\/span><\/button>/u);
+  assert.match(drawerFooter, /id="open-admin-console-button"[\s\S]*<span>Admin Console<\/span><\/button>/u);
   assert.doesNotMatch(drawerFooter, /rail-show-sessions-button/u);
 });
 
@@ -1517,11 +1533,17 @@ test('admin console renders four-page management layout with RBAC controls', asy
 
   let html = api.renderAdminConsole().innerHTML;
   assert.match(html, /class="admin-layout"/u);
+  assert.match(html, /data-admin-current-page="sessions"/u);
   assert.match(html, /class="admin-sidebar"/u);
   assert.match(html, /data-admin-page="projects"/u);
   assert.match(html, /data-admin-page="roles"/u);
   assert.match(html, /data-admin-page="users"/u);
   assert.match(html, /data-admin-page="sessions"/u);
+  assert.match(html, /data-admin-page="sessions" aria-pressed="true" aria-current="page"/u);
+  assert.match(html, /id="admin-session-user-filter"/u);
+
+  api.state.admin.page = 'projects';
+  html = api.renderAdminConsole().innerHTML;
 
   assert.match(html, /id="admin-project-form"/u);
   assert.doesNotMatch(html, /Project ID/u);
@@ -1583,6 +1605,63 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.match(html, /<option value="project_a" data-i18n-skip>a<\/option>/u);
   assert.match(html, /class="admin-row-main" data-i18n-skip>a<\/span>/u);
   assert.match(html, /Observer Mode/u);
+});
+
+test('admin navigation binds only page buttons so container bubbling cannot restore the old page', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  const { api } = await loadAppHarness();
+
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+  api.state.admin.loaded = true;
+  api.state.admin.page = 'projects';
+
+  const html = api.renderAdminConsole().innerHTML;
+  assert.match(html, /data-admin-current-page="projects"/u);
+  assert.doesNotMatch(html, /class="admin-layout" data-admin-page=/u);
+  assert.match(app, /querySelectorAll\('button\[data-admin-page\]'\)/u);
+  assert.doesNotMatch(app, /querySelectorAll\('\[data-admin-page\]'\)/u);
+});
+
+test('admin console defaults to audit, exposes selected-session state, and protects the current account', async () => {
+  const { api } = await loadAppHarness({ viewportWidth: 1280, viewportHeight: 844, desktopPointer: true });
+
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'user_admin', isAdmin: true } };
+  api.state.admin.loaded = true;
+  api.state.admin.settings = { multiUserEnabled: true };
+  api.state.admin.projects = [{ id: 'project_a', cwd: '/repo/a', displayName: 'Project Alpha' }];
+  api.state.admin.roles = [{ id: 'role_admin', name: 'Admin', isAdmin: true, projectGrants: [] }];
+  api.state.admin.users = [{
+    id: 'user_admin',
+    username: 'admin',
+    email: 'admin@example.com',
+    enabled: true,
+    roleId: 'role_admin',
+    roleIds: ['role_admin'],
+  }];
+  api.state.admin.sessions = [{
+    id: 'session_1',
+    ownerUserId: 'user_admin',
+    projectId: 'project_a',
+    summary: 'Audit this session',
+  }];
+
+  let html = api.renderAdminConsole().innerHTML;
+  assert.match(html, /data-admin-page="sessions" aria-pressed="true" aria-current="page"/u);
+  assert.match(html, /class="admin-nav-count" data-i18n-skip>1[<][/]span>/u);
+  assert.match(html, /class="admin-observed-panel is-empty"/u);
+  assert.match(html, /No session selected/u);
+
+  api.state.admin.observedSession = { id: 'session_1' };
+  html = api.renderAdminConsole().innerHTML;
+  assert.match(html, /class="admin-row admin-session-row" data-selected="true"/u);
+  assert.match(html, /data-admin-session-id="session_1" aria-pressed="true"/u);
+
+  api.state.admin.observedSession = null;
+  api.state.admin.page = 'users';
+  html = api.renderAdminConsole().innerHTML;
+  assert.match(html, /Current account/u);
+  assert.match(html, /data-admin-toggle-user-id="user_admin"[^>]* disabled/u);
+  assert.match(html, /data-admin-delete-user-id="user_admin" disabled/u);
 });
 
 test('admin session audit renders session summaries', async () => {
@@ -1746,6 +1825,7 @@ test('admin project form creates with POST and edits with PATCH while retaining 
 
   api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
   api.state.admin.loaded = true;
+  api.state.admin.page = 'projects';
 
   const html = api.renderAdminConsole().innerHTML;
   assert.match(html, /name="activeSessionLimit"/u);
@@ -2669,18 +2749,32 @@ test('share routes render the full shared session context', async () => {
 });
 
 test('admin console uses dense mobile-safe management rows', async () => {
-  const [app, styles] = await Promise.all([
-    readFile(appUrl, 'utf8'),
+  const [adminUi, styles] = await Promise.all([
+    readFile(adminUiUrl, 'utf8'),
     readFile(stylesUrl, 'utf8'),
   ]);
 
   assert.match(styles, /\.admin-console-screen\s*\{[^}]*overflow-y:\s*auto;/su);
+  assert.match(styles, /\.admin-console-page\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 72%,\s*var\(--bg\)\);/su);
   assert.match(styles, /\.admin-list\s*\{[^}]*display:\s*grid;/su);
+  assert.match(styles, /\.admin-sidebar\s*\{[^}]*border:\s*1px solid color-mix\(in srgb,\s*var\(--border\) 52%,\s*transparent\);/su);
+  assert.match(styles, /\.admin-sidebar\s*\{[^}]*border-radius:\s*12px;/su);
+  assert.match(styles, /\.admin-sidebar-button\[aria-pressed="true"\]\s*\{[^}]*border-left:\s*3px solid var\(--accent\);/su);
+  assert.match(styles, /\.admin-editor-panel,\s*\.admin-collection-panel\s*\{[^}]*border-radius:\s*12px;/su);
+  assert.match(styles, /\.admin-filter-row\s*\{[^}]*border-radius:\s*12px;/su);
+  assert.match(styles, /\.admin-console-page :where\(input:not\(\[type="checkbox"\]\),\s*select,\s*textarea\):focus-visible\s*\{[^}]*box-shadow:\s*0 0 0 3px/su);
   assert.match(styles, /\.admin-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/su);
+  assert.match(styles, /\.admin-row\s*\{[^}]*border-radius:\s*10px;/su);
+  assert.match(styles, /\.admin-row\s*\{[^}]*box-shadow:\s*0 1px 3px/su);
+  assert.match(styles, /\.admin-session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.admin-session-row\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(styles, /\.admin-session-row\s*\{[^}]*background:\s*var\(--panel\);/su);
+  assert.match(styles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*border-left-color:\s*var\(--accent\);/su);
   assert.match(styles, /\.admin-row-main\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
   assert.match(styles, /\.admin-session-open\s*\{[^}]*text-align:\s*left;/su);
-  assert.match(app, /class="admin-table admin-project-table"/u);
-  assert.match(app, /<td data-label="\$\{escapeAttribute\(t\('CWD'\)\)\}"/u);
+  assert.match(styles, /\.admin-console-page \.danger,[\s\S]*\.admin-console-page \.danger:focus-visible:not\(:disabled\)\s*\{[^}]*color:\s*var\(--danger\);/su);
+  assert.match(adminUi, /class="admin-table admin-project-table"/u);
+  assert.match(adminUi, /<td data-label="\$\{a\(t\('CWD'\)\)\}"/u);
   assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*\.admin-project-table thead\s*\{[^}]*display:\s*none;/u);
   assert.match(styles, /\.admin-project-table td:first-child\s*\{[^}]*grid-column:\s*1 \/ -1;/su);
 });
@@ -2741,42 +2835,35 @@ test('mobile settings page title is centered with back on the left', async () =>
 test('app settings persist theme and default thread settings', async () => {
   const { api, storage, context } = await loadAppHarness();
 
-  assert.equal(api.state.theme, 'sunny');
+  assert.equal(api.state.theme, 'retro');
 
   api.state.models = [
     { id: 'gpt-5.4', label: 'GPT 5.4' },
     { id: 'gpt-5.4-mini', label: 'GPT 5.4 Mini' },
   ];
 
-  api.applyTheme('light');
-  assert.equal(storage.get('codexWebTheme'), 'light');
-  assert.equal(context.document.documentElement.dataset.theme, 'light');
+  api.applyTheme('fresh-light');
+  assert.equal(storage.get('codexWebTheme'), 'fresh-light');
+  assert.equal(context.document.documentElement.dataset.theme, 'fresh-light');
 
-  api.applyTheme('nord');
-  assert.equal(storage.get('codexWebTheme'), 'nord');
-  assert.equal(context.document.documentElement.dataset.theme, 'nord');
+  api.applyTheme('dark-gold');
+  assert.equal(storage.get('codexWebTheme'), 'dark-gold');
+  assert.equal(context.document.documentElement.dataset.theme, 'dark-gold');
 
-  api.applyTheme('catppuccin');
-  assert.equal(storage.get('codexWebTheme'), 'catppuccin');
-  assert.equal(context.document.documentElement.dataset.theme, 'catppuccin');
+  api.applyTheme('oled-black');
+  assert.equal(storage.get('codexWebTheme'), 'oled-black');
+  assert.equal(context.document.documentElement.dataset.theme, 'oled-black');
 
   api.applyTheme('unsupported');
-  assert.equal(storage.get('codexWebTheme'), 'sunny');
-  assert.equal(context.document.documentElement.dataset.theme, 'sunny');
+  assert.equal(storage.get('codexWebTheme'), 'retro');
+  assert.equal(context.document.documentElement.dataset.theme, 'retro');
 
   const settingsHtml = api.renderAppSettings().innerHTML;
   for (const theme of [
-    'sunny',
-    'light',
-    'dark',
-    'nord',
-    'forest',
-    'rose',
-    'amber',
-    'one-dark',
-    'gruvbox',
-    'catppuccin',
-    'dracula',
+    'retro',
+    'dark-gold',
+    'oled-black',
+    'fresh-light',
   ]) {
     assert.match(settingsHtml, new RegExp(`data-app-theme="${theme}"`, 'u'));
   }
@@ -3230,7 +3317,7 @@ test('global website title loads from the backend and saves through the settings
   assert.equal(JSON.parse(fetchCalls[5].options.body).siteTitle, 'New Team Title');
 });
 
-test('app language defaults to English and keeps send as a localized text control', async () => {
+test('app language defaults to English and keeps the icon send control accessible', async () => {
   const { api, storage, context } = await loadAppHarness();
 
   assert.equal(api.state.language, 'en');
@@ -3246,7 +3333,8 @@ test('app language defaults to English and keeps send as a localized text contro
   assert.match(settingsHtml, /data-app-language="zh-CN"[^>]*>中文<\/button>/u);
 
   const chatHtml = api.renderChat().innerHTML;
-  assert.match(chatHtml, /id="send-button"[^>]*aria-label="Send"[^>]*>Send<\/button>/u);
+  assert.match(chatHtml, /id="send-button"[^>]*aria-label="Send"[^>]*title="Send"/u);
+  assert.match(chatHtml, /id="send-button"[\s\S]*<span class="visually-hidden">Send<\/span>[\s\S]*<\/button>/u);
 });
 
 test('Chinese language setting localizes settings, chat, and admin management UI', async () => {
@@ -3279,10 +3367,10 @@ test('Chinese language setting localizes settings, chat, and admin management UI
   assert.match(settingsHtml, /网站标题/u);
   assert.match(settingsHtml, /此设备的新会话/u);
   assert.match(settingsHtml, /退出登录/u);
-  for (const themeName of ['深石墨琥珀', '原子深色', '复古暖色', '摩卡柔彩', '德古拉深色']) {
+  for (const themeName of ['复古黄', '黑金', '纯粹黑', '清新白']) {
     assert.match(settingsHtml, new RegExp(`>${themeName}<`, 'u'));
   }
-  for (const themeName of ['Graphite Amber', 'One Dark Pro', 'Gruvbox Dark', 'Catppuccin Mocha', 'Dracula Dark']) {
+  for (const themeName of ['Retro', 'Dark Gold', 'OLED Black', 'Fresh Light']) {
     assert.doesNotMatch(settingsHtml, new RegExp(`>${themeName}<`, 'u'));
   }
 
@@ -3290,9 +3378,10 @@ test('Chinese language setting localizes settings, chat, and admin management UI
   api.state.currentSession = { id: 'session_1', cwd: '/repo' };
   const chatHtml = api.renderChat().innerHTML;
   assert.match(chatHtml, /placeholder="输入消息"/u);
-  assert.match(chatHtml, /id="send-button"[^>]*aria-label="发送"[^>]*>发送<\/button>/u);
-  assert.doesNotMatch(chatHtml, />Send<\/button>/u);
+  assert.match(chatHtml, /id="send-button"[^>]*aria-label="发送"[^>]*title="发送"/u);
+  assert.match(chatHtml, /id="send-button"[\s\S]*<span class="visually-hidden">发送<\/span>[\s\S]*<\/button>/u);
 
+  api.state.admin.page = 'projects';
   const adminHtml = api.renderAdminConsole().innerHTML;
   assert.match(adminHtml, /管理控制台/u);
   assert.match(adminHtml, /项目管理/u);
@@ -3340,7 +3429,7 @@ test('Chinese UI keeps model and reasoning option labels untranslated', async ()
   assert.doesNotMatch(sessionReasoning, />中<\/option>|>极高<\/option>/u);
 });
 
-test('Chinese session settings localize the running-state card and keep the close symbol compact', async () => {
+test('Chinese session settings localize the running-state card and keep the close action as an icon', async () => {
   const { api } = await loadAppHarness();
   api.applyLanguage('zh-CN');
   api.state.authSession = { id: 'auth_1' };
@@ -3355,7 +3444,7 @@ test('Chinese session settings localize the running-state card and keep the clos
 
   assert.match(html, /data-session-state="running"[\s\S]*当前会话正在运行/u);
   assert.match(html, /id="stop-button"[^>]*>停止<\/button>/u);
-  assert.match(html, /id="settings-drawer-close"[\s\S]*?<span aria-hidden="true">×<\/span>/u);
+  assert.match(html, /id="settings-drawer-close"[\s\S]*?<svg class="button-icon"/u);
   assert.doesNotMatch(html, /&amp;times;|&times;/u);
 });
 
@@ -3638,7 +3727,8 @@ test('Chinese new-session project picker skips bulk localization for many projec
 
   assert.match(html, /<select id="new-project-select" name="projectId" data-i18n-skip>/u);
   assert.match(html, /<option value="project_0" selected data-i18n-skip>Send project 0<\/option>/u);
-  assert.match(html, /<button class="primary primary-action" type="submit">开始<\/button>/u);
+  assert.match(html, /id="new-session-cancel-button">返回<\/button>/u);
+  assert.match(html, /<button class="primary primary-action new-session-start-button" type="submit">开始<\/button>/u);
   assert.doesNotMatch(html, /发送 project 0/u);
 });
 
@@ -3704,14 +3794,28 @@ test('pull refresh indicator keeps readable themed colors', async () => {
 test('session card titles reserve two lines while latest input stays compact', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
+  assert.match(styles, /\.session-list\s*\{[^}]*gap:\s*8px;/su);
+  assert.match(styles, /\.session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.mobile-session-topbar\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.session-card\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(styles, /\.session-card\s*\{[^}]*background:\s*var\(--panel\);/su);
+  assert.match(styles, /\.session-card\s*\{[^}]*box-shadow:\s*0 1px 4px/su);
+  assert.match(styles, /\.session-card,\s*\.path-choice\s*\{[^}]*border-radius:\s*12px;/su);
+  assert.match(styles, /\.session-card:hover\s*\{[^}]*box-shadow:\s*0 2px 8px/su);
+  assert.match(styles, /\.session-card\.is-active\s*\{[^}]*border-left:\s*4px solid var\(--accent\);/su);
+  assert.match(styles, /\.session-card\.is-active\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(styles, /\.session-card-actions \.compact-button\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(styles, /\.session-card-actions \.compact-button\s*\{[^}]*border-radius:\s*10px;/su);
   assert.match(styles, /\.session-title\s*\{[^}]*display:\s*-webkit-box;/su);
   assert.match(styles, /\.session-title\s*\{[^}]*-webkit-box-orient:\s*vertical;/su);
   assert.match(styles, /\.session-title\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
   assert.match(styles, /\.session-title\s*\{[^}]*min-height:\s*calc\(var\(--session-summary-line-height\)\s*\*\s*2\);/su);
-  assert.doesNotMatch(styles, /\.session-title\s*\{[^}]*font-weight:\s*(?:600|650|700|bold);/su);
+  assert.match(styles, /\.session-title\s*\{[^}]*font-weight:\s*500;/su);
   assert.match(styles, /\.session-card-open\s*\{[^}]*font-weight:\s*400;/su);
   assert.match(styles, /body\s*\{[^}]*font-weight:\s*450;/su);
   assert.match(styles, /\.session-project\s*\{[^}]*font-weight:\s*650;/su);
+  assert.match(styles, /\.session-preview,\s*\.session-card-meta,\s*\.path-choice small\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--muted\) 58%,\s*transparent\);/su);
+  assert.match(styles, /\.session-preview,\s*\.session-card-meta,\s*\.path-choice small\s*\{[^}]*font-size:\s*11px;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*white-space:\s*nowrap;/su);
   assert.match(styles, /\.session-preview\s*\{[^}]*text-overflow:\s*ellipsis;/su);
 });
@@ -3724,11 +3828,22 @@ test('new session path entry and primary submit buttons are readable on mobile',
 
   assert.match(app, /<textarea id="new-cwd-input"[^>]*name="cwd"[^>]*rows="3"/u);
   assert.doesNotMatch(app, /<input id="new-cwd-input"[^>]*type="text"/u);
-  assert.match(styles, /\.new-session-page \.panel\s*\{[^}]*width:\s*100%;/su);
+  assert.match(app, /<h1 class="new-session-heading" data-i18n-skip>开启新会话<\/h1>/u);
+  assert.match(app, /class="panel stack new-session-card bg-shared ring-theme"/u);
+  assert.match(styles, /\.new-session-page\s*\{[^}]*align-items:\s*center;/su);
+  assert.match(styles, /\.new-session-page\s*\{[^}]*justify-content:\s*center;/su);
+  assert.match(styles, /\.new-session-page \.new-session-card\s*\{[^}]*max-width:\s*448px;/su);
+  assert.match(styles, /\.new-session-page \.new-session-card\s*\{[^}]*border-radius:\s*24px;/su);
+  assert.match(styles, /\.new-session-page \.new-session-card\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(styles, /\.new-session-card :where\(select,\s*textarea\)\s*\{[^}]*background:\s*var\(--bg-base\);/su);
   assert.match(styles, /\.new-session-page textarea\s*\{[^}]*min-height:\s*92px;/su);
   assert.match(styles, /\.new-session-page textarea\s*\{[^}]*resize:\s*vertical;/su);
   assert.match(styles, /\.primary-action\s*\{[^}]*min-height:\s*48px;/su);
-  assert.match(app, /<button class="\$\{desktop \? 'primary compact-button' : 'primary primary-action'\}" type="submit"\$\{startDisabled \? ' disabled' : ''\}>Start<\/button>/u);
+  assert.match(app, /<button class="primary \$\{desktop \? 'compact-button' : 'primary-action'\} new-session-start-button" type="submit"\$\{startDisabled \? ' disabled' : ''\}>Start<\/button>/u);
+  assert.match(app, /<button class="ghost compact-button new-session-secondary-button" type="button" id="new-session-cancel-button">Back<\/button>/u);
+  assert.match(app, /const newSessionCancelButton = document\.querySelector\('#new-session-cancel-button'\);[\s\S]*showSessionList\(\);/u);
+  assert.match(styles, /\.new-session-secondary-button\s*\{[^}]*background:\s*var\(--bg-base\);/su);
+  assert.match(styles, /\.new-session-secondary-button\s*\{[^}]*color:\s*var\(--text-main\);/su);
   assert.match(app, /<button class="primary primary-action" type="submit">\$\{escapeHtml\(t\('Log in'\)\)\}<\/button>/u);
 });
 
@@ -3769,7 +3884,7 @@ test('sessions navigation remains available during a pending turn', async () => 
   assert.doesNotMatch(app, /async function selectSession\(sessionId\)\s*\{\s*if \(state\.pendingTurn\)/u);
 });
 
-test('message input starts one line and auto-grows to a compact capped height', async () => {
+test('message input uses a roomy wrapped editor and keeps bounded auto-growth', async () => {
   const [styles, app] = await Promise.all([
     readFile(stylesUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
@@ -3779,18 +3894,24 @@ test('message input starts one line and auto-grows to a compact capped height', 
   assert.match(app, /id="composer-expand-button"/u);
   assert.match(app, /function updateComposerExpansionState\(textarea\)/u);
   assert.match(app, /function toggleComposerExpanded\(\)/u);
-  assert.match(app, /class="composer-wrap \$\{composerClassName\}"/u);
-  assert.match(app, /class="composer \$\{composerClassName\}"/u);
+  assert.match(app, /const PROMPT_EXPAND_LINE_THRESHOLD = 4;/u);
+  assert.match(app, /class="composer-wrap \$\{composerClassName\}\$\{centeredClassName\}"/u);
+  assert.match(app, /class="composer bg-shared ring-theme \$\{composerClassName\}\$\{centeredClassName\}"/u);
   assert.match(app, /class="message-editor-shell \$\{composerClassName\}"/u);
-  assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*min-height:\s*38px;/su);
-  assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*max-height:\s*116px;/su);
+  assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*min-height:\s*64px;/su);
+  assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*max-height:\s*160px;/su);
   assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.match(styles, /\.composer\.is-expanded\s*\{/su);
   assert.match(styles, /\.message-editor-shell\s*\{[^}]*position:\s*relative;/su);
   assert.doesNotMatch(styles, /\.message-editor-shell\[data-editor-toggle-visible=/u);
   assert.doesNotMatch(styles, /\.message-editor-shell\.is-expanded textarea\s*\{[^}]*padding-left:/su);
   assert.doesNotMatch(styles, /\.composer-editor-toggle/u);
-  assert.match(styles, /\.composer-leading-controls\s*\{[^}]*gap:\s*6px;/su);
+  assert.match(styles, /\.composer-leading-controls\s*\{[^}]*gap:\s*4px;/su);
+  assert.match(styles, /\.composer-toolbar\s*\{[^}]*justify-content:\s*space-between;/su);
+  assert.match(styles, /@media \(hover:\s*none\),\s*\(pointer:\s*coarse\)[\s\S]*\.compact-composer-row\s*\{[^}]*display:\s*flex;/su);
+  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.message-editor-shell:not\(\.is-expanded\)\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/su);
+  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.message-editor-shell:not\(\.is-expanded\) textarea\s*\{[^}]*min-height:\s*44px;/su);
+  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.message-editor-shell\.is-expanded > \.compact-send\s*\{[^}]*position:\s*absolute;/su);
   assert.match(styles, /\.icon-button\[hidden\]\s*\{[^}]*display:\s*none;/su);
   assert.match(styles, /\.icon-button,\s*\.compact-send,\s*\.compact-refresh\s*\{[^}]*min-height:\s*38px;/su);
   assert.match(styles, /\.icon-button,\s*\.compact-send,\s*\.compact-refresh\s*\{[^}]*padding:\s*0 8px;/su);
@@ -3811,8 +3932,47 @@ test('message input focus uses themed outline instead of browser default blue ri
   const styles = await readFile(stylesUrl, 'utf8');
 
   assert.match(styles, /\.composer textarea:focus\s*\{[^}]*outline:\s*none;/su);
-  assert.match(styles, /\.composer textarea:focus\s*\{[^}]*border-color:\s*color-mix\(in srgb,\s*var\(--accent\)/su);
+  assert.match(styles, /\.composer textarea:focus\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(styles, /\.composer:focus-within\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.doesNotMatch(styles, /\.composer:focus-within\s*\{[^}]*0 0 0 3px color-mix\(in srgb,\s*var\(--accent\)/su);
+  assert.doesNotMatch(styles, /\.composer textarea:focus-visible\s*\{[^}]*outline:\s*2px/su);
   assert.match(styles, /\.message-editor-shell\.is-expanded textarea:focus\s*\{[^}]*box-shadow:\s*none;/su);
+});
+
+test('chat surfaces use soft elevation and preserve asymmetric message corners', async () => {
+  const styles = await readFile(stylesUrl, 'utf8');
+
+  assert.match(styles, /input::placeholder,\s*textarea::placeholder\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--muted\) 58%,\s*transparent\);/su);
+  assert.match(styles, /\.session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.admin-session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.screen\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.desktop-chat-pane\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.message-card\s*\{[^}]*border-color:\s*color-mix\(in srgb,\s*var\(--border\) 24%,\s*transparent\);/su);
+  assert.match(styles, /\.message-card\.assistant\s*\{[^}]*background:\s*var\(--msg-sys-bg\);/su);
+  assert.match(styles, /\.message-card\.system\s*\{[^}]*background:\s*var\(--msg-sys-bg\);/su);
+  assert.match(styles, /\.message-card\s*\{[^}]*border-radius:\s*16px;/su);
+  assert.match(styles, /\.message-card\.assistant\s*\{[^}]*border-top-left-radius:\s*4px;/su);
+  assert.match(styles, /\.message-card\.user\s*\{[^}]*border-top-right-radius:\s*4px;/su);
+  assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*line-height:\s*1\.6;/su);
+  assert.match(styles, /\.composer\s*\{[^}]*border:\s*1px solid transparent;/su);
+  assert.match(styles, /\.composer\.ring-theme\s*\{[^}]*box-shadow:\s*0 0 0 1px color-mix\(in srgb,\s*var\(--border\) 52%,\s*transparent\)/su);
+  assert.match(styles, /\.message-card\.user\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(styles, /\.composer\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(styles, /\.composer\s*\{[^}]*border-radius:\s*32px;/su);
+  assert.match(styles, /\.composer\s*\{[^}]*box-shadow:[^;]*0 16px 40px/su);
+  assert.match(styles, /\.composer-wrap\s*\{[^}]*border-top:\s*0;/su);
+  assert.match(styles, /\.composer-wrap\s*\{[^}]*background:\s*transparent;/su);
+  assert.match(styles, /\.composer-toolbar\s*\{[^}]*background:\s*transparent;/su);
+  assert.match(styles, /\.compact-send\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(styles, /\.compact-send\s*\{[^}]*box-shadow:\s*0 4px 10px/su);
+  assert.match(styles, /\.new-session-empty-state\s*\{[^}]*display:\s*flex;/su);
+  assert.match(styles, /\.new-session-empty-state\s*\{[^}]*justify-content:\s*center;/su);
+  assert.match(styles, /\.new-session-slogan\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--bg-user-shared\) 30%,\s*var\(--text-main\)\);/su);
+  assert.match(styles, /\.new-session-slogan\s*\{[^}]*font-size:\s*20px;/su);
+  assert.match(styles, /\.new-session-empty-state \.composer-wrap\.is-centered\s*\{[^}]*width:\s*min\(100%,\s*760px\);/su);
+  assert.match(styles, /\.new-session-empty-state \.composer\.is-centered\s*\{[^}]*border-radius:\s*28px;/su);
+  assert.match(styles, /\.new-session-empty-state \.composer\.is-centered\s*\{[^}]*box-shadow:\s*0 18px 48px/su);
+  assert.match(styles, /\.new-session-empty-state:has\(\.composer\.is-expanded\) \.new-session-slogan\s*\{[^}]*display:\s*none;/su);
 });
 
 test('chat composer renders attachment control and keeps the session menu in the topbar', async () => {
@@ -4065,7 +4225,7 @@ test('hydrated user messages hide attachment prompt metadata and render attachme
   assert.doesNotMatch(html, /localImage/u);
 });
 
-test('composer shows external expand above Attach and keeps session menu in the topbar', async () => {
+test('mobile composer keeps the WeChat-style row while desktop retains the svg toolbar', async () => {
   const { api } = await loadAppHarness();
 
   api.state.view = 'chat';
@@ -4078,10 +4238,10 @@ test('composer shows external expand above Attach and keeps session menu in the 
   assert.doesNotMatch(shortHtml, /id="settings-toggle"[^>]*hidden/u);
   assert.match(shortHtml, /id="composer-expand-button"[^>]*hidden/u);
   assert.match(shortHtml, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*>[\s\S]*class="button-icon button-icon-more"[\s\S]*<\/button>/u);
-  assert.match(shortHtml, /id="attach-button"[^>]*>\+<\/button>/u);
+  assert.match(shortHtml, /id="attach-button"[^>]*aria-label="Attach files"[\s\S]*class="button-icon"[\s\S]*<\/button>/u);
   assert.match(shortHtml, /class="message-editor-shell [^"]*"/u);
-  assert.match(shortHtml, /<textarea id="prompt-input"[\s\S]*<button class="primary compact-send" type="submit" id="send-button"[^>]*aria-label="Send"[^>]*>Send<\/button>/u);
-  assert.doesNotMatch(shortHtml, /id="composer-refresh-button"/u);
+  assert.match(shortHtml, /class="compact-composer-row"[\s\S]*class="composer-leading-controls"[\s\S]*id="attach-button"[\s\S]*class="message-editor-shell [^"]*"[\s\S]*<textarea id="prompt-input"[\s\S]*<button class="primary icon-button compact-send" type="submit" id="send-button"[^>]*aria-label="Send"/u);
+  assert.doesNotMatch(shortHtml, /id="composer-refresh-button"|class="composer-toolbar"/u);
   assert.match(shortHtml, /class="composer-wrap "/u);
   const shortComposerHtml = shortHtml.match(/<form class="composer[\s\S]*?<\/form>/u)?.[0] || '';
   assert.doesNotMatch(shortComposerHtml, /id="settings-toggle"/u);
@@ -4089,9 +4249,9 @@ test('composer shows external expand above Attach and keeps session menu in the 
   api.state.composerCanExpand = true;
   const compactHtml = api.renderChat().innerHTML;
   assert.match(compactHtml, /class="composer-wrap is-expandable"/u);
-  assert.match(compactHtml, /class="composer is-expandable"/u);
+  assert.match(compactHtml, /class="composer bg-shared ring-theme is-expandable"/u);
   assert.match(compactHtml, /class="message-editor-shell is-expandable"/u);
-  assert.match(compactHtml, /<div class="composer-leading-controls">[\s\S]*id="composer-expand-button"[\s\S]*\^<\/button>[\s\S]*id="attach-button"[^>]*>\+<\/button>[\s\S]*<\/div>/u);
+  assert.match(compactHtml, /<div class="composer-leading-controls">[\s\S]*id="composer-expand-button"[\s\S]*class="button-icon"[\s\S]*id="attach-button"[^>]*aria-label="Attach files"[\s\S]*<\/div>/u);
   assert.doesNotMatch(compactHtml, /id="settings-toggle"[^>]*hidden/u);
 
   api.state.composerExpanded = true;
@@ -4105,12 +4265,22 @@ test('composer shows external expand above Attach and keeps session menu in the 
   assert.doesNotMatch(expandedHtml, /composer-status/u);
   assert.doesNotMatch(expandedHtml, /composer-error/u);
   assert.match(expandedHtml, /class="composer-wrap is-expanded"/u);
-  assert.match(expandedHtml, /class="composer is-expanded"/u);
-  assert.match(expandedHtml, /<div class="composer-leading-controls">[\s\S]*id="composer-expand-button"[\s\S]*v<\/button>[\s\S]*<\/div>/u);
+  assert.match(expandedHtml, /class="composer bg-shared ring-theme is-expanded"/u);
+  assert.match(expandedHtml, /<div class="composer-leading-controls">[\s\S]*id="composer-expand-button"[\s\S]*class="button-icon"[\s\S]*<\/div>/u);
   assert.doesNotMatch(expandedHtml, /id="attach-button"/u);
-  assert.match(expandedHtml, /<div class="message-editor-shell is-expanded"[\s\S]*<textarea id="prompt-input"[\s\S]*<button class="primary compact-send" type="submit" id="send-button"[^>]*aria-label="Send"[^>]*>Send<\/button>[\s\S]*<\/div>/u);
-  assert.doesNotMatch(expandedHtml, /id="composer-refresh-button"/u);
+  assert.match(expandedHtml, /<div class="message-editor-shell is-expanded"[\s\S]*<textarea id="prompt-input"[\s\S]*<button class="primary icon-button compact-send" type="submit" id="send-button"[^>]*aria-label="Send"/u);
+  assert.doesNotMatch(expandedHtml, /id="composer-refresh-button"|class="composer-toolbar"/u);
   assert.match(expandedHtml, /<textarea id="prompt-input"[\s\S]*id="send-button"/u);
+
+  const { api: desktopApi, context: desktopContext } = await loadAppHarness({ viewportWidth: 900, viewportHeight: 844, desktopPointer: true });
+  desktopApi.state.authSession = { id: 'auth_1' };
+  desktopApi.state.view = 'chat';
+  desktopApi.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  desktopApi.state.sessionId = 'session_1';
+  desktopApi.render();
+  const desktopHtml = desktopContext.document.querySelector('#app').innerHTML;
+  assert.doesNotMatch(desktopHtml, /class="desktop-workspace"/u);
+  assert.match(desktopHtml, /class="composer-toolbar"[\s\S]*id="attach-button"[\s\S]*id="composer-refresh-button"[\s\S]*id="send-button"/u);
 });
 
 test('session settings drawer closes when tapping outside the drawer', async () => {
@@ -4228,16 +4398,12 @@ test('expanded composer positions collapse and Send inside a single editor surfa
   assert.match(styles, /\.composer\.is-expanded\s*\{[^}]*padding:\s*0;/su);
   assert.match(styles, /\.message-editor-shell\.is-expanded\s*\{[^}]*position:\s*relative;/su);
   assert.match(styles, /\.message-editor-shell\.is-expanded\s*\{[^}]*min-height:\s*min\(84dvh,\s*640px\);/su);
-  assert.match(styles, /\.composer\.is-expanded \.composer-leading-controls #composer-expand-button\s*\{[^}]*position:\s*absolute;/su);
-  assert.match(styles, /\.composer\.is-expanded \.composer-leading-controls #composer-expand-button\s*\{[^}]*top:\s*0;/su);
-  assert.match(styles, /\.composer\.is-expanded \.composer-leading-controls #composer-expand-button\s*\{[^}]*left:\s*0;/su);
-  assert.match(styles, /\.message-editor-shell\.is-expanded textarea\s*\{[^}]*height:\s*100%;/su);
+  assert.match(styles, /\.composer\.is-expanded \.composer-leading-controls #composer-expand-button\s*\{[^}]*position:\s*static;/su);
+  assert.match(styles, /\.message-editor-shell\.is-expanded textarea\s*\{[^}]*flex:\s*1 1 auto;/su);
   assert.match(styles, /\.message-editor-shell\.is-expanded textarea\s*\{[^}]*border-color:\s*transparent;/su);
   assert.match(styles, /\.message-editor-shell\.is-expanded textarea\s*\{[^}]*background:\s*transparent;/su);
-  assert.match(styles, /\.message-editor-shell\.is-expanded textarea\s*\{[^}]*padding:\s*54px 12px 58px;/su);
-  assert.match(styles, /\.message-editor-shell\.is-expanded \.composer-action-buttons\s*\{[^}]*position:\s*absolute;/su);
-  assert.match(styles, /\.message-editor-shell\.is-expanded \.composer-action-buttons\s*\{[^}]*right:\s*8px;/su);
-  assert.match(styles, /\.message-editor-shell\.is-expanded \.composer-action-buttons\s*\{[^}]*bottom:\s*8px;/su);
+  assert.match(styles, /\.message-editor-shell\.is-expanded textarea\s*\{[^}]*padding:\s*18px 16px;/su);
+  assert.match(styles, /\.composer-toolbar\s*\{[^}]*border-top:\s*0;/su);
   assert.doesNotMatch(styles, /\.composer\.is-expanded \.compact-composer-row textarea\s*\{[^}]*max-height:\s*min\(72dvh,\s*560px\);/su);
 });
 
@@ -5388,20 +5554,24 @@ test('desktop workspace CSS waits for enough room before creating three panes', 
 
   assert.match(styles, /@media \(min-width:\s*1280px\) and \(orientation:\s*landscape\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
   assert.match(styles, /\.desktop-workspace\s*\{[^}]*display:\s*grid;/su);
-  assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*240px minmax\(320px,\s*380px\) minmax\(640px,\s*1fr\);/su);
+  assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*256px 363px minmax\(640px,\s*1fr\);/su);
   assert.match(styles, /\.desktop-project-rail,\s*\.desktop-session-pane\s*\{[^}]*overflow:\s*hidden;/su);
   assert.match(styles, /\.desktop-session-list\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.match(styles, /\.desktop-chat-pane\s*\{[^}]*position:\s*relative;/su);
+  assert.match(styles, /\.desktop-project-rail > \.project-rail-header\s*\{[^}]*height:\s*66px;/su);
+  assert.match(styles, /\.desktop-session-pane-topbar\s*\{[^}]*height:\s*66px;/su);
+  assert.match(styles, /\.desktop-chat-topbar\s*\{[^}]*height:\s*66px;/su);
   assert.match(styles, /\.desktop-chat-pane \.message-card\.assistant,\s*\.desktop-chat-pane \.message-card\.system\s*\{[^}]*max-width:\s*min\(72ch,\s*88%\);/su);
-  assert.match(styles, /\.desktop-chat-pane \.message-card\.user\s*\{[^}]*max-width:\s*min\(64ch,\s*74%\);/su);
+  assert.match(styles, /\.desktop-chat-pane \.message-card\.user\s*\{[^}]*max-width:\s*min\(68ch,\s*78%\);/su);
 });
 
-test('desktop sidebars use theme-aware panel backgrounds', async () => {
+test('desktop project rail and session workspace use distinct theme backgrounds', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /\.desktop-project-rail\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 92%,\s*var\(--bg\)\);/su);
-  assert.match(styles, /\.desktop-session-pane\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 78%,\s*var\(--bg\)\);/su);
-  assert.match(styles, /\.desktop-session-pane-topbar\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 78%,\s*var\(--bg\)\);/su);
+  assert.match(styles, /\.desktop-project-rail\s*\{[^}]*background:\s*var\(--bg-panel\);/su);
+  assert.match(styles, /\.desktop-session-pane\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.desktop-session-pane-topbar\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(styles, /\.desktop-session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
   assert.doesNotMatch(styles, /\.desktop-project-rail\s*\{[^}]*background:\s*#[0-9a-f]{3,8}\b/siu);
 });
 
@@ -5434,7 +5604,7 @@ test('mobile session navigation still clears active session when returning to li
 test('composer bottom gap stays tight above the keyboard safe area', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /\.composer-wrap\s*\{[^}]*padding:\s*6px 10px calc\(env\(safe-area-inset-bottom,\s*0px\) \+ 4px\);/su);
+  assert.match(styles, /\.composer-wrap\s*\{[^}]*padding:\s*8px 10px calc\(env\(safe-area-inset-bottom,\s*0px\) \+ 8px\);/su);
 });
 
 test('timeline follows the latest messages until the user scrolls upward', async () => {
@@ -5682,7 +5852,7 @@ test('mobile timeline reserves the measured composer height', async () => {
   ]);
 
   assert.match(styles, /--composer-offset:\s*320px;/u);
-  assert.match(styles, /\.timeline\s*\{[^}]*padding:\s*12px 12px var\(--composer-offset\);/su);
+  assert.match(styles, /\.timeline\s*\{[^}]*padding:\s*18px 14px var\(--composer-offset\);/su);
   assert.match(styles, /\.timeline\s*\{[^}]*scroll-padding-bottom:\s*var\(--composer-offset\);/su);
   assert.match(app, /function syncComposerOffset\(\)/u);
   assert.match(app, /getBoundingClientRect\(\)\.height/u);
@@ -6817,7 +6987,7 @@ test('mobile UI uses session list, compact composer, settings drawer, and histor
   assert.match(app, /settingsOpen/u);
   assert.match(app, /function renderComposerStatus\(\)/u);
   assert.match(app, /composer-status/u);
-  assert.match(app, /<div class="composer-wrap \$\{composerClassName\}">\s*\$\{state\.composerExpanded \? '' : renderComposerStatus\(\)\}\s*\$\{renderQueuedMessages\(\)\}\s*<form class="composer \$\{composerClassName\}"/u);
+  assert.match(app, /<div class="composer-wrap \$\{composerClassName\}\$\{centeredClassName\}">\s*\$\{state\.composerExpanded \|\| centered \? '' : renderComposerStatus\(\)\}\s*\$\{renderQueuedMessages\(\)\}\s*<form class="composer bg-shared ring-theme \$\{composerClassName\}\$\{centeredClassName\}"/u);
   assert.doesNotMatch(app, /----- \$\{escapeHtml\(composerStatusLabel\(\)\)\} -----/u);
   assert.doesNotMatch(app, /Turn started/u);
   assert.doesNotMatch(app, /Turn completed/u);
@@ -8847,7 +9017,7 @@ test('session names prefer the last cwd segment over long stored project labels'
   const chatHtml = api.renderChat().innerHTML;
 
   assert.match(listHtml, /class="session-project" data-i18n-skip>project-beta<\/span>/u);
-  assert.doesNotMatch(listHtml, /workspace\/project-beta/u);
+  assert.doesNotMatch(listHtml, />workspace\/project-beta</u);
   assert.match(chatHtml, /class="project-title" data-i18n-skip>project-beta<\/div>/u);
 });
 
@@ -11545,8 +11715,11 @@ test('session history defaults to two recent exchanges and expands older history
   assert.equal(api.showMoreSessionHistory(), false);
 });
 
-test('session list defaults to recents and supports favorites plus session actions', async () => {
-  const app = await readFile(appUrl, 'utf8');
+test('session list defaults to recents and keeps archive as an icon tool', async () => {
+  const [app, uiKit] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(uiKitUrl, 'utf8'),
+  ]);
 
   assert.match(app, /sortMode:\s*'time'/u);
   assert.match(app, /sessionsScope:\s*'all'/u);
@@ -11556,15 +11729,12 @@ test('session list defaults to recents and supports favorites plus session actio
   assert.doesNotMatch(app, /sessionSearchQuery/u);
   assert.doesNotMatch(app, /renderSessionSearchField/u);
   assert.doesNotMatch(app, /id="session-search-input"/u);
-  assert.match(app, /data-sort-mode="favorites"/u);
-  assert.match(app, /data-sort-mode="time"/u);
-  assert.match(app, /data-sort-mode="archived"/u);
-  assert.match(app, /class="archive-sort-button"/u);
-  assert.match(app, /aria-label="Archived sessions"/u);
-  assert.match(app, /class="archive-sort-icon"/u);
-  assert.match(app, /<span class="visually-hidden">Archived<\/span>/u);
-  assert.doesNotMatch(app, /data-sort-mode="archived"[^>]*>Archived<\/button>/u);
-  assert.match(app, /data-sort-mode="time"[^>]*>Recents<\/button>/u);
+  assert.match(app, /UI\.segmentedControl\(\{/u);
+  assert.match(app, /value:\s*'favorites',\s*label:\s*t\('Favorites'\)/u);
+  assert.match(app, /value:\s*'time',\s*label:\s*t\('Recents'\)/u);
+  assert.match(app, /value:\s*'archived',[\s\S]*icon:\s*'archive',[\s\S]*ariaLabel:\s*t\('Archived sessions'\)/u);
+  assert.match(uiKit, /data-sort-mode="\$\{escapeHtml\(item\.value\)\}"/u);
+  assert.match(uiKit, /item\.label \? `<span>\$\{escapeHtml\(item\.label\)\}<\/span>` : ''/u);
   assert.doesNotMatch(app, />Time<\/button>/u);
   assert.doesNotMatch(app, /data-sort-mode="project"/u);
   assert.doesNotMatch(app, /renderProjectFilter\(\)/u);
@@ -11587,7 +11757,7 @@ test('session list defaults to recents and supports favorites plus session actio
   assert.match(app, /apiFetch\(`\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/archive`,\s*\{\s*method:\s*'POST'/su);
 });
 
-test('mobile session filters keep archive as a compact accessible icon', async () => {
+test('mobile session tools keep favorites recents and archive icon visible in one row', async () => {
   const [styles, { api }] = await Promise.all([
     readFile(stylesUrl, 'utf8'),
     loadAppHarness(),
@@ -11595,19 +11765,37 @@ test('mobile session filters keep archive as a compact accessible icon', async (
 
   const html = api.renderSessionList().innerHTML;
 
-  assert.match(html, /class="toggle sort-toggle mobile-session-sort-toggle"/u);
+  assert.match(html, /class="segmented-control sort-toggle mobile-session-sort-toggle"/u);
   assert.match(html, /data-sort-mode="favorites"[\s\S]*data-sort-mode="time"[\s\S]*data-sort-mode="archived"/u);
-  assert.match(html, /data-sort-mode="favorites"[^>]*>Favorites<\/button>/u);
-  assert.match(html, /data-sort-mode="time"[^>]*>Recents<\/button>/u);
-  assert.match(html, /class="archive-sort-button"[^>]*data-sort-mode="archived"[^>]*aria-label="Archived sessions"/u);
-  assert.match(html, /class="archive-sort-icon"/u);
-  assert.match(html, /<span class="visually-hidden">Archived<\/span>/u);
-  assert.match(styles, /\.sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+34px;/su);
+  assert.match(html, /data-sort-mode="favorites"[^>]*>[\s\S]*<span>Favorites<\/span>[\s\S]*<\/button>/u);
+  assert.match(html, /data-sort-mode="time"[^>]*>[\s\S]*<span>Recents<\/span>[\s\S]*<\/button>/u);
+  assert.match(html, /data-sort-mode="archived"[^>]*aria-label="Archived sessions"[^>]*>[\s\S]*class="segmented-icon"/u);
+  assert.doesNotMatch(html, /data-sort-mode="archived"[^>]*>[\s\S]*<span>Archived<\/span>/u);
+  assert.match(styles, /\.sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+40px;/su);
   assert.match(styles, /\.mobile-session-actions\s*\{[^}]*flex:\s*1 1 0;/su);
   assert.match(styles, /\.mobile-session-sort-toggle\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)\s+44px;/su);
-  assert.match(styles, /\.toggle \.archive-sort-button\s*\{[^}]*padding:\s*0;/su);
-  assert.match(styles, /\.archive-sort-icon\s*\{[^}]*width:\s*17px;/su);
-  assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*min-width:\s*0;/su);
+  assert.match(styles, /\.sort-toggle \[data-sort-mode="archived"\] \.segmented-icon\s*\{[^}]*fill:\s*none;/su);
+  assert.match(styles, /\.segmented-control\.mobile-session-sort-toggle button\s*\{[^}]*min-width:\s*0;/su);
+  assert.match(styles, /\.segmented-control\s*\{[^}]*border:\s*1px solid transparent;/su);
+  assert.match(styles, /\.segmented-control\s*\{[^}]*border-radius:\s*10px;/su);
+  assert.match(styles, /\.segmented-control\s*\{[^}]*box-shadow:\s*inset 0 1px 3px/su);
+  assert.match(styles, /\.segmented-control button\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--panel\);/su);
+  assert.match(styles, /\.segmented-control button\[aria-pressed="true"\]\s*\{[^}]*box-shadow:\s*0 2px 6px/su);
+});
+
+test('project navigation uses rounded hover and active surfaces without adding search', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
+
+  assert.match(styles, /\.project-rail-item\s*\{[^}]*border-radius:\s*8px;/su);
+  assert.match(styles, /\.project-rail-action\s*\{[^}]*gap:\s*10px;/su);
+  assert.match(styles, /\.project-rail-action\s*\{[^}]*border-radius:\s*8px;/su);
+  assert.match(styles, /\.project-rail-item:hover,[\s\S]*\.project-rail-action:focus-visible\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 62%,\s*transparent\);/su);
+  assert.match(styles, /\.project-rail-item\.is-active,\s*\.project-rail-action\.is-active\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(styles, /\.project-rail-item\.is-active \.project-rail-marker\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--text-muted\) 72%,\s*var\(--bg-user-shared\)\);/su);
+  assert.doesNotMatch(app, /sessionSearchQuery|renderSessionSearchField|id="session-search-input"/u);
 });
 
 test('archived session cards use a clear restore icon instead of a font glyph', async () => {
@@ -12150,7 +12338,7 @@ test('workspace projects put favorites first and then sort by session count', as
   assert.equal(JSON.stringify(api.workspaceProjects().map((project) => project.id)), JSON.stringify(['project_b', 'project_a', 'project_c']));
 });
 
-test('project rail renders project favorite controls', async () => {
+test('project rail keeps one project list with svg favorite controls', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
   api.state.projects = [
@@ -12164,13 +12352,16 @@ test('project rail renders project favorite controls', async () => {
 
   const html = api.renderDesktopProjectRail();
 
-  assert.match(html, /data-project-favorite-id="project_a"/u);
-  assert.match(html, /data-project-favorite-id="project_b"/u);
-  assert.match(html, /aria-label="Unfavorite Project Alpha"/u);
-  assert.match(html, /aria-label="Favorite Project Beta"/u);
+  assert.match(html, /<div class="project-rail-group-label">Projects<\/div>/u);
+  assert.match(html, /data-project-scope-key="project_a"/u);
+  assert.match(html, /data-project-scope-key="project_b"/u);
+  assert.match(html, /class="project-rail-favorite-button is-favorite"[^>]*data-project-favorite-id="project_a"[^>]*aria-pressed="true"/u);
+  assert.match(html, /class="project-rail-favorite-button"[^>]*data-project-favorite-id="project_b"[^>]*aria-pressed="false"/u);
+  assert.match(html, /class="project-rail-favorite-icon"/u);
+  assert.doesNotMatch(html, /Favorite projects|★|☆/u);
 });
 
-test('project favorite action patches backend and updates the project list', async () => {
+test('project favorite action persists and updates the project list', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
@@ -12199,6 +12390,25 @@ test('project favorite action patches backend and updates the project list', asy
   assert.equal(fetchCalls[0]?.options.method, 'PATCH');
   assert.deepEqual(JSON.parse(fetchCalls[0]?.options.body), { favorite: true });
   assert.equal(api.state.projects.find((project) => project.id === 'project_a')?.favorite, true);
+});
+
+test('project rail merges a uniquely matching legacy session into its managed project', async () => {
+  const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.projects = [
+    { id: 'project_a', displayName: 'Project Alpha', cwd: '/repo/a' },
+  ];
+  api.state.sessions = [
+    { id: 'legacy_alpha', projectId: 'stale_project_id', projectDisplayName: 'Project Alpha', cwd: '/repo/a', updatedAt: 20, settings: { metadata: {} } },
+  ];
+
+  const projects = api.workspaceProjects();
+  const html = api.renderDesktopProjectRail();
+
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0]?.id, 'project_a');
+  assert.equal(projects[0]?.sessionCount, 1);
+  assert.equal((html.match(/data-project-scope-key="project_a"/gu) || []).length, 1);
+  assert.doesNotMatch(html, /data-project-scope-key="stale_project_id"/u);
 });
 
 test('desktop session selection keeps the workspace view active', async () => {
@@ -12318,7 +12528,7 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
     readFile(appUrl, 'utf8'),
   ]);
 
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*960px\);/su);
+  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*860px\);/su);
   assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
   assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
   assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*font-weight:\s*400;/su);
@@ -12601,12 +12811,15 @@ test('mobile sessions render drawer actions and keep favorites toggle beside the
   const mobileHeader = html.match(/<header class="topbar page-topbar mobile-session-topbar">([\s\S]*?)<\/header>/u)?.[1] || '';
   const drawerFooter = html.match(/<div class="project-rail-footer">([\s\S]*?)<\/div>/u)?.[1] || '';
   assert.match(mobileHeader, /mobile-sidebar-toggle-button[\s\S]*mobile-session-sort-toggle/u);
-  assert.match(mobileHeader, /data-sort-mode="favorites"[\s\S]*data-sort-mode="time"/u);
+  assert.match(mobileHeader, /data-sort-mode="favorites"[\s\S]*data-sort-mode="time"[\s\S]*data-sort-mode="archived"/u);
+  assert.doesNotMatch(mobileHeader, /class="mobile-app-title"/u);
   assert.doesNotMatch(mobileHeader, /mobile-session-page-title/u);
   assert.doesNotMatch(mobileHeader, />Sessions<\/div>/u);
   assert.doesNotMatch(mobileHeader, /id="open-reports-button"/u);
   assert.match(mobileHeader, /id="open-new-session-button"/u);
   assert.match(drawerFooter, /id="open-app-settings-button"/u);
+  assert.match(drawerFooter, /id="open-app-settings-button"[\s\S]*class="project-rail-action-icon"/u);
+  assert.match(drawerFooter, /id="open-admin-console-button"[\s\S]*class="project-rail-action-icon"/u);
   assert.doesNotMatch(drawerFooter, /open-reports-button|>Reports<\/button>/u);
   assert.doesNotMatch(drawerFooter, /id="open-new-session-button"/u);
 });
@@ -12630,18 +12843,18 @@ test('mobile project drawer title stays below the phone status bar', async () =>
   assert.match(styles, /\.mobile-project-drawer-header\s*\{[^}]*padding-top:\s*calc\(env\(safe-area-inset-top,\s*0px\) \+ 18px\);/su);
 });
 
-test('mobile sidebar toggle uses a real touch target instead of a flat text button', async () => {
+test('mobile sidebar toggle restores the framed 44px icon touch target', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /\.mobile-sidebar-toggle-button\s*\{[^}]*width:\s*42px;/su);
-  assert.match(styles, /\.mobile-sidebar-toggle-button\s*\{[^}]*min-height:\s*42px;/su);
+  assert.match(styles, /\.mobile-sidebar-toggle-button\s*\{[^}]*width:\s*44px;/su);
+  assert.match(styles, /\.mobile-sidebar-toggle-button\s*\{[^}]*min-height:\s*44px;/su);
   assert.match(styles, /\.mobile-sidebar-toggle-button\s*\{[^}]*border-radius:\s*12px;/su);
   assert.match(styles, /\.mobile-sidebar-toggle-button\s*\{[^}]*border:\s*1px solid var\(--border\);/su);
   assert.match(styles, /\.mobile-sidebar-toggle-button\s*\{[^}]*background:\s*var\(--panel\);/su);
   assert.match(styles, /\.mobile-session-sort-toggle\s*\{[^}]*flex:\s*1 1 auto;/su);
-  assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*min-height:\s*32px;/su);
-  assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*padding:\s*0 8px;/su);
-  assert.match(styles, /\.toggle\.mobile-session-sort-toggle button\s*\{[^}]*font-size:\s*11px;/su);
+  assert.match(styles, /\.segmented-control\.mobile-session-sort-toggle button\s*\{[^}]*min-height:\s*32px;/su);
+  assert.match(styles, /\.segmented-control\.mobile-session-sort-toggle button\s*\{[^}]*padding:\s*0 8px;/su);
+  assert.match(styles, /\.segmented-control\.mobile-session-sort-toggle button\s*\{[^}]*font-size:\s*11px;/su);
 });
 
 test('mobile sidebar toggle renders the sidebar svg icon', async () => {
@@ -12684,7 +12897,10 @@ test('desktop new session submit keeps the workspace shell and activates the dra
   assert.equal(api.state.sessionId, null);
   assert.equal(api.state.currentSession, null);
   assert.match(api.context.document.querySelector('#app').innerHTML, /desktop-workspace/u);
-  assert.match(api.context.document.querySelector('#app').innerHTML, /No context yet/u);
+  assert.match(api.context.document.querySelector('#app').innerHTML, /class="new-session-empty-state"/u);
+  assert.match(api.context.document.querySelector('#app').innerHTML, /AI 只是工具，其回答未必正确无误。/u);
+  assert.match(api.context.document.querySelector('#app').innerHTML, /class="composer [^"]*is-centered"/u);
+  assert.doesNotMatch(api.context.document.querySelector('#app').innerHTML, /id="timeline"/u);
 });
 
 test('desktop new session submit does not auto-select an existing session', async () => {
@@ -12702,7 +12918,7 @@ test('desktop new session submit does not auto-select an existing session', asyn
   assert.equal(api.state.sessionId, null);
   assert.equal(api.state.currentSession, null);
   assert.equal(api.state.cwd, '/repo/new');
-  assert.match(api.context.document.querySelector('#app').innerHTML, /No context yet/u);
+  assert.match(api.context.document.querySelector('#app').innerHTML, /AI 只是工具，其回答未必正确无误。/u);
 });
 
 test('desktop new session submit with the default cwd still shows the composer', async () => {
@@ -12774,6 +12990,7 @@ test('desktop draft session clears after the first submitted message creates a b
   assert.equal(api.state.draftSessionActive, false);
   assert.equal(api.state.sessionId, 'session_new');
   assert.equal(fetchCalls[0], '/api/session-submissions');
+  assert.doesNotMatch(api.context.document.querySelector('#app').innerHTML, /new-session-empty-state/u);
 });
 
 test('desktop app settings opens as a panel without clearing the active session', async () => {
@@ -12863,7 +13080,7 @@ test('desktop session file links open in the right-pane overlay and close back t
   assert.doesNotMatch(chatHtml, /session-file-viewer/u);
 });
 
-test('session topbar keeps New visually neutral and omits the redundant desktop Sessions action', async () => {
+test('session pane keeps the icon New control neutral and omits redundant actions', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
   api.state.sortMode = 'favorites';
@@ -12871,11 +13088,11 @@ test('session topbar keeps New visually neutral and omits the redundant desktop 
   const railHtml = api.renderDesktopProjectRail();
 
   assert.doesNotMatch(favoritesHtml, /id="favorite-sort-button"/u);
-  assert.match(favoritesHtml, /id="open-new-session-button"[\s\S]*>New<\/button>/u);
+  assert.match(favoritesHtml, /id="open-new-session-button"[^>]*aria-label="New session"[\s\S]*class="button-icon"[\s\S]*<\/button>/u);
   assert.doesNotMatch(favoritesHtml, /open-reports-button|>Reports<\/button>/u);
-  assert.match(favoritesHtml, /class="ghost compact-button" type="button" id="open-new-session-button"/u);
+  assert.match(favoritesHtml, /class="ghost icon-button mobile-new-session-button" type="button" id="open-new-session-button"/u);
   assert.doesNotMatch(railHtml, /id="rail-show-sessions-button"|>Sessions<\/button>/u);
-  assert.match(railHtml, /class="project-rail-action" type="button" id="open-app-settings-button">Setting<\/button>/u);
+  assert.match(railHtml, /class="project-rail-action" type="button" id="open-app-settings-button">[\s\S]*<span>Setting<\/span><\/button>/u);
   assert.doesNotMatch(favoritesHtml, /id="rail-open-new-session-button"/u);
   assert.doesNotMatch(favoritesHtml, /class="primary compact-button" type="button" id="open-new-session-button"/u);
 
@@ -12888,7 +13105,7 @@ test('session topbar keeps New visually neutral and omits the redundant desktop 
   assert.doesNotMatch(allHtml, /id="rail-open-new-session-button"/u);
 });
 
-test('session topbar does not render long project names next to New', async () => {
+test('session pane toolbar does not render long project names next to New', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
   const longProjectName = 'Very Long Project Name '.repeat(12).trim();
 
@@ -12900,12 +13117,10 @@ test('session topbar does not render long project names next to New', async () =
   api.state.selectedProjectLabel = longProjectName;
 
   const html = api.renderDesktopSessionPane();
-  const topbarMain = html.match(/<div class="topbar-main">([\s\S]*?)<\/div>\s*<div class="list-actions">/u)?.[1] || '';
-
-  assert.match(topbarMain, /<div class="page-title">Sessions<\/div>/u);
-  assert.equal(topbarMain.includes(longProjectName), false);
-  assert.doesNotMatch(topbarMain, /open-reports-button|>Reports<\/button>/u);
-  assert.match(topbarMain, /id="open-new-session-button"[\s\S]*>New<\/button>/u);
+  assert.match(html, /class="segmented-control sort-toggle"/u);
+  assert.equal(html.includes(longProjectName), false);
+  assert.doesNotMatch(html, /open-reports-button|>Reports<\/button>/u);
+  assert.match(html, /id="open-new-session-button"[^>]*aria-label="New session"/u);
 });
 
 test('session UI omits Reports without replacing Message textarea or session menu', async () => {
@@ -16090,7 +16305,14 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 }
 
 async function loadAppHarness(overrides = {}) {
-  const app = await readFile(appUrl, 'utf8');
+  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(uiCopyUrl, 'utf8'),
+    readFile(uiKitUrl, 'utf8'),
+    readFile(attachmentUtilsUrl, 'utf8'),
+    readFile(markdownRendererUrl, 'utf8'),
+    readFile(adminUiUrl, 'utf8'),
+  ]);
   const storage = overrides.storage instanceof Map
     ? overrides.storage
     : new Map(Object.entries(overrides.storage || {}));
@@ -16415,7 +16637,12 @@ async function loadAppHarness(overrides = {}) {
       disconnect() {}
     },
   };
-  vm.runInNewContext(`${app}
+  vm.runInNewContext(`${uiCopy}
+${uiKit}
+${attachmentUtils}
+${markdownRenderer}
+${adminUi}
+${app}
 globalThis.__codexWebTest = {
   state,
   get draftSessionActive() {
