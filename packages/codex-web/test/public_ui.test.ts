@@ -88,6 +88,24 @@ test('app shell shows a lightweight loading state before the main module execute
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/u);
 });
 
+test('global typography uses native CJK fallbacks and mobile-safe form sizing', async () => {
+  const styles = await readFile(stylesUrl, 'utf8');
+
+  assert.match(styles, /body\s*\{[^}]*font-family:\s*-apple-system,\s*BlinkMacSystemFont,\s*"Segoe UI",\s*Roboto,\s*"Helvetica Neue",\s*Arial,\s*"Noto Sans",\s*"PingFang SC",\s*"Hiragino Sans GB",\s*"Microsoft YaHei",\s*sans-serif;/su);
+  assert.match(styles, /body\s*\{[^}]*-webkit-font-smoothing:\s*antialiased;/su);
+  assert.match(styles, /body\s*\{[^}]*-moz-osx-font-smoothing:\s*grayscale;/su);
+  assert.match(styles, /input,\s*select,\s*textarea\s*\{[^}]*font-size:\s*16px;/su);
+});
+
+test('markdown code surfaces use dedicated high-contrast theme tokens', async () => {
+  const styles = await readFile(stylesUrl, 'utf8');
+
+  assert.match(styles, /:root\[data-theme="dark-gold"\]\s*\{[^}]*--code-bg:\s*#15171c;[^}]*--code-border:\s*#71717a;[^}]*--code-inline-bg:\s*#55555f;/su);
+  assert.match(styles, /:root\[data-theme="oled-black"\]\s*\{[^}]*--code-bg:\s*#202026;[^}]*--code-border:\s*#71717a;[^}]*--code-inline-bg:\s*#4b4b55;/su);
+  assert.match(styles, /\.markdown-body pre\s*\{[^}]*border:\s*1px solid var\(--code-border\);[^}]*background:\s*var\(--code-bg\);[^}]*color:\s*var\(--code-text\);/su);
+  assert.match(styles, /\.markdown-body :not\(pre\) > code\s*\{[^}]*background:\s*var\(--code-inline-bg\);[^}]*color:\s*var\(--code-inline-text\);/su);
+});
+
 test('PWA checks for updates without forcing stale cached pages to reload', async () => {
   const app = await readFile(appUrl, 'utf8');
 
@@ -2760,6 +2778,7 @@ test('admin console uses dense mobile-safe management rows', async () => {
   assert.match(styles, /\.admin-sidebar\s*\{[^}]*border:\s*1px solid color-mix\(in srgb,\s*var\(--border\) 52%,\s*transparent\);/su);
   assert.match(styles, /\.admin-sidebar\s*\{[^}]*border-radius:\s*12px;/su);
   assert.match(styles, /\.admin-sidebar-button\[aria-pressed="true"\]\s*\{[^}]*border-left:\s*3px solid var\(--accent\);/su);
+  assert.match(styles, /\.admin-sidebar-button\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
   assert.match(styles, /\.admin-editor-panel,\s*\.admin-collection-panel\s*\{[^}]*border-radius:\s*12px;/su);
   assert.match(styles, /\.admin-filter-row\s*\{[^}]*border-radius:\s*12px;/su);
   assert.match(styles, /\.admin-console-page :where\(input:not\(\[type="checkbox"\]\),\s*select,\s*textarea\):focus-visible\s*\{[^}]*box-shadow:\s*0 0 0 3px/su);
@@ -2770,6 +2789,7 @@ test('admin console uses dense mobile-safe management rows', async () => {
   assert.match(styles, /\.admin-session-row\s*\{[^}]*border-color:\s*transparent;/su);
   assert.match(styles, /\.admin-session-row\s*\{[^}]*background:\s*var\(--panel\);/su);
   assert.match(styles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*border-left-color:\s*var\(--accent\);/su);
+  assert.match(styles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
   assert.match(styles, /\.admin-row-main\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
   assert.match(styles, /\.admin-session-open\s*\{[^}]*text-align:\s*left;/su);
   assert.match(styles, /\.admin-console-page \.danger,[\s\S]*\.admin-console-page \.danger:focus-visible:not\(:disabled\)\s*\{[^}]*color:\s*var\(--danger\);/su);
@@ -3957,7 +3977,10 @@ test('chat surfaces use soft elevation and preserve asymmetric message corners',
   assert.match(styles, /\.composer\s*\{[^}]*border:\s*1px solid transparent;/su);
   assert.match(styles, /\.composer\.ring-theme\s*\{[^}]*box-shadow:\s*0 0 0 1px color-mix\(in srgb,\s*var\(--border\) 52%,\s*transparent\)/su);
   assert.match(styles, /\.message-card\.user\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(styles, /\.message-card\.user\s*\{[^}]*color:\s*var\(--text-user\);/su);
   assert.match(styles, /\.composer\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(styles, /\.composer textarea\s*\{[^}]*font-size:\s*16px;/su);
+  assert.match(styles, /\.composer textarea\s*\{[^}]*line-height:\s*1\.6;/su);
   assert.match(styles, /\.composer\s*\{[^}]*border-radius:\s*32px;/su);
   assert.match(styles, /\.composer\s*\{[^}]*box-shadow:[^;]*0 16px 40px/su);
   assert.match(styles, /\.composer-wrap\s*\{[^}]*border-top:\s*0;/su);
@@ -5426,6 +5449,7 @@ test('app settings page exposes message font size controls scoped to chat messag
   assert.doesNotMatch(app, /function renderSettingsDrawer\(\)[\s\S]*data-message-font-size="small"/u);
   assert.match(app, /for \(const button of document\.querySelectorAll\('\[data-message-font-size\]'\)\)/u);
   assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
+  assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*line-height:\s*1\.6;/su);
   assert.match(styles, /\.message-card \.markdown-body h1,\s*\.message-card \.markdown-body h2,\s*\.message-card \.markdown-body h3\s*\{[^}]*font-size:\s*var\(--message-heading-font-size\);/su);
   assert.doesNotMatch(styles, /\.session-file-document\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
   assert.match(styles, /\.message-size-toggle\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/su);
@@ -5449,8 +5473,8 @@ test('message font size loads from storage and applies root variables', async ()
   assert.equal(storage.get('codexWebMessageFontSize'), 'large');
   assert.equal(context.document.documentElement.dataset.messageFontSize, 'large');
   assert.deepEqual(styleCalls, [
-    ['--message-font-size', '17px'],
-    ['--message-heading-font-size', '16px'],
+    ['--message-font-size', '18px'],
+    ['--message-heading-font-size', '20px'],
   ]);
 });
 

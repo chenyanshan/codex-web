@@ -2,7 +2,8 @@
   --bg-base: #fcf9f2;
   --bg-panel: #f5efe3;
   --bg-card: #ffffff;
-  --bg-user-shared: #e3d9c3;
+  --bg-user-shared: #dfd6c8;
+  --text-user: #2d2d2d;
   --msg-sys-bg: #ffffff;
   --text-main: #4a4a4a;
   --text-muted: #8a8a8a;
@@ -27,21 +28,25 @@
   --danger: #a33d3d;
   --code-bg: #20231f;
   --code-text: #f3f0e8;
+  --code-border: #8a735f;
+  --code-inline-bg: #ede4d7;
+  --code-inline-text: #2d2d2d;
   --overlay: rgba(30, 24, 14, 0.44);
   --shadow: 0 12px 28px rgba(79, 58, 22, 0.14);
   --composer-offset: 320px;
-  --message-font-size: 15px;
-  --message-heading-font-size: 14px;
+  --message-font-size: 16px;
+  --message-heading-font-size: 18px;
   --session-summary-line-height: 1.35em;
   color-scheme: light;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
 :root[data-theme="fresh-light"] {
   --bg-base: #f4f5f7;
   --bg-panel: #eaecef;
   --bg-card: #ffffff;
-  --bg-user-shared: #ddf0e3;
+  --bg-user-shared: #cfd4dc;
+  --text-user: #111827;
   --msg-sys-bg: #ffffff;
   --text-main: #1f2937;
   --text-muted: #6b7280;
@@ -65,6 +70,9 @@
   --danger: #b42318;
   --code-bg: #24292f;
   --code-text: #f0f6fc;
+  --code-border: #748094;
+  --code-inline-bg: #dfe4eb;
+  --code-inline-text: #111827;
   --overlay: rgba(31, 41, 55, 0.42);
   --shadow: 0 12px 28px rgba(31, 41, 55, 0.14);
   color-scheme: light;
@@ -74,7 +82,8 @@
   --bg-base: #18181a;
   --bg-panel: #121212;
   --bg-card: #202022;
-  --bg-user-shared: #352b20;
+  --bg-user-shared: #42424a;
+  --text-user: #f4f4f5;
   --msg-sys-bg: #27272a;
   --text-main: #e4e4e7;
   --text-muted: #a1a1aa;
@@ -96,8 +105,11 @@
   --success: #6ee7a8;
   --warn: #fde047;
   --danger: #fca5a5;
-  --code-bg: #0c0c0d;
-  --code-text: #f4f4f5;
+  --code-bg: #15171c;
+  --code-text: #f8fafc;
+  --code-border: #71717a;
+  --code-inline-bg: #55555f;
+  --code-inline-text: #ffffff;
   --overlay: rgba(0, 0, 0, 0.68);
   --shadow: 0 14px 32px rgba(0, 0, 0, 0.44);
   color-scheme: dark;
@@ -107,7 +119,8 @@
   --bg-base: #000000;
   --bg-panel: #000000;
   --bg-card: #151515;
-  --bg-user-shared: #2a2a2a;
+  --bg-user-shared: #38383f;
+  --text-user: #ffffff;
   --msg-sys-bg: #121212;
   --text-main: #f4f4f5;
   --text-muted: #a1a1aa;
@@ -129,8 +142,11 @@
   --success: #6ee7a8;
   --warn: #fde047;
   --danger: #fca5a5;
-  --code-bg: #0a0a0a;
-  --code-text: #fafafa;
+  --code-bg: #202026;
+  --code-text: #ffffff;
+  --code-border: #71717a;
+  --code-inline-bg: #4b4b55;
+  --code-inline-text: #ffffff;
   --overlay: rgba(0, 0, 0, 0.8);
   --shadow: 0 16px 38px rgba(0, 0, 0, 0.72);
   color-scheme: dark;
@@ -140,7 +156,8 @@
   --bg-base: #fcf9f2;
   --bg-panel: #f5efe3;
   --bg-card: #ffffff;
-  --bg-user-shared: #e3d9c3;
+  --bg-user-shared: #dfd6c8;
+  --text-user: #2d2d2d;
   --msg-sys-bg: #ffffff;
   --text-main: #4a4a4a;
   --text-muted: #8a8a8a;
@@ -165,11 +182,15 @@ body {
 
 body {
   min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-weight: 450;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .bg-shared {
   background-color: var(--bg-user-shared);
+  color: var(--text-user);
 }
 
 .ring-theme {
@@ -195,6 +216,12 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+input,
+select,
+textarea {
+  font-size: 16px;
 }
 
 button,
@@ -1288,9 +1315,9 @@ button:disabled {
 .admin-sidebar-button[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--border) 52%, transparent);
   border-left: 3px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  background: var(--bg-user-shared);
   box-shadow: 0 1px 4px color-mix(in srgb, var(--overlay) 8%, transparent);
-  color: var(--text);
+  color: var(--text-user);
 }
 
 .admin-nav-icon {
@@ -1710,7 +1737,12 @@ button:disabled {
 .admin-session-row[data-selected="true"] {
   border-color: transparent;
   border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  background: var(--bg-user-shared);
+  color: var(--text-user);
+}
+
+.admin-session-row[data-selected="true"] :where(.admin-row-main, .admin-session-summary, .admin-row-meta) {
+  color: var(--text-user);
 }
 
 .admin-session-row:hover {
@@ -1961,11 +1993,11 @@ button:disabled {
 .project-rail-item.is-active,
 .project-rail-action.is-active {
   background: var(--bg-user-shared);
-  color: var(--text);
+  color: var(--text-user);
 }
 
 .project-rail-item.is-active {
-  color: var(--text);
+  color: var(--text-user);
 }
 
 .project-rail-item.is-active .project-rail-marker {
@@ -2048,6 +2080,10 @@ button:disabled {
   border-left: 4px solid var(--accent);
   background: var(--bg-user-shared);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--overlay) 11%, transparent);
+}
+
+.session-card.is-active :where(.session-title, .session-preview, .session-card-meta, .session-project) {
+  color: var(--text-user);
 }
 
 .session-card-open {
@@ -2381,7 +2417,7 @@ button:disabled {
 .message-card.user {
   border-color: transparent;
   background: var(--bg-user-shared);
-  color: var(--text);
+  color: var(--text-user);
   justify-self: end;
   border-top-right-radius: 4px;
 }
@@ -2390,18 +2426,18 @@ button:disabled {
 .message-card.user .markdown-body,
 .message-card.user .message-attachment-kind,
 .message-card.user .message-attachment-name {
-  color: var(--text);
+  color: var(--text-user);
 }
 
 .message-card.user .message-attachment {
   border-color: color-mix(in srgb, var(--border) 46%, transparent);
   background: color-mix(in srgb, var(--panel) 56%, transparent);
-  color: var(--text);
+  color: var(--text-user);
 }
 
 .message-card.user .message-attachment-meta,
 .message-card.user .message-attachment-open {
-  color: var(--muted);
+  color: color-mix(in srgb, var(--text-user) 72%, transparent);
 }
 
 .message-card.assistant {
@@ -2472,6 +2508,11 @@ button:disabled {
 .message-card .markdown-body {
   font-size: var(--message-font-size);
   font-weight: 400;
+  line-height: 1.6;
+}
+
+.message-card .markdown-body code {
+  font-size: 1em;
   line-height: 1.6;
 }
 
@@ -2899,6 +2940,7 @@ button:disabled {
   border: 1px solid transparent;
   border-radius: 32px;
   background: var(--bg-user-shared);
+  color: var(--text-user);
   box-shadow: inset 0 1px 2px color-mix(in srgb, var(--overlay) 5%, transparent), 0 16px 40px color-mix(in srgb, var(--overlay) 18%, transparent);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
@@ -2923,7 +2965,7 @@ button:disabled {
 .composer.is-expanded {
   padding: 0;
   border-color: transparent;
-  background: var(--panel);
+  background: var(--bg-user-shared);
 }
 
 .compact-composer-row {
@@ -3393,7 +3435,14 @@ button:disabled {
 
 .composer textarea {
   min-height: 104px;
+  color: var(--text-user);
+  font-size: 16px;
+  line-height: 1.6;
   resize: none;
+}
+
+.composer textarea::placeholder {
+  color: color-mix(in srgb, var(--text-user) 56%, transparent);
 }
 
 .composer textarea:focus {
@@ -3461,7 +3510,7 @@ button:disabled {
   max-height: 160px;
   padding: 13px 14px 11px;
   overflow-y: auto;
-  line-height: 1.45;
+  line-height: 1.6;
   font-weight: 400;
 }
 
@@ -3815,11 +3864,12 @@ button:disabled {
 
 .markdown-body pre {
   overflow-x: auto;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
   background: var(--code-bg);
   color: var(--code-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--code-border) 34%, transparent), 0 2px 8px color-mix(in srgb, var(--overlay) 12%, transparent);
 }
 
 .markdown-body pre,
@@ -3863,9 +3913,16 @@ button:disabled {
 }
 
 .markdown-body :not(pre) > code {
-  padding: 1px 4px;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--code-border) 74%, transparent);
   border-radius: 4px;
-  background: color-mix(in srgb, var(--panel-2) 90%, var(--accent));
+  background: var(--code-inline-bg);
+  color: var(--code-inline-text);
+}
+
+.markdown-body code a {
+  color: inherit;
+  text-decoration-color: currentColor;
 }
 
 .markdown-body a {

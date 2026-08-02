@@ -25,6 +25,7 @@ test('every theme meets contrast targets for text, actions, states, and controls
       'bg-panel',
       'bg-card',
       'bg-user-shared',
+      'text-user',
       'msg-sys-bg',
       'panel',
       'panel-2',
@@ -45,6 +46,9 @@ test('every theme meets contrast targets for text, actions, states, and controls
       'danger',
       'code-bg',
       'code-text',
+      'code-border',
+      'code-inline-bg',
+      'code-inline-text',
       'overlay',
       'shadow',
     ]) {
@@ -52,6 +56,7 @@ test('every theme meets contrast targets for text, actions, states, and controls
     }
 
     assertContrast(theme, 'text/background', tokens.text, tokens.bg, 7);
+    assertContrast(theme, 'user text/shared surface', tokens['text-user'], tokens['bg-user-shared'], 7);
     assertContrast(theme, 'muted/panel', tokens.muted, tokens.panel, 3);
     assertContrast(theme, 'accent/panel', tokens.accent, tokens.panel, 2.3);
     assertContrast(theme, 'primary action', tokens['on-accent'], tokens['accent-2'], 4.5);
@@ -61,6 +66,7 @@ test('every theme meets contrast targets for text, actions, states, and controls
     assertContrast(theme, 'warning/panel', tokens.warn, tokens.panel, 4.5);
     assertContrast(theme, 'danger/panel', tokens.danger, tokens.panel, 4.5);
     assertContrast(theme, 'code text/background', tokens['code-text'], tokens['code-bg'], 7);
+    assertContrast(theme, 'inline code text/background', tokens['code-inline-text'], tokens['code-inline-bg'], 7);
     assert.equal(tokens.bg, tokens['bg-base']);
     assert.equal(tokens.text, tokens['text-main']);
     assert.equal(tokens.muted, tokens['text-muted']);
@@ -71,16 +77,17 @@ test('every theme meets contrast targets for text, actions, states, and controls
 test('the four product themes keep the specified surface palette', async () => {
   const css = await readFile(stylesUrl, 'utf8');
   const expected = {
-    retro: ['#fcf9f2', '#f5efe3', '#ffffff', '#e3d9c3', '#ffffff', '#4a4a4a', '#8a8a8a', '#e8decc', '#d97757'],
-    'dark-gold': ['#18181a', '#121212', '#202022', '#352b20', '#27272a', '#e4e4e7', '#a1a1aa', '#3f3f46', '#eab308'],
-    'oled-black': ['#000000', '#000000', '#151515', '#2a2a2a', '#121212', '#f4f4f5', '#a1a1aa', '#27272a', '#ffffff'],
-    'fresh-light': ['#f4f5f7', '#eaecef', '#ffffff', '#ddf0e3', '#ffffff', '#1f2937', '#6b7280', '#e5e7eb', '#10b981'],
+    retro: ['#fcf9f2', '#f5efe3', '#ffffff', '#dfd6c8', '#2d2d2d', '#ffffff', '#4a4a4a', '#8a8a8a', '#e8decc', '#d97757'],
+    'dark-gold': ['#18181a', '#121212', '#202022', '#42424a', '#f4f4f5', '#27272a', '#e4e4e7', '#a1a1aa', '#3f3f46', '#eab308'],
+    'oled-black': ['#000000', '#000000', '#151515', '#38383f', '#ffffff', '#121212', '#f4f4f5', '#a1a1aa', '#27272a', '#ffffff'],
+    'fresh-light': ['#f4f5f7', '#eaecef', '#ffffff', '#cfd4dc', '#111827', '#ffffff', '#1f2937', '#6b7280', '#e5e7eb', '#10b981'],
   };
   const keys = [
     'bg-base',
     'bg-panel',
     'bg-card',
     'bg-user-shared',
+    'text-user',
     'msg-sys-bg',
     'text-main',
     'text-muted',

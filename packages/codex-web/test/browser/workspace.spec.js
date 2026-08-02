@@ -1136,13 +1136,30 @@ test('four themes keep canvas and chat surfaces aligned', async ({ page }, testI
       return {
         base: root.getPropertyValue('--bg-base').trim(),
         shared: root.getPropertyValue('--bg-user-shared').trim(),
+        userTextToken: root.getPropertyValue('--text-user').trim(),
         system: root.getPropertyValue('--msg-sys-bg').trim(),
         canvas: getComputedStyle(chatCanvas).backgroundColor,
         user: getComputedStyle(document.querySelector('.message-card.user')).backgroundColor,
+        userText: getComputedStyle(document.querySelector('.message-card.user .message-text')).color,
+        userFontSize: getComputedStyle(document.querySelector('.message-card.user .message-text')).fontSize,
+        userLineHeight: getComputedStyle(document.querySelector('.message-card.user .message-text')).lineHeight,
         assistant: getComputedStyle(document.querySelector('.message-card.assistant')).backgroundColor,
+        assistantFontSize: getComputedStyle(document.querySelector('.message-card.assistant .markdown-body')).fontSize,
+        assistantLineHeight: getComputedStyle(document.querySelector('.message-card.assistant .markdown-body')).lineHeight,
         composer: getComputedStyle(document.querySelector('#composer-form')).backgroundColor,
+        composerText: getComputedStyle(document.querySelector('#prompt-input')).color,
+        composerFontSize: getComputedStyle(document.querySelector('#prompt-input')).fontSize,
       };
     });
+
+    const expectedUserText = await page.evaluate((token) => {
+      const probe = document.createElement('div');
+      probe.style.color = token;
+      document.body.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    }, chatSurfaces.userTextToken);
 
     const expectedColors = await page.evaluate((tokens) => {
       const probe = document.createElement('div');
@@ -1167,11 +1184,88 @@ test('four themes keep canvas and chat surfaces aligned', async ({ page }, testI
     expect(listSurfaces.normalCard).toBe(expectedColors.card);
     expect(chatSurfaces.canvas).toBe(expectedColors.base);
     expect(chatSurfaces.user).toBe(expectedColors.shared);
+    expect(chatSurfaces.userText).toBe(expectedUserText);
+    expect(chatSurfaces.userFontSize).toBe('16px');
+    expect(Number.parseFloat(chatSurfaces.userLineHeight) / Number.parseFloat(chatSurfaces.userFontSize)).toBeCloseTo(1.6, 1);
     expect(chatSurfaces.composer).toBe(expectedColors.shared);
+    expect(chatSurfaces.composerText).toBe(expectedUserText);
+    expect(chatSurfaces.composerFontSize).toBe('16px');
     expect(chatSurfaces.assistant).toBe(expectedColors.system);
+    expect(chatSurfaces.assistantFontSize).toBe('16px');
+    expect(Number.parseFloat(chatSurfaces.assistantLineHeight) / Number.parseFloat(chatSurfaces.assistantFontSize)).toBeCloseTo(1.6, 1);
 
     await page.screenshot({
       path: '/tmp/codex-web-final-' + theme + '-' + testInfo.project.name + '.png',
+      fullPage: true,
+    });
+  }
+});
+
+test('dark themes keep block and inline code visibly separated', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'One desktop viewport covers dark code surfaces.');
+
+  await page.goto('/');
+  for (const theme of ['dark-gold', 'oled-black']) {
+    await page.evaluate((nextTheme) => {
+      window.localStorage.setItem('codexWebTheme', nextTheme);
+    }, theme);
+    await page.reload();
+    await page.locator('[data-session-id="session_browser_history"]').click();
+    await expect(page.locator('#timeline')).toBeVisible();
+    const colors = await page.evaluate(() => {
+      const card = document.createElement('article');
+      card.className = 'message-card assistant code-surface-fixture';
+      card.innerHTML = '<div class="markdown-body"><p>Run <code>npm test</code> before deploy.</p><pre><code>const enabled = true;\nconsole.log(enabled);</code></pre></div>';
+      document.querySelector('#timeline').appendChild(card);
+      const root = getComputedStyle(document.documentElement);
+      const pre = card.querySelector('pre');
+      const inline = card.querySelector('p code');
+      return {
+        codeBgToken: root.getPropertyValue('--code-bg').trim(),
+        codeTextToken: root.getPropertyValue('--code-text').trim(),
+        codeBorderToken: root.getPropertyValue('--code-border').trim(),
+        inlineBgToken: root.getPropertyValue('--code-inline-bg').trim(),
+        inlineTextToken: root.getPropertyValue('--code-inline-text').trim(),
+        preBackground: getComputedStyle(pre).backgroundColor,
+        preColor: getComputedStyle(pre).color,
+        preBorder: getComputedStyle(pre).borderTopColor,
+        inlineBackground: getComputedStyle(inline).backgroundColor,
+        inlineColor: getComputedStyle(inline).color,
+        cardBackground: getComputedStyle(card).backgroundColor,
+      };
+    });
+    const expected = await page.evaluate((tokens) => {
+      const probe = document.createElement('div');
+      document.body.appendChild(probe);
+      const resolved = {};
+      for (const [name, token] of Object.entries(tokens)) {
+        const isText = name.toLowerCase().includes('text') || name.toLowerCase().includes('border');
+        if (isText) {
+          probe.style.color = token;
+          resolved[name] = getComputedStyle(probe).color;
+        } else {
+          probe.style.backgroundColor = token;
+          resolved[name] = getComputedStyle(probe).backgroundColor;
+        }
+      }
+      probe.remove();
+      return resolved;
+    }, {
+      codeBg: colors.codeBgToken,
+      codeText: colors.codeTextToken,
+      codeBorder: colors.codeBorderToken,
+      inlineBg: colors.inlineBgToken,
+      inlineText: colors.inlineTextToken,
+    });
+    expect(colors.preBackground).toBe(expected.codeBg);
+    expect(colors.preColor).toBe(expected.codeText);
+    expect(colors.preBorder).toBe(expected.codeBorder);
+    expect(colors.inlineBackground).toBe(expected.inlineBg);
+    expect(colors.inlineColor).toBe(expected.inlineText);
+    expect(colors.preBackground).not.toBe(colors.cardBackground);
+    expect(colors.inlineBackground).not.toBe(colors.cardBackground);
+    await page.screenshot({
+      path: '/tmp/codex-web-code-surfaces-' + theme + '-desktop.png',
       fullPage: true,
     });
   }

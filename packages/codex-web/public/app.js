@@ -13931,18 +13931,18 @@ function messageFontSizeTokens(size) {
   switch (normalizeMessageFontSize(size)) {
     case 'small':
       return {
-        fontSize: '13px',
-        headingFontSize: '13px',
+        fontSize: '15px',
+        headingFontSize: '17px',
       };
     case 'large':
       return {
-        fontSize: '17px',
-        headingFontSize: '16px',
+        fontSize: '18px',
+        headingFontSize: '20px',
       };
     default:
       return {
-        fontSize: '15px',
-        headingFontSize: '14px',
+        fontSize: '16px',
+        headingFontSize: '18px',
       };
   }
 }
