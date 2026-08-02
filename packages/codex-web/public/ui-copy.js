@@ -72,6 +72,8 @@
       'Log in': '登录',
       Sessions: '会话',
       Back: '返回',
+      'Expand sidebar': '展开侧边栏',
+      'Collapse sidebar': '收起侧边栏',
       Open: '打开',
       New: '新建',
       Setting: '设置',

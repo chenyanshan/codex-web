@@ -55,5 +55,69 @@
     `;
   }
 
-  globalObject.CodexWebUi = Object.freeze({ icon, segmentedControl });
+  function hideTooltip(tooltip = globalObject.document?.querySelector('#global-tooltip')) {
+    tooltip?.classList.remove('is-visible');
+    tooltip?.setAttribute('aria-hidden', 'true');
+  }
+
+  function bindSidebarTooltips(sidebar, tooltip, signal) {
+    hideTooltip(tooltip);
+    if (!sidebar || !tooltip || !signal) {
+      return;
+    }
+    const show = ({ currentTarget: item }) => {
+      const label = item.dataset.tooltip?.trim();
+      if (!label || sidebar.classList.contains('expanded')) {
+        return;
+      }
+      const itemRect = item.getBoundingClientRect();
+      tooltip.textContent = label;
+      tooltip.classList.add('is-visible');
+      tooltip.setAttribute('aria-hidden', 'false');
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const right = Math.max(itemRect.right, sidebar.getBoundingClientRect().right) + 12;
+      tooltip.style.left = `${Math.round(right + tooltipRect.width <= globalObject.innerWidth - 8
+        ? right
+        : Math.max(8, itemRect.left - tooltipRect.width - 12))}px`;
+      tooltip.style.top = `${Math.round(Math.min(
+        globalObject.innerHeight - tooltipRect.height - 8,
+        Math.max(8, itemRect.top + ((itemRect.height - tooltipRect.height) / 2)),
+      ))}px`;
+    };
+    const listenerOptions = { signal };
+    for (const item of sidebar.querySelectorAll('[data-tooltip]')) {
+      item.addEventListener('mouseenter', show, listenerOptions);
+      item.addEventListener('mouseleave', () => hideTooltip(tooltip), listenerOptions);
+      item.addEventListener('focus', show, listenerOptions);
+      item.addEventListener('blur', () => hideTooltip(tooltip), listenerOptions);
+    }
+    sidebar.querySelector('.project-rail-list')?.addEventListener(
+      'scroll',
+      () => hideTooltip(tooltip),
+      { signal, passive: true },
+    );
+    globalObject.addEventListener('resize', () => hideTooltip(tooltip), { signal, passive: true });
+  }
+
+  function readStoredBoolean(key) {
+    const value = globalObject.localStorage.getItem(key);
+    return value === null ? null : value === 'true';
+  }
+
+  function storeBoolean(key, value) {
+    try {
+      globalObject.localStorage.setItem(key, String(Boolean(value)));
+    } catch (_error) {
+      // The UI state still applies for this page when browser storage is unavailable.
+    }
+  }
+
+  globalObject.CodexWebUi = Object.freeze({
+    bindSidebarTooltips,
+    hideTooltip,
+    icon,
+    readStoredBoolean,
+    segmentedControl,
+    storeBoolean,
+  });
 })(globalThis);

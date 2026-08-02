@@ -35,6 +35,7 @@ const DEFAULT_THREAD_SETTINGS_VERSION_KEY = 'codexWebDefaultThreadSettingsVersio
 const DEFAULT_THREAD_SETTINGS_VERSION = '2';
 const MESSAGE_FONT_SIZE_KEY = 'codexWebMessageFontSize';
 const LANGUAGE_KEY = 'codexWebLanguage';
+const DESKTOP_SIDEBAR_KEY = 'codexWebDesktopSidebarExpanded';
 const MAX_TIMELINE_CACHE_SESSIONS = 5;
 const MAX_TIMELINE_CACHE_ITEMS = 80;
 const MAX_TIMELINE_CACHE_MAP_ITEMS = 24;
@@ -185,6 +186,7 @@ const state = {
   selectedProjectId: '',
   selectedProjectLabel: '',
   mobileSidebarOpen: false,
+  desktopSidebarExpanded: UI.readStoredBoolean?.(DESKTOP_SIDEBAR_KEY) ?? null,
   desktopSettingsOpen: false,
   desktopOverlay: null,
   theme: normalizeTheme(localStorage.getItem(THEME_KEY)),
@@ -1266,7 +1268,7 @@ function renderDesktopWorkspace() {
   const shell = document.createElement('div');
   shell.className = 'shell desktop-shell';
   shell.innerHTML = `
-    <div class="desktop-workspace">
+    <div class="desktop-workspace${state.desktopSidebarExpanded ? ' sidebar-expanded' : ''}">
       ${renderDesktopProjectRail()}
       ${renderDesktopSessionPane()}
       <div class="desktop-workspace-pane-stack">
@@ -1282,16 +1284,19 @@ function renderDesktopWorkspace() {
 }
 
 function renderDesktopProjectRail() {
+  const sidebarLabel = state.desktopSidebarExpanded ? t('Collapse sidebar') : t('Expand sidebar');
   return `
-    <aside class="desktop-project-rail">
+    <aside class="desktop-project-rail${state.desktopSidebarExpanded ? ' expanded' : ''}" id="main-sidebar" aria-label="${escapeAttribute(t('Projects'))}">
       <header class="project-rail-header">
-        <div class="project-rail-brand">${escapeHtml(state.siteTitle)}</div>
+        <span class="project-rail-brand-mark" aria-hidden="true">${escapeHtml(projectMonogram(state.siteTitle))}</span>
+        <div class="project-rail-brand" data-i18n-skip>${escapeHtml(state.siteTitle)}</div>
       </header>
       <nav class="project-rail-list" aria-label="${escapeAttribute(t('Projects'))}" data-i18n-skip>
         ${renderWorkspaceProjectList()}
       </nav>
       <div class="project-rail-footer">
         ${renderWorkspaceRailActions()}
+        <button class="project-rail-action desktop-sidebar-toggle" type="button" id="desktop-sidebar-toggle-button" data-tooltip="${escapeAttribute(sidebarLabel)}" aria-label="${escapeAttribute(sidebarLabel)}" aria-expanded="${String(state.desktopSidebarExpanded)}">${UI.icon('arrowLeft', { className: 'project-rail-action-icon desktop-sidebar-toggle-icon' })}<span>${escapeHtml(sidebarLabel)}</span></button>
       </div>
     </aside>
   `;
@@ -4235,6 +4240,27 @@ function bindGlobalEvents() {
     });
   }
 
+  const desktopSidebarToggleButton = document.querySelector('#desktop-sidebar-toggle-button');
+  if (desktopSidebarToggleButton) {
+    listenRendered(desktopSidebarToggleButton, 'click', () => {
+      state.desktopSidebarExpanded = !state.desktopSidebarExpanded;
+      UI.storeBoolean?.(DESKTOP_SIDEBAR_KEY, state.desktopSidebarExpanded);
+      UI.hideTooltip?.();
+      const sidebar = document.querySelector('#main-sidebar');
+      const workspace = sidebar?.closest('.desktop-workspace');
+      const sidebarLabel = state.desktopSidebarExpanded ? t('Collapse sidebar') : t('Expand sidebar');
+      sidebar?.classList.toggle('expanded', state.desktopSidebarExpanded);
+      workspace?.classList.toggle('sidebar-expanded', state.desktopSidebarExpanded);
+      desktopSidebarToggleButton.setAttribute('aria-expanded', String(state.desktopSidebarExpanded));
+      desktopSidebarToggleButton.setAttribute('aria-label', sidebarLabel);
+      desktopSidebarToggleButton.dataset.tooltip = sidebarLabel;
+      const visibleLabel = desktopSidebarToggleButton.querySelector('span');
+      if (visibleLabel) {
+        visibleLabel.textContent = sidebarLabel;
+      }
+    });
+  }
+
   const mobileDrawerCloseButton = document.querySelector('#mobile-drawer-close-button');
   if (mobileDrawerCloseButton) {
     listenRendered(mobileDrawerCloseButton, 'click', closeMobileSidebar);
@@ -4709,6 +4735,11 @@ function bindGlobalEvents() {
     });
   }
 
+  UI.bindSidebarTooltips?.(
+    document.querySelector('#main-sidebar'),
+    document.querySelector('#global-tooltip'),
+    renderEventController?.signal,
+  );
 }
 
 function bindSessionCardEvents(root = document) {
@@ -9281,6 +9312,10 @@ async function refreshProjectsList({ renderAfter = true, request = null } = {}) 
     }
     state.projects = normalizeProjects(payload);
     state.projectsLoaded = true;
+    if (state.desktopSidebarExpanded === null) {
+      state.desktopSidebarExpanded = state.projects.length >= 2;
+      UI.storeBoolean?.(DESKTOP_SIDEBAR_KEY, state.desktopSidebarExpanded);
+    }
     initializeNewProjectSelection();
     resolvePendingWorkDetailsPolicy();
     enforceKnownWorkDetailsAccess();
@@ -12767,8 +12802,8 @@ function renderWorkspaceProjectList() {
     const favoriteLabel = t(favorite ? 'Unfavorite {label}' : 'Favorite {label}', { label: project.label });
     return `
     <div class="project-rail-item${canFavorite ? ' has-favorite-control' : ''}${isActive ? ' is-active' : ''}${favorite ? ' is-favorite' : ''}">
-      <button class="project-rail-select-button" type="button" data-project-scope-key="${escapeAttribute(project.key)}" aria-pressed="${String(isActive)}">
-        <span class="project-rail-marker" aria-hidden="true"></span>
+      <button class="project-rail-select-button" type="button" data-project-scope-key="${escapeAttribute(project.key)}" data-tooltip="${escapeAttribute(project.label)}" aria-label="${escapeAttribute(project.label)}" aria-pressed="${String(isActive)}">
+        <span class="project-rail-marker" aria-hidden="true">${escapeHtml(projectMonogram(project.label))}</span>
         <span class="project-rail-item-main"${project.source === 'all' ? '' : ' data-i18n-skip'}>${escapeHtml(project.label)}</span>
         <span class="project-rail-item-meta">${escapeHtml(count)}</span>
       </button>
@@ -12788,14 +12823,18 @@ function renderWorkspaceRailActions({ mobile = false } = {}) {
   const settingsActive = state.view === 'settings' || state.desktopSettingsOpen;
   if (mobile) {
     return `
-    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">${UI.icon('settings', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Setting'))}</span></button>
-    ${showAdmin ? `<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">${UI.icon('admin', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Admin Console'))}</span></button>` : ''}
+    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button" data-tooltip="${escapeAttribute(t('Setting'))}">${UI.icon('settings', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Setting'))}</span></button>
+    ${showAdmin ? `<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button" data-tooltip="${escapeAttribute(t('Admin Console'))}">${UI.icon('admin', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Admin Console'))}</span></button>` : ''}
   `;
   }
   return `
-    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button">${UI.icon('settings', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Setting'))}</span></button>
-    ${showAdmin ? `<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button">${UI.icon('admin', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Admin Console'))}</span></button>` : ''}
+    <button class="project-rail-action${settingsActive ? ' is-active' : ''}" type="button" id="open-app-settings-button" data-tooltip="${escapeAttribute(t('Setting'))}">${UI.icon('settings', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Setting'))}</span></button>
+    ${showAdmin ? `<button class="project-rail-action project-rail-admin-action" type="button" id="open-admin-console-button" data-tooltip="${escapeAttribute(t('Admin Console'))}">${UI.icon('admin', { className: 'project-rail-action-icon' })}<span>${escapeHtml(t('Admin Console'))}</span></button>` : ''}
   `;
+}
+
+function projectMonogram(label) {
+  return Array.from(String(label || '').trim())[0]?.toLocaleUpperCase() || '?';
 }
 
 function renderMobileProjectDrawer() {

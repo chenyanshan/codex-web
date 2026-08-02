@@ -197,6 +197,37 @@ body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 52%, transparent);
 }
 
+.global-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 6px 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--overlay) 18%, transparent);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-8px);
+  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+}
+
+.global-tooltip.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+}
+
 ::-webkit-scrollbar {
   width: 4px;
   height: 4px;
@@ -209,6 +240,43 @@ body {
 ::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: color-mix(in srgb, var(--muted) 34%, transparent);
+}
+
+.project-rail-list,
+.session-list,
+.admin-console-screen,
+.admin-content {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.project-rail-list::-webkit-scrollbar,
+.session-list::-webkit-scrollbar,
+.admin-console-screen::-webkit-scrollbar,
+.admin-content::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.composer textarea {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.composer textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.timeline {
+  scrollbar-width: thin;
+}
+
+.timeline::-webkit-scrollbar {
+  width: 4px;
+  display: block;
 }
 
 button,
@@ -1860,6 +1928,20 @@ button:disabled {
   letter-spacing: 0;
 }
 
+.project-rail-brand-mark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-card) 74%, transparent);
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 800;
+}
+
 .project-rail-meta {
   min-width: 0;
   color: var(--muted);
@@ -1932,7 +2014,7 @@ button:disabled {
   min-height: 40px;
   padding: 0 0 0 10px;
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   border: 0;
@@ -1942,10 +2024,16 @@ button:disabled {
 }
 
 .project-rail-marker {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--border-strong);
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-card) 68%, var(--bg-panel));
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 750;
+  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
 .project-rail-favorite-button {
@@ -1990,6 +2078,13 @@ button:disabled {
   color: var(--text);
 }
 
+.project-rail-item:hover .project-rail-marker,
+.project-rail-item:focus-within .project-rail-marker {
+  background: var(--brand-color);
+  color: var(--brand-text);
+  transform: translateY(-1px);
+}
+
 .project-rail-item.is-active,
 .project-rail-action.is-active {
   background: var(--bg-user-shared);
@@ -2001,7 +2096,8 @@ button:disabled {
 }
 
 .project-rail-item.is-active .project-rail-marker {
-  background: color-mix(in srgb, var(--text-muted) 72%, var(--bg-user-shared));
+  background: var(--brand-color);
+  color: var(--brand-text);
 }
 
 .project-rail-item-main,
@@ -4361,8 +4457,13 @@ pre.command {
     height: 100dvh;
     min-height: 0;
     display: grid;
-    grid-template-columns: 256px 363px minmax(640px, 1fr);
+    grid-template-columns: 72px 363px minmax(640px, 1fr);
     overflow: hidden;
+    transition: grid-template-columns 200ms ease;
+  }
+
+  .desktop-workspace.sidebar-expanded {
+    grid-template-columns: 256px 363px minmax(640px, 1fr);
   }
 
   .desktop-project-rail,
@@ -4383,7 +4484,76 @@ pre.command {
     height: 66px;
     min-height: 66px;
     max-height: 66px;
+    padding: 0 10px;
+    flex-direction: row;
+    align-items: center;
     justify-content: center;
+  }
+
+  .desktop-project-rail:not(.expanded) > .project-rail-header .project-rail-brand {
+    display: none;
+  }
+
+  .desktop-project-rail.expanded > .project-rail-header {
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .desktop-project-rail.expanded > .project-rail-header .project-rail-brand {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 17px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .desktop-project-rail:not(.expanded) .project-rail-list {
+    padding: 10px 8px;
+  }
+
+  .desktop-project-rail:not(.expanded) .project-rail-group-label,
+  .desktop-project-rail:not(.expanded) .project-rail-item-main,
+  .desktop-project-rail:not(.expanded) .project-rail-item-meta,
+  .desktop-project-rail:not(.expanded) .project-rail-favorite-button,
+  .desktop-project-rail:not(.expanded) .project-rail-action > span {
+    display: none;
+  }
+
+  .desktop-project-rail:not(.expanded) .project-rail-item,
+  .desktop-project-rail:not(.expanded) .project-rail-item.has-favorite-control {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0;
+  }
+
+  .desktop-project-rail:not(.expanded) .project-rail-select-button {
+    padding: 4px;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .desktop-project-rail:not(.expanded) .project-rail-marker {
+    width: 38px;
+    height: 38px;
+    font-size: 13px;
+  }
+
+  .desktop-project-rail:not(.expanded) .project-rail-footer {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .desktop-project-rail:not(.expanded) .project-rail-action {
+    padding: 0;
+    grid-template-columns: minmax(0, 1fr);
+    place-items: center;
+  }
+
+  .desktop-sidebar-toggle-icon {
+    transition: transform 180ms ease;
+  }
+
+  .desktop-project-rail:not(.expanded) .desktop-sidebar-toggle-icon {
+    transform: rotate(180deg);
   }
 
   .desktop-session-pane {

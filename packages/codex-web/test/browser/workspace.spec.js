@@ -64,6 +64,87 @@ test.beforeEach(async ({ page }, testInfo) => {
   }, browserToken);
 });
 
+test('desktop project sidebar expands smoothly and uses an unclipped global tooltip', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop rail behavior only applies to the wide workspace.');
+
+  await page.goto('/');
+  const sidebar = page.locator('#main-sidebar');
+  const workspace = page.locator('.desktop-workspace');
+  const projectButton = sidebar.locator('[data-project-scope-key]').first();
+  const projectLabel = projectButton.locator('.project-rail-item-main');
+  const tooltip = page.locator('#global-tooltip');
+  const toggle = page.locator('#desktop-sidebar-toggle-button');
+
+  await expect(sidebar).toBeVisible();
+  await expect(sidebar).not.toHaveClass(/expanded/u);
+  await expect(sidebar).toHaveCSS('width', '72px');
+  await expect(projectButton.locator('.project-rail-marker')).toHaveText(/\S/u);
+  await expect(projectLabel).toHaveCSS('display', 'none');
+
+  await projectButton.hover();
+  await expect(tooltip).toHaveClass(/is-visible/u);
+  await expect(tooltip).toHaveAttribute('aria-hidden', 'false');
+  const tooltipGeometry = await page.evaluate(() => {
+    const sidebarElement = document.querySelector('#main-sidebar');
+    const tooltipElement = document.querySelector('#global-tooltip');
+    const sidebarBox = sidebarElement?.getBoundingClientRect();
+    const tooltipBox = tooltipElement?.getBoundingClientRect();
+    return {
+      parentIsBody: tooltipElement?.parentElement === document.body,
+      sidebarRight: sidebarBox?.right ?? 0,
+      tooltipLeft: tooltipBox?.left ?? 0,
+      tooltipRight: tooltipBox?.right ?? 0,
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(tooltipGeometry.parentIsBody).toBe(true);
+  expect(tooltipGeometry.tooltipLeft).toBeGreaterThan(tooltipGeometry.sidebarRight);
+  expect(tooltipGeometry.tooltipRight).toBeLessThanOrEqual(tooltipGeometry.viewportWidth);
+
+  await toggle.click();
+  await expect(sidebar).toHaveClass(/expanded/u);
+  await expect(workspace).toHaveClass(/sidebar-expanded/u);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(sidebar).toHaveCSS('width', '256px');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('codexWebDesktopSidebarExpanded'))).toBe('true');
+  await expect(projectLabel).not.toHaveCSS('display', 'none');
+  await expect(tooltip).not.toHaveClass(/is-visible/u);
+  await projectButton.hover();
+  await expect(tooltip).not.toHaveClass(/is-visible/u);
+
+  await page.reload();
+  await expect(page.locator('#main-sidebar')).toHaveCSS('width', '256px');
+  await expect(page.locator('#desktop-sidebar-toggle-button')).toHaveAttribute('aria-expanded', 'true');
+
+  await page.locator('#desktop-sidebar-toggle-button').click();
+  await expect(page.locator('#main-sidebar')).toHaveCSS('width', '72px');
+  await expect(page.locator('#desktop-sidebar-toggle-button')).toHaveAttribute('aria-expanded', 'false');
+  await page.reload();
+  await expect(page.locator('#main-sidebar')).toHaveCSS('width', '72px');
+  const overflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    body: document.body.scrollWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(Math.max(overflow.body, overflow.document)).toBeLessThanOrEqual(overflow.viewport + 1);
+});
+
+test('mobile project navigation remains a full drawer without the desktop rail toggle', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-compact', 'One compact mobile viewport covers the drawer structure.');
+
+  await page.goto('/');
+  await expect(page.locator('#main-sidebar')).toHaveCount(0);
+  await page.locator('#mobile-sidebar-toggle-button').click();
+  const drawer = page.locator('.mobile-project-drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveClass(/is-open/u);
+  await expect(drawer.locator('.project-rail-item-main').first()).toBeVisible();
+  await expect(drawer.locator('#desktop-sidebar-toggle-button')).toHaveCount(0);
+  const box = await drawer.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box.width).toBeGreaterThanOrEqual(240);
+});
+
 test('failed session messages can be dismissed without leaving a stuck list badge', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     const submissionId = 'failed_browser_message';

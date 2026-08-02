@@ -83,6 +83,7 @@ test('app shell shows a lightweight loading state before the main module execute
   ]);
 
   assert.match(index, /<div class="boot-shell" role="status" aria-label="Loading Codex">/u);
+  assert.match(index, /<div id="global-tooltip" class="global-tooltip" role="tooltip" aria-hidden="true"><\/div>/u);
   assert.ok(index.indexOf('class="boot-shell"') < index.indexOf('src="/app.js'));
   assert.match(styles, /\.boot-shell\s*\{/u);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/u);
@@ -5578,7 +5579,8 @@ test('desktop workspace CSS waits for enough room before creating three panes', 
 
   assert.match(styles, /@media \(min-width:\s*1280px\) and \(orientation:\s*landscape\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
   assert.match(styles, /\.desktop-workspace\s*\{[^}]*display:\s*grid;/su);
-  assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*256px 363px minmax\(640px,\s*1fr\);/su);
+  assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*72px 363px minmax\(640px,\s*1fr\);/su);
+  assert.match(styles, /\.desktop-workspace\.sidebar-expanded\s*\{[^}]*grid-template-columns:\s*256px 363px minmax\(640px,\s*1fr\);/su);
   assert.match(styles, /\.desktop-project-rail,\s*\.desktop-session-pane\s*\{[^}]*overflow:\s*hidden;/su);
   assert.match(styles, /\.desktop-session-list\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.match(styles, /\.desktop-chat-pane\s*\{[^}]*position:\s*relative;/su);
@@ -11818,8 +11820,93 @@ test('project navigation uses rounded hover and active surfaces without adding s
   assert.match(styles, /\.project-rail-action\s*\{[^}]*border-radius:\s*8px;/su);
   assert.match(styles, /\.project-rail-item:hover,[\s\S]*\.project-rail-action:focus-visible\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 62%,\s*transparent\);/su);
   assert.match(styles, /\.project-rail-item\.is-active,\s*\.project-rail-action\.is-active\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
-  assert.match(styles, /\.project-rail-item\.is-active \.project-rail-marker\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--text-muted\) 72%,\s*var\(--bg-user-shared\)\);/su);
+  assert.match(styles, /\.project-rail-item\.is-active \.project-rail-marker\s*\{[^}]*background:\s*var\(--brand-color\);[^}]*color:\s*var\(--brand-text\);/su);
   assert.doesNotMatch(app, /sessionSearchQuery|renderSessionSearchField|id="session-search-input"/u);
+});
+
+test('desktop project rail defaults to a 72px monogram sidebar and expands to 256px', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
+  const { api } = await loadAppHarness({ viewportWidth: 1440, viewportHeight: 900, desktopPointer: true });
+  api.state.projects = [{ id: 'project_alpha', displayName: 'Workspace Alpha', cwd: '/repo/alpha' }];
+  api.state.desktopSidebarExpanded = false;
+
+  const collapsed = api.renderDesktopProjectRail();
+  api.state.desktopSidebarExpanded = true;
+  const expanded = api.renderDesktopProjectRail();
+
+  assert.match(collapsed, /<aside class="desktop-project-rail" id="main-sidebar"/u);
+  assert.match(collapsed, /class="project-rail-brand-mark"[^>]*>C<\/span>/u);
+  assert.match(collapsed, /class="project-rail-marker"[^>]*>W<\/span>/u);
+  assert.match(collapsed, /id="desktop-sidebar-toggle-button"[^>]*aria-expanded="false"/u);
+  assert.match(expanded, /<aside class="desktop-project-rail expanded" id="main-sidebar"/u);
+  assert.match(expanded, /id="desktop-sidebar-toggle-button"[^>]*aria-expanded="true"/u);
+  assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*72px 363px minmax\(640px,\s*1fr\);/su);
+  assert.match(styles, /\.desktop-workspace\.sidebar-expanded\s*\{[^}]*grid-template-columns:\s*256px 363px minmax\(640px,\s*1fr\);/su);
+  assert.match(styles, /\.desktop-project-rail:not\(\.expanded\) \.project-rail-item-main,[\s\S]*\.desktop-project-rail:not\(\.expanded\) \.project-rail-action > span\s*\{[^}]*display:\s*none;/su);
+  assert.match(app, /state\.desktopSidebarExpanded = !state\.desktopSidebarExpanded;/u);
+  assert.match(app, /UI\.storeBoolean\?\.\(DESKTOP_SIDEBAR_KEY, state\.desktopSidebarExpanded\);/u);
+  assert.match(app, /if \(state\.desktopSidebarExpanded === null\)[\s\S]*state\.desktopSidebarExpanded = state\.projects\.length >= 2;[\s\S]*UI\.storeBoolean\?\.\(DESKTOP_SIDEBAR_KEY, state\.desktopSidebarExpanded\);/u);
+  assert.match(app, /workspace\?\.classList\.toggle\('sidebar-expanded', state\.desktopSidebarExpanded\);/u);
+  assert.doesNotMatch(app, /state\.desktopSidebarExpanded = !state\.desktopSidebarExpanded;[\s\S]{0,120}render\(\);/u);
+  assert.doesNotMatch(app, /global-search|session-search-input|renderSessionSearchField/u);
+});
+
+test('desktop sidebar defaults from project count and restores an explicit browser preference', async () => {
+  const oneProject = await loadAppHarness();
+  await oneProject.api.refreshProjectsList({
+    renderAfter: false,
+    request: Promise.resolve({ items: [{ id: 'project_a' }] }),
+  });
+  assert.equal(oneProject.api.state.desktopSidebarExpanded, false);
+  assert.equal(oneProject.storage.get('codexWebDesktopSidebarExpanded'), 'false');
+
+  const twoProjects = await loadAppHarness();
+  await twoProjects.api.refreshProjectsList({
+    renderAfter: false,
+    request: Promise.resolve({ items: [{ id: 'project_a' }, { id: 'project_b' }] }),
+  });
+  assert.equal(twoProjects.api.state.desktopSidebarExpanded, true);
+  assert.equal(twoProjects.storage.get('codexWebDesktopSidebarExpanded'), 'true');
+
+  const restored = await loadAppHarness({ storage: { codexWebDesktopSidebarExpanded: 'false' } });
+  await restored.api.refreshProjectsList({
+    renderAfter: false,
+    request: Promise.resolve({ items: [{ id: 'project_a' }, { id: 'project_b' }] }),
+  });
+  assert.equal(restored.api.state.desktopSidebarExpanded, false);
+});
+
+test('global sidebar tooltip is body-level and positions outside overflow containers', async () => {
+  const [index, app, uiKit, styles] = await Promise.all([
+    readFile(indexUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(uiKitUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
+
+  assert.match(index, /<\/div>\s*<div id="global-tooltip" class="global-tooltip" role="tooltip" aria-hidden="true"><\/div>\s*<script src="\/pwa-pull-refresh/u);
+  assert.match(app, /UI\.bindSidebarTooltips\?\.\(/u);
+  assert.match(uiKit, /function bindSidebarTooltips\(sidebar, tooltip, signal\)/u);
+  assert.match(uiKit, /sidebar\.classList\.contains\('expanded'\)/u);
+  assert.match(uiKit, /item\.getBoundingClientRect\(\)/u);
+  assert.match(uiKit, /Math\.max\(itemRect\.right, sidebar\.getBoundingClientRect\(\)\.right\) \+ 12/u);
+  assert.match(uiKit, /globalObject\.innerWidth/u);
+  assert.match(styles, /\.global-tooltip\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*9999;/su);
+  assert.match(styles, /\.global-tooltip\.is-visible\s*\{[^}]*opacity:\s*1;[^}]*visibility:\s*visible;/su);
+});
+
+test('list, admin, and composer scrollers hide chrome while the message timeline keeps its scrollbar', async () => {
+  const styles = await readFile(stylesUrl, 'utf8');
+
+  assert.match(styles, /\.project-rail-list,\s*\.session-list,\s*\.admin-console-screen,\s*\.admin-content\s*\{[^}]*scrollbar-width:\s*none;/su);
+  assert.match(styles, /\.project-rail-list::-webkit-scrollbar,[\s\S]*\.admin-content::-webkit-scrollbar\s*\{[^}]*display:\s*none;/su);
+  assert.match(styles, /\.composer textarea\s*\{[^}]*scrollbar-width:\s*none;/su);
+  assert.match(styles, /\.composer textarea::-webkit-scrollbar\s*\{[^}]*display:\s*none;/su);
+  assert.match(styles, /\.timeline\s*\{[^}]*scrollbar-width:\s*thin;/su);
+  assert.match(styles, /\.timeline::-webkit-scrollbar\s*\{[^}]*width:\s*4px;[^}]*display:\s*block;/su);
 });
 
 test('archived session cards use a clear restore icon instead of a font glyph', async () => {
@@ -13116,7 +13203,7 @@ test('session pane keeps the icon New control neutral and omits redundant action
   assert.doesNotMatch(favoritesHtml, /open-reports-button|>Reports<\/button>/u);
   assert.match(favoritesHtml, /class="ghost icon-button mobile-new-session-button" type="button" id="open-new-session-button"/u);
   assert.doesNotMatch(railHtml, /id="rail-show-sessions-button"|>Sessions<\/button>/u);
-  assert.match(railHtml, /class="project-rail-action" type="button" id="open-app-settings-button">[\s\S]*<span>Setting<\/span><\/button>/u);
+  assert.match(railHtml, /class="project-rail-action" type="button" id="open-app-settings-button" data-tooltip="Setting">[\s\S]*<span>Setting<\/span><\/button>/u);
   assert.doesNotMatch(favoritesHtml, /id="rail-open-new-session-button"/u);
   assert.doesNotMatch(favoritesHtml, /class="primary compact-button" type="button" id="open-new-session-button"/u);
 
