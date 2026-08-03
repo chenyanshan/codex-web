@@ -104,7 +104,7 @@ test('markdown code surfaces use dedicated high-contrast theme tokens', async ()
   assert.match(styles, /:root\[data-theme="dark-gold"\]\s*\{[^}]*--code-bg:\s*#15171c;[^}]*--code-border:\s*#71717a;[^}]*--code-inline-bg:\s*#55555f;/su);
   assert.match(styles, /:root\[data-theme="oled-black"\]\s*\{[^}]*--code-bg:\s*#202026;[^}]*--code-border:\s*#71717a;[^}]*--code-inline-bg:\s*#4b4b55;/su);
   assert.match(styles, /\.markdown-body pre\s*\{[^}]*border:\s*1px solid var\(--code-border\);[^}]*background:\s*var\(--code-bg\);[^}]*color:\s*var\(--code-text\);/su);
-  assert.match(styles, /\.markdown-body :not\(pre\) > code\s*\{[^}]*background:\s*var\(--code-inline-bg\);[^}]*color:\s*var\(--code-inline-text\);/su);
+  assert.match(styles, /\.markdown-body :not\(pre\) > code\s*\{[^}]*border:\s*0;[^}]*background:\s*var\(--code-inline-bg\);[^}]*color:\s*var\(--code-inline-text\);/su);
 });
 
 test('PWA checks for updates without forcing stale cached pages to reload', async () => {

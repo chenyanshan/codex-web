@@ -1311,6 +1311,7 @@ test('dark themes keep block and inline code visibly separated', async ({ page }
         preColor: getComputedStyle(pre).color,
         preBorder: getComputedStyle(pre).borderTopColor,
         inlineBackground: getComputedStyle(inline).backgroundColor,
+        inlineBorderWidth: getComputedStyle(inline).borderTopWidth,
         inlineColor: getComputedStyle(inline).color,
         cardBackground: getComputedStyle(card).backgroundColor,
       };
@@ -1342,6 +1343,7 @@ test('dark themes keep block and inline code visibly separated', async ({ page }
     expect(colors.preColor).toBe(expected.codeText);
     expect(colors.preBorder).toBe(expected.codeBorder);
     expect(colors.inlineBackground).toBe(expected.inlineBg);
+    expect(colors.inlineBorderWidth).toBe('0px');
     expect(colors.inlineColor).toBe(expected.inlineText);
     expect(colors.preBackground).not.toBe(colors.cardBackground);
     expect(colors.inlineBackground).not.toBe(colors.cardBackground);

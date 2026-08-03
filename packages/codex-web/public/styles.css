@@ -4010,7 +4010,7 @@ button:disabled {
 
 .markdown-body :not(pre) > code {
   padding: 2px 5px;
-  border: 1px solid color-mix(in srgb, var(--code-border) 74%, transparent);
+  border: 0;
   border-radius: 4px;
   background: var(--code-inline-bg);
   color: var(--code-inline-text);
