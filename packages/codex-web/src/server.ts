@@ -2271,7 +2271,7 @@ async function advanceSessionSubmission({
     current = await store.update(current.ownerUserId, current.id, (value) => ({
       ...value,
       status: 'submitted',
-      turnId: 'turnId' in result ? result.turnId : null,
+      turnId: normalizeOptionalString(result.turnId) || null,
       result: presentedResult,
       turnBaseline: null,
       payload: redactSubmittedPayload(value.payload),
@@ -2609,7 +2609,7 @@ function presentSubmissionTurnResult({
   target: SessionSubmissionTarget;
   principal: CodexWebPrincipal;
 }): Record<string, unknown> {
-  if ('turnId' in result) {
+  if (!('type' in result)) {
     return { turnId: result.turnId };
   }
   let presented: Record<string, unknown>;
@@ -5492,11 +5492,12 @@ function presentStartTurnResultForUser({
   project: CodexWebProject | null;
   includeWorkDetails: boolean;
 }): Record<string, unknown> {
-  if ('turnId' in result) {
+  if (!('type' in result)) {
     return { turnId: result.turnId };
   }
   return {
     type: 'command',
+    ...(result.turnId ? { turnId: result.turnId } : {}),
     command: {
       name: result.command.name,
       action: result.command.action,

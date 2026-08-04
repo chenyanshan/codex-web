@@ -465,20 +465,18 @@ test('workspace is usable without overflow and exposes work and status semantics
       await expectTouchTarget(locator);
     }
     const composerGeometry = await page.locator('#composer-form').evaluate((composer) => {
-      const controls = [
-        composer.querySelector('#prompt-input'),
-        composer.querySelector('#attach-button'),
-        composer.querySelector('#composer-refresh-button'),
-        composer.querySelector('#send-button'),
-      ].map((element) => element?.getBoundingClientRect()).filter(Boolean);
-      const centers = controls.map((rect) => rect.top + rect.height / 2);
+      const prompt = composer.querySelector('#prompt-input')?.getBoundingClientRect();
+      const attach = composer.querySelector('#attach-button')?.getBoundingClientRect();
+      const send = composer.querySelector('#send-button')?.getBoundingClientRect();
       return {
         height: composer.getBoundingClientRect().height,
-        centerSpread: Math.max(...centers) - Math.min(...centers),
+        promptHeight: prompt?.height || 0,
+        bottomSpread: Math.abs((attach?.bottom || 0) - (send?.bottom || 0)),
       };
     });
     expect(composerGeometry.height).toBeLessThanOrEqual(64);
-    expect(composerGeometry.centerSpread).toBeLessThanOrEqual(2);
+    expect(composerGeometry.promptHeight).toBeGreaterThanOrEqual(44);
+    expect(composerGeometry.bottomSpread).toBeLessThanOrEqual(2);
   }
 
   const layout = await page.evaluate(() => ({
@@ -540,10 +538,35 @@ test('mobile composer expands after four lines and restores the compact attachme
 
   const expandButton = page.getByRole('button', { name: 'Expand message editor' });
   await expect(expandButton).toBeVisible();
+  await expect(promptInput).toBeFocused();
+  const expandButtonStyle = await expandButton.evaluate((element) => {
+    const styles = window.getComputedStyle(element);
+    return {
+      borderWidth: styles.borderTopWidth,
+      boxShadow: styles.boxShadow,
+      appearance: styles.appearance,
+    };
+  });
+  expect(expandButtonStyle).toEqual({
+    borderWidth: '0px',
+    boxShadow: 'none',
+    appearance: 'none',
+  });
+  const leadingControlLayout = await page.locator('#composer-form').evaluate((composer) => {
+    const expand = composer.querySelector('#composer-expand-button')?.getBoundingClientRect();
+    const upload = composer.querySelector('#attach-button')?.getBoundingClientRect();
+    return {
+      expandAboveUpload: Boolean(expand && upload && expand.bottom <= upload.top + 1),
+      leftEdgesAligned: Boolean(expand && upload && Math.abs(expand.left - upload.left) <= 1),
+    };
+  });
+  expect(leadingControlLayout.expandAboveUpload).toBe(true);
+  expect(leadingControlLayout.leftEdgesAligned).toBe(true);
   await expandButton.click();
 
   const composer = page.locator('#composer-form');
   await expect(composer).toHaveClass(/\bis-expanded\b/u);
+  await expect(promptInput).toBeFocused();
   await expect(page.getByRole('button', { name: 'Collapse message editor' })).toBeVisible();
   await expect(page.locator('#attach-button')).toHaveCount(0);
   const expandedGeometry = await composer.evaluate((element) => ({
@@ -558,7 +581,13 @@ test('mobile composer expands after four lines and restores the compact attachme
 
   await page.getByRole('button', { name: 'Collapse message editor' }).click();
   await expect(composer).not.toHaveClass(/\bis-expanded\b/u);
+  await expect(promptInput).toBeFocused();
   await expect(page.locator('#attach-button')).toBeVisible();
+
+  await promptInput.fill('');
+  await expect(expandButton).toBeHidden();
+  const compactHeight = await composer.evaluate((element) => element.getBoundingClientRect().height);
+  expect(compactHeight).toBeLessThan(80);
 });
 
 test('narrow desktop browser keeps the web composer in the single-session layout', async ({ page }, testInfo) => {
@@ -629,6 +658,39 @@ test('new session stays focused and usable on phone and desktop', async ({ page 
   await expect(centeredComposer).toBeVisible();
   await expect(page.locator('#timeline')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+  await expect(page.locator('#composer-refresh-button')).toHaveCount(0);
+  const newSessionSettingsButton = page.locator('#new-session-settings-button');
+  await expect(newSessionSettingsButton).toBeVisible();
+  const compactControlLayout = await page.locator('#composer-form').evaluate((composer) => {
+    const prompt = composer.querySelector('#prompt-input')?.getBoundingClientRect();
+    const settings = composer.querySelector('#new-session-settings-button')?.getBoundingClientRect();
+    const send = composer.querySelector('#send-button')?.getBoundingClientRect();
+    const upload = composer.querySelector('#attach-button')?.getBoundingClientRect();
+    return {
+      promptHeight: prompt?.height || 0,
+      settingsAboveSend: Boolean(settings && send && settings.bottom <= send.top + 1),
+      sendAlignedWithUpload: Boolean(send && upload && Math.abs(send.bottom - upload.bottom) <= 2),
+    };
+  });
+  expect(compactControlLayout.promptHeight).toBeGreaterThanOrEqual(92);
+  expect(compactControlLayout.settingsAboveSend).toBe(testInfo.project.name === 'mobile-compact');
+  expect(compactControlLayout.sendAlignedWithUpload).toBe(true);
+  await newSessionSettingsButton.click();
+  const newSessionSettings = page.locator('.new-session-settings-popover');
+  await expect(newSessionSettings).toBeVisible();
+  await expect(page.locator('#new-session-model-select')).toHaveValue('gpt-5.6-sol');
+  await expect(page.locator('#new-session-reasoning-select')).toHaveValue('ultra');
+  const settingsBox = await newSessionSettings.boundingBox();
+  expect(settingsBox).not.toBeNull();
+  expect(settingsBox.x).toBeGreaterThanOrEqual(0);
+  expect(settingsBox.x + settingsBox.width).toBeLessThanOrEqual((await page.viewportSize()).width + 1);
+  expect(settingsBox.y + settingsBox.height).toBeLessThanOrEqual((await page.viewportSize()).height + 1);
+  await page.screenshot({
+    path: `/tmp/codex-web-new-session-settings-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+  await newSessionSettingsButton.click();
+  await expect(newSessionSettings).toHaveCount(0);
   const emptyLayout = await emptyState.evaluate((element) => {
     const stateBox = element.getBoundingClientRect();
     const composerBox = element.querySelector('.composer-wrap.is-centered')?.getBoundingClientRect();
@@ -1214,6 +1276,16 @@ test('four themes keep canvas and chat surfaces aligned', async ({ page }, testI
     const chatSurfaces = await page.evaluate(() => {
       const root = getComputedStyle(document.documentElement);
       const chatCanvas = document.querySelector('#timeline')?.closest('.desktop-chat-pane, .screen');
+      const timeline = document.querySelector('#timeline');
+      const statusCard = document.createElement('article');
+      statusCard.className = 'card message-card system goal-message';
+      statusCard.innerHTML = '<p class="message-text">Goal set: verify status styling.</p>';
+      const errorCard = document.createElement('article');
+      errorCard.className = 'card message-card system error-message';
+      errorCard.innerHTML = '<span class="error-badge">Error</span><p class="message-text">502 Bad Gateway</p>';
+      timeline.append(statusCard, errorCard);
+      const statusStyles = getComputedStyle(statusCard);
+      const errorStyles = getComputedStyle(errorCard);
       return {
         base: root.getPropertyValue('--bg-base').trim(),
         shared: root.getPropertyValue('--bg-user-shared').trim(),
@@ -1227,6 +1299,10 @@ test('four themes keep canvas and chat surfaces aligned', async ({ page }, testI
         assistant: getComputedStyle(document.querySelector('.message-card.assistant')).backgroundColor,
         assistantFontSize: getComputedStyle(document.querySelector('.message-card.assistant .markdown-body')).fontSize,
         assistantLineHeight: getComputedStyle(document.querySelector('.message-card.assistant .markdown-body')).lineHeight,
+        statusBackground: statusStyles.backgroundColor,
+        statusBorder: statusStyles.borderColor,
+        errorBackground: errorStyles.backgroundColor,
+        errorBorder: errorStyles.borderColor,
         composer: getComputedStyle(document.querySelector('#composer-form')).backgroundColor,
         composerText: getComputedStyle(document.querySelector('#prompt-input')).color,
         composerFontSize: getComputedStyle(document.querySelector('#prompt-input')).fontSize,
@@ -1274,6 +1350,10 @@ test('four themes keep canvas and chat surfaces aligned', async ({ page }, testI
     expect(chatSurfaces.assistant).toBe(expectedColors.system);
     expect(chatSurfaces.assistantFontSize).toBe('16px');
     expect(Number.parseFloat(chatSurfaces.assistantLineHeight) / Number.parseFloat(chatSurfaces.assistantFontSize)).toBeCloseTo(1.6, 1);
+    expect(chatSurfaces.statusBorder).toBe('rgba(0, 0, 0, 0)');
+    expect(chatSurfaces.errorBorder).toBe('rgba(0, 0, 0, 0)');
+    expect(chatSurfaces.statusBackground).not.toBe(chatSurfaces.assistant);
+    expect(chatSurfaces.errorBackground).not.toBe(chatSurfaces.statusBackground);
 
     await page.screenshot({
       path: '/tmp/codex-web-final-' + theme + '-' + testInfo.project.name + '.png',

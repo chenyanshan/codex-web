@@ -2007,9 +2007,11 @@ test('runtime treats missing native threads as absent when opened or used', asyn
   );
 });
 
-test('runtime handles goal slash commands without starting a native turn', async () => {
+test('runtime starts managed turns for active goal commands and keeps other goal commands synchronous', async () => {
   let currentGoal: ProviderThreadGoal | null = null;
   let startTurnCalls = 0;
+  const goalStartCalls: Array<{ objective: string | null; status: string | null }> = [];
+  let goalTurnSequence = 0;
   const setCalls: Array<{
     threadId: string;
     objective?: string | null;
@@ -2036,6 +2038,35 @@ test('runtime handles goal slash commands without starting a native turn', async
         timeUsedSeconds: null,
       };
       return currentGoal;
+    },
+    startThreadGoal: async ({
+      threadId,
+      objective = null,
+      status = null,
+      onGoalUpdated,
+      onTurnStarted,
+    }) => {
+      goalStartCalls.push({ objective, status });
+      currentGoal = {
+        threadId,
+        objective: objective ?? currentGoal?.objective ?? '',
+        status: status ?? currentGoal?.status ?? 'active',
+        tokenBudget: null,
+        tokensUsed: null,
+        timeUsedSeconds: null,
+      };
+      const turnId = `turn_goal_${++goalTurnSequence}`;
+      await onGoalUpdated?.(currentGoal);
+      await onTurnStarted?.({ threadId, turnId });
+      return {
+        goal: currentGoal,
+        turn: {
+          outputText: 'Goal work completed',
+          status: 'completed',
+          turnId,
+          threadId,
+        },
+      };
     },
     clearThreadGoal: async () => {
       clearCalls += 1;
@@ -2068,12 +2099,16 @@ test('runtime handles goal slash commands without starting a native turn', async
   assert.match((created as any).command.message, /Goal set/u);
   assert.equal((created as any).command.goal.objective, 'improve benchmark coverage');
   assert.equal((created as any).command.goal.status, 'active');
+  assert.equal((created as any).turnId, 'turn_goal_1');
+  await new Promise((resolve) => setImmediate(resolve));
 
   const paused = await runtime.startTurn('thread_goal', { text: '/goal pause' });
   assert.equal((paused as any).command.goal.status, 'paused');
 
   const resumed = await runtime.startTurn('thread_goal', { text: '/goal resume' });
   assert.equal((resumed as any).command.goal.status, 'active');
+  assert.equal((resumed as any).turnId, 'turn_goal_2');
+  await new Promise((resolve) => setImmediate(resolve));
 
   currentGoal = {
     threadId: 'thread_goal',
@@ -2086,6 +2121,8 @@ test('runtime handles goal slash commands without starting a native turn', async
   const replaced = await runtime.startTurn('thread_goal', { text: '/goal improve product experience' });
   assert.equal((replaced as any).command.goal.objective, 'improve product experience');
   assert.equal((replaced as any).command.goal.status, 'active');
+  assert.equal((replaced as any).turnId, 'turn_goal_3');
+  await new Promise((resolve) => setImmediate(resolve));
 
   const reported = await runtime.startTurn('thread_goal', { text: '/goal' });
   assert.match((reported as any).command.message, /improve product experience/u);
@@ -2099,28 +2136,15 @@ test('runtime handles goal slash commands without starting a native turn', async
   assert.deepEqual(setCalls, [
     {
       threadId: 'thread_goal',
-      objective: 'improve benchmark coverage',
-      status: 'active',
-      suppressAutoTurn: true,
-    },
-    {
-      threadId: 'thread_goal',
       objective: null,
       status: 'paused',
       suppressAutoTurn: true,
     },
-    {
-      threadId: 'thread_goal',
-      objective: null,
-      status: 'active',
-      suppressAutoTurn: true,
-    },
-    {
-      threadId: 'thread_goal',
-      objective: 'improve product experience',
-      status: 'active',
-      suppressAutoTurn: true,
-    },
+  ]);
+  assert.deepEqual(goalStartCalls, [
+    { objective: 'improve benchmark coverage', status: 'active' },
+    { objective: null, status: 'active' },
+    { objective: 'improve product experience', status: 'active' },
   ]);
 });
 
@@ -2203,6 +2227,24 @@ test('runtime readSession exposes backend-managed slash command timeline entries
       objective: 'ship slash goal support',
       status: 'active',
     }),
+    startThreadGoal: async ({ threadId, onGoalUpdated, onTurnStarted }) => {
+      const goal = {
+        threadId,
+        objective: 'ship slash goal support',
+        status: 'active',
+      };
+      await onGoalUpdated?.(goal);
+      await onTurnStarted?.({ threadId, turnId: 'turn_goal_resume' });
+      return {
+        goal,
+        turn: {
+          outputText: 'Goal work completed',
+          status: 'completed',
+          turnId: 'turn_goal_resume',
+          threadId,
+        },
+      };
+    },
     clearThreadGoal: async () => true,
     writeConfigValue: async () => {},
     startTurn: async () => ({
@@ -2232,6 +2274,104 @@ test('runtime readSession exposes backend-managed slash command timeline entries
     '/goal resume',
     'Goal resumed: ship slash goal support',
   ]);
+});
+
+test('goal command timeline stays anchored before auto-turn output when history windows slide', async (t) => {
+  const timelinePath = `/tmp/codex-web-runtime-goal-anchor-${process.pid}-${Date.now()}.json`;
+  t.after(() => fs.rmSync(timelinePath, { force: true }));
+  let goalStarted = false;
+  const anchorTurn = {
+    id: 'turn_anchor',
+    status: 'completed',
+    error: null,
+    items: [
+      { type: 'message', role: 'user', phase: null, text: 'Anchor question' },
+      { type: 'message', role: 'assistant', phase: null, text: 'Anchor answer' },
+    ],
+  };
+  const client: CodexWebRuntimeClient = {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads: async () => ({ items: [createThread('thread_goal_anchor')], nextCursor: null }),
+    startThread: async () => ({ threadId: 'thread_goal_anchor', cwd: '/workspace', title: 'Thread' }),
+    readThread: async () => ({
+      ...createThread('thread_goal_anchor'),
+      turns: goalStarted
+        ? [
+            anchorTurn,
+            {
+              id: 'turn_goal_auto',
+              status: 'completed',
+              error: null,
+              items: [
+                { type: 'message', role: 'assistant', phase: null, text: 'Goal execution output' },
+              ],
+            },
+          ]
+        : [
+            {
+              id: 'turn_dropped',
+              status: 'completed',
+              error: null,
+              items: [
+                { type: 'message', role: 'user', phase: null, text: 'Dropped question' },
+                { type: 'message', role: 'assistant', phase: null, text: 'Dropped answer' },
+              ],
+            },
+            anchorTurn,
+          ],
+    }),
+    resumeThread: async () => {},
+    getThreadGoal: async () => ({
+      threadId: 'thread_goal_anchor',
+      objective: 'finish anchored work',
+      status: 'active',
+    }),
+    setThreadGoal: async () => null,
+    startThreadGoal: async ({ threadId, onGoalUpdated, onTurnStarted }) => {
+      goalStarted = true;
+      const goal = { threadId, objective: 'finish anchored work', status: 'active' };
+      await onGoalUpdated?.(goal);
+      await onTurnStarted?.({ threadId, turnId: 'turn_goal_auto' });
+      return {
+        goal,
+        turn: {
+          outputText: 'Goal execution output',
+          status: 'completed',
+          turnId: 'turn_goal_auto',
+          threadId,
+        },
+      };
+    },
+    clearThreadGoal: async () => true,
+    writeConfigValue: async () => {},
+    startTurn: async () => {
+      throw new Error('ordinary turn should not start');
+    },
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+  const timelineStore = new FileSessionTimelineStore({ timelinePath });
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+    eventBus: new CodexWebEventBus(),
+    timelineStore,
+  });
+
+  await runtime.startTurn('thread_goal_anchor', { text: '/goal resume' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const session = await runtime.readSession('thread_goal_anchor');
+
+  assert.deepEqual(session?.timeline.map((item) => item.text), [
+    'Anchor question',
+    'Anchor answer',
+    '/goal resume',
+    'Goal resumed: finish anchored work',
+    'Goal execution output',
+  ]);
+  assert.equal(timelineStore.list('thread_goal_anchor').every((item) => item.afterHistoryId === 'history_turn_anchor_1'), true);
 });
 
 test('runtime readSession exposes the current thread goal as session state', async () => {
@@ -2474,7 +2614,7 @@ test('runtime rejects overlapping non-command turns that are active in this proc
   assert.equal(startTurnCalls, 1);
 });
 
-test('runtime still allows slash commands while thread history shows an active turn', async () => {
+test('runtime allows goal inspection but blocks another goal turn while thread history is active', async () => {
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
     readUsage: async (): Promise<ProviderUsageReport | null> => null,
@@ -2529,6 +2669,17 @@ test('runtime still allows slash commands while thread history shows an active t
   assert.equal(result.type, 'command');
   assert.equal(result.command.name, 'goal');
   assert.match(result.command.message, /ship slash goal support/u);
+  await assert.rejects(
+    runtime.startTurn('thread_busy_command', { text: '/goal resume' }),
+    (error: unknown) => {
+      assert.equal((error as Error & { code?: string }).code, 'turn_conflict');
+      assert.equal(
+        (error as Error & { activeTurnId?: string }).activeTurnId,
+        'turn_existing_active_2',
+      );
+      return true;
+    },
+  );
 });
 
 test('runtime readSession exposes backend-managed turn failure timeline entries', async () => {

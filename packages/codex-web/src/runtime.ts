@@ -112,6 +112,7 @@ export interface CodexWebRuntimeClient {
     approvalPolicy?: string | null;
     sandboxMode?: string | null;
     runtimeEnv?: Record<string, string | null>;
+    developerInstructions?: string | null;
   }): Promise<unknown>;
   listSkills?(args?: {
     cwd?: string | null;
@@ -132,6 +133,17 @@ export interface CodexWebRuntimeClient {
     status?: string | null;
     suppressAutoTurn?: boolean;
   }): Promise<ProviderThreadGoal | null>;
+  startThreadGoal?(args: {
+    threadId: string;
+    objective?: string | null;
+    status?: string | null;
+    onGoalUpdated?: ((goal: ProviderThreadGoal | null) => Promise<void> | void) | null;
+    onProgress?: ((progress: any) => Promise<void> | void) | null;
+    onWorkEvent?: ((event: ProviderTurnWorkEvent) => Promise<void> | void) | null;
+    onTurnStarted?: ((meta: Record<string, unknown>) => Promise<void> | void) | null;
+    onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
+    timeoutMs?: number;
+  }): Promise<{ goal: ProviderThreadGoal | null; turn: ProviderTurnResult }>;
   clearThreadGoal?(threadId: string): Promise<boolean>;
   archiveThread?(threadId: string): Promise<void>;
   unarchiveThread?(threadId: string): Promise<void>;
@@ -231,6 +243,7 @@ export interface AppendSessionTimelineEntryInput {
   text: string;
   severity?: 'error' | null;
   afterHistoryIndex?: number | null;
+  afterHistoryId?: string | null;
 }
 
 export interface CodexWebCommandResult {
@@ -241,6 +254,7 @@ export interface CodexWebCommandResult {
     message: string;
     goal: ProviderThreadGoal | null;
   };
+  turnId?: string;
   session?: CodexWebSession | null;
 }
 
@@ -627,7 +641,7 @@ export class CodexWebRuntime {
     if (helpCommand) {
       await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
       const result = createHelpCommandResult();
-      this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread).length);
+      this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
       return {
         ...result,
         session: await this.readSession(sessionId),
@@ -635,9 +649,18 @@ export class CodexWebRuntime {
     }
     const goalCommand = parseGoalSlashCommand(input.text);
     if (goalCommand) {
-      await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
+      if (goalCommand.action === 'set' || goalCommand.action === 'resume') {
+        const conflictingTurnId = this.conflictingActiveTurnId(session);
+        if (conflictingTurnId) {
+          throw createTurnConflictError(sessionId, conflictingTurnId);
+        }
+      }
+      await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv, input.developerInstructions);
+      if (goalCommand.action === 'set' || goalCommand.action === 'resume') {
+        return this.startGoalCommandTurn(session, input.text, goalCommand);
+      }
       const result = await this.handleGoalCommand(sessionId, goalCommand);
-      this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread).length);
+      this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
       return {
         ...result,
         session: await this.readSession(sessionId),
@@ -649,7 +672,7 @@ export class CodexWebRuntime {
     }
     let settings = this.mergeSettings(sessionId, input.settings);
     this.persistSessionSettings(sessionId, settings);
-    await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
+    await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv, input.developerInstructions);
     settings = this.getSessionSettings(sessionId);
     this.logDebug('turn_start_requested', {
       sessionId,
@@ -663,10 +686,48 @@ export class CodexWebRuntime {
       approvalPolicy: settings.approvalPolicy ?? 'never',
       collaborationMode: settings.collaborationMode ?? 'default',
     });
+    const codexInput = buildCodexTurnInput(input.text, input.attachments);
+    return this.startTrackedTurn({
+      session,
+      start: (callbacks) => this.client.startTurn({
+        threadId: sessionId,
+        inputText: input.text,
+        input: codexInput,
+        cwd: session.cwd ?? this.defaultCwd,
+        model: settings.model,
+        effort: settings.reasoningEffort,
+        serviceTier: settings.serviceTier,
+        personality: settings.personality ?? null,
+        sandboxMode: settings.sandboxMode ?? 'danger-full-access',
+        approvalPolicy: settings.approvalPolicy ?? 'never',
+        collaborationMode: settings.collaborationMode ?? 'default',
+        developerInstructions: input.developerInstructions ?? '',
+        ...callbacks,
+      }),
+    });
+  }
+
+  private startTrackedTurn({
+    session,
+    start,
+    buildStartedResult = (turnId) => ({ turnId }),
+    failureHistoryOffset = 1,
+  }: {
+    session: CodexWebSession;
+    start: (callbacks: {
+      onTurnStarted: (meta: Record<string, unknown>) => Promise<void>;
+      onProgress: (progress: any) => Promise<void>;
+      onWorkEvent: (event: ProviderTurnWorkEvent) => Promise<void>;
+      onApprovalRequest: (request: ProviderApprovalRequest) => Promise<void>;
+    }) => Promise<ProviderTurnResult>;
+    buildStartedResult?: (turnId: string) => CodexWebStartTurnResult;
+    failureHistoryOffset?: number;
+  }): Promise<CodexWebStartTurnResult> {
+    const sessionId = session.id;
     let startedTurnId = '';
-    let resolveStarted: ((value: { turnId: string }) => void) | null = null;
+    let resolveStarted: ((value: CodexWebStartTurnResult) => void) | null = null;
     let rejectStarted: ((reason?: unknown) => void) | null = null;
-    const startedPromise = new Promise<{ turnId: string }>((resolve, reject) => {
+    const startedPromise = new Promise<CodexWebStartTurnResult>((resolve, reject) => {
       resolveStarted = resolve;
       rejectStarted = reject;
     });
@@ -688,38 +749,27 @@ export class CodexWebRuntime {
         turnId,
         raw: summarizeRuntimeValue(raw),
       });
-      resolveStarted?.({ turnId });
+      try {
+        resolveStarted?.(buildStartedResult(turnId));
+      } catch (error) {
+        rejectStarted?.(error);
+        throw error;
+      }
       return true;
     };
-    const codexInput = buildCodexTurnInput(input.text, input.attachments);
-    const runPromise = this.client.startTurn({
-      threadId: sessionId,
-      inputText: input.text,
-      input: codexInput,
-      cwd: session.cwd ?? this.defaultCwd,
-      model: settings.model,
-      effort: settings.reasoningEffort,
-      serviceTier: settings.serviceTier,
-      personality: settings.personality ?? null,
-      sandboxMode: settings.sandboxMode ?? 'danger-full-access',
-      approvalPolicy: settings.approvalPolicy ?? 'never',
-      collaborationMode: settings.collaborationMode ?? 'default',
-      developerInstructions: input.developerInstructions ?? '',
+    const runPromise = start({
       onTurnStarted: async (meta) => {
-        const turnId = String(meta.turnId ?? '');
-        markTurnStarted(turnId, meta);
+        markTurnStarted(String(meta.turnId ?? ''), meta);
       },
       onProgress: async (progress) => {
-        if (!startedTurnId) {
-          return;
+        if (startedTurnId) {
+          this.captureTurnProgress(startedTurnId, sessionId, progress);
         }
-        this.captureTurnProgress(startedTurnId, sessionId, progress);
       },
       onWorkEvent: async (event) => {
-        if (!startedTurnId) {
-          return;
+        if (startedTurnId) {
+          this.captureTurnWorkEvent(startedTurnId, event);
         }
-        this.captureTurnWorkEvent(startedTurnId, event);
       },
       onApprovalRequest: async (request) => {
         this.captureApprovalRequest(request, startedTurnId || null, sessionId);
@@ -779,7 +829,7 @@ export class CodexWebRuntime {
         sessionId,
         turnId,
         failureMessage,
-        timelineMessagesFromThread(session.thread).length + 1,
+        timelineMessagesFromThread(session.thread).length + failureHistoryOffset,
       );
       if (startedTurnId) {
         this.cleanupFinishedTurn(startedTurnId);
@@ -787,7 +837,11 @@ export class CodexWebRuntime {
       throw error;
     });
     runPromise.catch(() => {});
-    startedPromise.then(({ turnId }) => {
+    startedPromise.then((started) => {
+      const turnId = String(started.turnId || '');
+      if (!turnId) {
+        return;
+      }
       this.activeTurns.set(turnId, runPromise);
       runPromise.finally(() => {
         if (this.activeTurns.get(turnId) === runPromise) {
@@ -796,6 +850,46 @@ export class CodexWebRuntime {
       }).catch(() => {});
     }).catch(() => {});
     return startedPromise;
+  }
+
+  private startGoalCommandTurn(
+    session: CodexWebSession,
+    inputText: string,
+    command: ParsedGoalSlashCommand,
+  ): Promise<CodexWebStartTurnResult> {
+    let commandResult: CodexWebCommandResult | null = null;
+    const action = command.action === 'resume' ? 'resume' : 'set';
+    return this.startTrackedTurn({
+      session,
+      failureHistoryOffset: 2,
+      buildStartedResult: (turnId) => {
+        if (!commandResult) {
+          throw new Error('Goal turn started before the goal update completed');
+        }
+        return { ...commandResult, turnId };
+      },
+      start: (callbacks) => this.requireGoalStarter()({
+        threadId: session.id,
+        objective: action === 'set' ? command.objective : null,
+        status: 'active',
+        onGoalUpdated: async (goal) => {
+          commandResult = createGoalCommandResult({
+            action,
+            goal,
+            message: goal
+              ? `${action === 'resume' ? 'Goal resumed' : 'Goal set'}: ${goal.objective}`
+              : action === 'resume' ? 'Goal resumed.' : 'Goal set.',
+          });
+          this.appendCommandTimeline(
+            session.id,
+            inputText,
+            commandResult.command,
+            timelineMessagesFromThread(session.thread),
+          );
+        },
+        ...callbacks,
+      }).then(({ turn }) => turn),
+    });
   }
 
   private async handleGoalCommand(
@@ -831,30 +925,7 @@ export class CodexWebRuntime {
         message: goal ? `Goal paused: ${goal.objective}` : 'Goal paused.',
       });
     }
-    if (command.action === 'resume') {
-      const goal = await this.requireGoalSetter()({
-        threadId: sessionId,
-        objective: null,
-        status: 'active',
-        suppressAutoTurn: true,
-      });
-      return createGoalCommandResult({
-        action: 'resume',
-        goal,
-        message: goal ? `Goal resumed: ${goal.objective}` : 'Goal resumed.',
-      });
-    }
-    const goal = await this.requireGoalSetter()({
-      threadId: sessionId,
-      objective: command.objective,
-      status: 'active',
-      suppressAutoTurn: true,
-    });
-    return createGoalCommandResult({
-      action: 'set',
-      goal,
-      message: goal ? `Goal set: ${goal.objective}` : 'Goal set.',
-    });
+    throw new Error('Active goal commands must start a managed turn');
   }
 
   private requireGoalReader(): (threadId: string) => Promise<ProviderThreadGoal | null> {
@@ -874,6 +945,13 @@ export class CodexWebRuntime {
       throw new Error('Goal commands are not supported by this Codex runtime');
     }
     return this.client.setThreadGoal.bind(this.client);
+  }
+
+  private requireGoalStarter(): NonNullable<CodexWebRuntimeClient['startThreadGoal']> {
+    if (typeof this.client.startThreadGoal !== 'function') {
+      throw new Error('Goal auto-start is not supported by this Codex runtime');
+    }
+    return this.client.startThreadGoal.bind(this.client);
   }
 
   private requireGoalClearer(): (threadId: string) => Promise<boolean> {
@@ -1282,12 +1360,13 @@ export class CodexWebRuntime {
   private async ensureThreadReadyForTurn(
     threadId: string,
     runtimeEnv: Record<string, string | null> | undefined = undefined,
+    developerInstructions: string | undefined = undefined,
   ): Promise<void> {
     if (typeof this.client.resumeThread !== 'function') {
       return;
     }
     try {
-      await this.resumeThreadWithSessionSettings(threadId, runtimeEnv);
+      await this.resumeThreadWithSessionSettings(threadId, runtimeEnv, developerInstructions);
     } catch (error) {
       if (isMissingRolloutError(error)) {
         return;
@@ -1299,6 +1378,7 @@ export class CodexWebRuntime {
   private async resumeThreadWithSessionSettings(
     threadId: string,
     runtimeEnv: Record<string, string | null> | undefined = undefined,
+    developerInstructions: string | undefined = undefined,
   ): Promise<void> {
     if (typeof this.client.resumeThread !== 'function') {
       return;
@@ -1310,6 +1390,7 @@ export class CodexWebRuntime {
       approvalPolicy: permissions.approvalPolicy,
       sandboxMode: permissions.sandboxMode,
       runtimeEnv: runtimeEnv ?? { CODEX_WEB_CONTEXT_FILE: null },
+      developerInstructions: developerInstructions ?? null,
     });
     const effectiveSettings = mergeEffectiveModelSettings(settings, resumed);
     if (effectiveSettings !== settings) {
@@ -1701,9 +1782,11 @@ export class CodexWebRuntime {
     sessionId: string,
     inputText: string,
     command: CodexWebCommandResult['command'],
-    afterHistoryIndex: number,
+    history: CodexWebTimelineMessage[],
   ): void {
     const baseId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const afterHistoryIndex = history.length;
+    const afterHistoryId = history.at(-1)?.id;
     this.appendSessionTimelineEntry(sessionId, {
       id: `local_user_${baseId}`,
       role: 'user',
@@ -1711,6 +1794,7 @@ export class CodexWebRuntime {
       meta: 'command',
       text: inputText.trim(),
       afterHistoryIndex,
+      afterHistoryId,
     });
     this.appendSessionTimelineEntry(sessionId, {
       id: `command_${command.name}_${baseId}`,
@@ -1719,6 +1803,7 @@ export class CodexWebRuntime {
       meta: command.action || 'completed',
       text: String(command.message || 'Command completed.'),
       afterHistoryIndex,
+      afterHistoryId,
     });
   }
 
@@ -1881,9 +1966,14 @@ function composeSessionTimeline(
   }
   const extrasByAfterHistoryIndex = new Map<number, CodexWebTimelineMessage[]>();
   for (const entry of extras) {
-    const afterHistoryIndex = Number.isFinite(entry.afterHistoryIndex)
-      ? Math.max(0, Math.min(history.length, Math.floor(Number(entry.afterHistoryIndex))))
-      : history.length;
+    const anchoredHistoryIndex = entry.afterHistoryId
+      ? history.findIndex((item) => item.id === entry.afterHistoryId)
+      : -1;
+    const afterHistoryIndex = entry.afterHistoryId
+      ? anchoredHistoryIndex >= 0 ? anchoredHistoryIndex + 1 : 0
+      : Number.isFinite(entry.afterHistoryIndex)
+        ? Math.max(0, Math.min(history.length, Math.floor(Number(entry.afterHistoryIndex))))
+        : history.length;
     const entries = extrasByAfterHistoryIndex.get(afterHistoryIndex) ?? [];
     entries.push(entry);
     extrasByAfterHistoryIndex.set(afterHistoryIndex, entries);
@@ -1932,11 +2022,18 @@ function normalizeSessionTimelineEntry(
     text,
     severity: input.severity === 'error' ? 'error' : undefined,
     afterHistoryIndex: Number.isFinite(input.afterHistoryIndex) ? Math.max(0, Math.floor(Number(input.afterHistoryIndex))) : undefined,
+    afterHistoryId: typeof input.afterHistoryId === 'string' && input.afterHistoryId.trim()
+      ? input.afterHistoryId.trim()
+      : undefined,
   };
 }
 
 function publicSessionTimelineEntry(entry: CodexWebTimelineMessage): CodexWebTimelineMessage {
-  const { afterHistoryIndex: _afterHistoryIndex, ...publicEntry } = entry as CodexWebTimelineMessage & { afterHistoryIndex?: number };
+  const {
+    afterHistoryIndex: _afterHistoryIndex,
+    afterHistoryId: _afterHistoryId,
+    ...publicEntry
+  } = entry;
   return publicEntry;
 }
 
@@ -2007,7 +2104,7 @@ function timelineMessagesFromThread(thread: ProviderThreadSummary): CodexWebTime
         && (explicitFinalIndexes.has(itemIndex) || fallbackFinalIndex === itemIndex);
       const phase = role === 'assistant' ? historicalTimelineAssistantPhase(item, isFinal) : null;
       items.push({
-        id: `history_${turn.id}_${items.length}`,
+        id: `history_${turn.id}_${itemIndex}`,
         kind: 'message',
         role,
         label: role === 'user' ? 'You' : 'Assistant',

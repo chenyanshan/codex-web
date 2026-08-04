@@ -112,8 +112,127 @@
     }
   }
 
+  function createComposerRenderer(context) {
+    const state = () => context.getState();
+    const disabled = (value) => value ? ' disabled' : '';
+
+    function renderSettingsButton() {
+      return `<button class="ghost icon-button compact-refresh new-session-settings-button" type="button" id="new-session-settings-button" aria-label="Model and thinking effort" title="Model and thinking effort" aria-expanded="${String(state().newSessionSettingsOpen)}">${icon('settings', { className: 'button-icon' })}<span class="visually-hidden">Model and thinking effort</span></button>`;
+    }
+
+    function renderSettingsPopover() {
+      const current = state();
+      if (!context.canConfigureNewSessionDraft() || !current.newSessionSettingsOpen) {
+        return '';
+      }
+      return `
+          <div class="new-session-settings-popover" role="dialog" aria-label="Model and thinking effort">
+            <div class="control-group">
+              <label for="new-session-model-select">Model</label>
+              <select id="new-session-model-select" name="newSessionModel" data-i18n-skip>${context.renderModelOptions(current.model)}</select>
+            </div>
+            <div class="control-group">
+              <label for="new-session-reasoning-select">Thinking effort</label>
+              <select id="new-session-reasoning-select" name="newSessionReasoningEffort" data-i18n-skip>
+                ${context.renderReasoningOptions(current.reasoningEffort, current.model)}
+              </select>
+            </div>
+          </div>
+      `;
+    }
+
+    function renderLeadingControls() {
+      const current = state();
+      const expandButton = context.isDesktopLayout() ? '' : `<button class="ghost icon-button composer-expand-button${current.composerExpanded ? ' is-expanded' : ''}" type="button" id="composer-expand-button" aria-label="${current.composerExpanded ? 'Collapse message editor' : 'Expand message editor'}" aria-expanded="${String(current.composerExpanded)}"${current.composerCanExpand || current.composerExpanded ? '' : ' hidden'}>${icon('chevronDown', { className: 'button-icon' })}</button>`;
+      const attachButton = current.composerExpanded ? '' : `<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${disabled(current.pendingTurn || current.submissionSending || context.hasUploadingComposerAttachments())}>${icon('attachment', { className: 'button-icon' })}</button>`;
+      return `<div class="composer-leading-controls">${expandButton}${attachButton}</div>`;
+    }
+
+    function renderTrailingControls({ includeNewSessionSettings = false } = {}) {
+      const settingsButton = includeNewSessionSettings && context.canConfigureNewSessionDraft()
+        ? renderSettingsButton()
+        : '';
+      return `<div class="composer-trailing-controls${settingsButton ? ' has-new-session-settings' : ''}">${settingsButton}<button class="primary icon-button compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${disabled(state().submissionSending || context.hasUploadingComposerAttachments())}>${icon('send', { className: 'button-icon' })}<span class="visually-hidden">Send</span></button></div>`;
+    }
+
+    function renderMessageEditor({ desktop = false } = {}) {
+      const current = state();
+      const className = context.composerStateClassName();
+      const textarea = `<textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">${context.escapeHtml(current.prompt)}</textarea>`;
+      if (!desktop) {
+        return `<div class="message-editor-shell ${className}">${textarea}</div>`;
+      }
+      const secondaryAction = context.canConfigureNewSessionDraft()
+        ? renderSettingsButton()
+        : `<button class="ghost icon-button compact-refresh" type="button" id="composer-refresh-button" aria-label="Refresh session" title="Refresh session">${icon('refresh', { className: 'button-icon' })}<span class="visually-hidden">Refresh</span></button>`;
+      return `<div class="message-editor-shell ${className}">${textarea}<div class="composer-toolbar">${renderLeadingControls()}<div class="composer-action-buttons">${secondaryAction}<button class="primary icon-button compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${disabled(current.submissionSending || context.hasUploadingComposerAttachments())}>${icon('send', { className: 'button-icon' })}<span class="visually-hidden">Send</span></button></div></div></div>`;
+    }
+
+    function toggleSettings() {
+      if (!context.canConfigureNewSessionDraft()) {
+        return;
+      }
+      const current = state();
+      const opening = !current.newSessionSettingsOpen;
+      if (opening) context.rememberFocusReturn(context.document.activeElement);
+      else context.requestFocusRestore();
+      current.settingsOpen = false;
+      current.newSessionSettingsOpen = opening;
+      context.render();
+      if (opening) context.document.querySelector('#new-session-model-select')?.focus?.();
+    }
+
+    function bindSettings() {
+      const button = context.document.querySelector('#new-session-settings-button');
+      if (button) context.listenRendered(button, 'click', toggleSettings);
+      const model = context.document.querySelector('#new-session-model-select');
+      if (model) {
+        context.listenRendered(model, 'change', (event) => {
+          const current = state();
+          current.model = event.target.value;
+          current.reasoningEffort = current.model
+            ? context.reasoningEffortForModel(current.model, current.reasoningEffort)
+            : '';
+          context.render();
+          context.document.querySelector('#new-session-reasoning-select')?.focus?.();
+        });
+      }
+      const reasoning = context.document.querySelector('#new-session-reasoning-select');
+      if (reasoning) {
+        context.listenRendered(reasoning, 'change', (event) => {
+          state().reasoningEffort = event.target.value;
+        });
+      }
+    }
+
+    function handleSettingsOutsideClick(event) {
+      if (!state().newSessionSettingsOpen || event?.target?.closest?.('#new-session-settings-button, .new-session-settings-popover')) {
+        return;
+      }
+      context.requestFocusRestore();
+      state().newSessionSettingsOpen = false;
+      context.render();
+    }
+
+    function preservePromptFocus(event) {
+      const prompt = context.document.querySelector('#prompt-input');
+      if (prompt && context.document.activeElement === prompt) event.preventDefault();
+    }
+
+    return Object.freeze({
+      bindSettings,
+      handleSettingsOutsideClick,
+      preservePromptFocus,
+      renderLeadingControls,
+      renderMessageEditor,
+      renderSettingsPopover,
+      renderTrailingControls,
+    });
+  }
+
   globalObject.CodexWebUi = Object.freeze({
     bindSidebarTooltips,
+    createComposerRenderer,
     hideTooltip,
     icon,
     readStoredBoolean,

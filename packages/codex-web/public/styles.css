@@ -2548,14 +2548,19 @@ button:disabled {
 }
 
 .message-card.system {
-  background: var(--msg-sys-bg);
-  border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--msg-sys-bg));
+  border-color: transparent;
   justify-self: stretch;
 }
 
+.message-card.system.goal-message {
+  background: color-mix(in srgb, var(--success) 12%, var(--msg-sys-bg));
+}
+
 .message-card.error-message {
-  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--danger) 10%, var(--msg-sys-bg));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--overlay) 10%, transparent);
 }
 
 .error-badge {
@@ -3079,6 +3084,13 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.composer-trailing-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .attach-button {
   width: 38px;
   min-width: 38px;
@@ -3580,6 +3592,41 @@ button:disabled {
   background: transparent;
 }
 
+.new-session-settings-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 8px;
+  z-index: 4;
+  width: min(360px, calc(100% - 16px));
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--overlay) 22%, transparent);
+  color: var(--text);
+}
+
+.new-session-settings-popover .control-group {
+  min-width: 0;
+}
+
+.new-session-settings-popover select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.new-session-settings-button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--text);
+}
+
 .message-editor-shell.is-expanded {
   position: relative;
   min-height: min(84dvh, 640px);
@@ -3636,6 +3683,26 @@ button:disabled {
 
 .composer-expand-button .button-icon {
   transform: rotate(180deg);
+}
+
+.composer-expand-button {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.composer-expand-button:hover,
+.composer-expand-button:focus-visible {
+  border: 0;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow: none;
+  color: var(--text);
 }
 
 .composer-expand-button.is-expanded .button-icon {
@@ -4811,8 +4878,9 @@ pre.command {
 
   .compact-composer-row {
     padding: 3px 4px;
-    display: flex;
-    align-items: flex-end;
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    align-items: stretch;
     gap: 4px;
   }
 
@@ -4823,52 +4891,66 @@ pre.command {
 
   .compact-composer-row > .composer-leading-controls {
     display: grid;
+    grid-auto-rows: 44px;
+    align-self: end;
     gap: 2px;
   }
 
+  .compact-composer-row > .composer-trailing-controls {
+    display: grid;
+    grid-auto-rows: 44px;
+    align-self: end;
+    gap: 2px;
+  }
+
+  .composer-leading-controls .composer-expand-button,
+  .composer-leading-controls .attach-button,
+  .composer-trailing-controls .new-session-settings-button,
+  .composer-trailing-controls .compact-send {
+    grid-row: 1;
+  }
+
+  .composer.is-expandable .composer-leading-controls .attach-button,
+  .composer-trailing-controls.has-new-session-settings .compact-send {
+    grid-row: 2;
+  }
+
+  .new-session-settings-button,
   .composer-expand-button {
     width: 44px;
     height: 44px;
     min-width: 44px;
     min-height: 44px;
-    padding: 0;
   }
 
   .message-editor-shell:not(.is-expanded) {
-    flex: 1 1 auto;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: flex-end;
-    gap: 4px;
+    min-width: 0;
   }
 
   .message-editor-shell:not(.is-expanded) textarea {
-    grid-column: 1;
-    grid-row: 1;
     min-height: 44px;
     max-height: 116px;
     padding: 10px 8px;
   }
 
-  .message-editor-shell:not(.is-expanded) > .compact-send {
-    grid-column: 2;
-    grid-row: 1;
-    width: 44px;
-    min-width: 44px;
-    min-height: 44px;
+  .composer.is-centered .message-editor-shell:not(.is-expanded) textarea {
+    min-height: 92px;
+    max-height: 140px;
+    padding: 8px 10px;
   }
 
   .message-editor-shell.is-expanded textarea {
-    padding: 54px 12px 58px;
+    padding: 54px 60px 58px 12px;
   }
 
-  .message-editor-shell.is-expanded > .compact-send {
+  .composer.is-expanded .composer-trailing-controls {
     position: absolute;
     right: 8px;
     bottom: 8px;
-    width: 44px;
-    min-width: 44px;
-    min-height: 44px;
+    z-index: 2;
+    display: grid;
+    grid-auto-rows: 44px;
+    gap: 2px;
   }
 
   .composer.is-expanded .composer-leading-controls {

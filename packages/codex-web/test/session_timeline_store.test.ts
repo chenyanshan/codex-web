@@ -68,6 +68,7 @@ test('file session timeline store preserves safe projection metadata and strips 
     lifecycle: 'completed',
     severity: undefined,
     afterHistoryIndex: undefined,
+    afterHistoryId: undefined,
   }]);
   assert.equal('raw' in store.list('thread_one')[0]!, false);
 });

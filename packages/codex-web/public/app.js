@@ -229,6 +229,7 @@ const state = {
   reasoningEffort: DEFAULT_REASONING_EFFORT,
   collaborationMode: DEFAULT_COLLABORATION_MODE,
   settingsOpen: false,
+  newSessionSettingsOpen: false,
   permissionPreset: DEFAULT_PERMISSION_PRESET,
   approvalPolicy: DEFAULT_APPROVAL_POLICY,
   sandboxMode: DEFAULT_SANDBOX_MODE,
@@ -256,6 +257,23 @@ const state = {
   workDetailsFollowLatest: true,
   workDetailsPolicyPendingSessionId: '',
 };
+
+const COMPOSER_UI = UI.createComposerRenderer({
+  getState: () => state,
+  document,
+  escapeHtml,
+  canConfigureNewSessionDraft,
+  composerStateClassName,
+  hasUploadingComposerAttachments,
+  isDesktopLayout,
+  renderModelOptions,
+  renderReasoningOptions,
+  reasoningEffortForModel,
+  listenRendered,
+  render,
+  rememberFocusReturn,
+  requestFocusRestore,
+});
 
 const ADMIN_UI = globalThis.CodexWebAdminUi.createRenderer({
   getState: () => state,
@@ -341,6 +359,7 @@ setupAppVersionRefresh();
 setupStreamRecoveryWatchdog();
 document.addEventListener('visibilitychange', onVisibilityChange);
 document.addEventListener('click', handleSessionSettingsOutsideClick);
+document.addEventListener('click', COMPOSER_UI.handleSettingsOutsideClick);
 document.addEventListener('keydown', handleFocusScopeKeydown);
 window.addEventListener('resize', handleWindowResize);
 window.addEventListener('pageshow', onPageResume);
@@ -994,6 +1013,12 @@ function closeFocusScope(kind = '') {
     withTimelineScrollPreserved(() => render());
     return true;
   }
+  if ((!kind || kind === 'new-session-settings') && state.newSessionSettingsOpen) {
+    requestFocusRestore();
+    state.newSessionSettingsOpen = false;
+    render();
+    return true;
+  }
   if ((!kind || kind === 'desktop-settings') && state.desktopSettingsOpen) {
     requestFocusRestore();
     state.desktopSettingsOpen = false;
@@ -1046,6 +1071,12 @@ function clearPromptDraftForCurrentSession() {
     state.promptDrafts.delete(key);
   }
   state.prompt = '';
+  resetComposerExpansionState();
+}
+
+function resetComposerExpansionState() {
+  state.composerCanExpand = false;
+  state.composerExpanded = false;
 }
 
 function migrateDraftPromptToSession(sessionId) {
@@ -1919,11 +1950,7 @@ function renderChat() {
 function renderChatContent({ desktop = false } = {}) {
   const composerClassName = composerStateClassName();
   const readOnly = isReadOnlySession(state.currentSession);
-  const emptyDraft = state.draftSessionActive
-    && !state.sessionId
-    && !state.activeSubmissionId
-    && state.timeline.length === 0
-    && !state.pendingTurn;
+  const emptyDraft = canConfigureNewSessionDraft();
   return localizeFragment(`
       <header class="topbar chat-topbar${desktop ? ' desktop-chat-topbar' : ''}">
         <div class="chat-nav">
@@ -1953,6 +1980,16 @@ function renderNewSessionEmptyState(composerClassName, { desktop = false } = {})
         ${renderComposer(composerClassName, { desktop, centered: true })}
       </main>
   `;
+}
+
+function canConfigureNewSessionDraft() {
+  return Boolean(
+    state.draftSessionActive
+      && !state.sessionId
+      && !state.activeSubmissionId
+      && state.timeline.length === 0
+      && !state.pendingTurn,
+  );
 }
 
 function renderChatHeaderActions({ readOnly }) {
@@ -2051,12 +2088,14 @@ function renderComposer(composerClassName, { desktop = false, centered = false }
         ${renderQueuedMessages()}
         <form class="composer bg-shared ring-theme ${composerClassName}${centeredClassName}" id="composer-form">
           ${state.settingsOpen && !state.composerExpanded ? renderSettingsDrawer() : ''}
+          ${COMPOSER_UI.renderSettingsPopover()}
           ${state.error && !state.composerExpanded ? `<div class="composer-error" role="alert">${escapeHtml(shorten(state.error, 96))}</div>` : ''}
           ${renderAttachmentTray()}
           <input class="visually-hidden" id="attachment-input" type="file" multiple aria-label="Upload files">
           <div class="compact-composer-row">
-            ${desktopComposer ? '' : renderComposerLeadingControls()}
-            ${renderMessageEditor({ desktop: desktopComposer })}
+            ${desktopComposer ? '' : COMPOSER_UI.renderLeadingControls()}
+            ${COMPOSER_UI.renderMessageEditor({ desktop: desktopComposer })}
+            ${desktopComposer ? '' : COMPOSER_UI.renderTrailingControls({ includeNewSessionSettings: true })}
           </div>
         </form>
       </div>
@@ -2190,48 +2229,6 @@ function composerStateClassName() {
     return 'is-expandable';
   }
   return '';
-}
-
-function renderComposerLeadingControls() {
-  let expandButton = '';
-  if (!isDesktopLayout()) {
-    expandButton = `<button class="ghost icon-button composer-expand-button${state.composerExpanded ? ' is-expanded' : ''}" type="button" id="composer-expand-button" aria-label="${state.composerExpanded ? 'Collapse message editor' : 'Expand message editor'}" aria-expanded="${String(state.composerExpanded)}"${state.composerCanExpand || state.composerExpanded ? '' : ' hidden'}>${UI.icon('chevronDown', { className: 'button-icon' })}</button>`;
-  }
-  const attachDisabled = state.pendingTurn || state.submissionSending || hasUploadingComposerAttachments() ? ' disabled' : '';
-  const attachButton = state.composerExpanded
-    ? ''
-    : `<button class="ghost icon-button attach-button" type="button" id="attach-button" aria-label="Attach files" title="Attach files"${attachDisabled}>${UI.icon('attachment', { className: 'button-icon' })}</button>`;
-  return `
-    <div class="composer-leading-controls">
-      ${expandButton}
-      ${attachButton}
-    </div>
-  `;
-}
-
-function renderMessageEditor({ desktop = false } = {}) {
-  const composerClassName = composerStateClassName();
-  const sendDisabled = state.submissionSending || hasUploadingComposerAttachments() ? ' disabled' : '';
-  if (!desktop) {
-    return `
-    <div class="message-editor-shell ${composerClassName}">
-      <textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">${escapeHtml(state.prompt)}</textarea>
-      <button class="primary icon-button compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${sendDisabled}>${UI.icon('send', { className: 'button-icon' })}<span class="visually-hidden">Send</span></button>
-    </div>
-  `;
-  }
-  return `
-    <div class="message-editor-shell ${composerClassName}">
-      <textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">${escapeHtml(state.prompt)}</textarea>
-      <div class="composer-toolbar">
-        ${renderComposerLeadingControls()}
-        <div class="composer-action-buttons">
-          <button class="ghost icon-button compact-refresh" type="button" id="composer-refresh-button" aria-label="Refresh session" title="Refresh session">${UI.icon('refresh', { className: 'button-icon' })}<span class="visually-hidden">Refresh</span></button>
-          <button class="primary icon-button compact-send" type="submit" id="send-button" aria-label="Send" title="Send"${sendDisabled}>${UI.icon('send', { className: 'button-icon' })}<span class="visually-hidden">Send</span></button>
-        </div>
-      </div>
-    </div>
-  `;
 }
 
 function renderAttachmentTray() {
@@ -2418,7 +2415,26 @@ function sessionLatestPreview(session) {
 }
 
 function normalizeSessionCardText(value) {
-  return String(value || '').replace(/\s+/gu, ' ').trim();
+  const rawText = String(value || '').trim();
+  if (!rawText) {
+    return '';
+  }
+  const parsed = parseAttachmentPromptText(rawText);
+  const displayText = String(parsed.text || '').replace(/\s+/gu, ' ').trim();
+  const truncatedAttachmentIndex = parsed.attachments.length === 0
+    ? displayText.search(/\s+Attachments:\s+\d+\.\s+(?:image|file|voice message|video|attachment)\s+path:\s+/iu)
+    : -1;
+  if (truncatedAttachmentIndex >= 0) {
+    const promptText = displayText.slice(0, truncatedAttachmentIndex).trim();
+    return promptText === 'User sent attachments without additional text.' ? '' : promptText;
+  }
+  if (displayText) {
+    return displayText;
+  }
+  return parsed.attachments
+    .map((attachment) => String(attachment.fileName || '').trim())
+    .filter(Boolean)
+    .join(', ');
 }
 
 function sessionActivityState(session) {
@@ -2766,7 +2782,7 @@ function renderTimelineItem(item) {
       || (!submission && item.deliveryLabel === 'Send failed')
     );
     return `
-      <article class="card message-card ${escapeHtml(item.role)}${item.severity === 'error' ? ' error-message' : ''}${item.meta === 'reasoning-summary' ? ' reasoning-summary' : ''}${deliveryFailed ? ' delivery-failed' : ''}" data-timeline-id="${escapeAttribute(item.id || '')}">
+      <article class="card message-card ${escapeHtml(item.role)}${item.label === '/goal' ? ' goal-message' : ''}${item.severity === 'error' ? ' error-message' : ''}${item.meta === 'reasoning-summary' ? ' reasoning-summary' : ''}${deliveryFailed ? ' delivery-failed' : ''}" data-timeline-id="${escapeAttribute(item.id || '')}">
         <div class="card-header">
           <span class="card-title">${escapeHtml(t(item.label))}</span>
           <span class="card-kind">${escapeHtml(t(meta))}</span>
@@ -4217,6 +4233,8 @@ function bindGlobalEvents() {
     });
   }
 
+  COMPOSER_UI.bindSettings();
+
   const attachButton = document.querySelector('#attach-button');
   const attachmentInput = document.querySelector('#attachment-input');
   if (attachButton) {
@@ -4593,6 +4611,7 @@ function bindGlobalEvents() {
 
   const composerExpandButton = document.querySelector('#composer-expand-button');
   if (composerExpandButton) {
+    listenRendered(composerExpandButton, 'pointerdown', COMPOSER_UI.preservePromptFocus);
     listenRendered(composerExpandButton, 'click', toggleComposerExpanded);
   }
 
@@ -4873,7 +4892,8 @@ function updateComposerExpansionState(textarea) {
   const paddingBottom = Number.parseFloat(styles?.paddingBottom || '0') || 0;
   const contentHeight = Math.max(0, textarea.scrollHeight - paddingTop - paddingBottom);
   const visibleLineCount = Math.ceil(contentHeight / Math.max(1, lineHeight));
-  const canExpand = visibleLineCount >= PROMPT_EXPAND_LINE_THRESHOLD;
+  const hasPromptText = typeof textarea.value !== 'string' || textarea.value.length > 0;
+  const canExpand = hasPromptText && visibleLineCount >= PROMPT_EXPAND_LINE_THRESHOLD;
   if (canExpand === state.composerCanExpand) {
     return;
   }
@@ -5860,6 +5880,7 @@ function showSessionList() {
   savePromptDraftForCurrentSession();
   saveCurrentTimeline();
   stopStream();
+  state.newSessionSettingsOpen = false;
   const returnView = state.chatReturnView;
   rememberSessionListScroll();
   if (returnView === 'admin' && isAdminPrincipal()) {
@@ -5986,6 +6007,7 @@ function openNewSessionPage() {
   seedNewSessionTargetFromSelection();
   state.mobileSidebarOpen = false;
   state.activeSubmissionId = '';
+  state.newSessionSettingsOpen = false;
   if (isDesktopLayout()) {
     applyDefaultSettings();
     state.view = 'new';
@@ -6054,6 +6076,7 @@ function onNewSessionSubmit(event) {
   state.composerAttachments = [];
   state.composerExpanded = false;
   state.settingsOpen = false;
+  state.newSessionSettingsOpen = false;
   resetTurnState();
   state.status = 'Ready';
   state.statusTone = 'success';
@@ -6103,6 +6126,7 @@ async function selectSession(sessionId) {
   state.desktopOverlay = null;
   state.composerExpanded = false;
   state.settingsOpen = false;
+  state.newSessionSettingsOpen = false;
   state.composerAttachments = [];
   state.error = '';
   state.status = restoredRuntimeStatus.changed && restoredRuntimeStatus.activeTurnId
@@ -6363,6 +6387,7 @@ function openPendingSubmission(submissionId) {
   state.sessionId = null;
   state.currentSession = null;
   state.draftSessionActive = true;
+  state.newSessionSettingsOpen = false;
   state.cwd = entry.cwd;
   state.newProjectId = entry.projectId || state.newProjectId;
   if (entry.projectId) {
@@ -6556,6 +6581,7 @@ async function sendDurableComposerMessage(text, options = {}) {
   clearPromptDraftForCurrentSession();
   state.composerAttachments = [];
   state.activeSubmissionId = state.sessionId ? '' : submission.id;
+  state.newSessionSettingsOpen = false;
   renderChatAtLatest(() => {});
   return deliverSubmission(submission.id, { interactive: true });
 }
@@ -6574,7 +6600,7 @@ async function deliverSubmission(submissionId, { interactive = false, force = fa
   }
   const requestGeneration = authRequestGeneration;
   const wasNewSession = !current.sessionId;
-  const wasActiveDraft = state.activeSubmissionId === current.id || (wasNewSession && state.draftSessionActive && !state.sessionId);
+  const wasActiveDraft = isActiveNewSessionSubmission(current);
   let sending;
   try {
     sending = upsertSubmissionOutboxEntry({
@@ -6646,7 +6672,7 @@ async function deliverSubmission(submissionId, { interactive = false, force = fa
       return payload;
     }
     state.submissionSending = false;
-    return completeDeliveredSubmission(sending, normalized, payload, { wasActiveDraft });
+    return completeDeliveredSubmission(sending, normalized, payload);
   } catch (error) {
     if (!isAuthRequestCurrent(requestGeneration)) {
       resetSubmissionAfterAuthChange(sending);
@@ -6742,15 +6768,24 @@ function invalidSubmissionAcknowledgement(message) {
   return error;
 }
 
-function completeDeliveredSubmission(entry, normalized, payload, { wasActiveDraft = false } = {}) {
+function isActiveNewSessionSubmission(entry) {
+  return Boolean(
+    entry
+    && !entry.sessionId
+    && state.activeSubmissionId === entry.id
+  );
+}
+
+function completeDeliveredSubmission(entry, normalized, payload) {
   const sessionId = normalized.sessionId;
   const session = normalized.session;
   if (session) {
     upsertSession(session);
   }
   const shouldAdoptSession = Boolean(sessionId && (
-    state.sessionId === entry.sessionId
-    || (!state.sessionId && wasActiveDraft)
+    entry.sessionId
+      ? state.sessionId === entry.sessionId
+      : !state.sessionId && state.draftSessionActive && isActiveNewSessionSubmission(entry)
   ));
   const continuesActiveTurn = Boolean(
     isSteerSubmissionEntry(entry)
@@ -6792,7 +6827,9 @@ function completeDeliveredSubmission(entry, normalized, payload, { wasActiveDraf
       handleCommandResult(normalized.commandResult);
     }
     renderSessionListAfterBackgroundUpdate();
-    return payload;
+    if (!normalized.turnId) {
+      return payload;
+    }
   }
   if (normalized.turnId) {
     setSessionSummaryActivity(sessionId, 'running', normalized.turnId);
@@ -7206,6 +7243,7 @@ async function ensureSession() {
   state.sessionId = payload.session.id;
   migrateDraftPromptToSession(payload.session.id);
   state.draftSessionActive = false;
+  state.newSessionSettingsOpen = false;
   state.cwd = payload.session.cwd || state.cwd;
   upsertSession(payload.session);
   applySessionSettings(payload.session);
@@ -8287,7 +8325,13 @@ function applyTurnEvent(event, assistantEntry) {
       }
       state.turnId = null;
       stopStream();
-      void refreshCurrentSessionMetadata();
+      void refreshCurrentSessionMetadata({
+        hydrateTimeline: state.timeline.filter((item) => (
+          item?.kind === 'message'
+          && item.role === 'user'
+          && timelineTurnId(item) === event.turnId
+        )).length > 1,
+      });
       break;
     case 'turn.failed':
       state.terminalTurnIds.add(event.turnId);
@@ -12936,6 +12980,7 @@ function resetWorkspaceSessionContext() {
   state.currentSession = null;
   state.activeSubmissionId = '';
   state.draftSessionActive = false;
+  state.newSessionSettingsOpen = false;
   state.cwd = '';
   state.prompt = '';
   state.composerAttachments = [];

@@ -79,7 +79,7 @@ export async function runScheduledTask({
       text: task.prompt,
       settings: task.settings,
     });
-    const turnId = 'turnId' in turn ? turn.turnId : null;
+    const turnId = turn.turnId ?? null;
     if (turnId) {
       await waitForScheduledTurnTerminal(runtime, turnId);
     }

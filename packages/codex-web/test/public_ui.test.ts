@@ -3906,19 +3906,20 @@ test('sessions navigation remains available during a pending turn', async () => 
 });
 
 test('message input uses a roomy wrapped editor and keeps bounded auto-growth', async () => {
-  const [styles, app] = await Promise.all([
+  const [styles, app, uiKit] = await Promise.all([
     readFile(stylesUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
+    readFile(uiKitUrl, 'utf8'),
   ]);
 
-  assert.match(app, /<textarea id="prompt-input"[^>]*rows="1"/u);
-  assert.match(app, /id="composer-expand-button"/u);
+  assert.match(uiKit, /<textarea id="prompt-input"[^>]*rows="1"/u);
+  assert.match(uiKit, /id="composer-expand-button"/u);
   assert.match(app, /function updateComposerExpansionState\(textarea\)/u);
   assert.match(app, /function toggleComposerExpanded\(\)/u);
   assert.match(app, /const PROMPT_EXPAND_LINE_THRESHOLD = 4;/u);
   assert.match(app, /class="composer-wrap \$\{composerClassName\}\$\{centeredClassName\}"/u);
   assert.match(app, /class="composer bg-shared ring-theme \$\{composerClassName\}\$\{centeredClassName\}"/u);
-  assert.match(app, /class="message-editor-shell \$\{composerClassName\}"/u);
+  assert.match(uiKit, /class="message-editor-shell \$\{className\}"/u);
   assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*min-height:\s*64px;/su);
   assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*max-height:\s*160px;/su);
   assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*overflow-y:\s*auto;/su);
@@ -3929,10 +3930,15 @@ test('message input uses a roomy wrapped editor and keeps bounded auto-growth', 
   assert.doesNotMatch(styles, /\.composer-editor-toggle/u);
   assert.match(styles, /\.composer-leading-controls\s*\{[^}]*gap:\s*4px;/su);
   assert.match(styles, /\.composer-toolbar\s*\{[^}]*justify-content:\s*space-between;/su);
-  assert.match(styles, /@media \(hover:\s*none\),\s*\(pointer:\s*coarse\)[\s\S]*\.compact-composer-row\s*\{[^}]*display:\s*flex;/su);
-  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.message-editor-shell:not\(\.is-expanded\)\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/su);
+  assert.match(styles, /\.composer-expand-button\s*\{[^}]*border:\s*0;/su);
+  assert.match(styles, /\.composer-expand-button\s*\{[^}]*border-radius:\s*50%;/su);
+  assert.match(styles, /\.composer-expand-button\s*\{[^}]*box-shadow:\s*none;/su);
+  assert.match(styles, /\.composer-expand-button\s*\{[^}]*-webkit-appearance:\s*none;/su);
+  assert.match(styles, /@media \(hover:\s*none\),\s*\(pointer:\s*coarse\)[\s\S]*\.compact-composer-row\s*\{[^}]*display:\s*grid;/su);
+  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.compact-composer-row\s*\{[^}]*grid-template-columns:\s*44px minmax\(0,\s*1fr\) 44px;/su);
   assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.message-editor-shell:not\(\.is-expanded\) textarea\s*\{[^}]*min-height:\s*44px;/su);
-  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.message-editor-shell\.is-expanded > \.compact-send\s*\{[^}]*position:\s*absolute;/su);
+  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.composer\.is-centered \.message-editor-shell:not\(\.is-expanded\) textarea\s*\{[^}]*min-height:\s*92px;/su);
+  assert.match(styles, /@media \(hover:\s*none\)[\s\S]*\.composer\.is-expanded \.composer-trailing-controls\s*\{[^}]*position:\s*absolute;/su);
   assert.match(styles, /\.icon-button\[hidden\]\s*\{[^}]*display:\s*none;/su);
   assert.match(styles, /\.icon-button,\s*\.compact-send,\s*\.compact-refresh\s*\{[^}]*min-height:\s*38px;/su);
   assert.match(styles, /\.icon-button,\s*\.compact-send,\s*\.compact-refresh\s*\{[^}]*padding:\s*0 8px;/su);
@@ -3970,7 +3976,11 @@ test('chat surfaces use soft elevation and preserve asymmetric message corners',
   assert.match(styles, /\.desktop-chat-pane\s*\{[^}]*background:\s*var\(--bg\);/su);
   assert.match(styles, /\.message-card\s*\{[^}]*border-color:\s*color-mix\(in srgb,\s*var\(--border\) 24%,\s*transparent\);/su);
   assert.match(styles, /\.message-card\.assistant\s*\{[^}]*background:\s*var\(--msg-sys-bg\);/su);
-  assert.match(styles, /\.message-card\.system\s*\{[^}]*background:\s*var\(--msg-sys-bg\);/su);
+  assert.match(styles, /\.message-card\.system\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--accent\) 9%,\s*var\(--msg-sys-bg\)\);/su);
+  assert.match(styles, /\.message-card\.system\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(styles, /\.message-card\.system\.goal-message\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--success\) 12%,\s*var\(--msg-sys-bg\)\);/su);
+  assert.match(styles, /\.message-card\.error-message\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(styles, /\.message-card\.error-message\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--danger\) 10%,\s*var\(--msg-sys-bg\)\);/su);
   assert.match(styles, /\.message-card\s*\{[^}]*border-radius:\s*16px;/su);
   assert.match(styles, /\.message-card\.assistant\s*\{[^}]*border-top-left-radius:\s*4px;/su);
   assert.match(styles, /\.message-card\.user\s*\{[^}]*border-top-right-radius:\s*4px;/su);
@@ -4264,7 +4274,7 @@ test('mobile composer keeps the WeChat-style row while desktop retains the svg t
   assert.match(shortHtml, /class="chat-header-actions"[\s\S]*id="settings-toggle"[^>]*>[\s\S]*class="button-icon button-icon-more"[\s\S]*<\/button>/u);
   assert.match(shortHtml, /id="attach-button"[^>]*aria-label="Attach files"[\s\S]*class="button-icon"[\s\S]*<\/button>/u);
   assert.match(shortHtml, /class="message-editor-shell [^"]*"/u);
-  assert.match(shortHtml, /class="compact-composer-row"[\s\S]*class="composer-leading-controls"[\s\S]*id="attach-button"[\s\S]*class="message-editor-shell [^"]*"[\s\S]*<textarea id="prompt-input"[\s\S]*<button class="primary icon-button compact-send" type="submit" id="send-button"[^>]*aria-label="Send"/u);
+  assert.match(shortHtml, /class="compact-composer-row"[\s\S]*class="composer-leading-controls"[\s\S]*id="attach-button"[\s\S]*class="message-editor-shell [^"]*"[\s\S]*<textarea id="prompt-input"[\s\S]*class="composer-trailing-controls"[\s\S]*id="send-button"[^>]*aria-label="Send"/u);
   assert.doesNotMatch(shortHtml, /id="composer-refresh-button"|class="composer-toolbar"/u);
   assert.match(shortHtml, /class="composer-wrap "/u);
   const shortComposerHtml = shortHtml.match(/<form class="composer[\s\S]*?<\/form>/u)?.[0] || '';
@@ -4292,7 +4302,7 @@ test('mobile composer keeps the WeChat-style row while desktop retains the svg t
   assert.match(expandedHtml, /class="composer bg-shared ring-theme is-expanded"/u);
   assert.match(expandedHtml, /<div class="composer-leading-controls">[\s\S]*id="composer-expand-button"[\s\S]*class="button-icon"[\s\S]*<\/div>/u);
   assert.doesNotMatch(expandedHtml, /id="attach-button"/u);
-  assert.match(expandedHtml, /<div class="message-editor-shell is-expanded"[\s\S]*<textarea id="prompt-input"[\s\S]*<button class="primary icon-button compact-send" type="submit" id="send-button"[^>]*aria-label="Send"/u);
+  assert.match(expandedHtml, /<div class="message-editor-shell is-expanded"[\s\S]*<textarea id="prompt-input"[\s\S]*<div class="composer-trailing-controls"[\s\S]*id="send-button"[^>]*aria-label="Send"/u);
   assert.doesNotMatch(expandedHtml, /id="composer-refresh-button"|class="composer-toolbar"/u);
   assert.match(expandedHtml, /<textarea id="prompt-input"[\s\S]*id="send-button"/u);
 
@@ -4305,6 +4315,78 @@ test('mobile composer keeps the WeChat-style row while desktop retains the svg t
   const desktopHtml = desktopContext.document.querySelector('#app').innerHTML;
   assert.doesNotMatch(desktopHtml, /class="desktop-workspace"/u);
   assert.match(desktopHtml, /class="composer-toolbar"[\s\S]*id="attach-button"[\s\S]*id="composer-refresh-button"[\s\S]*id="send-button"/u);
+});
+
+test('new-session composer replaces refresh with model and thinking effort settings', async () => {
+  const { api, context } = await loadAppHarness({
+    viewportWidth: 900,
+    viewportHeight: 844,
+    desktopPointer: true,
+  });
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.models = [
+    {
+      id: 'gpt-a',
+      displayName: 'GPT-A',
+      supportedReasoningEfforts: ['low', 'high'],
+      defaultReasoningEffort: 'low',
+    },
+    {
+      id: 'gpt-b',
+      displayName: 'GPT-B',
+      supportedReasoningEfforts: ['low', 'high', 'ultra'],
+      defaultReasoningEffort: 'low',
+    },
+  ];
+  api.state.model = 'gpt-a';
+  api.state.reasoningEffort = 'high';
+  api.render();
+
+  let html = context.document.querySelector('#app').innerHTML;
+  assert.match(html, /id="new-session-settings-button"[^>]*aria-label="Model and thinking effort"/u);
+  assert.doesNotMatch(html, /id="composer-refresh-button"/u);
+  assert.doesNotMatch(html, /class="new-session-settings-popover"/u);
+
+  context.document.querySelector('#new-session-settings-button').click();
+
+  html = context.document.querySelector('#app').innerHTML;
+  assert.equal(api.state.newSessionSettingsOpen, true);
+  assert.match(html, /class="new-session-settings-popover"/u);
+  assert.equal(context.document.querySelector('#new-session-model-select').value, 'gpt-a');
+  assert.equal(context.document.querySelector('#new-session-reasoning-select').value, 'high');
+
+  const modelSelect = context.document.querySelector('#new-session-model-select');
+  modelSelect.value = 'gpt-b';
+  modelSelect.__listeners.get('change')?.({ target: modelSelect });
+
+  const reasoningSelect = context.document.querySelector('#new-session-reasoning-select');
+  assert.equal(api.state.model, 'gpt-b');
+  assert.match(reasoningSelect.innerHTML, /value="ultra"/u);
+  assert.match(reasoningSelect.innerHTML, /value="high" selected/u);
+  reasoningSelect.value = 'ultra';
+  reasoningSelect.__listeners.get('change')?.({ target: reasoningSelect });
+  assert.equal(api.collectSettings().model, 'gpt-b');
+  assert.equal(api.collectSettings().reasoningEffort, 'ultra');
+
+  const { api: mobileApi } = await loadAppHarness({ viewportWidth: 390, viewportHeight: 844 });
+  mobileApi.state.view = 'chat';
+  mobileApi.state.draftSessionActive = true;
+  mobileApi.state.newSessionSettingsOpen = true;
+  mobileApi.applyLanguage('zh-CN');
+  const mobileHtml = mobileApi.renderChat().innerHTML;
+  assert.match(mobileHtml, /class="composer-leading-controls"[\s\S]*id="attach-button"[\s\S]*class="composer-trailing-controls has-new-session-settings"[\s\S]*id="new-session-settings-button"[\s\S]*id="send-button"/u);
+  assert.match(mobileHtml, /aria-label="模型与思考强度"/u);
+  assert.match(mobileHtml, /<label for="new-session-reasoning-select">思考强度<\/label>/u);
+
+  api.state.draftSessionActive = false;
+  api.state.sessionId = 'session_existing';
+  api.state.currentSession = { id: 'session_existing', cwd: '/repo' };
+  api.render();
+  html = context.document.querySelector('#app').innerHTML;
+  assert.match(html, /id="composer-refresh-button"/u);
+  assert.doesNotMatch(html, /id="new-session-settings-button"/u);
 });
 
 test('session settings drawer closes when tapping outside the drawer', async () => {
@@ -4432,7 +4514,10 @@ test('expanded composer positions collapse and Send inside a single editor surfa
 });
 
 test('running turns keep message sending available and expose Stop only in session settings', async () => {
-  const app = await readFile(appUrl, 'utf8');
+  const [app, uiKit] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(uiKitUrl, 'utf8'),
+  ]);
   const { api } = await loadAppHarness();
 
   api.state.authSession = { id: 'auth_1' };
@@ -4445,10 +4530,10 @@ test('running turns keep message sending available and expose Stop only in sessi
 
   const closedHtml = api.renderChat().innerHTML;
 
-  assert.match(app, /<textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">/u);
-  assert.doesNotMatch(app, /<textarea id="prompt-input"[^>]*state\.pendingTurn \? 'disabled'/u);
-  assert.match(app, /id="send-button"/u);
-  assert.doesNotMatch(app, /id="\$\{state\.pendingTurn \? 'stop-button' : 'send-button'\}"/u);
+  assert.match(uiKit, /<textarea id="prompt-input" name="prompt" rows="1" placeholder="Message">/u);
+  assert.doesNotMatch(uiKit, /<textarea id="prompt-input"[^>]*pendingTurn[^>]*disabled/u);
+  assert.match(uiKit, /id="send-button"/u);
+  assert.doesNotMatch(uiKit, /id="\$\{[^}]*pendingTurn[^}]*\? 'stop-button' : 'send-button'\}"/u);
   assert.doesNotMatch(closedHtml, /id="stop-button"/u);
   assert.doesNotMatch(closedHtml, /settings-stop-row/u);
 
@@ -5172,7 +5257,7 @@ test('turn interrupt timeout failures are removed from events and hydrated histo
   assert.equal(hydrated.length, 0);
 });
 
-test('composer renders handled goal slash command results without streaming a turn', async () => {
+test('composer renders handled goal slash command results and streams their managed turn', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
@@ -5183,6 +5268,7 @@ test('composer renders handled goal slash command results without streaming a tu
           status: 202,
           json: async () => ({
             type: 'command',
+            turnId: 'turn_goal_auto',
             command: {
               name: 'goal',
               action: 'resume',
@@ -5206,6 +5292,13 @@ test('composer renders handled goal slash command results without streaming a tu
           }),
         };
       }
+      if (path === '/api/turns/turn_goal_auto/events') {
+        return {
+          ok: true,
+          status: 200,
+          body: { getReader: () => ({ read: async () => ({ done: true }) }) },
+        };
+      }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
@@ -5221,10 +5314,14 @@ test('composer renders handled goal slash command results without streaming a tu
     preventDefault() {},
   });
 
-  assert.deepEqual(fetchCalls.map((call) => call.path), ['/api/sessions/session_goal/turns']);
-  assert.equal(api.state.pendingTurn, false);
-  assert.equal(api.state.turnId, null);
-  assert.equal(api.state.status, 'Ready');
+  assert.deepEqual(fetchCalls.map((call) => call.path), [
+    '/api/sessions/session_goal/turns',
+    '/api/turns/turn_goal_auto/events',
+  ]);
+  assert.equal(api.state.pendingTurn, true);
+  assert.equal(api.state.turnId, 'turn_goal_auto');
+  assert.equal(api.state.status, 'Turn running');
+  assert.match(api.renderChat().innerHTML, /message-card system goal-message/u);
   assert.equal(
     JSON.stringify(api.state.timeline.map((item) => item.text)),
     JSON.stringify(['/goal resume', 'Goal resumed: ship slash goal support']),
@@ -5809,6 +5906,47 @@ test('composer expansion threshold ignores textarea padding when counting lines'
   textarea.scrollHeight = 88;
   api.updateComposerExpansionState(textarea);
   assert.equal(api.state.composerCanExpand, true);
+});
+
+test('empty composer content clears stale expansion state', async () => {
+  const { api, context } = await loadAppHarness();
+  const textarea = {
+    value: '',
+    scrollHeight: 108,
+    style: {},
+  };
+
+  context.window.getComputedStyle = () => ({
+    lineHeight: '23px',
+    paddingTop: '8px',
+    paddingBottom: '8px',
+  });
+  api.state.composerCanExpand = true;
+  api.state.composerExpanded = true;
+
+  api.updateComposerExpansionState(textarea);
+
+  assert.equal(api.state.composerCanExpand, false);
+  assert.equal(api.state.composerExpanded, false);
+});
+
+test('composer expansion pointer keeps focus in the prompt input', async () => {
+  const { api, context } = await loadAppHarness();
+  let prevented = false;
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo' };
+  api.render();
+  const promptInput = context.document.querySelector('#prompt-input');
+  Object.defineProperty(context.document, 'activeElement', { configurable: true, value: promptInput });
+
+  api.preservePromptFocusOnComposerToggle({
+    preventDefault() {
+      prevented = true;
+    },
+  });
+
+  assert.equal(prevented, true);
 });
 
 test('composer expansion toggle removes the live attach button without a full rerender', async () => {
@@ -9025,6 +9163,79 @@ test('session cards use the first task as identity and the latest input for orie
   assert.doesNotMatch(html, /Users\/alice\/workspace\/project-alpha/u);
 });
 
+test('session cards hide attachment prompt metadata and retain useful user-facing text', async () => {
+  const { api } = await loadAppHarness();
+  const attachmentPrompt = (text, fileName, localPath) => [
+    text || 'User sent attachments without additional text.',
+    '',
+    'Attachments:',
+    '1. image',
+    `   path: ${localPath}`,
+    `   filename: ${fileName}`,
+    '   mime: image/png',
+    '   attached_as: localImage',
+    '',
+    'Use the local file paths above when you inspect these attachments.',
+  ].join('\n');
+
+  api.state.sortMode = 'time';
+  api.state.sessions = [{
+    id: 'session_attachment_prompt',
+    cwd: '/Users/alice/workspace/project-alpha',
+    firstUserInput: attachmentPrompt(
+      '这个扩展输入栏有些问题。',
+      'input-issue.png',
+      '/Users/alice/.codex-web/turn-attachments/input-issue.png',
+    ),
+    lastUserInput: attachmentPrompt(
+      '',
+      'follow-up.png',
+      '/Users/alice/.codex-web/turn-attachments/follow-up.png',
+    ),
+    updatedAt: 1716200000000,
+    settings: { metadata: {} },
+  }];
+
+  const html = api.renderSessionCards();
+
+  assert.match(html, /class="session-title" data-i18n-skip>这个扩展输入栏有些问题。<\/span>/u);
+  assert.match(html, /class="session-preview" data-i18n-skip>follow-up\.png<\/span>/u);
+  assert.doesNotMatch(html, /Attachments:|attached_as|localImage|turn-attachments/u);
+});
+
+test('session cards strip truncated flattened attachment metadata from runtime summaries', async () => {
+  const { api } = await loadAppHarness();
+  const truncatedSummary = '这个位置的渲染，看如何改吧。 Attachments: 1. image path: /Users/alice/.codex-web/turn-attachments/2da346...';
+
+  api.state.sortMode = 'time';
+  api.state.sessions = [{
+    id: 'session_truncated_attachment_prompt',
+    cwd: '/Users/alice/workspace/project-alpha',
+    firstUserInput: truncatedSummary,
+    lastUserInput: truncatedSummary,
+    preview: [
+      '这个位置的渲染，看如何改吧。',
+      '',
+      'Attachments:',
+      '1. image',
+      '   path: /Users/alice/.codex-web/turn-attachments/image.png',
+      '   filename: image.png',
+      '   mime: image/png',
+      '   attached_as: localImage',
+      '',
+      'Use the local file paths above when you inspect these attachments.',
+    ].join('\n'),
+    updatedAt: 1716200000000,
+    settings: { metadata: {} },
+  }];
+
+  const html = api.renderSessionCards();
+
+  assert.match(html, /class="session-title" data-i18n-skip>这个位置的渲染，看如何改吧。<\/span>/u);
+  assert.doesNotMatch(html, /class="session-preview"/u);
+  assert.doesNotMatch(html, /Attachments:|turn-attachments|2da346/u);
+});
+
 test('session names prefer the last cwd segment over long stored project labels', async () => {
   const { api } = await loadAppHarness();
 
@@ -9924,6 +10135,140 @@ test('new-session submission persists before the network request can finish', as
   assert.equal(api.state.sessionId, 'session_new');
   assert.equal(api.state.turnId, 'turn_new');
   assert.equal(api.state.timeline[0]?.turnId, 'turn_new');
+});
+
+test('a background new-session retry cannot take over a fresh draft', async () => {
+  const streamRequests = [];
+  const pending = {
+    id: 'submission_background_draft',
+    ownerKey: 'single',
+    text: 'Old pending first message',
+    status: 'pending',
+    sessionId: '',
+    projectId: '',
+    cwd: '/repo/old',
+    settings: {},
+    attachments: [],
+    createdAt: 100,
+    updatedAt: 100,
+    attempts: 0,
+    nextAttemptAt: 0,
+    error: '',
+    retryable: true,
+    queuedMessageId: '',
+  };
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      if (path === '/api/session-submissions') {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            submission: {
+              id: JSON.parse(options.body).submissionId,
+              status: 'submitted',
+              sessionId: 'session_background',
+              turnId: 'turn_background',
+              error: null,
+            },
+            session: { id: 'session_background', cwd: '/repo/old', settings: {}, thread: { turns: [] } },
+            turnId: 'turn_background',
+          }),
+        };
+      }
+      if (path.includes('/api/turns/')) {
+        streamRequests.push(path);
+        return { ok: true, status: 200, body: { getReader: () => ({ read: async () => ({ done: true }) }) } };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo/new';
+  api.state.prompt = 'Still typing the new first message';
+  api.state.submissionOutbox.set(pending.id, pending);
+
+  await api.drainSubmissionOutbox({ force: true });
+
+  assert.equal(api.state.sessionId, null);
+  assert.equal(api.state.currentSession, null);
+  assert.equal(api.state.activeSubmissionId, '');
+  assert.equal(api.state.draftSessionActive, true);
+  assert.equal(api.state.cwd, '/repo/new');
+  assert.equal(api.state.prompt, 'Still typing the new first message');
+  assert.equal(api.state.timeline.length, 0);
+  assert.equal(api.state.turnId, null);
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.sessions.some((session) => session.id === 'session_background'), true);
+  assert.deepEqual(streamRequests, []);
+});
+
+test('a delayed first-message response cannot take over a newer draft', async () => {
+  let resolveSubmission;
+  const submissionReady = new Promise((resolve) => {
+    resolveSubmission = resolve;
+  });
+  const streamRequests = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      if (path === '/api/session-submissions') {
+        await submissionReady;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            submission: {
+              id: JSON.parse(options.body).submissionId,
+              status: 'submitted',
+              sessionId: 'session_delayed',
+              turnId: 'turn_delayed',
+              error: null,
+            },
+            session: { id: 'session_delayed', cwd: '/repo/old', settings: {}, thread: { turns: [] } },
+            turnId: 'turn_delayed',
+          }),
+        };
+      }
+      if (path.includes('/api/turns/')) {
+        streamRequests.push(path);
+        return { ok: true, status: 200, body: { getReader: () => ({ read: async () => ({ done: true }) }) } };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.projectsLoaded = true;
+  api.state.cwd = '/repo/old';
+  api.state.prompt = 'First message for the old draft';
+
+  const sending = api.onComposerSubmit({ preventDefault() {} });
+  await Promise.resolve();
+  api.openNewSessionPage();
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.cwd = '/repo/new';
+  api.state.prompt = 'Partially typed newer draft';
+  api.state.timeline = [];
+  resolveSubmission();
+  await sending;
+
+  assert.equal(api.state.sessionId, null);
+  assert.equal(api.state.currentSession, null);
+  assert.equal(api.state.activeSubmissionId, '');
+  assert.equal(api.state.draftSessionActive, true);
+  assert.equal(api.state.cwd, '/repo/new');
+  assert.equal(api.state.prompt, 'Partially typed newer draft');
+  assert.equal(api.state.timeline.length, 0);
+  assert.equal(api.state.turnId, null);
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.sessions.some((session) => session.id === 'session_delayed'), true);
+  assert.deepEqual(streamRequests, []);
 });
 
 test('lost new-session response retries the same submission after reload', async () => {
@@ -12634,9 +12979,10 @@ test('desktop showSessionList keeps the active right pane instead of clearing it
 });
 
 test('desktop composer is larger, shows Refresh and Send, and does not render the expand control', async () => {
-  const [styles, app] = await Promise.all([
+  const [styles, app, uiKit] = await Promise.all([
     readFile(stylesUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
+    readFile(uiKitUrl, 'utf8'),
   ]);
 
   assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*860px\);/su);
@@ -12646,9 +12992,9 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
   assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*font-weight:\s*400;/su);
   assert.match(app, /const maxHeight = hasDesktopPointer\(\) \? DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT : PROMPT_TEXTAREA_MAX_HEIGHT;/u);
   assert.doesNotMatch(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
-  assert.match(app, /if \(!isDesktopLayout\(\)\) \{[\s\S]*id="composer-expand-button"/u);
-  assert.match(app, /id="composer-refresh-button"/u);
-  assert.match(app, /class="composer-action-buttons"/u);
+  assert.match(uiKit, /context\.isDesktopLayout\(\) \? '' : `[\s\S]*id="composer-expand-button"/u);
+  assert.match(uiKit, /id="composer-refresh-button"/u);
+  assert.match(uiKit, /class="composer-action-buttons"/u);
   assert.match(app, /function handlePromptKeydown\(event\)/u);
   assert.match(app, /listenRendered\(promptInput, 'keydown', handlePromptKeydown\)/u);
   assert.doesNotMatch(app, /document\.querySelector\('#composer-form'\)\?\.requestSubmit\(\)/u);
@@ -14692,6 +15038,67 @@ test('terminal event metadata refresh requests status without downloading timeli
   assert.deepEqual(fetchCalls, ['/api/sessions/session_terminal_status/status']);
 });
 
+test('terminal turns with steered input reconcile authoritative message order', async () => {
+  const fetchCalls: string[] = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions/session_steered_terminal/status') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ session: { id: 'session_steered_terminal', cwd: '/repo', activeTurnId: null } }),
+        };
+      }
+      if (path === '/api/sessions/session_steered_terminal/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'history_turn_steered_0', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Initial request', turnId: 'turn_steered' },
+              { id: 'history_turn_steered_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'commentary', text: 'First response', turnId: 'turn_steered' },
+              { id: 'history_turn_steered_2', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Steered follow-up', turnId: 'turn_steered' },
+              { id: 'history_turn_steered_3', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'final', text: 'Final response', turnId: 'turn_steered' },
+            ],
+            hasMore: false,
+            nextBefore: null,
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_steered_terminal';
+  api.state.currentSession = { id: 'session_steered_terminal', cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_steered';
+  api.state.timeline = [
+    { id: 'local_user_initial', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Initial request', turnId: 'turn_steered' },
+    { id: 'local_user_steer', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Steered follow-up', turnId: 'turn_steered' },
+    { id: 'assistant_turn_steered_first', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'commentary', text: 'First response', turnId: 'turn_steered', source: 'stream' },
+  ];
+
+  api.applyTurnEvent({
+    type: 'turn.completed',
+    turnId: 'turn_steered',
+    status: 'completed',
+  }, null);
+  await flushMicrotasks();
+
+  assert.deepEqual(fetchCalls.sort(), [
+    '/api/sessions/session_steered_terminal/status',
+    '/api/sessions/session_steered_terminal/timeline?limit=50',
+  ]);
+  assert.equal(
+    JSON.stringify(api.state.timeline.map((item) => item.text)),
+    JSON.stringify(['Initial request', 'First response', 'Steered follow-up', 'Final response']),
+  );
+});
+
 test('active session refresh keeps the live assistant entry instead of replacing it with history', async () => {
   const { api } = await loadAppHarness({
     fetch: async (path) => {
@@ -16551,11 +16958,14 @@ async function loadAppHarness(overrides = {}) {
   const materializeAppHtml = (html) => {
     materializeSelectFromHtml(html, 'model-select');
     materializeSelectFromHtml(html, 'reasoning-select');
+    materializeSelectFromHtml(html, 'new-session-model-select');
+    materializeSelectFromHtml(html, 'new-session-reasoning-select');
     elements.delete('#timeline');
     elements.delete('#prompt-input');
     elements.delete('#username');
     elements.delete('#password');
     elements.delete('#attach-button');
+    elements.delete('#new-session-settings-button');
     elements.delete('.session-file-viewer');
 	    elements.delete('#mobile-sidebar-toggle-button');
 	    elements.delete('#mobile-drawer-backdrop');
@@ -16596,6 +17006,10 @@ async function loadAppHarness(overrides = {}) {
           elements.delete('#attach-button');
         },
       }));
+    }
+    if (String(html || '').includes('id="new-session-settings-button"')) {
+      const settingsHtml = String(html).match(/<button\b[^>]*id="new-session-settings-button"[^>]*>/u)?.[0] || '';
+      trackElement('#new-session-settings-button', createElementFromHtml('#new-session-settings-button', settingsHtml));
     }
     if (String(html || '').includes('class="session-file-viewer"')) {
       const fileHtml = String(html).match(/<main class="session-file-viewer">([\s\S]*?)<\/main>/u)?.[1] || '';
@@ -16800,10 +17214,11 @@ globalThis.__codexWebTest = {
   refreshChatDynamicUi: typeof refreshChatDynamicUi === 'function' ? refreshChatDynamicUi : null,
   composerStatusLabel: typeof composerStatusLabel === 'function' ? composerStatusLabel : null,
   applyMessageFontSize: typeof applyMessageFontSize === 'function' ? applyMessageFontSize : null,
-  setMessageFontSize: typeof setMessageFontSize === 'function' ? setMessageFontSize : null,
-  updateComposerExpansionState: typeof updateComposerExpansionState === 'function' ? updateComposerExpansionState : null,
-  toggleComposerExpanded: typeof toggleComposerExpanded === 'function' ? toggleComposerExpanded : null,
-  hydrateTimelineFromSession,
+	  setMessageFontSize: typeof setMessageFontSize === 'function' ? setMessageFontSize : null,
+	  updateComposerExpansionState: typeof updateComposerExpansionState === 'function' ? updateComposerExpansionState : null,
+	  toggleComposerExpanded: typeof toggleComposerExpanded === 'function' ? toggleComposerExpanded : null,
+	  preservePromptFocusOnComposerToggle: COMPOSER_UI?.preservePromptFocus || null,
+	  hydrateTimelineFromSession,
   restoreTimelineForSession: typeof restoreTimelineForSession === 'function' ? restoreTimelineForSession : null,
   showMoreSessionHistory: typeof showMoreSessionHistory === 'function' ? showMoreSessionHistory : null,
   loadOlderSessionTimelinePage: typeof loadOlderSessionTimelinePage === 'function' ? loadOlderSessionTimelinePage : null,

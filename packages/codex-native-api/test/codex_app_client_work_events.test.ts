@@ -110,6 +110,7 @@ test('app client sends persisted permission settings when resuming a thread', as
     assert.equal(method, 'thread/resume');
     assert.equal(params.approvalPolicy, 'never');
     assert.equal(params.sandbox, 'danger-full-access');
+    assert.equal(params.developerInstructions, 'Use the projected web context.');
     assert.equal(Object.hasOwn(params, 'sandboxPolicy'), false);
     return {};
   };
@@ -118,7 +119,92 @@ test('app client sends persisted permission settings when resuming a thread', as
     threadId: 'thread_full_access',
     approvalPolicy: 'never',
     sandboxMode: 'danger-full-access',
+    developerInstructions: 'Use the projected web context.',
   });
+});
+
+test('app client adopts the automatic turn started by an active goal update', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const callbackOrder: string[] = [];
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    assert.equal(method, 'thread/goal/set');
+    assert.deepEqual(params, {
+      threadId: 'thread_goal',
+      objective: 'Finish the release',
+      status: 'active',
+    });
+    client.handleMessage(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'turn/started',
+      params: {
+        threadId: 'thread_goal',
+        turn: { id: 'turn_goal_auto', status: 'inProgress' },
+      },
+    }));
+    return {
+      goal: {
+        threadId: 'thread_goal',
+        objective: 'Finish the release',
+        status: 'active',
+      },
+    };
+  };
+  client.waitForTurnResult = async (args: any) => {
+    callbackOrder.push('wait');
+    assert.equal(args.threadId, 'thread_goal');
+    assert.equal(args.turnId, 'turn_goal_auto');
+    assert.equal(args.turnStartStatus, 'inProgress');
+    return {
+      outputText: 'Release finished',
+      status: 'completed',
+      turnId: 'turn_goal_auto',
+      threadId: 'thread_goal',
+    };
+  };
+
+  const result = await client.startThreadGoal({
+    threadId: 'thread_goal',
+    objective: 'Finish the release',
+    onGoalUpdated: () => callbackOrder.push('goal'),
+    onTurnStarted: () => callbackOrder.push('started'),
+  });
+
+  assert.deepEqual(callbackOrder, ['goal', 'started', 'wait']);
+  assert.equal(result.goal?.objective, 'Finish the release');
+  assert.equal(result.turn.turnId, 'turn_goal_auto');
+});
+
+test('app client interrupts an automatic goal turn when web tracking setup fails', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const interrupted: string[] = [];
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    if (method === 'turn/interrupt') {
+      interrupted.push(String(params.turnId || ''));
+      return {};
+    }
+    assert.equal(method, 'thread/goal/set');
+    client.handleMessage(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'turn/started',
+      params: {
+        threadId: 'thread_goal',
+        turn: { id: 'turn_goal_untracked', status: 'inProgress' },
+      },
+    }));
+    return {
+      goal: { threadId: 'thread_goal', objective: 'Finish safely', status: 'active' },
+    };
+  };
+
+  await assert.rejects(client.startThreadGoal({
+    threadId: 'thread_goal',
+    objective: 'Finish safely',
+    onGoalUpdated: () => {
+      throw new Error('timeline unavailable');
+    },
+  }), /timeline unavailable/u);
+
+  assert.deepEqual(interrupted, ['turn_goal_untracked']);
 });
 
 test('app client projects runtime environment into new and resumed thread shell policies', async () => {

@@ -604,18 +604,20 @@ export class CodexAppClient extends EventEmitter {
     approvalPolicy = null,
     sandboxMode = null,
     runtimeEnv = {},
+    developerInstructions = null,
   }: {
     threadId: string;
     approvalPolicy?: string | null;
     sandboxMode?: string | null;
     runtimeEnv?: Record<string, string | null>;
+    developerInstructions?: string | null;
   }): Promise<ProviderConfigDefaults> {
     const result: any = await this.request('thread/resume', {
       threadId,
       cwd: null,
       approvalPolicy,
       baseInstructions: null,
-      developerInstructions: null,
+      developerInstructions,
       config: buildRuntimeEnvironmentConfig(runtimeEnv),
       sandbox: sandboxMode,
       model: null,
@@ -668,6 +670,77 @@ export class CodexAppClient extends EventEmitter {
       }
     }
     return mapThreadGoal(result?.goal ?? null);
+  }
+
+  async startThreadGoal({
+    threadId,
+    objective = null,
+    status = 'active',
+    onGoalUpdated = null,
+    onProgress = null,
+    onWorkEvent = null,
+    onTurnStarted = null,
+    onApprovalRequest = null,
+    timeoutMs = 15 * 60 * 1000,
+  }: {
+    threadId: string;
+    objective?: string | null;
+    status?: string | null;
+    onGoalUpdated?: ((goal: ProviderThreadGoal | null) => Promise<void> | void) | null;
+    onProgress?: ((progress: ProviderTurnProgress) => Promise<void> | void) | null;
+    onWorkEvent?: ((event: ProviderTurnWorkEvent) => Promise<void> | void) | null;
+    onTurnStarted?: ((meta: Record<string, unknown>) => Promise<void> | void) | null;
+    onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
+    timeoutMs?: number;
+  }): Promise<{ goal: ProviderThreadGoal | null; turn: ProviderTurnResult }> {
+    const stderrBaseline = this.childStderrSequence;
+    const earlyEventCapture = beginEarlyTurnEventCapture(this, threadId);
+    const autoStartedTurnPromise = this.captureNextTurnStartedForThread(threadId, 5_000);
+    try {
+      const result: any = await this.request('thread/goal/set', {
+        threadId,
+        objective,
+        status,
+      }, { timeoutMs: 15_000 });
+      const goal = mapThreadGoal(result?.goal ?? null);
+      const turnId = await autoStartedTurnPromise;
+      if (!turnId) {
+        throw new Error('Codex thread/goal/set did not start a turn');
+      }
+      earlyEventCapture.turnId = turnId;
+      try {
+        if (typeof onGoalUpdated === 'function') {
+          await onGoalUpdated(goal);
+        }
+        if (typeof onTurnStarted === 'function') {
+          await onTurnStarted({ turnId, threadId });
+        }
+      } catch (error) {
+        try {
+          await this.interruptTurn({ threadId, turnId });
+        } catch (interruptError) {
+          this.logDebug('thread_goal_untracked_turn_interrupt_failed', {
+            threadId,
+            turnId,
+            error: interruptError instanceof Error ? interruptError.message : String(interruptError),
+          });
+        }
+        throw error;
+      }
+      const turn = await this.waitForTurnResult({
+        threadId,
+        turnId,
+        turnStartStatus: 'inProgress',
+        onProgress,
+        onWorkEvent,
+        onApprovalRequest,
+        timeoutMs,
+        stderrBaseline,
+      });
+      return { goal, turn };
+    } finally {
+      stopEarlyTurnEventCapture(this, earlyEventCapture);
+    }
   }
 
   async clearThreadGoal(threadId: string): Promise<boolean> {

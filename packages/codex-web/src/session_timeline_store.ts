@@ -18,6 +18,7 @@ export interface CodexWebTimelineMessage {
   lifecycle?: 'started' | 'delta' | 'completed';
   severity?: 'error';
   afterHistoryIndex?: number;
+  afterHistoryId?: string;
 }
 
 export interface CodexWebSessionTimelineStore {
@@ -220,6 +221,7 @@ function normalizeEntryOrNull(value: unknown): CodexWebTimelineMessage | null {
     lifecycle: normalizeLifecycle(value.lifecycle),
     severity: value.severity === 'error' ? 'error' : undefined,
     afterHistoryIndex: Number.isFinite(value.afterHistoryIndex) ? Math.max(0, Math.floor(Number(value.afterHistoryIndex))) : undefined,
+    afterHistoryId: optionalString(value.afterHistoryId),
   };
 }
 
@@ -239,6 +241,7 @@ function normalizeEntry(entry: CodexWebTimelineMessage): CodexWebTimelineMessage
     lifecycle: normalizeLifecycle(entry.lifecycle),
     severity: entry.severity === 'error' ? 'error' : undefined,
     afterHistoryIndex: Number.isFinite(entry.afterHistoryIndex) ? Math.max(0, Math.floor(Number(entry.afterHistoryIndex))) : undefined,
+    afterHistoryId: optionalString(entry.afterHistoryId),
   };
 }
 

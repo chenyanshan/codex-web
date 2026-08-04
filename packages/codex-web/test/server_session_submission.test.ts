@@ -104,6 +104,19 @@ function runtimeStub() {
           session: sessions.get(sessionId),
         };
       }
+      if (input.text === '/goal resume') {
+        return {
+          type: 'command',
+          turnId: `turn_${calls.start}`,
+          command: {
+            name: 'goal',
+            action: 'resume',
+            message: 'Goal resumed: finish the release',
+            goal: { threadId: sessionId, objective: 'finish the release', status: 'active' },
+          },
+          session: sessions.get(sessionId),
+        };
+      }
       return { turnId: `turn_${calls.start}` };
     },
     interruptTurn: async () => {},
@@ -113,6 +126,44 @@ function runtimeStub() {
   };
   return runtime;
 }
+
+test('goal submissions preserve both the command status and managed turn id', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-goal-submission-'));
+  const runtime = runtimeStub();
+  runtime.sessions.set('thread_goal', {
+    id: 'thread_goal',
+    cwd: '/tmp',
+    title: 'Goal session',
+    settings: {},
+    activityState: null,
+    thread: { id: 'thread_goal', turns: [] },
+    timeline: [],
+  });
+  const server = createCodexWebServer({
+    auth: acceptingAuth(),
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const response = await postJson(`${server.baseUrl}/api/sessions/thread_goal/turns`, {
+      submissionId: 'sub-goal-resume',
+      text: '/goal resume',
+      settings: {},
+    });
+    assert.equal(response.status, 202);
+    const payload = await response.json() as any;
+    assert.equal(payload.submission.status, 'submitted');
+    assert.equal(payload.submission.turnId, 'turn_1');
+    assert.equal(payload.turnId, 'turn_1');
+    assert.equal(payload.type, 'command');
+    assert.equal(payload.command.action, 'resume');
+    assert.match(payload.command.message, /Goal resumed/u);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
 
 async function postJson(url: string, body: Record<string, unknown>) {
   return fetch(url, {
