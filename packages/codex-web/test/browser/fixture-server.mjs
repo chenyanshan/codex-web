@@ -93,6 +93,21 @@ const fixtureArchivedSession = {
   },
 };
 
+const fixtureOlderSession = {
+  ...fixtureIdleSession,
+  id: 'session_browser_older',
+  title: 'Older pagination fixture',
+  preview: 'Load an older session page',
+  firstUserInput: 'Load an older session page',
+  lastUserInput: 'Load an older session page',
+  lastInputAt: Date.parse('2026-07-14T06:00:00.000Z'),
+  updatedAt: Date.parse('2026-07-14T06:01:00.000Z'),
+  thread: {
+    id: 'session_browser_older',
+    turns: [],
+  },
+};
+
 const fixtureHistorySession = {
   ...fixtureIdleSession,
   id: 'session_browser_history',
@@ -266,12 +281,13 @@ const jsonRoutes = new Map([
       favorite: true,
     }],
   }],
-  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureFileSession, fixtureHistorySession] }],
+  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureFileSession, fixtureHistorySession], nextCursor: 'older-page' }],
   ['/api/sessions/session_browser_fixture', { session: fixtureSession }],
   ['/api/sessions/session_browser_idle', { session: fixtureIdleSession }],
   ['/api/sessions/session_browser_archived', { session: fixtureArchivedSession }],
   ['/api/sessions/session_browser_history', { session: fixtureHistorySession }],
   ['/api/sessions/session_browser_files', { session: fixtureFileSession }],
+  ['/api/sessions/session_browser_older', { session: fixtureOlderSession }],
 ]);
 
 const contentTypes = new Map([
@@ -375,7 +391,12 @@ const server = createServer(async (request, response) => {
     }
 
     if (pathname === '/api/sessions' && requestUrl.searchParams.get('state') === 'archived') {
-      sendJson(response, 200, { items: [fixtureArchivedSession] });
+      sendJson(response, 200, { items: [fixtureArchivedSession], nextCursor: null });
+      return;
+    }
+
+    if (pathname === '/api/sessions' && requestUrl.searchParams.get('cursor') === 'older-page') {
+      sendJson(response, 200, { items: [fixtureOlderSession], nextCursor: null });
       return;
     }
 

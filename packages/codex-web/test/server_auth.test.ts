@@ -817,6 +817,7 @@ test('static root is public', async () => {
     assert.match(html, new RegExp(`/attachment-utils\\.js\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/markdown-renderer\\.js\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/admin-ui\\.js\\?v=${buildId}`, 'u'));
+    assert.match(html, new RegExp(`/session-pagination\\.js\\?v=${buildId}`, 'u'));
     assert.equal(scriptResponse.headers.get('cache-control'), 'no-cache');
 
     const versionedScriptResponse = await fetch(`${server.baseUrl}/app.js?v=${buildId}`, {
@@ -849,6 +850,11 @@ test('static root is public', async () => {
     assert.equal(attachmentUtilsResponse.status, 200);
     assert.equal(attachmentUtilsResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
     assert.match(await attachmentUtilsResponse.text(), /CodexWebAttachments|parseAttachmentPromptText/u);
+
+    const sessionPaginationResponse = await fetch(`${server.baseUrl}/session-pagination.js?v=${buildId}`);
+    assert.equal(sessionPaginationResponse.status, 200);
+    assert.equal(sessionPaginationResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.match(await sessionPaginationResponse.text(), /CodexWebSessionPagination|createController/u);
 
     const manifestResponse = await fetch(`${server.baseUrl}/manifest.webmanifest`);
     assert.equal(manifestResponse.status, 200);
@@ -1820,7 +1826,7 @@ test('GET /api/sessions?state=archived lists archived sessions in single-user mo
       headers: { Authorization: 'Bearer cw_token' },
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { items: [{ id: 'thread_archived' }] });
+    assert.deepEqual(await response.json(), { items: [{ id: 'thread_archived' }], nextCursor: null });
     assert.deepEqual(calls, [{ archived: true }]);
   } finally {
     await server.stop();

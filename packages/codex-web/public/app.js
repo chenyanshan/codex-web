@@ -3,6 +3,7 @@ const UI = globalThis.CodexWebUi || {
   icon: () => '',
   segmentedControl: () => '',
 };
+const SESSION_PAGINATION_API = globalThis.CodexWebSessionPagination;
 const {
   fileNameFromPath,
   formatAttachmentSize,
@@ -152,22 +153,8 @@ const state = {
     observedSession: null,
     observedSessionLoading: false,
   },
-  sessions: [],
-  sessionsByScope: {
-    favorites: [],
-    all: [],
-    archived: [],
-  },
-  sessionsLoadedByScope: {
-    favorites: false,
-    all: false,
-    archived: false,
-  },
+  ...SESSION_PAGINATION_API.createState(),
   sessionArchiveOverrides: new Map(),
-  sessionsLoading: false,
-  sessionsLoadingScope: null,
-  sessionsError: '',
-  sessionsRequestId: 0,
   reports: [],
   currentSessionFile: null,
   currentSessionFilePath: '',
@@ -257,6 +244,27 @@ const state = {
   workDetailsFollowLatest: true,
   workDetailsPolicyPendingSessionId: '',
 };
+
+const SESSION_PAGINATION = SESSION_PAGINATION_API.createController({
+  state,
+  apiFetch,
+  getAuthRequestGeneration: () => authRequestGeneration,
+  isAuthRequestCurrent,
+  normalizeSessionsForScope,
+  restoreSessionsFromCacheForScope,
+  discardSupersededFailedSubmissions,
+  syncCurrentWorkDetailsAccessFromSessions,
+  enforceKnownWorkDetailsAccess,
+  persistSessionsCache,
+  currentSessionScope,
+  syncCurrentSessionFromList,
+  mergeSessionSummary,
+  sessionSummaryOnly,
+  render,
+  translate: t,
+  escapeHtml,
+  icon: (...args) => UI.icon(...args),
+});
 
 const COMPOSER_UI = UI.createComposerRenderer({
   getState: () => state,
@@ -643,22 +651,8 @@ function setLoggedOut(message = '') {
   localStorage.removeItem(TIMELINE_CACHE_KEY);
   clearWorkspaceState();
   state.authSession = null;
-  state.sessions = [];
-  state.sessionsByScope = {
-    favorites: [],
-    all: [],
-    archived: [],
-  };
-  state.sessionsLoadedByScope = {
-    favorites: false,
-    all: false,
-    archived: false,
-  };
+  SESSION_PAGINATION.resetAllState({ incrementRequestId: true });
   state.sessionArchiveOverrides = new Map();
-  state.sessionsLoading = false;
-  state.sessionsLoadingScope = null;
-  state.sessionsError = '';
-  state.sessionsRequestId += 1;
   allSessionsPreloadPromise = null;
   state.reports = [];
   state.projects = [];
@@ -2320,8 +2314,13 @@ function renderSessionCards() {
         : 'No sessions yet.';
     return `<div class="empty-state">${escapeHtml(t(message))}</div>`;
   }
-  const errorBanner = state.sessionsError ? renderSessionsError({ compact: true }) : '';
-  return errorBanner + sessions.map((session) => {
+  const refreshError = state.sessionsError && state.sessionsErrorMode !== 'more'
+    ? renderSessionsError({ compact: true })
+    : '';
+  const loadMoreError = state.sessionsError && state.sessionsErrorMode === 'more'
+    ? renderSessionsError({ compact: true })
+    : '';
+  const cards = sessions.map((session) => {
     const activityState = sessionActivityState(session);
     const pendingDelivery = session.localSubmission === true
       ? null
@@ -2368,6 +2367,7 @@ function renderSessionCards() {
       </article>
     `;
   }).join('');
+  return refreshError + cards + loadMoreError + SESSION_PAGINATION.renderPagination();
 }
 
 function pendingSubmissionForSessionCard(session) {
@@ -4765,6 +4765,7 @@ function bindSessionCardEvents(root = document) {
   listenRendered(root, 'click', (event) => {
     const button = event.target?.closest?.([
       '#retry-sessions-button',
+      '#load-more-sessions-button',
       '[data-session-id]',
       '[data-session-favorite-id]',
       '[data-session-archive-request-id]',
@@ -4774,7 +4775,15 @@ function bindSessionCardEvents(root = document) {
       return;
     }
     if (button.id === 'retry-sessions-button') {
-      void refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => {});
+      if (state.sessionsErrorMode === 'more') {
+        void loadMoreSessions().catch(() => {});
+      } else {
+        void refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => {});
+      }
+      return;
+    }
+    if (button.id === 'load-more-sessions-button') {
+      void loadMoreSessions().catch(() => {});
       return;
     }
     const sessionId = button.getAttribute('data-session-id');
@@ -7300,7 +7309,8 @@ async function archiveSession(sessionId) {
     }
     state.sessionArchiveOverrides.set(sessionId, true);
     removeSession(sessionId);
-    state.sessionsLoadedByScope.archived = false;
+    SESSION_PAGINATION.resetScope('archived');
+    persistSessionsCache();
     state.timelineCache.delete(sessionId);
     persistTimelineCache();
     if (state.sessionId === sessionId) {
@@ -8939,79 +8949,12 @@ async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = n
   return session;
 }
 
-async function refreshSessionsList({
-  renderAfter = true,
-  scope = state.sortMode === 'favorites' ? 'favorites' : 'all',
-  background = false,
-  request = null,
-} = {}) {
-  const requestGeneration = authRequestGeneration;
-  const normalizedScope = normalizeSessionScope(scope);
-  const path = sessionListPath(normalizedScope);
-  if (background) {
-    const payload = await (request || apiFetch(path));
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return [];
-    }
-    const sessions = normalizeSessionsForScope(payload, normalizedScope);
-    state.sessionsByScope[normalizedScope] = sessions;
-    state.sessionsLoadedByScope[normalizedScope] = true;
-    discardSupersededFailedSubmissions(sessions);
-    syncCurrentWorkDetailsAccessFromSessions(sessions);
-    enforceKnownWorkDetailsAccess();
-    persistSessionsCache();
-    return sessions;
-  }
-  const requestId = state.sessionsRequestId + 1;
-  state.sessionsRequestId = requestId;
-  state.sessionsLoading = true;
-  state.sessionsLoadingScope = normalizedScope;
-  state.sessionsError = '';
-  restoreSessionsFromCacheForScope(normalizedScope);
-  state.sessionsScope = normalizedScope;
-  state.sessions = normalizedScope === currentSessionScope()
-    ? [...(state.sessionsByScope[normalizedScope] || [])]
-    : [];
-  if (renderAfter) {
-    render();
-  }
-  try {
-    const payload = await (request || apiFetch(path));
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return [];
-    }
-    const sessions = normalizeSessionsForScope(payload, normalizedScope);
-    state.sessionsByScope[normalizedScope] = sessions;
-    state.sessionsLoadedByScope[normalizedScope] = true;
-    discardSupersededFailedSubmissions(sessions);
-    syncCurrentWorkDetailsAccessFromSessions(sessions);
-    enforceKnownWorkDetailsAccess();
-    persistSessionsCache();
-    if (requestId !== state.sessionsRequestId || normalizedScope !== currentSessionScope()) {
-      return sessions;
-    }
-    state.sessions = [...sessions];
-    state.sessionsScope = normalizedScope;
-    syncCurrentSessionFromList();
-    return state.sessions;
-  } catch (error) {
-    if (
-      requestId === state.sessionsRequestId
-      && normalizedScope === currentSessionScope()
-      && isAuthRequestCurrent(requestGeneration)
-    ) {
-      state.sessionsError = 'Could not update sessions.';
-    }
-    throw error;
-  } finally {
-    if (requestId === state.sessionsRequestId) {
-      state.sessionsLoading = false;
-      state.sessionsLoadingScope = null;
-    }
-    if (renderAfter && isAuthRequestCurrent(requestGeneration)) {
-      render();
-    }
-  }
+function refreshSessionsList(options) {
+  return SESSION_PAGINATION.refreshSessionsList(options);
+}
+
+function loadMoreSessions() {
+  return SESSION_PAGINATION.loadMoreSessions();
 }
 
 function createWebhookSettingsState() {
@@ -10090,9 +10033,10 @@ async function setSessionSortMode(mode) {
   const scope = currentSessionScope();
   if (scope !== previousScope) {
     state.sessionsError = '';
+    state.sessionsErrorMode = '';
   }
   const cached = state.sessionsByScope[scope] || [];
-  const isLoaded = state.sessionsLoadedByScope[scope] === true;
+  const isLoaded = SESSION_PAGINATION.scopeMatchesQuery(scope);
   state.sessions = isLoaded ? [...cached] : [];
   state.sessionsScope = scope;
   if (nextMode === 'time' && !isLoaded) {
@@ -10111,7 +10055,8 @@ async function setSessionSortMode(mode) {
 }
 
 function preloadAllSessionsInBackground() {
-  if (!state.token || state.sessionsLoadedByScope.all === true || allSessionsPreloadPromise) {
+  const allQueryLoaded = SESSION_PAGINATION.scopeMatchesQuery('all');
+  if (!state.token || allQueryLoaded || allSessionsPreloadPromise) {
     return allSessionsPreloadPromise;
   }
   const preloadPromise = refreshSessionsList({ renderAfter: false, scope: 'all', background: true })
@@ -10155,7 +10100,7 @@ async function refreshCurrentView() {
       rememberSessionListScroll();
       await refreshSessionsList({
         renderAfter: false,
-        scope: state.sortMode === 'favorites' ? 'favorites' : 'all',
+        scope: currentSessionScope(),
       });
       if (!isAuthRequestCurrent(requestGeneration)) {
         return;
@@ -10880,17 +10825,21 @@ function normalizeSessionsForScope(payload, scope) {
   return sessions.filter((session) => sessionBelongsToScope(session, scope));
 }
 
-function restoreSessionsFromCacheForScope(scope) {
-  const normalizedScope = normalizeSessionScope(scope);
-  if (state.sessionsByScope[normalizedScope]?.length) {
+function restoreSessionsFromCacheForScope(scope, queryKey = SESSION_PAGINATION.queryKey(scope)) {
+  const normalizedScope = SESSION_PAGINATION.normalizeScope(scope);
+  if (
+    state.sessionsByScope[normalizedScope]?.length
+    && state.sessionsQueryByScope[normalizedScope] === queryKey
+  ) {
     return;
   }
-  const cachedScopes = loadSessionsCacheScopes();
-  const cached = cachedScopes[normalizedScope] || [];
-  if (!cached.length) {
+  const cachedState = loadSessionsCacheScopes();
+  const cached = cachedState.scopes[normalizedScope] || [];
+  if (!cached.length || cachedState.queryKeys[normalizedScope] !== queryKey) {
     return;
   }
   state.sessionsByScope[normalizedScope] = cached;
+  state.sessionsQueryByScope[normalizedScope] = queryKey;
   if (normalizedScope === currentSessionScope()) {
     state.sessions = [...cached];
   }
@@ -10902,17 +10851,28 @@ function loadSessionsCacheScopes() {
     const scopes = parsed && typeof parsed === 'object' && parsed.scopes && typeof parsed.scopes === 'object'
       ? parsed.scopes
       : {};
+    const queryKeys = parsed?.queryKeys && typeof parsed.queryKeys === 'object' ? parsed.queryKeys : {};
     return {
-      all: normalizeSessionsForScope({ items: scopes.all }, 'all'),
-      favorites: normalizeSessionsForScope({ items: scopes.favorites }, 'favorites'),
-      archived: normalizeSessionsForScope({ items: scopes.archived }, 'archived'),
+      scopes: {
+        all: normalizeSessionsForScope({ items: scopes.all }, 'all'),
+        favorites: normalizeSessionsForScope({ items: scopes.favorites }, 'favorites'),
+        archived: normalizeSessionsForScope({ items: scopes.archived }, 'archived'),
+      },
+      queryKeys: {
+        all: typeof queryKeys.all === 'string' ? queryKeys.all : SESSION_PAGINATION.baseListPath('all'),
+        favorites: typeof queryKeys.favorites === 'string' ? queryKeys.favorites : SESSION_PAGINATION.baseListPath('favorites'),
+        archived: typeof queryKeys.archived === 'string' ? queryKeys.archived : SESSION_PAGINATION.baseListPath('archived'),
+      },
     };
   } catch (_error) {
     localStorage.removeItem(SESSIONS_CACHE_KEY);
     return {
-      all: [],
-      favorites: [],
-      archived: [],
+      scopes: { all: [], favorites: [], archived: [] },
+      queryKeys: {
+        all: SESSION_PAGINATION.baseListPath('all'),
+        favorites: SESSION_PAGINATION.baseListPath('favorites'),
+        archived: SESSION_PAGINATION.baseListPath('archived'),
+      },
     };
   }
 }
@@ -10923,8 +10883,9 @@ function persistSessionsCache() {
     favorites: (state.sessionsByScope.favorites || []).filter((session) => sessionBelongsToScope(session, 'favorites')).map(serializeSessionSummaryForCache).filter(Boolean),
     archived: (state.sessionsByScope.archived || []).filter((session) => sessionBelongsToScope(session, 'archived')).map(serializeSessionSummaryForCache).filter(Boolean),
   };
+  const queryKeys = { ...state.sessionsQueryByScope };
   try {
-    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify({ scopes, savedAt: Date.now() }));
+    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify({ scopes, queryKeys, savedAt: Date.now() }));
   } catch (error) {
     console.warn('[codex-web] sessions cache persist failed', error);
   }
@@ -11110,7 +11071,9 @@ function currentSessionScope() {
 }
 
 function isCurrentSessionScopeLoading() {
-  return state.sessionsLoading === true && state.sessionsLoadingScope === currentSessionScope();
+  const scope = currentSessionScope();
+  return (state.sessionsLoading === true && state.sessionsLoadingScope === scope)
+    || (state.sessionsLoadingMore === true && state.sessionsLoadingMoreScope === scope);
 }
 
 function upsertSessionInScope(scope, session) {
@@ -13006,10 +12969,12 @@ async function selectProjectScope(projectKey) {
     sessionFileTimelineSnapshot = null;
     if (!isDesktopLayout()) {
       showSessionList();
+      await refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => null);
       return null;
     }
     state.view = 'sessions';
     render();
+    await refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => null);
     return null;
   }
   const selectedProject = workspaceProjects().find((project) => project.key === normalizedKey) || null;
@@ -13025,8 +12990,12 @@ async function selectProjectScope(projectKey) {
   sessionFileTimelineSnapshot = null;
   if (!isDesktopLayout()) {
     showSessionList();
+    await refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => null);
     return null;
   }
+  state.view = 'sessions';
+  render();
+  await refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => null);
   const [latestSession] = projectScopedSessions()
     .sort(compareSessionsForSelection);
   if (latestSession) {
@@ -13153,21 +13122,8 @@ function normalizeSortMode(mode) {
   return 'time';
 }
 
-function normalizeSessionScope(scope) {
-  if (scope === 'favorites' || scope === 'archived') {
-    return scope;
-  }
-  return 'all';
-}
-
-function sessionListPath(scope) {
-  if (scope === 'favorites') {
-    return '/api/sessions?favorite=true';
-  }
-  if (scope === 'archived') {
-    return '/api/sessions?state=archived';
-  }
-  return '/api/sessions';
+function sessionListPath(scope, options) {
+  return SESSION_PAGINATION.listPath(scope, options);
 }
 
 function normalizeActiveSessionLimitInput(value) {

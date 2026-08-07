@@ -976,6 +976,33 @@ button:disabled {
   text-align: left;
 }
 
+.session-list-pagination {
+  width: 100%;
+  min-height: 52px;
+  padding: 4px 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-list-load-more {
+  width: 100%;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--muted);
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.session-list-load-more .button-icon {
+  width: 17px;
+  height: 17px;
+}
+
 .app-settings-page {
   display: grid;
   gap: 0;

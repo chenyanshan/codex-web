@@ -27,6 +27,27 @@ function createThread(threadId = 'thread_1'): ProviderThreadSummary {
   };
 }
 
+function createThreadListClient(
+  listThreads: CodexWebRuntimeClient['listThreads'],
+): CodexWebRuntimeClient {
+  return {
+    listModels: async () => [],
+    readUsage: async () => null,
+    listThreads,
+    startThread: async () => ({ threadId: 'thread_1', cwd: '/workspace', title: 'Thread' }),
+    readThread: async (threadId) => createThread(threadId),
+    writeConfigValue: async () => {},
+    startTurn: async () => ({
+      outputText: 'done',
+      status: 'completed',
+      turnId: 'turn_1',
+      threadId: 'thread_1',
+    }),
+    interruptTurn: async () => {},
+    respondToApproval: async () => {},
+  };
+}
+
 test('session summary extracts user inputs from turns and project name from cwd', async () => {
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
@@ -221,6 +242,77 @@ test('runtime lists sessions from thread summaries without hydrating every threa
   assert.equal(sessions[0]?.firstUserInput, 'Fast preview one');
   assert.equal(sessions[0]?.activityState, 'waiting_approval');
   assert.equal(sessions[1]?.activityState, 'running');
+});
+
+test('runtime follows thread list cursors until every session is collected', async () => {
+  const cursors: Array<string | null | undefined> = [];
+  const client = createThreadListClient(async (args) => {
+    cursors.push(args?.cursor);
+    if (!args?.cursor) {
+      return {
+        items: [createThread('thread_recent')],
+        nextCursor: 'older-page',
+      };
+    }
+    assert.equal(args.cursor, 'older-page');
+    return {
+      items: [createThread('thread_infrequent')],
+      nextCursor: null,
+    };
+  });
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  const sessions = await runtime.listSessions();
+
+  assert.deepEqual(cursors, [null, 'older-page']);
+  assert.deepEqual(sessions.map((session) => session.id), ['thread_recent', 'thread_infrequent']);
+});
+
+test('runtime never publishes a partial thread snapshot when a later page fails', async () => {
+  const client = createThreadListClient(async (args) => {
+    if (!args?.cursor) {
+      return {
+        items: [createThread('thread_partial')],
+        nextCursor: 'failing-page',
+      };
+    }
+    throw new Error('page unavailable');
+  });
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+
+  await assert.rejects(() => runtime.listSessions(), /page unavailable/u);
+  assert.equal((runtime as any).threadListSnapshots.has('active'), false);
+});
+
+test('runtime keeps the previous complete thread snapshot when refresh fails', async () => {
+  let failRefresh = false;
+  const client = createThreadListClient(async () => {
+    if (failRefresh) {
+      throw new Error('refresh unavailable');
+    }
+    return {
+      items: [createThread('thread_stable')],
+      nextCursor: null,
+    };
+  });
+  const runtime = new CodexWebRuntime({
+    codexBin: 'codex',
+    defaultCwd: '/workspace',
+    client,
+  });
+  assert.deepEqual((await runtime.listSessions()).map((session) => session.id), ['thread_stable']);
+  (runtime as any).threadListSnapshots.get('active').cachedAt = 0;
+  failRefresh = true;
+
+  assert.deepEqual((await runtime.listSessions()).map((session) => session.id), ['thread_stable']);
 });
 
 test('runtime session lists bulk-load settings once and never read timeline state', async () => {

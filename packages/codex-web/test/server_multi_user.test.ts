@@ -329,6 +329,94 @@ test('multi-user session list omits conversation details while direct reads reta
   }
 });
 
+test('multi-user session pagination is applied after ownership filtering', async () => {
+  const identityStore = await createIdentityStore();
+  const aliceSessions = [{
+    id: 'app_alice',
+    threadId: 'thread_alice',
+    updatedAt: 1,
+  }];
+  for (let index = 1; index < 35; index += 1) {
+    const suffix = String(index).padStart(2, '0');
+    const appSession = {
+      id: `app_alice_${suffix}`,
+      threadId: `thread_alice_${suffix}`,
+      updatedAt: index + 1,
+    };
+    aliceSessions.push(appSession);
+    await identityStore.upsertSession({
+      id: appSession.id,
+      codexThreadId: appSession.threadId,
+      projectId: 'project_allowed',
+      ownerUserId: 'user_alice',
+      createdAt: '2026-05-27T00:00:00.000Z',
+      updatedAt: new Date(Date.UTC(2026, 4, 27, 0, index)).toISOString(),
+      archived: false,
+      archivedAt: null,
+      archivedByUserId: null,
+      archiveSource: null,
+    });
+  }
+  const unrelated = Array.from({ length: 100 }, (_, index) => ({
+    id: `thread_unrelated_${index}`,
+    cwd: '/other/path',
+    projectName: 'other/path',
+    updatedAt: 10_000 - index,
+    settings: {},
+    thread: { turns: [] },
+    timeline: [],
+  }));
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async () => [
+      ...unrelated,
+      ...aliceSessions.map((session) => ({
+        id: session.threadId,
+        cwd: '/secret/path',
+        projectName: 'secret/path',
+        updatedAt: session.updatedAt,
+        firstUserInput: `Alice session ${session.id}`,
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      })),
+    ],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const firstResponse = await fetch(`${server.baseUrl}/api/sessions`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(firstResponse.status, 200);
+    const first = await firstResponse.json();
+    assert.equal(first.items.length, 30);
+    assert.equal(typeof first.nextCursor, 'string');
+
+    const secondResponse = await fetch(`${server.baseUrl}/api/sessions?cursor=${encodeURIComponent(first.nextCursor)}`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(secondResponse.status, 200);
+    const second = await secondResponse.json();
+    assert.equal(second.items.length, 5);
+    assert.equal(second.nextCursor, null);
+
+    const combined = [...first.items, ...second.items];
+    assert.equal(new Set(combined.map((item: any) => item.id)).size, 35);
+    assert.equal(combined.every((item: any) => item.ownerUserId === 'user_alice'), true);
+    assert.equal(combined.some((item: any) => String(item.id).includes('unrelated')), false);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('multi-user favorite session list uses the runtime favorite filter before hydrating sessions', async () => {
   const identityStore = await createIdentityStore();
   const runtime = {
@@ -870,7 +958,44 @@ test('owners can list archived sessions recorded in identity when runtime archiv
     assert.deepEqual(listPayload.items.map((item: any) => item.id), ['app_archived']);
     assert.equal(listPayload.items[0].archived, true);
     assert.equal(listPayload.items[0].readOnly, true);
-    assert.deepEqual(runtime.calls, ['read:thread_archived']);
+    assert.deepEqual(runtime.calls, ['list:archived', 'list:all', 'read:thread_archived']);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('session listing repairs an indexed active session found in the Codex archive', async () => {
+  const identityStore = await createIdentityStore();
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async (options?: { archived?: boolean }) => {
+      runtime.calls.push(`list:${options?.archived === true ? 'archived' : 'all'}`);
+      return options?.archived === true
+        ? [{ id: 'thread_alice', cwd: '/secret/path', projectName: 'secret/path', settings: {}, thread: { turns: [] }, timeline: [] }]
+        : [];
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      alice: { userId: 'user_alice', username: 'alice', roleIds: [], isAdmin: false, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).items, []);
+
+    const state = await identityStore.readState();
+    const repaired = state.sessions.find((session) => session.id === 'app_alice');
+    assert.equal(repaired?.archived, true);
+    assert.equal(repaired?.archiveSource, 'codex');
+    assert.deepEqual(runtime.calls, ['list:all', 'list:archived']);
   } finally {
     await server.stop();
   }

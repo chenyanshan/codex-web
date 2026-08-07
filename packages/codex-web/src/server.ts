@@ -49,6 +49,10 @@ import {
   type CodexWebSessionSubmissionRecord,
 } from './session_submission_store.js';
 import {
+  InvalidSessionListCursorError,
+  paginateSessionList,
+} from './session_list_page.js';
+import {
   FileWebhookConversationStore,
   hashWebhookConversationKey,
   type CodexWebWebhookConversation,
@@ -181,6 +185,7 @@ const DEFAULT_STATIC_SOURCE_FILES = [
   'attachment-utils.js',
   'markdown-renderer.js',
   'admin-ui.js',
+  'session-pagination.js',
   'manifest.webmanifest',
   'service-worker.js',
   'icon.svg',
@@ -408,6 +413,10 @@ function loadDefaultStaticFiles(): StaticFilesRecord {
       'application/javascript; charset=utf-8',
     ),
     '/admin-ui.js': () => versionedAsset(readText('admin-ui.js'), 'application/javascript; charset=utf-8'),
+    '/session-pagination.js': () => versionedAsset(
+      readText('session-pagination.js'),
+      'application/javascript; charset=utf-8',
+    ),
     '/manifest.webmanifest': () => versionedAsset(
       injectManifestBuildId(readText('manifest.webmanifest'), buildId),
       'application/manifest+json; charset=utf-8',
@@ -743,13 +752,25 @@ async function handleRequest({
   }
 
   if (pathname === '/api/sessions' && method === 'GET') {
-    const options = url.searchParams.get('favorite') === 'true'
+    const favoriteOnly = url.searchParams.get('favorite') === 'true';
+    const stateFilter = normalizeSessionStateFilter(url.searchParams.get('state'));
+    const options = favoriteOnly
       ? { favorite: true }
-      : normalizeSessionStateFilter(url.searchParams.get('state')) === 'archived'
+      : stateFilter === 'archived'
         ? { archived: true }
         : {};
-    const items = (await runtime.listSessions(options)).map(presentSessionSummary);
-    writeJson(response, 200, { items });
+    const requestedCwd = normalizeOptionalString(url.searchParams.get('cwd'));
+    const items = (await runtime.listSessions(options))
+      .filter((session) => !requestedCwd || normalizeOptionalString(session.cwd) === requestedCwd)
+      .map(presentSessionSummary);
+    writeSessionListPage(response, url, items, {
+      principalId: 'single-user',
+      scope: sessionListScopeKey({
+        favoriteOnly,
+        archivedOnly: stateFilter === 'archived',
+        projectKey: requestedCwd ? `cwd:${requestedCwd}` : '',
+      }),
+    });
     return;
   }
 
@@ -3164,6 +3185,8 @@ async function handleMultiUserRequest({
   if (pathname === '/api/sessions' && method === 'GET') {
     const stateFilter = normalizeSessionStateFilter(url.searchParams.get('state'));
     const archivedOnly = stateFilter === 'archived';
+    const favoriteOnly = url.searchParams.get('favorite') === 'true';
+    const requestedProjectId = normalizeOptionalString(url.searchParams.get('projectId'));
     const workspaceState = principal.isAdmin
       ? await ensureAdminLegacySessionMappings({
         identityStore,
@@ -3176,32 +3199,24 @@ async function handleMultiUserRequest({
       workspaceState.sessions
         .filter((appSession) => canReadWorkspaceAppSession(workspaceState, principal, appSession))
         .filter((appSession) => archivedOnly ? appSession.archived === true : appSession.archived !== true)
+        .filter((appSession) => !requestedProjectId || appSession.projectId === requestedProjectId)
         .map((appSession) => [appSession.codexThreadId, appSession]),
     );
-    if (url.searchParams.get('favorite') === 'true') {
+    const pageContext = {
+      principalId: principal.userId,
+      scope: sessionListScopeKey({
+        favoriteOnly,
+        archivedOnly,
+        projectKey: requestedProjectId,
+      }),
+    };
+    if (favoriteOnly) {
       const items = [];
-      for (const runtimeSession of await runtime.listSessions({ favorite: true })) {
-        const appSession = readableSessionsByThreadId.get(runtimeSession.id);
-        if (!appSession) {
-          continue;
-        }
-        const project = findProject(workspaceState, appSession.projectId);
-        items.push(presentSessionForUser({
-          runtimeSession,
-          appSession,
-          project,
-          observer: isObserverSessionForPrincipal(identityState, principal, appSession),
-          includeDetails: false,
-          includeWorkDetails: canViewProjectWorkDetails(principal, project),
-        }));
-      }
-      writeJson(response, 200, { items });
-      return true;
-    }
-    if (archivedOnly) {
-      const items = [];
+      const runtimeSessionsByThreadId = new Map(
+        (await runtime.listSessions({ favorite: true })).map((runtimeSession) => [runtimeSession.id, runtimeSession]),
+      );
       for (const appSession of readableSessionsByThreadId.values()) {
-        const runtimeSession = await runtime.readSession(appSession.codexThreadId);
+        const runtimeSession = runtimeSessionsByThreadId.get(appSession.codexThreadId);
         if (!runtimeSession) {
           continue;
         }
@@ -3215,13 +3230,59 @@ async function handleMultiUserRequest({
           includeWorkDetails: canViewProjectWorkDetails(principal, project),
         }));
       }
-      writeJson(response, 200, { items });
+      writeSessionListPage(response, url, items, pageContext);
+      return true;
+    }
+    if (archivedOnly) {
+      const items = [];
+      const runtimeSessionsByThreadId = new Map(
+        (await runtime.listSessions({ archived: true })).map((runtimeSession) => [runtimeSession.id, runtimeSession]),
+      );
+      const missingAppSessions = [...readableSessionsByThreadId.values()]
+        .filter((appSession) => !runtimeSessionsByThreadId.has(appSession.codexThreadId));
+      const reconciledThreadIds = await reconcileOppositeArchiveStates({
+        identityStore,
+        runtime,
+        appSessions: missingAppSessions,
+        indexedArchived: true,
+      });
+      for (const appSession of readableSessionsByThreadId.values()) {
+        if (reconciledThreadIds.has(appSession.codexThreadId)) {
+          continue;
+        }
+        const runtimeSession = runtimeSessionsByThreadId.get(appSession.codexThreadId)
+          ?? await runtime.readSession(appSession.codexThreadId);
+        if (!runtimeSession) {
+          continue;
+        }
+        const project = findProject(workspaceState, appSession.projectId);
+        items.push(presentSessionForUser({
+          runtimeSession,
+          appSession,
+          project,
+          observer: isObserverSessionForPrincipal(identityState, principal, appSession),
+          includeDetails: false,
+          includeWorkDetails: canViewProjectWorkDetails(principal, project),
+        }));
+      }
+      writeSessionListPage(response, url, items, pageContext);
       return true;
     }
     const items = [];
-    for (const runtimeSession of await runtime.listSessions()) {
-      const appSession = readableSessionsByThreadId.get(runtimeSession.id);
-      if (!appSession) {
+    const runtimeSessionsByThreadId = new Map(
+      (await runtime.listSessions()).map((runtimeSession) => [runtimeSession.id, runtimeSession]),
+    );
+    const missingAppSessions = [...readableSessionsByThreadId.values()]
+      .filter((appSession) => !runtimeSessionsByThreadId.has(appSession.codexThreadId));
+    await reconcileOppositeArchiveStates({
+      identityStore,
+      runtime,
+      appSessions: missingAppSessions,
+      indexedArchived: false,
+    });
+    for (const appSession of readableSessionsByThreadId.values()) {
+      const runtimeSession = runtimeSessionsByThreadId.get(appSession.codexThreadId);
+      if (!runtimeSession) {
         continue;
       }
       const project = findProject(workspaceState, appSession.projectId);
@@ -3234,7 +3295,7 @@ async function handleMultiUserRequest({
         includeWorkDetails: canViewProjectWorkDetails(principal, project),
       }));
     }
-    writeJson(response, 200, { items });
+    writeSessionListPage(response, url, items, pageContext);
     return true;
   }
 
@@ -5513,6 +5574,80 @@ function presentStartTurnResultForUser({
       }),
     } : {}),
   };
+}
+
+function writeSessionListPage(
+  response: ServerResponse,
+  url: URL,
+  items: Array<Record<string, unknown>>,
+  context: { principalId: string; scope: string },
+): void {
+  try {
+    const page = paginateSessionList(items, {
+      cursor: url.searchParams.get('cursor'),
+      limit: url.searchParams.get('limit'),
+      principalId: context.principalId,
+      scope: context.scope,
+    });
+    writeJson(response, 200, page);
+  } catch (error) {
+    if (error instanceof InvalidSessionListCursorError) {
+      writeJson(response, 400, {
+        error: error.code,
+        message: error.message,
+      });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function reconcileOppositeArchiveStates({
+  identityStore,
+  runtime,
+  appSessions,
+  indexedArchived,
+}: {
+  identityStore: CodexWebIdentityStoreLike;
+  runtime: CodexWebRuntime;
+  appSessions: CodexWebAppSession[];
+  indexedArchived: boolean;
+}): Promise<Set<string>> {
+  if (!appSessions.length) {
+    return new Set();
+  }
+  const oppositeThreadIds = new Set(
+    (await runtime.listSessions({ archived: !indexedArchived })).map((session) => session.id),
+  );
+  const reconciled = new Set<string>();
+  for (const appSession of appSessions) {
+    if (!oppositeThreadIds.has(appSession.codexThreadId)) {
+      continue;
+    }
+    const actualArchived = !indexedArchived;
+    await identityStore.upsertSession({
+      ...appSession,
+      archived: actualArchived,
+      archivedAt: actualArchived ? appSession.archivedAt ?? new Date().toISOString() : null,
+      archivedByUserId: actualArchived ? appSession.archivedByUserId : null,
+      archiveSource: actualArchived ? 'codex' : null,
+    });
+    reconciled.add(appSession.codexThreadId);
+  }
+  return reconciled;
+}
+
+function sessionListScopeKey({
+  favoriteOnly,
+  archivedOnly,
+  projectKey,
+}: {
+  favoriteOnly: boolean;
+  archivedOnly: boolean;
+  projectKey: string;
+}): string {
+  const state = archivedOnly ? 'archived' : favoriteOnly ? 'favorites' : 'active';
+  return `${state}:${projectKey || 'all'}`;
 }
 
 function normalizeSessionStateFilter(value: string | null): 'active' | 'archived' | 'all' {

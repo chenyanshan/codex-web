@@ -11,6 +11,7 @@ const VERSIONED_STATIC_ASSET_PATHS = new Set([
   '/attachment-utils.js',
   '/markdown-renderer.js',
   '/admin-ui.js',
+  '/session-pagination.js',
   '/app.js',
   '/manifest.webmanifest',
   '/icon.svg',
@@ -30,6 +31,7 @@ const CRITICAL_STATIC_ASSETS = [
     '/attachment-utils.js',
     '/markdown-renderer.js',
     '/admin-ui.js',
+    '/session-pagination.js',
     '/app.js',
   ].map(versionedUrl),
 ];
@@ -43,6 +45,7 @@ const LEGACY_CRITICAL_STATIC_ASSETS = [
   '/attachment-utils.js',
   '/markdown-renderer.js',
   '/admin-ui.js',
+  '/session-pagination.js',
   '/app.js',
 ];
 
@@ -57,6 +60,7 @@ const criticalAssetsForBuild = (buildId) => [
     '/attachment-utils.js',
     '/markdown-renderer.js',
     '/admin-ui.js',
+    '/session-pagination.js',
     '/app.js',
   ].map((pathname) => `${pathname}?v=${encodeURIComponent(buildId)}`),
 ];

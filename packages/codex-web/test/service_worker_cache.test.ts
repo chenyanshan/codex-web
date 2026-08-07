@@ -52,6 +52,7 @@ test('service worker independently precaches only critical shell assets', async 
   assert.ok(precached.includes(`/attachment-utils.js?v=${buildId}`));
   assert.ok(precached.includes(`/markdown-renderer.js?v=${buildId}`));
   assert.ok(precached.includes(`/admin-ui.js?v=${buildId}`));
+  assert.ok(precached.includes(`/session-pagination.js?v=${buildId}`));
   assert.ok(!precached.includes('/manifest.webmanifest'));
   assert.ok(!precached.includes(`/icon-192.png?v=${buildId}`));
   assert.ok(!precached.includes('/version.json'));
@@ -104,7 +105,7 @@ test('an incomplete update preserves and serves the previous complete build cach
   const deletedCaches: string[] = [];
   const previousBuildId = 'previous-build';
   const previousCache = `codex-web-static-${previousBuildId}`;
-  const previousAssets = ['/', '/theme-init.js', '/styles.css', '/pwa-pull-refresh.js', '/ui-copy.js', '/ui-kit.js', '/attachment-utils.js', '/markdown-renderer.js', '/admin-ui.js', '/app.js'];
+  const previousAssets = ['/', '/theme-init.js', '/styles.css', '/pwa-pull-refresh.js', '/ui-copy.js', '/ui-kit.js', '/attachment-utils.js', '/markdown-renderer.js', '/admin-ui.js', '/session-pagination.js', '/app.js'];
   const cacheContents = new Map<string, Map<string, Response>>([
     [previousCache, new Map(previousAssets.map((asset) => [
       new URL(asset, 'https://codex.test').toString(),
@@ -141,7 +142,7 @@ test('an incomplete update retries missing critical assets and promotes the curr
   const deletedCaches: string[] = [];
   const previousBuildId = 'previous-build';
   const previousCache = `codex-web-static-${previousBuildId}`;
-  const previousAssets = ['/', '/theme-init.js', '/styles.css', '/pwa-pull-refresh.js', '/ui-copy.js', '/ui-kit.js', '/attachment-utils.js', '/markdown-renderer.js', '/admin-ui.js', '/app.js'];
+  const previousAssets = ['/', '/theme-init.js', '/styles.css', '/pwa-pull-refresh.js', '/ui-copy.js', '/ui-kit.js', '/attachment-utils.js', '/markdown-renderer.js', '/admin-ui.js', '/session-pagination.js', '/app.js'];
   const cacheContents = new Map<string, Map<string, Response>>([
     [previousCache, new Map(previousAssets.map((asset) => [
       new URL(asset, 'https://codex.test').toString(),

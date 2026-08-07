@@ -15,6 +15,7 @@ const uiKitUrl = new URL('../public/ui-kit.js', import.meta.url);
 const attachmentUtilsUrl = new URL('../public/attachment-utils.js', import.meta.url);
 const markdownRendererUrl = new URL('../public/markdown-renderer.js', import.meta.url);
 const adminUiUrl = new URL('../public/admin-ui.js', import.meta.url);
+const sessionPaginationUrl = new URL('../public/session-pagination.js', import.meta.url);
 
 test('mobile UI exposes iOS PWA install metadata and registers a service worker', async () => {
   const [index, app, manifest, serviceWorker, themeInit] = await Promise.all([
@@ -43,7 +44,9 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(index, /<script src="\/attachment-utils\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(index, /<script src="\/markdown-renderer\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(index, /<script src="\/admin-ui\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script src="\/session-pagination\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.ok(index.indexOf('src="/attachment-utils.js') < index.indexOf('src="/app.js'));
+  assert.ok(index.indexOf('src="/session-pagination.js') < index.indexOf('src="/app.js'));
   assert.doesNotMatch(index, /screen-orientation|x5-orientation/u);
   assert.match(index, /<meta name="apple-mobile-web-app-capable" content="yes">/u);
   assert.match(index, /<meta name="apple-mobile-web-app-title" content="Codex">/u);
@@ -63,6 +66,7 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(serviceWorker, /'\/attachment-utils\.js'/u);
   assert.match(serviceWorker, /'\/markdown-renderer\.js'/u);
   assert.match(serviceWorker, /'\/admin-ui\.js'/u);
+  assert.match(serviceWorker, /'\/session-pagination\.js'/u);
   assert.match(serviceWorker, /'\/icon-512\.png'/u);
   assert.match(serviceWorker, /'\/apple-touch-icon\.png'/u);
   assert.match(serviceWorker, /self\.addEventListener\('install'/u);
@@ -12540,6 +12544,19 @@ test('desktop project selection filters sessions and opens the newest session fo
     desktopPointer: true,
     fetch: async (path) => {
       fetchCalls.push(path);
+      if (path === '/api/sessions?projectId=project_a') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'session_older', projectId: 'project_a', projectDisplayName: 'Project Alpha', cwd: '/repo/a', firstUserInput: 'Older alpha', lastUserInput: 'Older alpha', updatedAt: 10, settings: { metadata: {} } },
+              { id: 'session_newer', projectId: 'project_a', projectDisplayName: 'Project Alpha', cwd: '/repo/a', firstUserInput: 'Newest alpha', lastUserInput: 'Newest alpha', updatedAt: 50, settings: { metadata: {} } },
+            ],
+            nextCursor: null,
+          }),
+        };
+      }
       if (path === '/api/sessions/session_newer') {
         return {
           ok: true,
@@ -12584,6 +12601,7 @@ test('desktop project selection filters sessions and opens the newest session fo
   await api.selectProjectScope('project_a');
 
   assert.deepEqual(fetchCalls, [
+    '/api/sessions?projectId=project_a',
     '/api/sessions/session_newer/status',
     '/api/sessions/session_newer/timeline?limit=50',
     '/api/sessions/session_newer',
@@ -12602,6 +12620,39 @@ test('desktop project selection prefers a running session over a newer completed
     desktopPointer: true,
     fetch: async (path) => {
       fetchCalls.push(path);
+      if (path === '/api/sessions?projectId=project_a') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              {
+                id: 'session_completed_newer',
+                projectId: 'project_a',
+                projectDisplayName: 'Project Alpha',
+                cwd: '/repo/a',
+                firstUserInput: 'Completed newer',
+                lastUserInput: 'Completed newer',
+                updatedAt: 100,
+                settings: { metadata: {} },
+              },
+              {
+                id: 'session_running',
+                projectId: 'project_a',
+                projectDisplayName: 'Project Alpha',
+                cwd: '/repo/a',
+                firstUserInput: 'Running older',
+                lastUserInput: 'Running older',
+                updatedAt: 50,
+                activeTurnId: 'turn_active',
+                activityState: 'running',
+                settings: { metadata: {} },
+              },
+            ],
+            nextCursor: null,
+          }),
+        };
+      }
       if (path === '/api/sessions/session_running') {
         return {
           ok: true,
@@ -12688,7 +12739,8 @@ test('desktop project selection prefers a running session over a newer completed
 
   await api.selectProjectScope('project_a');
 
-  assert.equal(fetchCalls[0], '/api/turns/turn_active/events');
+  assert.equal(fetchCalls[0], '/api/sessions?projectId=project_a');
+  assert.ok(fetchCalls.includes('/api/turns/turn_active/events'));
   assert.ok(fetchCalls.includes('/api/sessions/session_running/status'));
   assert.ok(fetchCalls.includes('/api/sessions/session_running/timeline?limit=50'));
   assert.ok(fetchCalls.includes('/api/sessions/session_running'));
@@ -12733,6 +12785,19 @@ test('mobile project selection filters to project sessions without opening the n
     viewportWidth: 390,
     fetch: async (path) => {
       fetchCalls.push(path);
+      if (path === '/api/sessions?projectId=project_a') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'session_alpha_older', projectId: 'project_a', projectDisplayName: 'Project Alpha', cwd: '/repo/a', firstUserInput: 'Older alpha', lastUserInput: 'Older alpha', updatedAt: 10, settings: { metadata: {} } },
+              { id: 'session_alpha_newer', projectId: 'project_a', projectDisplayName: 'Project Alpha', cwd: '/repo/a', firstUserInput: 'Newest alpha', lastUserInput: 'Newest alpha', updatedAt: 50, settings: { metadata: {} } },
+            ],
+            nextCursor: null,
+          }),
+        };
+      }
       throw new Error(`unexpected fetch ${path}`);
     },
   });
@@ -12756,7 +12821,7 @@ test('mobile project selection filters to project sessions without opening the n
 
   await api.selectProjectScope('project_a');
 
-  assert.deepEqual(fetchCalls, []);
+  assert.deepEqual(fetchCalls, ['/api/sessions?projectId=project_a']);
   assert.equal(api.state.selectedProjectId, 'project_a');
   assert.equal(api.state.mobileSidebarOpen, false);
   assert.equal(api.state.view, 'sessions');
@@ -14209,6 +14274,93 @@ test('session refresh keeps visible cached sessions while a slow network request
   await refresh;
 
   assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_fresh']));
+});
+
+test('session list load more appends the next page without duplicating summaries', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'session_new', firstUserInput: 'Newest task', updatedAt: 20, settings: { metadata: {} } }],
+            nextCursor: 'older-page',
+          }),
+        };
+      }
+      if (path === '/api/sessions?cursor=older-page') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'session_new', firstUserInput: 'Newest task refreshed', updatedAt: 20, settings: { metadata: {} } },
+              { id: 'session_old', firstUserInput: 'Older task', updatedAt: 10, settings: { metadata: {} } },
+            ],
+            nextCursor: null,
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+
+  await api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+  assert.match(api.renderSessionCards(), /id="load-more-sessions-button"/u);
+  await api.loadMoreSessions();
+
+  assert.deepEqual(fetchCalls, ['/api/sessions', '/api/sessions?cursor=older-page']);
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_new', 'session_old']));
+  assert.equal(api.state.sessions[0]?.firstUserInput, 'Newest task refreshed');
+  assert.doesNotMatch(api.renderSessionCards(), /id="load-more-sessions-button"/u);
+});
+
+test('session list load-more failures preserve the first page and expose a retry', async () => {
+  let failOlderPage = true;
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      if (path === '/api/sessions') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'session_kept', firstUserInput: 'Keep this task', updatedAt: 20, settings: { metadata: {} } }],
+            nextCursor: 'older-page',
+          }),
+        };
+      }
+      if (path === '/api/sessions?cursor=older-page' && failOlderPage) {
+        return { ok: false, status: 503, json: async () => ({ message: 'host unavailable' }) };
+      }
+      if (path === '/api/sessions?cursor=older-page') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [{ id: 'session_recovered', firstUserInput: 'Recovered task', updatedAt: 10, settings: { metadata: {} } }],
+            nextCursor: null,
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  await api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+
+  await assert.rejects(() => api.loadMoreSessions());
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_kept']));
+  assert.match(api.renderSessionCards(), /Could not load older sessions\.[\s\S]*id="retry-sessions-button"/u);
+
+  failOlderPage = false;
+  await api.loadMoreSessions();
+  assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_kept', 'session_recovered']));
 });
 
 test('session list restores cached summaries from local storage before network sync completes', async () => {
@@ -16823,13 +16975,14 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 }
 
 async function loadAppHarness(overrides = {}) {
-  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi] = await Promise.all([
+  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(uiCopyUrl, 'utf8'),
     readFile(uiKitUrl, 'utf8'),
     readFile(attachmentUtilsUrl, 'utf8'),
     readFile(markdownRendererUrl, 'utf8'),
     readFile(adminUiUrl, 'utf8'),
+    readFile(sessionPaginationUrl, 'utf8'),
   ]);
   const storage = overrides.storage instanceof Map
     ? overrides.storage
@@ -17167,6 +17320,7 @@ ${uiKit}
 ${attachmentUtils}
 ${markdownRenderer}
 ${adminUi}
+${sessionPagination}
 ${app}
 globalThis.__codexWebTest = {
   state,
@@ -17193,6 +17347,8 @@ globalThis.__codexWebTest = {
   renderSessionCards: typeof renderSessionCards === 'function' ? renderSessionCards : null,
   renderSessionList: typeof renderSessionList === 'function' ? renderSessionList : null,
   refreshSessionsList: typeof refreshSessionsList === 'function' ? refreshSessionsList : null,
+  loadMoreSessions: typeof loadMoreSessions === 'function' ? loadMoreSessions : null,
+  sessionListPath: typeof sessionListPath === 'function' ? sessionListPath : null,
   renderNewSession: typeof renderNewSession === 'function' ? renderNewSession : null,
   renderAppSettings: typeof renderAppSettings === 'function' ? renderAppSettings : null,
   renderAdminConsole: typeof renderAdminConsole === 'function' ? renderAdminConsole : null,

@@ -55,6 +55,9 @@ const CODEX_WEB_MODEL_DEFAULTS_VERSION = 2;
 const LEGACY_DEFAULT_MODEL = 'gpt-5.4';
 const LEGACY_DEFAULT_REASONING_EFFORT = 'xhigh';
 const SESSION_STATUS_SUMMARY_CACHE_MS = 5_000;
+const THREAD_LIST_SNAPSHOT_CACHE_MS = 5_000;
+const THREAD_LIST_PAGE_SIZE = 100;
+const MAX_THREAD_LIST_PAGES = 10_000;
 
 interface CodexWebRuntimeLogger {
   debug?: (message: string) => void;
@@ -274,6 +277,11 @@ export interface ListSessionsOptions {
   archived?: boolean;
 }
 
+interface ThreadListSnapshot {
+  threads: ProviderThreadSummary[];
+  cachedAt: number;
+}
+
 export class CodexWebRuntime {
   readonly client: CodexWebRuntimeClient;
 
@@ -290,6 +298,10 @@ export class CodexWebRuntime {
   private readonly threadSummaries = new Map<string, ProviderThreadSummary>();
 
   private readonly threadSummaryCachedAt = new Map<string, number>();
+
+  private readonly threadListSnapshots = new Map<'active' | 'archived', ThreadListSnapshot>();
+
+  private readonly threadListRefreshes = new Map<'active' | 'archived', Promise<ProviderThreadSummary[]>>();
 
   private readonly turnToThread = new Map<string, string>();
 
@@ -378,6 +390,8 @@ export class CodexWebRuntime {
     this.sessionSettings.clear();
     this.threadSummaries.clear();
     this.threadSummaryCachedAt.clear();
+    this.threadListSnapshots.clear();
+    this.threadListRefreshes.clear();
     this.turnToThread.clear();
     this.activeTurnByThread.clear();
     this.approvalToTurn.clear();
@@ -396,10 +410,83 @@ export class CodexWebRuntime {
     if (options.favorite === true) {
       return this.listFavoriteSessions();
     }
-    const result = await this.client.listThreads({ limit: 100, archived: options.archived === true });
-    return result.items
+    const threads = await this.readCompleteThreadList(options.archived === true);
+    return threads
       .filter((thread) => typeof thread.threadId === 'string' && thread.threadId)
       .map((thread) => this.toSessionSummary(thread));
+  }
+
+  private async readCompleteThreadList(archived: boolean): Promise<ProviderThreadSummary[]> {
+    const key = archived ? 'archived' : 'active';
+    const cached = this.threadListSnapshots.get(key);
+    if (cached && Date.now() - cached.cachedAt <= THREAD_LIST_SNAPSHOT_CACHE_MS) {
+      return cached.threads;
+    }
+    const existingRefresh = this.threadListRefreshes.get(key);
+    if (existingRefresh) {
+      return existingRefresh;
+    }
+    const refresh = this.scanCompleteThreadList(archived)
+      .then((threads) => {
+        this.threadListSnapshots.set(key, { threads, cachedAt: Date.now() });
+        return threads;
+      })
+      .catch((error) => {
+        if (!cached) {
+          throw error;
+        }
+        this.logger.warn?.(`Could not refresh ${key} thread catalog; using the previous complete snapshot: ${error instanceof Error ? error.message : String(error)}`);
+        return cached.threads;
+      })
+      .finally(() => {
+        if (this.threadListRefreshes.get(key) === refresh) {
+          this.threadListRefreshes.delete(key);
+        }
+      });
+    this.threadListRefreshes.set(key, refresh);
+    return refresh;
+  }
+
+  private async scanCompleteThreadList(archived: boolean): Promise<ProviderThreadSummary[]> {
+    const threads: ProviderThreadSummary[] = [];
+    const threadIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let pageCount = 0;
+    do {
+      const result = await this.client.listThreads({
+        limit: THREAD_LIST_PAGE_SIZE,
+        cursor,
+        archived,
+      });
+      for (const thread of result.items) {
+        if (!thread.threadId || threadIds.has(thread.threadId)) {
+          continue;
+        }
+        threadIds.add(thread.threadId);
+        threads.push(thread);
+      }
+      const nextCursor = result.nextCursor;
+      if (!nextCursor) {
+        return threads;
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(`Codex thread/list repeated cursor ${nextCursor}`);
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+      pageCount += 1;
+      if (pageCount >= MAX_THREAD_LIST_PAGES) {
+        throw new Error(`Codex thread/list exceeded ${MAX_THREAD_LIST_PAGES} pages`);
+      }
+    } while (cursor);
+    return threads;
+  }
+
+  private invalidateThreadListSnapshots(): void {
+    for (const snapshot of this.threadListSnapshots.values()) {
+      snapshot.cachedAt = 0;
+    }
   }
 
   private async listFavoriteSessions(): Promise<CodexWebSession[]> {
@@ -463,6 +550,7 @@ export class CodexWebRuntime {
       ephemeral: false,
       ...(input.runtimeEnv ? { runtimeEnv: input.runtimeEnv } : {}),
     });
+    this.invalidateThreadListSnapshots();
     const thread = await this.requireThread(started.threadId);
     const effectiveSettings = mergeEffectiveModelSettings(initialSettings, started);
     this.persistSessionSettings(started.threadId, {
@@ -542,6 +630,7 @@ export class CodexWebRuntime {
     }
     if (thread) {
       await this.client.archiveThread(sessionId);
+      this.invalidateThreadListSnapshots();
     } else if (!current?.favorite) {
       return false;
     } else {
@@ -555,6 +644,7 @@ export class CodexWebRuntime {
       throw new Error('Thread unarchive is not supported by this Codex runtime');
     }
     await this.client.unarchiveThread(sessionId);
+    this.invalidateThreadListSnapshots();
     return this.readSession(sessionId);
   }
 
@@ -637,6 +727,7 @@ export class CodexWebRuntime {
     if (!session) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
+    this.invalidateThreadListSnapshots();
     const helpCommand = parseHelpSlashCommand(input.text);
     if (helpCommand) {
       await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);

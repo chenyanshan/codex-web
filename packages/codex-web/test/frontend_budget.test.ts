@@ -12,6 +12,7 @@ const criticalAssets = [
   'attachment-utils.js',
   'markdown-renderer.js',
   'admin-ui.js',
+  'session-pagination.js',
   'app.js',
 ];
 

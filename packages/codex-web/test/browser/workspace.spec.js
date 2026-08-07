@@ -527,6 +527,27 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(page.locator('.settings-drawer')).toHaveCount(0);
 });
 
+test('session pagination loads an older page without replacing visible sessions', async ({ page }, testInfo) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.goto('/');
+
+  const currentSession = page.locator('[data-session-id="session_browser_fixture"]');
+  const loadMore = page.locator('#load-more-sessions-button');
+  await expect(currentSession).toBeVisible();
+  await expect(loadMore).toBeVisible();
+  if (testInfo.project.name.startsWith('mobile-')) {
+    await expectTouchTarget(loadMore);
+  }
+
+  await loadMore.click();
+
+  await expect(currentSession).toBeVisible();
+  await expect(page.locator('[data-session-id="session_browser_older"]')).toBeVisible();
+  await expect(loadMore).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('mobile composer expands after four lines and restores the compact attachment row', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile-compact');
 
