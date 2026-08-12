@@ -61,6 +61,43 @@ test('session submission payload hashes are stable across object key order', () 
   assert.notEqual(hashSessionSubmissionPayload(left), hashSessionSubmissionPayload(payload({ text: 'different' })));
 });
 
+test('session submission store normalizes optional webhook metadata without changing file version', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-submission-metadata-'));
+  const store = new FileSessionSubmissionStore({ stateDir });
+  const value = payload();
+  const now = new Date().toISOString();
+  await store.create({
+    id: 'webhook-request:abc',
+    ownerUserId: 'alice',
+    payloadHash: hashSessionSubmissionPayload(value),
+    payload: value,
+    status: 'failed',
+    sessionId: 'thread_1',
+    runtimeSessionId: 'thread_1',
+    turnBaseline: null,
+    turnId: null,
+    result: null,
+    error: { code: 'session_busy', message: 'busy', retryable: true, activeTurnId: 'turn_active' },
+    source: 'webhook',
+    clientRequestId: 'fsmsg:one',
+    requestFingerprint: 'fingerprint',
+    deliveryMode: 'reject_if_busy',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const reopened = new FileSessionSubmissionStore({ stateDir });
+  const record = await reopened.read('alice', 'webhook-request:abc');
+  assert.equal(record?.source, 'webhook');
+  assert.equal(record?.clientRequestId, 'fsmsg:one');
+  assert.equal(record?.requestFingerprint, 'fingerprint');
+  assert.equal(record?.deliveryMode, 'reject_if_busy');
+  assert.equal(record?.error?.activeTurnId, 'turn_active');
+  assert.equal(JSON.parse(await fs.readFile(path.join(stateDir, 'session-submissions.json'), 'utf8')).version, 1);
+
+  await fs.rm(stateDir, { recursive: true, force: true });
+});
+
 test('session submission store prunes expired and excess terminal records on create', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-submission-retention-'));
   const store = new FileSessionSubmissionStore({

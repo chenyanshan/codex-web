@@ -144,6 +144,39 @@ test('session summary falls back to preview when turns have no user input', asyn
   assert.equal(session?.lastInputAt, 456);
 });
 
+test('runtime reads a turn snapshot without resuming or observing execution', async () => {
+  const calls: Array<{ threadId: string; includeTurns: boolean | undefined }> = [];
+  let resumeCalls = 0;
+  const client: CodexWebRuntimeClient = {
+    ...createThreadListClient(async () => ({ items: [], nextCursor: null })),
+    readThread: async (threadId, includeTurns) => {
+      calls.push({ threadId, includeTurns });
+      return {
+        ...createThread(threadId),
+        turns: [{
+          id: 'turn_target',
+          status: 'completed',
+          error: null,
+          items: [{ type: 'message', role: 'assistant', phase: 'final_answer', text: 'done' }],
+        }],
+      };
+    },
+    resumeThread: async () => {
+      resumeCalls += 1;
+    },
+  };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+
+  const snapshot = await runtime.readTurnSnapshot('thread_target', 'turn_target');
+
+  assert.deepEqual(calls, [{ threadId: 'thread_target', includeTurns: true }]);
+  assert.equal(resumeCalls, 0);
+  assert.equal(snapshot?.status, 'completed');
+  assert.equal(snapshot?.items[0]?.text, 'done');
+  assert.equal(await runtime.readTurnSnapshot('thread_target', 'turn_missing'), null);
+  assert.equal(resumeCalls, 0);
+});
+
 test('runtime gives steered user messages stable privacy-preserving client identities', async () => {
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],

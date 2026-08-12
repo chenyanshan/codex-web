@@ -31,6 +31,7 @@ export interface CodexWebSessionSubmissionError {
   message: string;
   retryable: boolean;
   outcomeUnknown?: boolean;
+  activeTurnId?: string;
 }
 
 export interface CodexWebSessionSubmissionRecord {
@@ -46,6 +47,10 @@ export interface CodexWebSessionSubmissionRecord {
   turnId: string | null;
   result: Record<string, unknown> | null;
   error: CodexWebSessionSubmissionError | null;
+  source?: 'webhook';
+  clientRequestId?: string;
+  requestFingerprint?: string;
+  deliveryMode?: 'steer' | 'reject_if_busy';
   createdAt: string;
   updatedAt: string;
 }
@@ -228,6 +233,14 @@ function normalizeRecord(record: CodexWebSessionSubmissionRecord): CodexWebSessi
     turnId: nullableString(record.turnId),
     result: isRecord(record.result) ? record.result : null,
     error: normalizeError(record.error),
+    source: record.source === 'webhook' ? 'webhook' : undefined,
+    clientRequestId: normalizeString(record.clientRequestId) || undefined,
+    requestFingerprint: normalizeString(record.requestFingerprint) || undefined,
+    deliveryMode: record.deliveryMode === 'reject_if_busy'
+      ? 'reject_if_busy'
+      : record.deliveryMode === 'steer'
+        ? 'steer'
+        : undefined,
     createdAt,
     updatedAt: normalizeString(record.updatedAt) || createdAt,
   };
@@ -318,6 +331,7 @@ function normalizeError(value: unknown): CodexWebSessionSubmissionError | null {
     message,
     retryable: value.retryable === true,
     outcomeUnknown: value.outcomeUnknown === true,
+    activeTurnId: nullableString(value.activeTurnId) || undefined,
   };
 }
 

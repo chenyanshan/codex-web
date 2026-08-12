@@ -66,6 +66,16 @@ curl --request POST 'https://codex-web.example/api/webhook' \
 - 换一个值：创建另一段独立对话。
 - 相同内容连续发送两次：会被当作两条消息，不会去重。
 
+如果调用方需要避免单条消息因网络重试而重复执行，可以同时传入 `clientRequestId`。
+两个 key 的语义不同：
+
+- `Idempotency-Key`：逻辑会话键，决定消息进入哪个 Codex session。
+- `clientRequestId`：单条消息幂等键，在同一个 Webhook key owner 下唯一。
+
+相同 `clientRequestId` 和完全相同的请求重试会返回原 submission，不会创建第二个 turn。
+如果同一个 `clientRequestId` 被用于不同的会话键、文本、项目、模型、思考强度或投递模式，
+返回 `409 submission_conflict`。
+
 继续上面的 `task-001`：
 
 ```bash
@@ -87,6 +97,21 @@ review 或 compact turn 不能接收 steer。此时请求返回
 
 同一个 `Idempotency-Key` 不能在后续请求中改到另一个项目。映射 session 被归档、删除
 或不再有写权限时，也不会自动创建替代 session。
+
+调用方不希望向 active turn 追加消息时，可以传：
+
+```json
+{
+  "clientRequestId": "external-message-001",
+  "deliveryMode": "reject_if_busy",
+  "text": "等待 session 空闲后再执行"
+}
+```
+
+如果 session 正忙，Codex Web 不会 start、steer 或 interrupt，而是返回
+`409 session_busy`、当前 `activeTurnId` 和 `retryable: true`。调用方应保留原请求，等待后使用
+完全相同的 `Idempotency-Key`、`clientRequestId` 和 JSON 内容重试。Codex Web 不会为 busy
+请求建立后台队列。
 
 ## 5. 选择模型和思考强度
 
@@ -122,6 +147,8 @@ turn 的模型和思考强度。
 | `title` | 否 | session 标题，只在第一次创建 session 时使用。 |
 | `model` | 否 | 新 turn 使用的模型 ID，区分大小写。 |
 | `reasoningEffort` | 否 | 新 turn 使用的思考强度。 |
+| `clientRequestId` | 否 | 单条消息幂等键；1 到 128 个安全字符。 |
+| `deliveryMode` | 否 | `steer` 或 `reject_if_busy`，默认 `steer`。 |
 
 只接受以上字段。不能通过 Webhook 传入 `cwd`、`sessionId`、`attachments`、sandbox 或
 approval policy。
@@ -161,7 +188,31 @@ HTTP 202 Accepted
 ```
 
 `201` 或 `202` 表示消息已经被接受，不表示 Codex 已完成任务。当前 Webhook 不提供完成
-回调，执行进度和最终答案需要在 Codex Web 对应 session 中查看。
+回调。带 `clientRequestId` 的请求可以通过以下接口轮询：
+
+```text
+GET /api/webhook/submissions/<encoded-clientRequestId>
+Authorization: Bearer cwwh_...
+```
+
+示例响应：
+
+```json
+{
+  "clientRequestId": "external-message-001",
+  "status": "completed",
+  "sessionId": "session_...",
+  "turnId": "turn_...",
+  "finalText": "最终回答",
+  "error": null,
+  "createdAt": "2026-08-12T10:00:00.000Z",
+  "updatedAt": "2026-08-12T10:00:05.000Z"
+}
+```
+
+状态包括 `queued`、`running`、`completed`、`failed` 和 `cancelled`。最终文本严格来自响应中
+`turnId` 对应的 final assistant message，不包含 commentary 或内部 reasoning。建议运行中每
+2 秒轮询一次，连续错误时指数退避到 10 秒。
 
 ## 8. 多用户隔离示例
 
@@ -194,19 +245,26 @@ curl -X POST 'https://codex-web.example/api/webhook' \
 | `404` | `project_not_found` | 项目名不存在，或用户无权在该项目创建 session。 |
 | `404` | `session_not_found` | 原 session 已删除，或用户不再有写权限。 |
 | `409` | `active_turn_not_steerable` | 当前 review/compact turn 不能 steer，完成后重试。 |
+| `409` | `session_busy` | `reject_if_busy` 请求遇到 active turn；原样稍后重试。 |
+| `409` | `submission_conflict` | `clientRequestId` 已用于不同的请求内容，不应重试。 |
 | `409` | `webhook_conversation_conflict` | 同一个 `Idempotency-Key` 尝试切换项目。 |
 | `409` | `session_archived` | 原 session 已归档，取消归档后重试。 |
 | `409` | `active_session_limit_reached` | 项目 active session 已达到上限，先归档一个 session。 |
 | `429` | `rate_limited` | 请求过快，按 `Retry-After` 等待后再试。 |
+| `404` | `submission_not_found` | 当前 Webhook owner 下没有对应 submission。 |
 
 当前每个 Webhook key 最多 10 次请求/分钟。
 
 ## 10. 重试注意事项
 
-`Idempotency-Key` 只负责把请求路由到同一个 session，不负责单条消息去重。
+`Idempotency-Key` 只负责把请求路由到同一个 session，不负责单条消息去重。需要安全重试时
+必须提供稳定的 `clientRequestId`。
 
-如果请求已经成功，但 HTTP 响应在网络中丢失，直接重试可能发送两条相同消息。对重复
-消息敏感的调用方，应在业务侧记录请求状态，并在决定重试前核对 Codex Web 中的 session。
+网络错误或 `5xx` 应使用相同 payload 重试；`429` 按 `Retry-After` 重试；`session_busy`
+等待后原样重试；`submission_conflict`、`400`、`401` 和 `403` 不应自动重试。
+
+当前 1.0 只保证服务持续运行期间的请求幂等和状态查询，不承诺 Codex Web 进程重启窗口内
+的幂等恢复或终态恢复。
 
 ## 11. 安全说明
 

@@ -95,6 +95,10 @@ function runtimeStub() {
       return session;
     },
     readSession: async (id: string) => sessions.get(id) ?? null,
+    readTurnSnapshot: async (sessionId: string, turnId: string) => {
+      const turns = sessions.get(sessionId)?.thread?.turns ?? [];
+      return turns.find((turn: any) => turn.id === turnId) ?? null;
+    },
     isSessionArchived: (id: string) => archivedSessionIds.has(id),
     archiveSession: async () => true,
     updateSessionFavorite: async () => null,
@@ -185,6 +189,12 @@ async function webhookRequest(
       ...(idempotencyKey === null ? {} : { 'Idempotency-Key': idempotencyKey }),
     },
     body: JSON.stringify(body),
+  });
+}
+
+async function webhookStatusRequest(baseUrl: string, key: string, clientRequestId: string) {
+  return fetch(`${baseUrl}/api/webhook/submissions/${encodeURIComponent(clientRequestId)}`, {
+    headers: { Authorization: `Bearer ${key}` },
   });
 }
 
@@ -717,6 +727,21 @@ test('a webhook conversation key cannot move its session to another project', as
     assert.equal((await conflict.json() as any).error, 'webhook_conversation_conflict');
     assert.equal(runtime.createInputs.length, 1);
     assert.equal(runtime.startInputs.length, 1);
+
+    const idempotent = await webhookRequest(server.baseUrl, key, 'bound-project', {
+      projectId: 'Shared Project',
+      clientRequestId: 'fsmsg:project-conflict',
+      text: 'Stable project request',
+    });
+    assert.equal(idempotent.status, 202);
+    const idempotentProjectConflict = await webhookRequest(server.baseUrl, key, 'bound-project', {
+      projectId: 'Other Project',
+      clientRequestId: 'fsmsg:project-conflict',
+      text: 'Stable project request',
+    });
+    assert.equal(idempotentProjectConflict.status, 409);
+    assert.equal((await idempotentProjectConflict.json() as any).error, 'submission_conflict');
+    assert.equal(runtime.startInputs.length, 2);
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -1165,6 +1190,286 @@ test('valid webhook keys are limited to ten requests per minute', async () => {
     assert.equal(limited.headers.get('retry-after') !== null, true);
     assert.equal(runtime.createInputs.length, 10);
     assert.equal(runtime.startInputs.length, 10);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('clientRequestId deduplicates matching webhook messages and rejects changed content', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-client-request-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const key = (await identityStore.setWebhookEnabled('local-admin', true)).key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: null }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const body = {
+      clientRequestId: 'fsmsg:tenant:message-1',
+      text: 'investigate once',
+      model: 'gpt-test',
+      reasoningEffort: 'high',
+    };
+    const [first, duplicate] = await Promise.all([
+      webhookRequest(server.baseUrl, key, 'work:one', body),
+      webhookRequest(server.baseUrl, key, 'work:one', body),
+    ]);
+    assert.deepEqual([first.status, duplicate.status].sort(), [201, 202]);
+    const responses = await Promise.all([first.json() as Promise<any>, duplicate.json() as Promise<any>]);
+    assert.equal(responses[0].submission.id, responses[1].submission.id);
+    assert.equal(responses[0].turnId, responses[1].turnId);
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 1);
+    assert.equal(runtime.startInputs[0]?.input.text, 'investigate once');
+    assert.equal(JSON.stringify(runtime.startInputs[0]?.input).includes('fsmsg:tenant:message-1'), false);
+
+    const changedText = await webhookRequest(server.baseUrl, key, 'work:one', {
+      ...body,
+      text: 'different content',
+    });
+    assert.equal(changedText.status, 409);
+    assert.deepEqual(await changedText.json(), {
+      error: 'submission_conflict',
+      message: 'This clientRequestId was already used with different request content.',
+    });
+    const changedConversation = await webhookRequest(server.baseUrl, key, 'work:two', body);
+    assert.equal(changedConversation.status, 409);
+    assert.equal((await changedConversation.json() as any).error, 'submission_conflict');
+    assert.equal(runtime.createInputs.length, 1);
+    assert.equal(runtime.startInputs.length, 1);
+
+    const invalidId = await webhookRequest(server.baseUrl, key, 'work:invalid-id', {
+      clientRequestId: 'invalid/id',
+      text: 'must not run',
+    });
+    assert.equal(invalidId.status, 400);
+    const invalidMode = await webhookRequest(server.baseUrl, key, 'work:invalid-mode', {
+      clientRequestId: 'fsmsg:invalid-mode',
+      deliveryMode: 'queue',
+      text: 'must not run',
+    });
+    assert.equal(invalidMode.status, 400);
+    assert.equal(runtime.createInputs.length, 1);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('reject_if_busy records a retryable failure without start or steer and succeeds when idle', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-reject-busy-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const key = (await identityStore.setWebhookEnabled('local-admin', true)).key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: null }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const first = await webhookRequest(server.baseUrl, key, 'work:busy', { text: 'first turn' });
+    assert.equal(first.status, 201);
+    runtime.sessions.get('thread_1').activeTurnId = 'turn_active';
+    const body = {
+      clientRequestId: 'fsmsg:busy-1',
+      deliveryMode: 'reject_if_busy',
+      text: 'queued follow-up',
+    };
+    const busy = await webhookRequest(server.baseUrl, key, 'work:busy', body);
+    assert.equal(busy.status, 409);
+    assert.deepEqual(await busy.json(), {
+      error: 'session_busy',
+      message: 'The session already has an active turn.',
+      activeTurnId: 'turn_active',
+      retryable: true,
+    });
+    assert.equal(runtime.startInputs.length, 1);
+    assert.equal(runtime.steerInputs.length, 0);
+
+    const legacyBusy = await webhookRequest(server.baseUrl, key, 'work:busy', {
+      deliveryMode: 'reject_if_busy',
+      text: 'busy without client request id',
+    });
+    assert.equal(legacyBusy.status, 409);
+    assert.equal((await legacyBusy.json() as any).error, 'session_busy');
+    assert.equal(runtime.startInputs.length, 1);
+    assert.equal(runtime.steerInputs.length, 0);
+
+    const busyStatus = await webhookStatusRequest(server.baseUrl, key, 'fsmsg:busy-1');
+    assert.equal(busyStatus.status, 200);
+    const busyPayload = await busyStatus.json() as any;
+    assert.equal(busyPayload.status, 'failed');
+    assert.equal(busyPayload.error.code, 'session_busy');
+    assert.equal(busyPayload.error.retryable, true);
+    assert.equal(busyPayload.error.activeTurnId, 'turn_active');
+
+    const changed = await webhookRequest(server.baseUrl, key, 'work:busy', { ...body, text: 'changed' });
+    assert.equal(changed.status, 409);
+    assert.equal((await changed.json() as any).error, 'submission_conflict');
+
+    runtime.sessions.get('thread_1').activeTurnId = null;
+    const accepted = await webhookRequest(server.baseUrl, key, 'work:busy', body);
+    assert.equal(accepted.status, 202);
+    assert.equal((await accepted.json() as any).turnId, 'turn_2');
+    assert.equal(runtime.startInputs.length, 2);
+    assert.equal(runtime.steerInputs.length, 0);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('clientRequestId defaults to steer and reject_if_busy maps a start race to session_busy', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-delivery-race-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const key = (await identityStore.setWebhookEnabled('local-admin', true)).key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: null }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    assert.equal((await webhookRequest(server.baseUrl, key, 'work:race', { text: 'first' })).status, 201);
+    runtime.sessions.get('thread_1').activeTurnId = 'turn_active';
+    const steered = await webhookRequest(server.baseUrl, key, 'work:race', {
+      clientRequestId: 'fsmsg:default-steer',
+      text: 'steer by default',
+    });
+    assert.equal(steered.status, 202);
+    assert.equal(runtime.steerInputs.length, 1);
+    assert.equal(runtime.steerInputs[0]?.turnId, 'turn_active');
+
+    runtime.sessions.get('thread_1').activeTurnId = null;
+    runtime.startTurn = async () => {
+      runtime.sessions.get('thread_1').activeTurnId = 'turn_raced';
+      const error = new Error('turn raced') as Error & { code?: string; activeTurnId?: string };
+      error.code = 'turn_conflict';
+      error.activeTurnId = 'turn_raced';
+      throw error;
+    };
+    const raced = await webhookRequest(server.baseUrl, key, 'work:race', {
+      clientRequestId: 'fsmsg:race',
+      deliveryMode: 'reject_if_busy',
+      text: 'race while starting',
+    });
+    assert.equal(raced.status, 409);
+    assert.deepEqual(await raced.json(), {
+      error: 'session_busy',
+      message: 'The session already has an active turn.',
+      activeTurnId: 'turn_raced',
+      retryable: true,
+    });
+    assert.equal(runtime.steerInputs.length, 1);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('webhook submission status is owner-scoped, turn-scoped, and read-only', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-status-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  await identityStore.upsertUserWithPassword({
+    id: 'user_bob',
+    username: 'bob',
+    password: 'bob-password',
+    roleIds: ['role_member'],
+    directProjectGrants: [],
+  });
+  const aliceKey = (await identityStore.setWebhookEnabled('user_alice', true)).key!;
+  const bobKey = (await identityStore.setWebhookEnabled('user_bob', true)).key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const clientRequestId = 'fsmsg:status-1';
+    const submitted = await webhookRequest(server.baseUrl, aliceKey, 'work:status', {
+      projectId: 'Shared Project',
+      clientRequestId,
+      text: 'status target',
+    });
+    assert.equal(submitted.status, 201);
+    const { turnId, session } = await submitted.json() as any;
+    const runtimeSession = runtime.sessions.get(session.codexThreadId ?? 'thread_1');
+    runtimeSession.thread.turns = [
+      {
+        id: 'turn_other',
+        status: 'completed',
+        error: null,
+        items: [{ type: 'message', role: 'assistant', phase: 'final_answer', text: 'wrong answer' }],
+      },
+      {
+        id: turnId,
+        status: 'completed',
+        error: null,
+        items: [
+          { type: 'reasoning', role: 'assistant', phase: 'analysis', text: 'private reasoning' },
+          { type: 'message', role: 'assistant', phase: 'commentary', text: 'progress text' },
+          { type: 'message', role: 'assistant', phase: 'final_answer', text: 'target final answer' },
+        ],
+      },
+    ];
+    const startsBeforeGet = runtime.startInputs.length;
+    const steersBeforeGet = runtime.steerInputs.length;
+    const status = await webhookStatusRequest(server.baseUrl, aliceKey, clientRequestId);
+    assert.equal(status.status, 200);
+    assert.deepEqual(await status.json(), {
+      clientRequestId,
+      status: 'completed',
+      sessionId: session.id,
+      turnId,
+      finalText: 'target final answer',
+      error: null,
+      createdAt: (await new FileSessionSubmissionStore({ stateDir }).read(
+        'user_alice',
+        `webhook-request:${crypto.createHash('sha256').update(clientRequestId).digest('hex')}`,
+      ))!.createdAt,
+      updatedAt: (await new FileSessionSubmissionStore({ stateDir }).read(
+        'user_alice',
+        `webhook-request:${crypto.createHash('sha256').update(clientRequestId).digest('hex')}`,
+      ))!.updatedAt,
+    });
+    assert.equal(runtime.startInputs.length, startsBeforeGet);
+    assert.equal(runtime.steerInputs.length, steersBeforeGet);
+
+    const bobCannotRead = await webhookStatusRequest(server.baseUrl, bobKey, clientRequestId);
+    assert.equal(bobCannotRead.status, 404);
+    assert.equal((await bobCannotRead.json() as any).error, 'submission_not_found');
+    const missing = await webhookStatusRequest(server.baseUrl, aliceKey, 'fsmsg:missing');
+    assert.equal(missing.status, 404);
+
+    const bobOwn = await webhookRequest(server.baseUrl, bobKey, 'work:bob-status', {
+      projectId: 'Shared Project',
+      clientRequestId,
+      text: 'bob can reuse the same id',
+    });
+    assert.equal(bobOwn.status, 201);
+    assert.notEqual((await bobOwn.json() as any).submission.sessionId, session.id);
+
+    for (let index = 0; index < 11; index += 1) {
+      assert.equal((await webhookStatusRequest(server.baseUrl, aliceKey, `fsmsg:absent-${index}`)).status, 404);
+    }
+    const postAfterPolling = await webhookRequest(server.baseUrl, aliceKey, 'work:after-polling', {
+      projectId: 'Shared Project',
+      clientRequestId: 'fsmsg:after-polling',
+      text: 'status reads do not consume post quota',
+    });
+    assert.equal(postAfterPolling.status, 201);
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });

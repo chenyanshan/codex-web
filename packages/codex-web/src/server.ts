@@ -74,6 +74,13 @@ import {
   withManagedStateStorageCapacity,
   withProjectUploadCapacity,
 } from './storage_governance.js';
+import {
+  hashWebhookRequestFingerprint,
+  normalizeWebhookClientRequestId,
+  projectWebhookTurnStatus,
+  webhookSubmissionId,
+  type WebhookDeliveryMode,
+} from './webhook_submission.js';
 
 export interface CodexWebAuthLike {
   isConfigured(): Promise<boolean>;
@@ -167,6 +174,8 @@ const LOGIN_RATE_LIMIT_GLOBAL = 100;
 const WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
 const WEBHOOK_RATE_LIMIT_PER_KEY = 10;
 const WEBHOOK_RATE_LIMIT_GLOBAL = 100;
+const WEBHOOK_STATUS_RATE_LIMIT_PER_KEY = 120;
+const WEBHOOK_STATUS_RATE_LIMIT_GLOBAL = 1_000;
 const WEBHOOK_ENDPOINT_PATH = '/api/webhook';
 const LEGACY_WEBHOOK_SUBMISSION_ID_PATTERN = /^webhook:([0-9a-f]{64})$/u;
 const BUILD_ID_PLACEHOLDER = '__CODEX_WEB_BUILD_ID__';
@@ -243,6 +252,11 @@ export function createCodexWebServer({
     perClientLimit: WEBHOOK_RATE_LIMIT_PER_KEY,
     globalLimit: WEBHOOK_RATE_LIMIT_GLOBAL,
   });
+  const webhookStatusRateLimiter = new FixedWindowRateLimiter({
+    windowMs: WEBHOOK_RATE_LIMIT_WINDOW_MS,
+    perClientLimit: WEBHOOK_STATUS_RATE_LIMIT_PER_KEY,
+    globalLimit: WEBHOOK_STATUS_RATE_LIMIT_GLOBAL,
+  });
   const sessionFileStore = providedSessionFileStore ?? new FileSessionFileStore();
   const sessionSubmissionStore = providedSessionSubmissionStore ?? new FileSessionSubmissionStore({
     stateDir: config.stateDir,
@@ -267,6 +281,7 @@ export function createCodexWebServer({
       webhookConversationStore,
       loginRateLimiter,
       webhookRateLimiter,
+      webhookStatusRateLimiter,
       registerSseCloser: (close) => {
         activeSseClosers.add(close);
         return () => {
@@ -483,6 +498,7 @@ async function handleRequest({
   webhookConversationStore,
   loginRateLimiter,
   webhookRateLimiter,
+  webhookStatusRateLimiter,
   registerSseCloser,
   closeSseConnections,
 }: {
@@ -499,6 +515,7 @@ async function handleRequest({
   webhookConversationStore: FileWebhookConversationStore;
   loginRateLimiter: FixedWindowRateLimiter;
   webhookRateLimiter: FixedWindowRateLimiter;
+  webhookStatusRateLimiter: FixedWindowRateLimiter;
   registerSseCloser: (close: () => void) => () => void;
   closeSseConnections: () => void;
 }): Promise<void> {
@@ -572,6 +589,19 @@ async function handleRequest({
       sessionSubmissionOperations,
       webhookConversationStore,
       webhookRateLimiter,
+    });
+    return;
+  }
+
+  if (pathname.startsWith(`${WEBHOOK_ENDPOINT_PATH}/submissions/`) && method === 'GET') {
+    await handleWebhookSubmissionStatusRequest({
+      request,
+      response,
+      pathname,
+      identityStore,
+      runtime,
+      sessionSubmissionStore,
+      webhookStatusRateLimiter,
     });
     return;
   }
@@ -1490,11 +1520,43 @@ async function handleWebhookSessionRequest({
         }
       }
 
+      const clientRequestId = normalizeOptionalWebhookClientRequestId(rawBody.clientRequestId);
+      const deliveryMode = normalizeWebhookDeliveryMode(rawBody.deliveryMode);
       const createsConversation = conversation === null;
-      const body = normalizeWebhookSessionBody(rawBody, lockedIdentityState, lockedPrincipal, conversation);
-      const submissionId = createsConversation
-        ? legacySubmissionId
-        : `webhook:${conversationKeyHash.slice(0, 24)}:${crypto.randomUUID()}`;
+      let body: Record<string, unknown>;
+      try {
+        body = normalizeWebhookSessionBody(rawBody, lockedIdentityState, lockedPrincipal, conversation);
+      } catch (error) {
+        if (
+          clientRequestId
+          && isHttpError(error)
+          && error.code === 'webhook_conversation_conflict'
+          && await sessionSubmissionStore.read(lockedPrincipal.userId, webhookSubmissionId(clientRequestId))
+        ) {
+          throw createHttpError(
+            409,
+            'submission_conflict',
+            'This clientRequestId was already used with different request content.',
+          );
+        }
+        throw error;
+      }
+      const requestFingerprint = clientRequestId
+        ? hashWebhookRequestFingerprint({
+            conversationKeyHash,
+            projectId: webhookFingerprintProjectId(body, conversation),
+            text: String(rawBody.text),
+            title: normalizeOptionalString(rawBody.title) || null,
+            model: typeof rawBody.model === 'string' ? rawBody.model.trim() : null,
+            reasoningEffort: typeof rawBody.reasoningEffort === 'string' ? rawBody.reasoningEffort.trim() : null,
+            deliveryMode,
+          })
+        : null;
+      const submissionId = clientRequestId
+        ? webhookSubmissionId(clientRequestId)
+        : createsConversation
+          ? legacySubmissionId
+          : `webhook:${conversationKeyHash.slice(0, 24)}:${crypto.randomUUID()}`;
       const execution = await submitSessionSubmission({
         body: { ...body, submissionId },
         forcedSessionId: null,
@@ -1505,6 +1567,15 @@ async function handleWebhookSessionRequest({
         config,
         store: sessionSubmissionStore,
         operations: sessionSubmissionOperations,
+        submissionDeliveryMode: deliveryMode,
+        ...(clientRequestId && requestFingerprint ? {
+          metadata: {
+            source: 'webhook',
+            clientRequestId,
+            requestFingerprint,
+            deliveryMode,
+          },
+        } : {}),
       });
       const sessionId = execution.record.sessionId;
       if (!sessionId) {
@@ -1531,6 +1602,115 @@ async function handleWebhookSessionRequest({
       writeJson(response, createsConversation ? 201 : 202, execution.response);
     },
   );
+}
+
+async function handleWebhookSubmissionStatusRequest({
+  request,
+  response,
+  pathname,
+  identityStore,
+  runtime,
+  sessionSubmissionStore,
+  webhookStatusRateLimiter,
+}: {
+  request: IncomingMessage;
+  response: ServerResponse;
+  pathname: string;
+  identityStore: CodexWebIdentityStoreLike | null;
+  runtime: CodexWebRuntime;
+  sessionSubmissionStore: FileSessionSubmissionStore;
+  webhookStatusRateLimiter: FixedWindowRateLimiter;
+}): Promise<void> {
+  const token = extractBearerToken(request);
+  const rateLimit = webhookStatusRateLimiter.take(webhookRateLimitClientId(request, token));
+  if (!rateLimit.allowed) {
+    const retryAfterSeconds = Math.ceil(rateLimit.retryAfterMs / 1_000);
+    writeJson(response, 429, {
+      error: 'rate_limited',
+      message: 'Too many webhook status requests. Try again later.',
+      retryAfterSeconds,
+    }, { 'Retry-After': String(retryAfterSeconds) });
+    return;
+  }
+  const principal = await authenticateWebhookPrincipal(identityStore, token);
+  if (!principal) {
+    writeWebhookUnauthorized(response);
+    return;
+  }
+  const encodedClientRequestId = pathname.slice(`${WEBHOOK_ENDPOINT_PATH}/submissions/`.length);
+  let decodedClientRequestId = '';
+  try {
+    decodedClientRequestId = decodeURIComponent(encodedClientRequestId);
+  } catch {
+    throw createHttpError(400, 'invalid_client_request_id', 'clientRequestId is invalid.');
+  }
+  const clientRequestId = normalizeWebhookClientRequestId(decodedClientRequestId);
+  if (!clientRequestId) {
+    throw createHttpError(
+      400,
+      'invalid_client_request_id',
+      'clientRequestId must use 1-128 letters, numbers, dots, underscores, colons, or dashes.',
+    );
+  }
+  const record = await sessionSubmissionStore.read(principal.userId, webhookSubmissionId(clientRequestId));
+  if (!record || record.source !== 'webhook' || record.clientRequestId !== clientRequestId) {
+    throw createHttpError(404, 'submission_not_found', 'Webhook submission was not found.');
+  }
+  const projected = await projectWebhookSubmissionStatus(record, runtime);
+  writeJson(response, 200, {
+    clientRequestId,
+    status: projected.status,
+    sessionId: record.sessionId,
+    turnId: record.turnId,
+    finalText: projected.finalText,
+    error: projected.error,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  });
+}
+
+async function authenticateWebhookPrincipal(
+  identityStore: CodexWebIdentityStoreLike | null,
+  token: string | null,
+): Promise<CodexWebPrincipal | null> {
+  if (!token || !identityStore?.findWebhookCredentialByToken) {
+    return null;
+  }
+  const credential = await identityStore.findWebhookCredentialByToken(token);
+  if (!credential || credential.enabled !== true) {
+    return null;
+  }
+  const state = await identityStore.readState();
+  const current = state.webhookCredentials.find((item) => (
+    item.id === credential.id
+    && item.ownerUserId === credential.ownerUserId
+    && item.enabled === true
+    && item.tokenHash === credential.tokenHash
+  ));
+  return current ? webhookPrincipalForCredential(state, current) : null;
+}
+
+async function projectWebhookSubmissionStatus(
+  record: CodexWebSessionSubmissionRecord,
+  runtime: CodexWebRuntime,
+): Promise<{
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  finalText: string | null;
+  error: CodexWebSessionSubmissionRecord['error'];
+}> {
+  if (record.status === 'failed') {
+    return { status: 'failed', finalText: null, error: record.error };
+  }
+  if (!record.turnId || !record.runtimeSessionId) {
+    return record.status === 'submitted'
+      ? { status: 'completed', finalText: null, error: null }
+      : { status: 'queued', finalText: null, error: record.error };
+  }
+  const turn = await runtime.readTurnSnapshot(record.runtimeSessionId, record.turnId);
+  if (!turn) {
+    return { status: 'running', finalText: null, error: null };
+  }
+  return projectWebhookTurnStatus(turn);
 }
 
 function webhookRateLimitClientId(request: IncomingMessage, token: string | null): string {
@@ -1582,12 +1762,20 @@ function normalizeWebhookSessionBody(
   principal: CodexWebPrincipal,
   conversation: CodexWebWebhookConversation | null,
 ): Record<string, unknown> {
-  const allowedFields = new Set(['text', 'projectId', 'title', 'model', 'reasoningEffort']);
+  const allowedFields = new Set([
+    'text',
+    'projectId',
+    'title',
+    'model',
+    'reasoningEffort',
+    'clientRequestId',
+    'deliveryMode',
+  ]);
   if (Object.keys(body).some((key) => !allowedFields.has(key))) {
     throw createHttpError(
       400,
       'invalid_webhook_payload',
-      'Webhook session requests only accept text, projectId, title, model, and reasoningEffort.',
+      'Webhook session requests contain unsupported fields.',
     );
   }
   if (typeof body.text !== 'string' || !body.text.trim()) {
@@ -1596,6 +1784,8 @@ function normalizeWebhookSessionBody(
   if (body.title !== undefined && typeof body.title !== 'string') {
     throw createHttpError(400, 'invalid_webhook_payload', 'title must be a string.');
   }
+  normalizeOptionalWebhookClientRequestId(body.clientRequestId);
+  normalizeWebhookDeliveryMode(body.deliveryMode);
   const model = normalizeWebhookOptionalSetting(body, 'model');
   const reasoningEffort = normalizeWebhookOptionalSetting(body, 'reasoningEffort');
   const settings = {
@@ -1658,6 +1848,44 @@ function normalizeWebhookSessionBody(
     ...(body.title !== undefined ? { title: body.title } : {}),
     settings,
   };
+}
+
+function normalizeOptionalWebhookClientRequestId(value: unknown): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  const clientRequestId = normalizeWebhookClientRequestId(value);
+  if (!clientRequestId) {
+    throw createHttpError(
+      400,
+      'invalid_webhook_payload',
+      'clientRequestId must use 1-128 letters, numbers, dots, underscores, colons, or dashes.',
+    );
+  }
+  return clientRequestId;
+}
+
+function normalizeWebhookDeliveryMode(value: unknown): WebhookDeliveryMode {
+  if (value === undefined || value === 'steer') {
+    return 'steer';
+  }
+  if (value === 'reject_if_busy') {
+    return value;
+  }
+  throw createHttpError(
+    400,
+    'invalid_webhook_payload',
+    'deliveryMode must be steer or reject_if_busy.',
+  );
+}
+
+function webhookFingerprintProjectId(
+  body: Record<string, unknown>,
+  conversation: CodexWebWebhookConversation | null,
+): string | null {
+  return normalizeOptionalString(body.projectId)
+    || normalizeOptionalString(conversation?.projectId)
+    || null;
 }
 
 function webhookProjectReferenceMatches(project: CodexWebProject, reference: string): boolean {
@@ -1887,6 +2115,13 @@ interface SessionSubmissionExecution {
   response: Record<string, unknown>;
 }
 
+interface SessionSubmissionMetadata {
+  source: 'webhook';
+  clientRequestId: string;
+  requestFingerprint: string;
+  deliveryMode: WebhookDeliveryMode;
+}
+
 interface SessionSubmissionTarget {
   externalSessionId: string;
   runtimeSessionId: string;
@@ -2038,6 +2273,8 @@ async function submitSessionSubmission({
   config,
   store,
   operations,
+  metadata,
+  submissionDeliveryMode,
 }: {
   body: Record<string, unknown>;
   forcedSessionId: string | null;
@@ -2048,6 +2285,8 @@ async function submitSessionSubmission({
   config: CodexWebConfig;
   store: FileSessionSubmissionStore;
   operations: Map<string, Promise<SessionSubmissionExecution>>;
+  metadata?: SessionSubmissionMetadata;
+  submissionDeliveryMode?: WebhookDeliveryMode;
 }): Promise<SessionSubmissionExecution> {
   const submissionId = normalizeSessionSubmissionId(body.submissionId);
   const payload = normalizeSessionSubmissionPayload(body, forcedSessionId);
@@ -2072,14 +2311,21 @@ async function submitSessionSubmission({
         turnId: null,
         result: null,
         error: null,
+        ...(submissionDeliveryMode ? { deliveryMode: submissionDeliveryMode } : {}),
+        ...(metadata ?? {}),
         createdAt: now,
         updatedAt: now,
       });
-      if (createdRecord.record.payloadHash !== payloadHash) {
+      const conflicts = metadata
+        ? createdRecord.record.requestFingerprint !== metadata.requestFingerprint
+        : createdRecord.record.payloadHash !== payloadHash;
+      if (conflicts) {
         throw createHttpError(
           409,
           'submission_conflict',
-          'This submission id was already used with different content.',
+          metadata
+            ? 'This clientRequestId was already used with different request content.'
+            : 'This submission id was already used with different content.',
         );
       }
       return advanceSessionSubmission({
@@ -2239,8 +2485,12 @@ async function advanceSessionSubmission({
       input.runtimeEnv = runtimeContext.runtimeEnv;
     }
     const baselineSession = await runtime.readSession(target.runtimeSessionId) ?? target.runtimeSession;
+    const baselineActiveTurnId = normalizeOptionalString(baselineSession.activeTurnId);
+    if (current.deliveryMode === 'reject_if_busy' && baselineActiveTurnId) {
+      throw createSessionBusyError(baselineActiveTurnId);
+    }
     const activeTurnId = sessionSubmissionCanSteerActiveTurn(current)
-      ? normalizeOptionalString(baselineSession.activeTurnId)
+      ? baselineActiveTurnId
       : '';
     current = await store.update(current.ownerUserId, current.id, (value) => ({
       ...value,
@@ -2266,6 +2516,14 @@ async function advanceSessionSubmission({
         result = await runtime.startTurn(target.runtimeSessionId, input);
       } catch (error) {
         const normalizedStartError = normalizeSubmissionExecutionError(error);
+        if (current.deliveryMode === 'reject_if_busy' && normalizedStartError.code === 'turn_conflict') {
+          const racedSession = await runtime.readSession(target.runtimeSessionId).catch(() => null);
+          const racedTurnId = normalizeOptionalString(normalizedStartError.activeTurnId)
+            || normalizeOptionalString(racedSession?.activeTurnId);
+          if (racedTurnId) {
+            throw createSessionBusyError(racedTurnId);
+          }
+        }
         const recoveredSession = isUncertainSubmissionStartError(normalizedStartError)
           ? await runtime.readSession(target.runtimeSessionId).catch(() => null)
           : null;
@@ -2326,6 +2584,7 @@ async function advanceSessionSubmission({
           message: normalizedError.message,
           retryable,
           outcomeUnknown,
+          ...(normalizedError.activeTurnId ? { activeTurnId: normalizedError.activeTurnId } : {}),
         },
         updatedAt: new Date().toISOString(),
       }));
@@ -2948,6 +3207,10 @@ function normalizeSubmissionExecutionError(error: unknown): HttpError {
     return createHttpError(409, 'turn_conflict', error instanceof Error ? error.message : 'The active turn changed.');
   }
   if (isTurnConflictError(error)) {
+    const activeTurnId = extractActiveTurnId(error);
+    if (activeTurnId) {
+      return createTurnConflictHttpError(error, activeTurnId);
+    }
     return createHttpError(409, 'turn_conflict', error instanceof Error ? error.message : 'A turn is already running.');
   }
   return createHttpError(
@@ -2960,9 +3223,27 @@ function normalizeSubmissionExecutionError(error: unknown): HttpError {
 function isRetryableSubmissionError(error: HttpError): boolean {
   return error.statusCode >= 500
     || error.code === 'turn_conflict'
+    || error.code === 'session_busy'
     || error.code === 'active_turn_not_steerable'
     || error.code === 'session_archived'
     || error.code === 'active_session_limit_reached';
+}
+
+function createTurnConflictHttpError(error: unknown, activeTurnId: string): HttpError {
+  const normalized = createHttpError(
+    409,
+    'turn_conflict',
+    error instanceof Error ? error.message : 'A turn is already running.',
+  );
+  normalized.activeTurnId = activeTurnId;
+  return normalized;
+}
+
+function createSessionBusyError(activeTurnId: string): HttpError {
+  const error = createHttpError(409, 'session_busy', 'The session already has an active turn.');
+  error.activeTurnId = activeTurnId;
+  error.retryable = true;
+  return error;
 }
 
 function isUncertainSubmissionStartError(error: HttpError): boolean {
@@ -7161,6 +7442,8 @@ function applySecurityResponseHeaders(response: ServerResponse): void {
 interface HttpError extends Error {
   statusCode: number;
   code: string;
+  activeTurnId?: string;
+  retryable?: boolean;
 }
 
 function createHttpError(statusCode: number, code: string, message: string): HttpError {
@@ -7216,6 +7499,8 @@ function writeErrorResponse({
     writeJson(response, error.statusCode, {
       error: error.code,
       message: error.message,
+      ...(error.activeTurnId ? { activeTurnId: error.activeTurnId } : {}),
+      ...(error.retryable === true ? { retryable: true } : {}),
     });
     return;
   }
@@ -7247,7 +7532,10 @@ function writeRequestLog({
   code: string;
   message: string;
 }): void {
-  const safePath = path.split('?')[0] || '/';
+  const rawPath = path.split('?')[0] || '/';
+  const safePath = rawPath.startsWith(`${WEBHOOK_ENDPOINT_PATH}/submissions/`)
+    ? `${WEBHOOK_ENDPOINT_PATH}/submissions/:clientRequestId`
+    : rawPath;
   const payload = {
     ts: new Date().toISOString(),
     level,

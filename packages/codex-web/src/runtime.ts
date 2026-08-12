@@ -86,6 +86,13 @@ export interface CodexWebSession {
   timeline: CodexWebTimelineMessage[];
 }
 
+export interface CodexWebTurnSnapshot {
+  id: string;
+  status: string | null;
+  error: string | null;
+  items: ProviderThreadTurnItem[];
+}
+
 export type CodexWebSessionActivityState = 'running' | 'waiting_approval' | null;
 
 export interface CodexWebRuntimeClient {
@@ -571,6 +578,20 @@ export class CodexWebRuntime {
     const session = this.toSession(thread);
     this.observeRecoveredTurn(session);
     return this.withThreadGoal(session);
+  }
+
+  async readTurnSnapshot(sessionId: string, turnId: string): Promise<CodexWebTurnSnapshot | null> {
+    const thread = await this.client.readThread(sessionId, true);
+    const turn = thread?.turns?.find((item) => item.id === turnId);
+    if (!turn) {
+      return null;
+    }
+    return {
+      id: turn.id,
+      status: turn.status,
+      error: turn.error,
+      items: Array.isArray(turn.items) ? turn.items : [],
+    };
   }
 
   isSessionArchived(sessionId: string): boolean {
