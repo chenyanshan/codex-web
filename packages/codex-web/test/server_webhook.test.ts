@@ -1411,7 +1411,13 @@ test('webhook submission status is owner-scoped, turn-scoped, and read-only', as
         id: 'turn_other',
         status: 'completed',
         error: null,
-        items: [{ type: 'message', role: 'assistant', phase: 'final_answer', text: 'wrong answer' }],
+        items: [{
+          type: 'message',
+          role: 'assistant',
+          phase: 'final_answer',
+          text: '',
+          content: [{ type: 'output_text', text: 'wrong answer' }],
+        }],
       },
       {
         id: turnId,
@@ -1420,12 +1426,47 @@ test('webhook submission status is owner-scoped, turn-scoped, and read-only', as
         items: [
           { type: 'reasoning', role: 'assistant', phase: 'analysis', text: 'private reasoning' },
           { type: 'message', role: 'assistant', phase: 'commentary', text: 'progress text' },
-          { type: 'message', role: 'assistant', phase: 'final_answer', text: 'target final answer' },
         ],
       },
     ];
     const startsBeforeGet = runtime.startInputs.length;
     const steersBeforeGet = runtime.steerInputs.length;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const syncing = await webhookStatusRequest(server.baseUrl, aliceKey, clientRequestId);
+      assert.equal(syncing.status, 200);
+      assert.deepEqual(await syncing.json(), {
+        clientRequestId,
+        status: 'running',
+        sessionId: session.id,
+        turnId,
+        finalText: null,
+        error: null,
+        createdAt: (await new FileSessionSubmissionStore({ stateDir }).read(
+          'user_alice',
+          `webhook-request:${crypto.createHash('sha256').update(clientRequestId).digest('hex')}`,
+        ))!.createdAt,
+        updatedAt: (await new FileSessionSubmissionStore({ stateDir }).read(
+          'user_alice',
+          `webhook-request:${crypto.createHash('sha256').update(clientRequestId).digest('hex')}`,
+        ))!.updatedAt,
+      });
+    }
+    const syncFailed = await webhookStatusRequest(server.baseUrl, aliceKey, clientRequestId);
+    assert.equal(syncFailed.status, 200);
+    assert.deepEqual((await syncFailed.json() as any).error, {
+      code: 'final_response_sync_failed',
+      message: 'The turn finished, but its final response could not be synchronized.',
+      retryable: false,
+    });
+    assert.equal((await webhookStatusRequest(server.baseUrl, aliceKey, clientRequestId).then((response) => response.json()) as any).status, 'failed');
+
+    runtimeSession.thread.turns[1].items.push({
+      type: 'message',
+      role: 'assistant',
+      phase: 'final_answer',
+      text: '',
+      content: [{ type: 'output_text', text: 'target final answer' }],
+    });
     const status = await webhookStatusRequest(server.baseUrl, aliceKey, clientRequestId);
     assert.equal(status.status, 200);
     assert.deepEqual(await status.json(), {

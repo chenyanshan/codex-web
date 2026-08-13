@@ -90,7 +90,14 @@ export interface CodexWebTurnSnapshot {
   id: string;
   status: string | null;
   error: string | null;
-  items: ProviderThreadTurnItem[];
+  items: CodexWebTurnSnapshotItem[];
+}
+
+export interface CodexWebTurnSnapshotItem extends ProviderThreadTurnItem {
+  content?: Array<{
+    type: string;
+    text: string;
+  }>;
 }
 
 export type CodexWebSessionActivityState = 'running' | 'waiting_approval' | null;
@@ -584,13 +591,20 @@ export class CodexWebRuntime {
     const thread = await this.client.readThread(sessionId, true);
     const turn = thread?.turns?.find((item) => item.id === turnId);
     if (!turn) {
-      return null;
+      return readRolloutTurnSnapshot(thread?.path, turnId);
+    }
+    const items = (Array.isArray(turn.items) ? turn.items : []).map(normalizeTurnSnapshotItem);
+    if (!items.some(turnSnapshotItemHasFinalOutputText)) {
+      const rolloutFinal = readRolloutTurnSnapshot(thread?.path, turnId)?.items.at(-1);
+      if (rolloutFinal) {
+        items.push(rolloutFinal);
+      }
     }
     return {
       id: turn.id,
       status: turn.status,
       error: turn.error,
-      items: Array.isArray(turn.items) ? turn.items : [],
+      items,
     };
   }
 
@@ -2929,6 +2943,156 @@ function isMissingRolloutError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /no rollout found for thread id/i.test(message)
     || /rollout .* is empty/i.test(message);
+}
+
+function normalizeTurnSnapshotItem(item: ProviderThreadTurnItem): CodexWebTurnSnapshotItem {
+  const rawContent = isArchivedRecord(item.raw) ? item.raw.content : undefined;
+  const content = normalizeTurnSnapshotOutputTextContent(rawContent);
+  const type = normalizeString(item.type).replace(/[^a-z]/giu, '').toLowerCase();
+  const role = normalizeString(item.role).toLowerCase();
+  const phase = normalizeString(item.phase).toLowerCase().replace(/[\s-]+/gu, '_');
+  const explicitFinal = ['message', 'agentmessage', 'assistantmessage'].includes(type)
+    && role === 'assistant'
+    && phase === 'final_answer';
+  const fallbackText = explicitFinal ? normalizeString(item.text) : '';
+  const finalContent = content.length > 0
+    ? content
+    : fallbackText
+      ? [{ type: 'output_text', text: fallbackText }]
+      : [];
+  return {
+    ...item,
+    ...(explicitFinal ? { type: 'message', role: 'assistant', phase: 'final_answer' } : {}),
+    ...(finalContent.length > 0 ? { content: finalContent } : {}),
+  };
+}
+
+function turnSnapshotItemHasFinalOutputText(item: CodexWebTurnSnapshotItem): boolean {
+  return normalizeString(item.type).toLowerCase() === 'message'
+    && normalizeString(item.role).toLowerCase() === 'assistant'
+    && normalizeString(item.phase).toLowerCase().replace(/[\s-]+/gu, '_') === 'final_answer'
+    && Array.isArray(item.content)
+    && item.content.some((part) => part.type === 'output_text' && Boolean(part.text.trim()));
+}
+
+function readRolloutTurnSnapshot(
+  rolloutPath: string | null | undefined,
+  turnId: string,
+): CodexWebTurnSnapshot | null {
+  const normalizedPath = normalizeString(rolloutPath);
+  const normalizedTurnId = normalizeString(turnId);
+  if (!normalizedPath || !normalizedTurnId) {
+    return null;
+  }
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(normalizedPath, 'utf8').split('\n');
+  } catch {
+    return null;
+  }
+  let currentTurnId = '';
+  let matchedTurn = false;
+  let status: string | null = null;
+  let finalItem: CodexWebTurnSnapshotItem | null = null;
+  for (const line of lines) {
+    const entry = parseArchivedSessionLine(line);
+    if (!entry) {
+      continue;
+    }
+    const payload = isArchivedRecord(entry.payload) ? entry.payload : null;
+    if (!payload) {
+      continue;
+    }
+    const boundaryTurnId = rolloutTurnStartId(entry.type, payload);
+    if (boundaryTurnId) {
+      currentTurnId = boundaryTurnId;
+      if (boundaryTurnId === normalizedTurnId) {
+        matchedTurn = true;
+        if (entry.type === 'event_msg' && payload.type === 'task_started') {
+          status = 'running';
+        }
+      }
+      continue;
+    }
+    if (entry.type === 'event_msg' && payload.type === 'task_complete') {
+      const completedTurnId = normalizeString(payload.turn_id) || currentTurnId;
+      if (completedTurnId === normalizedTurnId) {
+        matchedTurn = true;
+        status = 'completed';
+      }
+      continue;
+    }
+    if (entry.type !== 'response_item') {
+      continue;
+    }
+    const itemTurnId = rolloutResponseItemTurnId(payload) || currentTurnId;
+    if (itemTurnId !== normalizedTurnId) {
+      continue;
+    }
+    matchedTurn = true;
+    if (normalizeString(payload.type).toLowerCase() !== 'message'
+      || normalizeString(payload.role).toLowerCase() !== 'assistant'
+      || normalizeString(payload.phase).toLowerCase().replace(/[\s-]+/gu, '_') !== 'final_answer') {
+      continue;
+    }
+    const content = normalizeTurnSnapshotOutputTextContent(payload.content);
+    if (!content.length) {
+      continue;
+    }
+    finalItem = {
+      id: normalizeString(payload.id) || null,
+      type: 'message',
+      role: 'assistant',
+      phase: 'final_answer',
+      text: content.map((part) => part.text).join('\n\n'),
+      content,
+    };
+  }
+  return matchedTurn
+    ? {
+        id: normalizedTurnId,
+        status,
+        error: null,
+        items: finalItem ? [finalItem] : [],
+      }
+    : null;
+}
+
+function rolloutTurnStartId(type: unknown, payload: Record<string, unknown>): string {
+  if (type === 'turn_context') {
+    return normalizeString(payload.turn_id);
+  }
+  return type === 'event_msg' && payload.type === 'task_started'
+    ? normalizeString(payload.turn_id)
+    : '';
+}
+
+function rolloutResponseItemTurnId(payload: Record<string, unknown>): string {
+  const metadata = isArchivedRecord(payload.internal_chat_message_metadata_passthrough)
+    ? payload.internal_chat_message_metadata_passthrough
+    : isArchivedRecord(payload.internalChatMessageMetadataPassthrough)
+      ? payload.internalChatMessageMetadataPassthrough
+      : null;
+  return normalizeString(metadata?.turn_id)
+    || normalizeString(metadata?.turnId)
+    || normalizeString(payload.turn_id)
+    || normalizeString(payload.turnId);
+}
+
+function normalizeTurnSnapshotOutputTextContent(value: unknown): Array<{
+  type: string;
+  text: string;
+}> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((part) => {
+    if (!isArchivedRecord(part) || normalizeString(part.type).toLowerCase() !== 'output_text') {
+      return [];
+    }
+    const text = normalizeString(part.text);
+    return text ? [{ type: 'output_text', text }] : [];
+  });
 }
 
 function readArchivedThreadFromFile(filePath: string, threadId: string): ProviderThreadSummary | null {

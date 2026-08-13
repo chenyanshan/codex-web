@@ -8593,6 +8593,146 @@ test('stream reset snapshot restores a complete projection and ignores retained 
   assert.equal(persisted.entries[0]?.streamCursor?.sequence, 600);
 });
 
+test('complete stream snapshots keep assistant updates interleaved with steered user messages', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1', principal: { mode: 'single', isAdmin: true } };
+  api.state.currentSession = { id: 'session_steer_reset', cwd: '/repo' };
+  api.state.sessionId = 'session_steer_reset';
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_steer_reset';
+  api.state.timeline = [
+    {
+      id: 'local_user_initial',
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'pending',
+      text: 'Initial request',
+      turnId: 'turn_steer_reset',
+    },
+    {
+      id: 'assistant_turn_steer_reset_commentary_1',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'commentary',
+      text: 'First progress update',
+      turnId: 'turn_steer_reset',
+      itemId: 'commentary_1',
+      projectionKey: 'turn_steer_reset\u0000commentary_1',
+      source: 'stream',
+    },
+    {
+      id: 'local_user_steer',
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'pending',
+      text: 'Steered follow-up',
+      turnId: 'turn_steer_reset',
+    },
+    {
+      id: 'assistant_turn_steer_reset_commentary_2',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'commentary',
+      text: 'Second progress update',
+      turnId: 'turn_steer_reset',
+      itemId: 'commentary_2',
+      projectionKey: 'turn_steer_reset\u0000commentary_2',
+      source: 'stream',
+    },
+  ];
+
+  await api.applySessionTurnSnapshot({
+    turnId: 'turn_steer_reset',
+    epoch: 'epoch_reset',
+    throughSequence: 40,
+    complete: true,
+    events: [
+      { type: 'turn.started', turnId: 'turn_steer_reset', threadId: 'session_steer_reset', sequence: 10 },
+      { type: 'assistant.delta', turnId: 'turn_steer_reset', itemId: 'commentary_1', eventType: 'completed', phase: 'commentary', text: 'First progress update', delta: '', sequence: 20 },
+      { type: 'assistant.delta', turnId: 'turn_steer_reset', itemId: 'commentary_2', eventType: 'completed', phase: 'commentary', text: 'Second progress update', delta: '', sequence: 40 },
+    ],
+  }, 'turn_steer_reset');
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(api.state.timeline.map((item) => [item.role, item.text]))),
+    [
+      ['user', 'Initial request'],
+      ['assistant', 'First progress update'],
+      ['user', 'Steered follow-up'],
+      ['assistant', 'Second progress update'],
+    ],
+  );
+});
+
+test('complete stream snapshots do not retain cached commentary hidden from members', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = {
+    id: 'auth_member',
+    principal: { userId: 'member', isAdmin: false, mode: 'multi' },
+  };
+  api.state.currentSession = {
+    id: 'session_restricted_reset',
+    cwd: '/repo',
+    canViewWorkDetails: false,
+  };
+  api.state.sessionId = 'session_restricted_reset';
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_restricted_reset';
+  api.state.timeline = [
+    {
+      id: 'local_user_restricted',
+      kind: 'message',
+      role: 'user',
+      label: 'You',
+      meta: 'pending',
+      text: 'Keep the public request',
+      turnId: 'turn_restricted_reset',
+    },
+    {
+      id: 'assistant_turn_restricted_reset_commentary_secret',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'commentary',
+      text: 'SECRET_CACHED_COMMENTARY',
+      turnId: 'turn_restricted_reset',
+      itemId: 'commentary_secret',
+      projectionKey: 'turn_restricted_reset\u0000commentary_secret',
+    },
+    {
+      id: 'assistant_turn_restricted_reset_final_public',
+      kind: 'message',
+      role: 'assistant',
+      label: 'Assistant',
+      meta: 'final',
+      text: 'Public final answer',
+      turnId: 'turn_restricted_reset',
+      itemId: 'final_public',
+      projectionKey: 'turn_restricted_reset\u0000final_public',
+    },
+  ];
+
+  await api.applySessionTurnSnapshot({
+    turnId: 'turn_restricted_reset',
+    epoch: 'epoch_restricted',
+    throughSequence: 30,
+    complete: true,
+    events: [
+      { type: 'turn.started', turnId: 'turn_restricted_reset', threadId: 'session_restricted_reset', sequence: 10 },
+      { type: 'assistant.delta', turnId: 'turn_restricted_reset', itemId: 'commentary_secret', eventType: 'completed', phase: 'commentary', text: 'SECRET_CACHED_COMMENTARY', delta: '', sequence: 20 },
+      { type: 'assistant.final', turnId: 'turn_restricted_reset', itemId: 'final_public', text: 'Public final answer', delta: '', sequence: 30 },
+    ],
+  }, 'turn_restricted_reset');
+
+  assert.doesNotMatch(JSON.stringify(api.state.timeline), /SECRET_CACHED_COMMENTARY/u);
+  assert.equal(api.state.timeline.some((item) => item.text === 'Keep the public request'), true);
+  assert.equal(api.state.timeline.some((item) => item.text === 'Public final answer'), true);
+});
+
 test('incomplete reset snapshots merge onto authoritative session commentary instead of clearing it', async () => {
   const control = {
     type: 'stream.reset',

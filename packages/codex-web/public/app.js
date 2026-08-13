@@ -7792,23 +7792,25 @@ async function applyTurnStreamControl(payload, turnId, activeStreamController, {
   if (!reset) {
     return false;
   }
-  const snapshotComplete = payload.snapshot?.complete === true;
-  if (snapshotComplete) {
-    resetTurnProjectionForReplay(turnId);
-  }
   const snapshotEvents = Array.isArray(payload.events)
     ? payload.events
     : Array.isArray(payload.snapshot?.events)
       ? payload.snapshot.events
       : [];
-  if (snapshotEvents.length) {
-    for (const rawEvent of snapshotEvents) {
-      const event = presentTurnEventForCurrentAudience(rawEvent);
-      if (event) {
-        applyTurnEvent(event, null);
-      }
+  const visibleSnapshotEvents = snapshotEvents
+    .map((event) => presentTurnEventForCurrentAudience(event))
+    .filter(Boolean);
+  const snapshotComplete = payload.snapshot?.complete === true;
+  if (snapshotComplete) {
+    resetTurnProjectionForReplay(turnId, {
+      retainedEntryIds: new Set(visibleSnapshotEvents.map(snapshotTimelineEntryId).filter(Boolean)),
+    });
+  }
+  if (visibleSnapshotEvents.length) {
+    for (const event of visibleSnapshotEvents) {
+      applyTurnEvent(event, null);
     }
-    reorderTurnSnapshotProjection(turnId, snapshotEvents);
+    reorderTurnSnapshotProjection(turnId, visibleSnapshotEvents);
   }
   const rawThroughSequence = payload.snapshot?.throughSequence;
   const throughSequence = Number(rawThroughSequence);
@@ -7841,23 +7843,14 @@ function reorderTurnSnapshotProjection(turnId, snapshotEvents) {
     return;
   }
   const projectedIds = new Set(projected.map((item) => item.id));
-  const preserved = state.timeline.filter((item) => !projectedIds.has(item?.id));
-  let insertionIndex = -1;
-  for (let index = 0; index < preserved.length; index += 1) {
-    if (timelineTurnId(preserved[index]) === turnId) {
-      insertionIndex = index;
+  let projectedIndex = 0;
+  state.timeline = state.timeline.flatMap((item) => {
+    if (!projectedIds.has(item?.id)) {
+      return [item];
     }
-  }
-  if (insertionIndex < 0) {
-    for (let index = preserved.length - 1; index >= 0; index -= 1) {
-      if (preserved[index]?.kind === 'message' && preserved[index]?.role === 'user') {
-        insertionIndex = index;
-        break;
-      }
-    }
-  }
-  preserved.splice(insertionIndex + 1, 0, ...projected);
-  state.timeline = preserved;
+    const replacement = projected[projectedIndex++];
+    return replacement ? [replacement] : [];
+  });
 }
 
 function snapshotTimelineEntryId(event) {
@@ -7978,7 +7971,10 @@ function timelineReplayMergeIdentity(item) {
   return typeof item.id === 'string' && item.id ? `id:${item.id}` : '';
 }
 
-function resetTurnProjectionForReplay(turnId, { preserveAuxiliary = false } = {}) {
+function resetTurnProjectionForReplay(turnId, {
+  preserveAuxiliary = false,
+  retainedEntryIds = new Set(),
+} = {}) {
   const normalizedTurnId = String(turnId || '').trim();
   if (!normalizedTurnId) {
     return;
@@ -7987,6 +7983,7 @@ function resetTurnProjectionForReplay(turnId, { preserveAuxiliary = false } = {}
   state.terminalTurnIds.delete(normalizedTurnId);
   state.timeline = state.timeline.filter((item) => !(
     timelineTurnId(item) === normalizedTurnId
+    && !retainedEntryIds.has(item?.id)
     && (
       (item?.kind === 'message' && item.role === 'assistant')
       || (!preserveAuxiliary && item?.kind === 'work')

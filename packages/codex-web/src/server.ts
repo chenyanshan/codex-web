@@ -78,6 +78,7 @@ import {
   hashWebhookRequestFingerprint,
   normalizeWebhookClientRequestId,
   projectWebhookTurnStatus,
+  webhookTurnNeedsFinalSync,
   webhookSubmissionId,
   type WebhookDeliveryMode,
 } from './webhook_submission.js';
@@ -176,6 +177,8 @@ const WEBHOOK_RATE_LIMIT_PER_KEY = 10;
 const WEBHOOK_RATE_LIMIT_GLOBAL = 100;
 const WEBHOOK_STATUS_RATE_LIMIT_PER_KEY = 120;
 const WEBHOOK_STATUS_RATE_LIMIT_GLOBAL = 1_000;
+const WEBHOOK_STATUS_SYNC_MAX_ATTEMPTS = 3;
+const WEBHOOK_STATUS_SYNC_MAX_ENTRIES = 10_000;
 const WEBHOOK_ENDPOINT_PATH = '/api/webhook';
 const LEGACY_WEBHOOK_SUBMISSION_ID_PATTERN = /^webhook:([0-9a-f]{64})$/u;
 const BUILD_ID_PLACEHOLDER = '__CODEX_WEB_BUILD_ID__';
@@ -265,6 +268,7 @@ export function createCodexWebServer({
     stateDir: config.stateDir,
   });
   const sessionSubmissionOperations = new Map<string, Promise<SessionSubmissionExecution>>();
+  const webhookStatusSyncAttempts = new Map<string, WebhookStatusSyncAttempt>();
   const server = http.createServer((request, response) => {
     applySecurityResponseHeaders(response);
     void handleRequest({
@@ -282,6 +286,7 @@ export function createCodexWebServer({
       loginRateLimiter,
       webhookRateLimiter,
       webhookStatusRateLimiter,
+      webhookStatusSyncAttempts,
       registerSseCloser: (close) => {
         activeSseClosers.add(close);
         return () => {
@@ -328,6 +333,7 @@ export function createCodexWebServer({
       });
     },
     async stop(): Promise<void> {
+      webhookStatusSyncAttempts.clear();
       for (const close of [...activeSseClosers]) {
         close();
       }
@@ -499,6 +505,7 @@ async function handleRequest({
   loginRateLimiter,
   webhookRateLimiter,
   webhookStatusRateLimiter,
+  webhookStatusSyncAttempts,
   registerSseCloser,
   closeSseConnections,
 }: {
@@ -516,6 +523,7 @@ async function handleRequest({
   loginRateLimiter: FixedWindowRateLimiter;
   webhookRateLimiter: FixedWindowRateLimiter;
   webhookStatusRateLimiter: FixedWindowRateLimiter;
+  webhookStatusSyncAttempts: Map<string, WebhookStatusSyncAttempt>;
   registerSseCloser: (close: () => void) => () => void;
   closeSseConnections: () => void;
 }): Promise<void> {
@@ -602,6 +610,7 @@ async function handleRequest({
       runtime,
       sessionSubmissionStore,
       webhookStatusRateLimiter,
+      webhookStatusSyncAttempts,
     });
     return;
   }
@@ -1612,6 +1621,7 @@ async function handleWebhookSubmissionStatusRequest({
   runtime,
   sessionSubmissionStore,
   webhookStatusRateLimiter,
+  webhookStatusSyncAttempts,
 }: {
   request: IncomingMessage;
   response: ServerResponse;
@@ -1620,6 +1630,7 @@ async function handleWebhookSubmissionStatusRequest({
   runtime: CodexWebRuntime;
   sessionSubmissionStore: FileSessionSubmissionStore;
   webhookStatusRateLimiter: FixedWindowRateLimiter;
+  webhookStatusSyncAttempts: Map<string, WebhookStatusSyncAttempt>;
 }): Promise<void> {
   const token = extractBearerToken(request);
   const rateLimit = webhookStatusRateLimiter.take(webhookRateLimitClientId(request, token));
@@ -1656,7 +1667,11 @@ async function handleWebhookSubmissionStatusRequest({
   if (!record || record.source !== 'webhook' || record.clientRequestId !== clientRequestId) {
     throw createHttpError(404, 'submission_not_found', 'Webhook submission was not found.');
   }
-  const projected = await projectWebhookSubmissionStatus(record, runtime);
+  const projected = await projectWebhookSubmissionStatus(
+    record,
+    runtime,
+    webhookStatusSyncAttempts,
+  );
   writeJson(response, 200, {
     clientRequestId,
     status: projected.status,
@@ -1693,24 +1708,88 @@ async function authenticateWebhookPrincipal(
 async function projectWebhookSubmissionStatus(
   record: CodexWebSessionSubmissionRecord,
   runtime: CodexWebRuntime,
+  syncAttempts: Map<string, WebhookStatusSyncAttempt>,
 ): Promise<{
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   finalText: string | null;
   error: CodexWebSessionSubmissionRecord['error'];
 }> {
+  const syncKey = webhookStatusSyncKey(record);
   if (record.status === 'failed') {
+    syncAttempts.delete(syncKey);
     return { status: 'failed', finalText: null, error: record.error };
   }
   if (!record.turnId || !record.runtimeSessionId) {
+    syncAttempts.delete(syncKey);
     return record.status === 'submitted'
-      ? { status: 'completed', finalText: null, error: null }
+      ? {
+          status: 'failed',
+          finalText: null,
+          error: {
+            code: 'submission_turn_missing',
+            message: 'The webhook submission was accepted without a turn id.',
+            retryable: false,
+          },
+        }
       : { status: 'queued', finalText: null, error: record.error };
   }
   const turn = await runtime.readTurnSnapshot(record.runtimeSessionId, record.turnId);
   if (!turn) {
     return { status: 'running', finalText: null, error: null };
   }
-  return projectWebhookTurnStatus(turn);
+  const projected = projectWebhookTurnStatus(turn);
+  if (!webhookTurnNeedsFinalSync(turn)) {
+    syncAttempts.delete(syncKey);
+    return projected;
+  }
+  const attempt = rememberWebhookStatusSyncAttempt(
+    syncAttempts,
+    syncKey,
+    record.turnId,
+  );
+  if (attempt.attempts < WEBHOOK_STATUS_SYNC_MAX_ATTEMPTS) {
+    return { status: 'running', finalText: null, error: null };
+  }
+  return {
+    status: 'failed',
+    finalText: null,
+    error: {
+      code: 'final_response_sync_failed',
+      message: 'The turn finished, but its final response could not be synchronized.',
+      retryable: false,
+    },
+  };
+}
+
+interface WebhookStatusSyncAttempt {
+  turnId: string;
+  attempts: number;
+}
+
+function webhookStatusSyncKey(record: CodexWebSessionSubmissionRecord): string {
+  return `${record.ownerUserId}\0${record.id}`;
+}
+
+function rememberWebhookStatusSyncAttempt(
+  attempts: Map<string, WebhookStatusSyncAttempt>,
+  key: string,
+  turnId: string,
+): WebhookStatusSyncAttempt {
+  const current = attempts.get(key);
+  const next = {
+    turnId,
+    attempts: current?.turnId === turnId ? current.attempts + 1 : 1,
+  };
+  attempts.delete(key);
+  attempts.set(key, next);
+  while (attempts.size > WEBHOOK_STATUS_SYNC_MAX_ENTRIES) {
+    const oldestKey = attempts.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    attempts.delete(oldestKey);
+  }
+  return next;
 }
 
 function webhookRateLimitClientId(request: IncomingMessage, token: string | null): string {

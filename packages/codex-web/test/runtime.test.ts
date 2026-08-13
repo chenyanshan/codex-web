@@ -177,6 +177,143 @@ test('runtime reads a turn snapshot without resuming or observing execution', as
   assert.equal(resumeCalls, 0);
 });
 
+test('runtime reads the matching final answer output_text from a rollout snapshot', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-turn-snapshot-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  fs.writeFileSync(rolloutPath, [
+    {
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_target' },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        phase: 'commentary',
+        content: [{ type: 'output_text', text: 'Target progress' }],
+        internal_chat_message_metadata_passthrough: { turn_id: 'turn_target' },
+      },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        output: 'Target tool output',
+        internal_chat_message_metadata_passthrough: { turn_id: 'turn_target' },
+      },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'Real final response' }],
+        internal_chat_message_metadata_passthrough: { turn_id: 'turn_target' },
+      },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_target' },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_other' },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'Wrong turn final response' }],
+        internal_chat_message_metadata_passthrough: { turn_id: 'turn_other' },
+      },
+    },
+  ].map((entry) => JSON.stringify(entry)).join('\n'));
+  const client: CodexWebRuntimeClient = {
+    ...createThreadListClient(async () => ({ items: [], nextCursor: null })),
+    readThread: async (threadId) => ({
+      ...createThread(threadId),
+      path: rolloutPath,
+      turns: [{
+        id: 'turn_target',
+        status: 'completed',
+        error: null,
+        items: [],
+      }, {
+        id: 'turn_other',
+        status: 'completed',
+        error: null,
+        items: [],
+      }],
+    }),
+  };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+
+  const snapshot = await runtime.readTurnSnapshot('thread_target', 'turn_target');
+
+  assert.equal(snapshot?.id, 'turn_target');
+  assert.deepEqual(snapshot?.items.map((item) => [item.type, item.role, item.phase, item.text]), [
+    ['message', 'assistant', 'final_answer', 'Real final response'],
+  ]);
+  assert.equal(JSON.stringify(snapshot).includes('Wrong turn final response'), false);
+  assert.equal(JSON.stringify(snapshot).includes('Target progress'), false);
+  assert.equal(JSON.stringify(snapshot).includes('Target tool output'), false);
+});
+
+test('runtime recovers a completed turn from rollout before thread turns are materialized', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-turn-rollout-only-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  fs.writeFileSync(rolloutPath, [
+    {
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_rollout_only' },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'Rollout-only final response' }],
+      },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_rollout_only' },
+    },
+  ].map((entry) => JSON.stringify(entry)).join('\n'));
+  const client: CodexWebRuntimeClient = {
+    ...createThreadListClient(async () => ({ items: [], nextCursor: null })),
+    readThread: async (threadId) => ({
+      ...createThread(threadId),
+      path: rolloutPath,
+      turns: [],
+    }),
+  };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+
+  const snapshot = await runtime.readTurnSnapshot('thread_target', 'turn_rollout_only');
+
+  assert.deepEqual(snapshot, {
+    id: 'turn_rollout_only',
+    status: 'completed',
+    error: null,
+    items: [{
+      id: null,
+      type: 'message',
+      role: 'assistant',
+      phase: 'final_answer',
+      text: 'Rollout-only final response',
+      content: [{ type: 'output_text', text: 'Rollout-only final response' }],
+    }],
+  });
+});
+
 test('runtime gives steered user messages stable privacy-preserving client identities', async () => {
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],

@@ -43,7 +43,13 @@ test('webhook turn projection separates running, completed, failed, and cancelle
     items: [
       { type: 'reasoning', role: 'assistant', phase: 'analysis', text: 'hidden' },
       { type: 'message', role: 'assistant', phase: 'commentary', text: 'progress' },
-      { type: 'message', role: 'assistant', phase: 'final_answer', text: 'final' },
+      {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        text: '',
+        content: [{ type: 'output_text', text: 'final' }],
+      },
     ],
   }), { status: 'completed', finalText: 'final', error: null });
   assert.deepEqual(projectWebhookTurnStatus({ ...base, status: 'failed', error: 'provider failed' }), {
@@ -55,5 +61,67 @@ test('webhook turn projection separates running, completed, failed, and cancelle
     status: 'cancelled',
     finalText: null,
     error: { code: 'turn_cancelled', message: 'The turn was cancelled.', retryable: false },
+  });
+});
+
+test('webhook turn projection reads only final answer output_text from rollout-shaped messages', () => {
+  const projected = projectWebhookTurnStatus({
+    id: 'turn_rollout',
+    status: 'completed',
+    error: null,
+    items: [
+      {
+        type: 'message',
+        role: 'assistant',
+        phase: 'commentary',
+        text: '',
+        content: [{ type: 'output_text', text: 'progress must stay hidden' }],
+      },
+      {
+        type: 'reasoning',
+        role: 'assistant',
+        phase: 'analysis',
+        text: '',
+        content: [{ type: 'output_text', text: 'reasoning must stay hidden' }],
+      },
+      {
+        type: 'function_call_output',
+        role: null,
+        phase: null,
+        text: '',
+        content: [{ type: 'output_text', text: 'tool output must stay hidden' }],
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        text: '',
+        content: [
+          { type: 'input_text', text: 'input must stay hidden' },
+          { type: 'output_text', text: 'Real final response' },
+        ],
+      },
+    ] as any,
+  });
+
+  assert.deepEqual(projected, {
+    status: 'completed',
+    finalText: 'Real final response',
+    error: null,
+  });
+});
+
+test('completed webhook turns remain running until an explicit final answer is available', () => {
+  assert.deepEqual(projectWebhookTurnStatus({
+    id: 'turn_pending_final',
+    status: 'completed',
+    error: null,
+    items: [
+      { type: 'message', role: 'assistant', phase: 'commentary', text: 'Still syncing' },
+    ],
+  }), {
+    status: 'running',
+    finalText: null,
+    error: null,
   });
 });

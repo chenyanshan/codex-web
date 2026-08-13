@@ -21,6 +21,10 @@ export interface WebhookTurnSnapshot {
     role: string | null;
     phase: string | null;
     text: string;
+    content?: Array<{
+      type: string;
+      text: string;
+    }>;
   }>;
 }
 
@@ -69,21 +73,38 @@ export function projectWebhookTurnStatus(turn: WebhookTurnSnapshot): {
     };
   }
   if (isCompletedStatus(status)) {
-    return { status: 'completed', finalText: finalAssistantText(turn), error: null };
+    const finalText = finalAssistantText(turn);
+    return finalText
+      ? { status: 'completed', finalText, error: null }
+      : { status: 'running', finalText: null, error: null };
   }
   return { status: 'running', finalText: null, error: null };
 }
 
+export function webhookTurnNeedsFinalSync(turn: WebhookTurnSnapshot): boolean {
+  return isCompletedStatus(normalizeTurnStatus(turn.status)) && finalAssistantText(turn) === null;
+}
+
 function finalAssistantText(turn: WebhookTurnSnapshot): string | null {
-  const messages = turn.items.filter((item) => {
+  const explicitFinal = turn.items.filter((item) => {
     const role = String(item.role || '').trim().toLowerCase();
     const type = String(item.type || '').replace(/[^a-z]/giu, '').toLowerCase();
-    return role === 'assistant' && (!type || type.includes('message')) && item.text.trim();
+    const phase = String(item.phase || '').trim().toLowerCase().replace(/[\s-]+/gu, '_');
+    return role === 'assistant'
+      && ['message', 'agentmessage', 'assistantmessage'].includes(type)
+      && phase === 'final_answer';
   });
-  const explicitFinal = messages.filter((item) => (
-    String(item.phase || '').trim().toLowerCase().replace(/[\s-]+/gu, '_') === 'final_answer'
-  ));
-  return (explicitFinal.at(-1) ?? messages.at(-1))?.text.trim() || null;
+  for (let index = explicitFinal.length - 1; index >= 0; index -= 1) {
+    const text = (explicitFinal[index]?.content ?? [])
+      .filter((part) => String(part?.type || '').trim().toLowerCase() === 'output_text')
+      .map((part) => String(part?.text || '').trim())
+      .filter(Boolean)
+      .join('\n\n');
+    if (text) {
+      return text;
+    }
+  }
+  return null;
 }
 
 function normalizeTurnStatus(value: string | null): string {
