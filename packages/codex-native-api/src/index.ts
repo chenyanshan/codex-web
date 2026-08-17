@@ -37,6 +37,7 @@ export {
   formatConfigKeyPath,
 } from './codex_app_client.js';
 export type {
+  CodexThreadUnsubscribeStatus,
   CodexTurnInput,
   CodexTurnSteerParams,
   CodexTurnSteerResult,

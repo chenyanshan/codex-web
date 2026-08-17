@@ -123,6 +123,32 @@ test('app client sends persisted permission settings when resuming a thread', as
   });
 });
 
+test('app client unsubscribes threads and accepts every idempotent status', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const statuses = ['notLoaded', 'notSubscribed', 'unsubscribed'] as const;
+  let call = 0;
+  client.request = async (method: string, params: Record<string, unknown>, options) => {
+    assert.equal(method, 'thread/unsubscribe');
+    assert.deepEqual(params, { threadId: 'thread_release' });
+    assert.deepEqual(options, { timeoutMs: 10_000 });
+    return { status: statuses[call++] };
+  };
+
+  for (const status of statuses) {
+    assert.equal(await client.unsubscribeThread('thread_release'), status);
+  }
+});
+
+test('app client rejects unknown thread unsubscribe statuses', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  client.request = async () => ({ status: 'unexpected' });
+
+  await assert.rejects(
+    client.unsubscribeThread('thread_release'),
+    /thread\/unsubscribe returned an unknown status: unexpected/u,
+  );
+});
+
 test('app client adopts the automatic turn started by an active goal update', async () => {
   const client = new CodexAppClient({ codexCliBin: 'codex' });
   const callbackOrder: string[] = [];

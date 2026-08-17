@@ -58,6 +58,9 @@ const SESSION_STATUS_SUMMARY_CACHE_MS = 5_000;
 const THREAD_LIST_SNAPSHOT_CACHE_MS = 5_000;
 const THREAD_LIST_PAGE_SIZE = 100;
 const MAX_THREAD_LIST_PAGES = 10_000;
+const THREAD_SUBSCRIPTION_GRACE_MS = 60_000;
+const THREAD_UNSUBSCRIBE_RETRY_DELAYS_MS = [1_000, 5_000] as const;
+const THREAD_CLOSING_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
 
 interface CodexWebRuntimeLogger {
   debug?: (message: string) => void;
@@ -131,6 +134,7 @@ export interface CodexWebRuntimeClient {
     runtimeEnv?: Record<string, string | null>;
     developerInstructions?: string | null;
   }): Promise<unknown>;
+  unsubscribeThread?(threadId: string): Promise<'notLoaded' | 'notSubscribed' | 'unsubscribed'>;
   listSkills?(args?: {
     cwd?: string | null;
     forceReload?: boolean;
@@ -217,6 +221,9 @@ export interface CodexWebRuntimeOptions {
   settingsStore?: CodexWebSessionSettingsStore;
   timelineStore?: CodexWebSessionTimelineStore;
   logger?: CodexWebRuntimeLogger;
+  threadSubscriptionGraceMs?: number;
+  threadUnsubscribeRetryDelaysMs?: readonly number[];
+  threadClosingRetryDelaysMs?: readonly number[];
 }
 
 export interface ReadSessionStatusOptions {
@@ -296,6 +303,11 @@ interface ThreadListSnapshot {
   cachedAt: number;
 }
 
+interface ThreadSubscriptionLease {
+  generation: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 export class CodexWebRuntime {
   readonly client: CodexWebRuntimeClient;
 
@@ -333,7 +345,19 @@ export class CodexWebRuntime {
 
   private readonly terminalTurns = new Set<string>();
 
+  private readonly threadSubscriptionLeases = new Map<string, ThreadSubscriptionLease>();
+
+  private readonly activeGoalThreads = new Set<string>();
+
+  private readonly threadSubscriptionGraceMs: number;
+
+  private readonly threadUnsubscribeRetryDelaysMs: readonly number[];
+
+  private readonly threadClosingRetryDelaysMs: readonly number[];
+
   private unsubscribeApprovalRequests: (() => void) | null = null;
+
+  private stopping = false;
 
   private readonly logger: CodexWebRuntimeLogger;
 
@@ -345,6 +369,9 @@ export class CodexWebRuntime {
     eventBus = new CodexWebEventBus(),
     settingsStore,
     timelineStore,
+    threadSubscriptionGraceMs = THREAD_SUBSCRIPTION_GRACE_MS,
+    threadUnsubscribeRetryDelaysMs = THREAD_UNSUBSCRIBE_RETRY_DELAYS_MS,
+    threadClosingRetryDelaysMs = THREAD_CLOSING_RETRY_DELAYS_MS,
   }: CodexWebRuntimeOptions) {
     this.client = client;
     this.eventBus = eventBus;
@@ -352,6 +379,9 @@ export class CodexWebRuntime {
     this.settingsStore = settingsStore ?? null;
     this.timelineStore = timelineStore ?? null;
     this.logger = logger;
+    this.threadSubscriptionGraceMs = normalizeDelay(threadSubscriptionGraceMs);
+    this.threadUnsubscribeRetryDelaysMs = threadUnsubscribeRetryDelaysMs.map(normalizeDelay);
+    this.threadClosingRetryDelaysMs = threadClosingRetryDelaysMs.map(normalizeDelay);
     if (typeof this.client.subscribeToApprovalRequests === 'function') {
       this.unsubscribeApprovalRequests = this.client.subscribeToApprovalRequests(
         (request) => this.captureApprovalRequest(request),
@@ -399,6 +429,14 @@ export class CodexWebRuntime {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
+    for (const lease of this.threadSubscriptionLeases.values()) {
+      if (lease.timer) {
+        clearTimeout(lease.timer);
+      }
+    }
+    this.threadSubscriptionLeases.clear();
+    this.activeGoalThreads.clear();
     this.unsubscribeApprovalRequests?.();
     this.unsubscribeApprovalRequests = null;
     this.sessionSettings.clear();
@@ -564,15 +602,20 @@ export class CodexWebRuntime {
       ephemeral: false,
       ...(input.runtimeEnv ? { runtimeEnv: input.runtimeEnv } : {}),
     });
-    this.invalidateThreadListSnapshots();
-    const thread = await this.requireThread(started.threadId);
-    const effectiveSettings = mergeEffectiveModelSettings(initialSettings, started);
-    this.persistSessionSettings(started.threadId, {
-      ...effectiveSettings,
-      bridgeSessionId: started.threadId,
-      updatedAt: Date.now(),
-    });
-    return this.toSession(thread);
+    this.retainThreadSubscription(started.threadId);
+    try {
+      this.invalidateThreadListSnapshots();
+      const thread = await this.requireThread(started.threadId);
+      const effectiveSettings = mergeEffectiveModelSettings(initialSettings, started);
+      this.persistSessionSettings(started.threadId, {
+        ...effectiveSettings,
+        bridgeSessionId: started.threadId,
+        updatedAt: Date.now(),
+      });
+      return this.toSession(thread);
+    } finally {
+      this.scheduleThreadSubscriptionRelease(started.threadId);
+    }
   }
 
   async readSession(sessionId: string): Promise<CodexWebSession | null> {
@@ -666,6 +709,8 @@ export class CodexWebRuntime {
     if (thread) {
       await this.client.archiveThread(sessionId);
       this.invalidateThreadListSnapshots();
+      this.activeGoalThreads.delete(sessionId);
+      this.scheduleThreadSubscriptionRelease(sessionId);
     } else if (!current?.favorite) {
       return false;
     } else {
@@ -850,6 +895,7 @@ export class CodexWebRuntime {
     failureHistoryOffset?: number;
   }): Promise<CodexWebStartTurnResult> {
     const sessionId = session.id;
+    this.retainThreadSubscription(sessionId);
     let startedTurnId = '';
     let resolveStarted: ((value: CodexWebStartTurnResult) => void) | null = null;
     let rejectStarted: ((reason?: unknown) => void) | null = null;
@@ -932,6 +978,7 @@ export class CodexWebRuntime {
     }).catch((error: unknown) => {
       if (!startedTurnId) {
         rejectStarted?.(error);
+        this.scheduleThreadSubscriptionRelease(sessionId);
       }
       const turnId = startedTurnId || `turn_failed_${sessionId}`;
       const failureMessage = publicRuntimeTurnFailureMessage(error);
@@ -999,6 +1046,7 @@ export class CodexWebRuntime {
         objective: action === 'set' ? command.objective : null,
         status: 'active',
         onGoalUpdated: async (goal) => {
+          this.rememberThreadGoal(session.id, goal);
           commandResult = createGoalCommandResult({
             action,
             goal,
@@ -1024,6 +1072,7 @@ export class CodexWebRuntime {
   ): Promise<CodexWebCommandResult> {
     if (command.action === 'show') {
       const goal = await this.requireGoalReader()(sessionId);
+      this.rememberThreadGoal(sessionId, goal);
       return createGoalCommandResult({
         action: 'show',
         goal,
@@ -1032,6 +1081,7 @@ export class CodexWebRuntime {
     }
     if (command.action === 'clear') {
       await this.requireGoalClearer()(sessionId);
+      this.rememberThreadGoal(sessionId, null);
       return createGoalCommandResult({
         action: 'clear',
         goal: null,
@@ -1045,6 +1095,7 @@ export class CodexWebRuntime {
         status: 'paused',
         suppressAutoTurn: true,
       });
+      this.rememberThreadGoal(sessionId, goal);
       return createGoalCommandResult({
         action: 'pause',
         goal,
@@ -1193,6 +1244,10 @@ export class CodexWebRuntime {
     }));
     this.approvalToTurn.delete(approvalId);
     this.approvalToBatch.delete(approvalId);
+    const threadId = this.turnToThread.get(turnId);
+    if (threadId) {
+      this.scheduleThreadSubscriptionRelease(threadId);
+    }
   }
 
   async resolveApprovalForThread(
@@ -1315,6 +1370,7 @@ export class CodexWebRuntime {
       return;
     }
     this.rememberTurnThread(turnId, session.id);
+    this.retainThreadSubscription(session.id);
     if (!this.eventBus.list(turnId).some((entry) => entry.event.type === 'turn.started')) {
       this.append(turnId, normalizeTurnStartedEvent({
         turnId,
@@ -1384,6 +1440,8 @@ export class CodexWebRuntime {
       const threadId = this.turnToThread.get(turnId);
       if (threadId) {
         this.markThreadSummaryIdle(threadId);
+        this.scheduleThreadSubscriptionRelease(threadId);
+        this.refreshActiveGoalForSubscriptionRelease(threadId);
       }
       while (this.terminalTurns.size > MAX_TURN_THREAD_MAPPINGS) {
         const oldestTurnId = this.terminalTurns.values().next().value as string | undefined;
@@ -1511,13 +1569,35 @@ export class CodexWebRuntime {
     }
     const settings = this.getSessionSettings(threadId);
     const permissions = resolveResumePermissions(settings);
-    const resumed = await this.client.resumeThread({
-      threadId,
-      approvalPolicy: permissions.approvalPolicy,
-      sandboxMode: permissions.sandboxMode,
-      runtimeEnv: runtimeEnv ?? { CODEX_WEB_CONTEXT_FILE: null },
-      developerInstructions: developerInstructions ?? null,
-    });
+    let resumed: unknown;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        resumed = await this.client.resumeThread({
+          threadId,
+          approvalPolicy: permissions.approvalPolicy,
+          sandboxMode: permissions.sandboxMode,
+          runtimeEnv: runtimeEnv ?? { CODEX_WEB_CONTEXT_FILE: null },
+          developerInstructions: developerInstructions ?? null,
+        });
+        break;
+      } catch (error) {
+        const retryDelay = this.threadClosingRetryDelaysMs[attempt];
+        if (retryDelay === undefined || !isThreadClosingError(error)) {
+          throw error;
+        }
+        this.logDebug('thread_resume_closing_retry', {
+          threadId,
+          attempt: attempt + 1,
+          retryDelayMs: retryDelay,
+        });
+        await waitForDelay(retryDelay);
+        if (this.stopping) {
+          throw new Error('Codex Web runtime stopped while waiting to resume a thread');
+        }
+      }
+    }
+    this.retainThreadSubscription(threadId);
+    this.scheduleThreadSubscriptionRelease(threadId);
     const effectiveSettings = mergeEffectiveModelSettings(settings, resumed);
     if (effectiveSettings !== settings) {
       this.persistSessionSettings(threadId, effectiveSettings);
@@ -1682,6 +1762,7 @@ export class CodexWebRuntime {
   }
 
   private rememberActiveTurn(threadId: string, turnId: string): void {
+    this.retainThreadSubscription(threadId);
     if (this.activeTurnByThread.has(threadId)) {
       this.activeTurnByThread.delete(threadId);
     }
@@ -1707,6 +1788,134 @@ export class CodexWebRuntime {
   private cleanupFinishedTurn(turnId: string): void {
     this.workSummaries.delete(turnId);
     this.finalAnswerItemIds.delete(turnId);
+  }
+
+  private retainThreadSubscription(threadId: string): void {
+    if (typeof this.client.unsubscribeThread !== 'function' || this.stopping) {
+      return;
+    }
+    const lease = this.threadSubscriptionLeases.get(threadId) ?? {
+      generation: 0,
+      timer: null,
+    };
+    if (lease.timer) {
+      clearTimeout(lease.timer);
+    }
+    lease.generation += 1;
+    lease.timer = null;
+    this.threadSubscriptionLeases.set(threadId, lease);
+  }
+
+  private scheduleThreadSubscriptionRelease(threadId: string): void {
+    if (typeof this.client.unsubscribeThread !== 'function' || this.stopping) {
+      return;
+    }
+    const lease = this.threadSubscriptionLeases.get(threadId);
+    if (!lease) {
+      return;
+    }
+    if (lease.timer) {
+      clearTimeout(lease.timer);
+    }
+    lease.generation += 1;
+    const generation = lease.generation;
+    lease.timer = setTimeout(() => {
+      const current = this.threadSubscriptionLeases.get(threadId);
+      if (!current || current.generation !== generation || this.stopping) {
+        return;
+      }
+      current.timer = null;
+      void this.releaseThreadSubscription(threadId, generation, 0);
+    }, this.threadSubscriptionGraceMs);
+    lease.timer.unref?.();
+  }
+
+  private async releaseThreadSubscription(
+    threadId: string,
+    generation: number,
+    attempt: number,
+  ): Promise<void> {
+    const lease = this.threadSubscriptionLeases.get(threadId);
+    const unsubscribeThread = this.client.unsubscribeThread;
+    if (
+      !lease
+      || lease.generation !== generation
+      || this.stopping
+      || typeof unsubscribeThread !== 'function'
+      || !this.canReleaseThreadSubscription(threadId)
+    ) {
+      return;
+    }
+    try {
+      const status = await unsubscribeThread.call(this.client, threadId);
+      const current = this.threadSubscriptionLeases.get(threadId);
+      if (current?.generation === generation) {
+        this.threadSubscriptionLeases.delete(threadId);
+      }
+      this.logDebug('thread_unsubscribed', { threadId, status, attempt: attempt + 1 });
+    } catch (error) {
+      const current = this.threadSubscriptionLeases.get(threadId);
+      if (!current || current.generation !== generation || this.stopping) {
+        return;
+      }
+      const retryDelay = this.threadUnsubscribeRetryDelaysMs[attempt];
+      this.logger.warn?.(`[codex-web-runtime] thread_unsubscribe_failed ${JSON.stringify({
+        threadId,
+        attempt: attempt + 1,
+        retryDelayMs: retryDelay ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      })}`);
+      if (retryDelay === undefined) {
+        return;
+      }
+      current.timer = setTimeout(() => {
+        const latest = this.threadSubscriptionLeases.get(threadId);
+        if (!latest || latest.generation !== generation || this.stopping) {
+          return;
+        }
+        latest.timer = null;
+        void this.releaseThreadSubscription(threadId, generation, attempt + 1);
+      }, retryDelay);
+      current.timer.unref?.();
+    }
+  }
+
+  private canReleaseThreadSubscription(threadId: string): boolean {
+    if (this.activeTurnByThread.has(threadId) || this.pendingApprovalTurnIdForThread(threadId)) {
+      return false;
+    }
+    for (const turnId of this.activeTurns.keys()) {
+      if (this.turnToThread.get(turnId) === threadId) {
+        return false;
+      }
+    }
+    return !this.activeGoalThreads.has(threadId);
+  }
+
+  private rememberThreadGoal(threadId: string, goal: ProviderThreadGoal | null): void {
+    if (goal?.status.trim().toLowerCase() === 'active') {
+      this.activeGoalThreads.add(threadId);
+      this.retainThreadSubscription(threadId);
+      return;
+    }
+    this.activeGoalThreads.delete(threadId);
+    this.scheduleThreadSubscriptionRelease(threadId);
+  }
+
+  private refreshActiveGoalForSubscriptionRelease(threadId: string): void {
+    if (!this.activeGoalThreads.has(threadId) || typeof this.client.getThreadGoal !== 'function') {
+      return;
+    }
+    void this.client.getThreadGoal(threadId).then((goal) => {
+      this.rememberThreadGoal(threadId, goal);
+    }).catch((error) => {
+      if (!isUnavailableThreadError(error)) {
+        this.logger.warn?.(`[codex-web-runtime] thread_goal_refresh_failed ${JSON.stringify({
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        })}`);
+      }
+    });
   }
 
   private activeTurnIdForThread(threadId: string, thread: ProviderThreadSummary | null = null): string | null {
@@ -1781,6 +1990,7 @@ export class CodexWebRuntime {
         throw error;
       }
     }
+    this.rememberThreadGoal(session.id, goal);
     return {
       ...session,
       goal,
@@ -2943,6 +3153,21 @@ function isMissingRolloutError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /no rollout found for thread id/i.test(message)
     || /rollout .* is empty/i.test(message);
+}
+
+function isThreadClosingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /thread .* is closing.*retry after .*thread is closed/iu.test(message);
+}
+
+function normalizeDelay(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function waitForDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function normalizeTurnSnapshotItem(item: ProviderThreadTurnItem): CodexWebTurnSnapshotItem {

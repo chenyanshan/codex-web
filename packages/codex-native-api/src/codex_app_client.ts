@@ -358,6 +358,8 @@ export interface CodexTurnSteerResult {
   turnId: string;
 }
 
+export type CodexThreadUnsubscribeStatus = 'notLoaded' | 'notSubscribed' | 'unsubscribed';
+
 export class CodexAppClient extends EventEmitter {
   codexCliBin: string;
 
@@ -629,6 +631,17 @@ export class CodexAppClient extends EventEmitter {
     const effectiveSettings = normalizeConfigDefaults(result);
     this.threadConfigDefaults.set(threadId, effectiveSettings);
     return effectiveSettings;
+  }
+
+  async unsubscribeThread(threadId: string): Promise<CodexThreadUnsubscribeStatus> {
+    const result: any = await this.request('thread/unsubscribe', {
+      threadId,
+    }, { timeoutMs: 10_000 });
+    const status = String(result?.status ?? '');
+    if (status === 'notLoaded' || status === 'notSubscribed' || status === 'unsubscribed') {
+      return status;
+    }
+    throw new Error(`Codex thread/unsubscribe returned an unknown status: ${status || 'missing'}`);
   }
 
   async getThreadGoal(threadId: string): Promise<ProviderThreadGoal | null> {
