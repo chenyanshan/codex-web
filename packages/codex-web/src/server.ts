@@ -2004,13 +2004,32 @@ function resolveWebhookProjectReference(
     (project) => projectDisplayNameKey(project.displayName) === displayNameKey,
   );
   if (displayNameMatches.length > 1) {
+    const normalizedCwds = displayNameMatches.map((project) => normalizedCwd(project.cwd));
+    const allMatchSameCwd = normalizedCwds.every((cwd) => (
+      cwd !== null && cwd === normalizedCwds[0]
+    ));
+    if (allMatchSameCwd) {
+      const canonicalMatches = displayNameMatches.filter((project) => !isAdminLegacyProject(project));
+      if (canonicalMatches.length === 1) {
+        return canonicalMatches[0]!;
+      }
+    }
     throw createHttpError(
       409,
       'ambiguous_project_reference',
-      'More than one available project has that display name. Use the internal project id.',
+      'More than one available project has that display name and no unique canonical project could be selected. Use the internal project id.',
     );
   }
   return displayNameMatches[0] ?? null;
+}
+
+function isAdminLegacyProject(project: CodexWebProject): boolean {
+  return project.id.startsWith('project_admin_legacy_');
+}
+
+function normalizedCwd(value: unknown): string | null {
+  const cwd = normalizeOptionalString(value);
+  return cwd ? path.resolve(cwd) : null;
 }
 
 function writeWebhookUnauthorized(response: ServerResponse): void {
@@ -5364,7 +5383,8 @@ async function ensureAdminLegacySessionMappings({
     if (!threadId || mappedThreadIds.has(threadId)) {
       continue;
     }
-    const project = legacyProjectForRuntimeSession(runtimeSession);
+    const project = reusableProjectForRuntimeSession(runtimeSession, projectsById.values())
+      ?? legacyProjectForRuntimeSession(runtimeSession);
     const existingProject = projectsById.get(project.id);
     if (!existingProject) {
       await identityStore.upsertProject(project, { allowDisplayNameConflict: true });
@@ -5399,6 +5419,21 @@ async function ensureAdminLegacySessionMappings({
   return changed ? identityStore.readState() : identityState;
 }
 
+function reusableProjectForRuntimeSession(
+  runtimeSession: CodexWebSession,
+  projects: Iterable<CodexWebProject>,
+): CodexWebProject | null {
+  const runtimeCwd = normalizedCwd(runtimeSession.cwd);
+  if (!runtimeCwd) {
+    return null;
+  }
+  const matches = [...projects].filter((project) => (
+    project.enabled !== false
+    && normalizedCwd(project.cwd) === runtimeCwd
+  ));
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 function adminOwnerUserId(state: CodexWebIdentityState, principal: CodexWebPrincipal): string {
   const adminUser = state.users.find((user) => user.id === 'user_admin')
     ?? state.users.find((user) => user.username === 'admin')
@@ -5407,7 +5442,7 @@ function adminOwnerUserId(state: CodexWebIdentityState, principal: CodexWebPrinc
 }
 
 function legacyProjectForRuntimeSession(runtimeSession: CodexWebSession): CodexWebProject {
-  const cwd = normalizeOptionalString(runtimeSession.cwd) || '__codex_web_legacy_unknown_cwd__';
+  const cwd = normalizedCwd(runtimeSession.cwd) ?? '__codex_web_legacy_unknown_cwd__';
   const displayName = cwdLeafName(cwd) || normalizeOptionalString(runtimeSession.projectName) || 'Legacy Session';
   return {
     id: `project_admin_legacy_${stableIdHash(cwd, 20)}`,

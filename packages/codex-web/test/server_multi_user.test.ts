@@ -1932,6 +1932,125 @@ test('admin audit can filter sessions by project only', async () => {
   }
 });
 
+test('admin legacy session import reuses one enabled project with the same normalized cwd', async () => {
+  const identityStore = await createIdentityStore();
+  const initialState = await identityStore.readState();
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async () => [
+      {
+        id: 'thread_existing_workspace',
+        cwd: '/Users/alice/secret-repo/../secret-repo/',
+        projectName: 'secret-repo',
+        updatedAt: 1_779_811_200_000,
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      },
+      {
+        id: 'thread_other_workspace',
+        cwd: '/Users/admin/other-repo/',
+        projectName: 'other-repo',
+        updatedAt: 1_779_811_201_000,
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      },
+      {
+        id: 'thread_unknown_workspace',
+        cwd: null,
+        projectName: 'unknown-workspace',
+        updatedAt: 1_779_811_202_000,
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      },
+    ],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/admin/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(response.status, 200);
+
+    const state = await identityStore.readState();
+    const reusedSession = state.sessions.find((session) => session.codexThreadId === 'thread_existing_workspace');
+    const independentSession = state.sessions.find((session) => session.codexThreadId === 'thread_other_workspace');
+    const unknownCwdSession = state.sessions.find((session) => session.codexThreadId === 'thread_unknown_workspace');
+    assert.equal(reusedSession?.projectId, 'project_allowed');
+    assert.match(independentSession?.projectId ?? '', /^project_admin_legacy_/u);
+    assert.notEqual(independentSession?.projectId, reusedSession?.projectId);
+    assert.match(unknownCwdSession?.projectId ?? '', /^project_admin_legacy_/u);
+    assert.notEqual(unknownCwdSession?.projectId, reusedSession?.projectId);
+    assert.notEqual(unknownCwdSession?.projectId, independentSession?.projectId);
+    assert.equal(state.projects.length, initialState.projects.length + 2);
+    assert.equal(
+      state.projects.some((project) => (
+        project.id.startsWith('project_admin_legacy_')
+        && path.resolve(project.cwd) === '/Users/alice/secret-repo'
+      )),
+      false,
+    );
+  } finally {
+    await server.stop();
+  }
+});
+
+test('admin legacy session import does not reuse ambiguous projects with the same cwd', async () => {
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertProject({
+    id: 'project_allowed_duplicate',
+    internalName: 'secret-repo-duplicate',
+    cwd: '/Users/alice/secret-repo/',
+    displayName: 'Allowed Project Duplicate',
+    enabled: true,
+  });
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async () => [{
+      id: 'thread_ambiguous_workspace',
+      cwd: '/Users/alice/other/../secret-repo',
+      projectName: 'secret-repo',
+      updatedAt: 1_779_811_200_000,
+      settings: {},
+      thread: { turns: [] },
+      timeline: [],
+    }],
+  };
+  const server = createCodexWebServer({
+    auth: authFor({
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+    }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/admin/sessions`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(response.status, 200);
+
+    const state = await identityStore.readState();
+    const importedSession = state.sessions.find((session) => session.codexThreadId === 'thread_ambiguous_workspace');
+    assert.match(importedSession?.projectId ?? '', /^project_admin_legacy_/u);
+    assert.notEqual(importedSession?.projectId, 'project_allowed');
+    assert.notEqual(importedSession?.projectId, 'project_allowed_duplicate');
+  } finally {
+    await server.stop();
+  }
+});
+
 test('admin audit adopts unmapped legacy runtime sessions as enabled admin-owned sessions', async () => {
   const identityStore = await createIdentityStore();
   const runtime = {

@@ -802,7 +802,7 @@ test('non-steerable webhook conversations return a retryable conflict without in
   }
 });
 
-test('webhook project references ignore display-name case and reject ambiguous legacy names', async () => {
+test('webhook project references ignore display-name case and reject same names from different cwd values', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-project-name-'));
   const identityStore = await createMultiUserStore(stateDir);
   await identityStore.upsertProject({
@@ -865,6 +865,127 @@ test('webhook project references ignore display-name case and reject ambiguous l
     assert.equal(unknownName.status, 404);
     assert.equal((await unknownName.json() as any).error, 'project_not_found');
     assert.equal(runtime.createInputs.length, 2);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('webhook project references prefer one non-legacy project for duplicate records with the same cwd', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-duplicate-workspace-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  const legacyProjectId = 'project_admin_legacy_duplicate_workspace';
+  await identityStore.upsertProject({
+    id: legacyProjectId,
+    internalName: 'shared-legacy',
+    cwd: '/private/shared-project/../shared-project/',
+    displayName: 'Shared Project',
+    enabled: true,
+    activeSessionLimit: null,
+    showWorkDetailsToMembers: false,
+  }, { allowDisplayNameConflict: true });
+  await identityStore.upsertRole({
+    id: 'role_member',
+    name: 'Member',
+    isAdmin: false,
+    projectGrants: [
+      { projectId: 'project_shared', canRead: true, canCreate: true, canWrite: true },
+      { projectId: legacyProjectId, canRead: true, canCreate: true, canWrite: true },
+    ],
+  });
+  const created = await identityStore.setWebhookEnabled('user_alice', true);
+  const key = created.key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const byName = await webhookRequest(server.baseUrl, key, 'duplicate-workspace-name', {
+      text: 'Use the canonical project',
+      projectId: 'sHaReD pRoJeCt',
+    });
+    assert.equal(byName.status, 201);
+    assert.equal((await byName.json() as any).session.projectId, 'project_shared');
+
+    const exactLegacy = await webhookRequest(server.baseUrl, key, 'duplicate-workspace-legacy-id', {
+      text: 'Use the exact legacy project',
+      projectId: legacyProjectId,
+    });
+    assert.equal(exactLegacy.status, 201);
+    assert.equal((await exactLegacy.json() as any).session.projectId, legacyProjectId);
+
+    const continuedLegacy = await webhookRequest(server.baseUrl, key, 'duplicate-workspace-legacy-id', {
+      text: 'Keep the existing legacy project binding',
+      projectId: 'Shared Project',
+    });
+    assert.equal(continuedLegacy.status, 202);
+    assert.equal(runtime.createInputs.length, 2);
+    assert.equal(runtime.startInputs.at(-1)?.sessionId, 'thread_2');
+
+    const exactCanonical = await webhookRequest(server.baseUrl, key, 'duplicate-workspace-canonical-id', {
+      text: 'Use the exact canonical project',
+      projectId: 'project_shared',
+    });
+    assert.equal(exactCanonical.status, 201);
+    assert.equal((await exactCanonical.json() as any).session.projectId, 'project_shared');
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('webhook project references reject duplicate workspaces with multiple non-legacy projects', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-nonlegacy-ambiguity-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  await identityStore.upsertProject({
+    id: 'project_shared_duplicate',
+    internalName: 'shared-duplicate',
+    cwd: '/private/shared-project/',
+    displayName: 'Shared Project',
+    enabled: true,
+    activeSessionLimit: null,
+    showWorkDetailsToMembers: false,
+  }, { allowDisplayNameConflict: true });
+  await identityStore.upsertProject({
+    id: 'project_admin_legacy_shared',
+    internalName: 'shared-legacy',
+    cwd: '/private/other/../shared-project',
+    displayName: 'Shared Project',
+    enabled: true,
+    activeSessionLimit: null,
+    showWorkDetailsToMembers: false,
+  }, { allowDisplayNameConflict: true });
+  await identityStore.upsertRole({
+    id: 'role_member',
+    name: 'Member',
+    isAdmin: false,
+    projectGrants: [
+      { projectId: 'project_shared', canRead: true, canCreate: true, canWrite: true },
+      { projectId: 'project_shared_duplicate', canRead: true, canCreate: true, canWrite: true },
+      { projectId: 'project_admin_legacy_shared', canRead: true, canCreate: true, canWrite: true },
+    ],
+  });
+  const created = await identityStore.setWebhookEnabled('user_alice', true);
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const response = await webhookRequest(server.baseUrl, created.key!, 'nonlegacy-ambiguity', {
+      text: 'Must not choose between canonical projects',
+      projectId: 'Shared Project',
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json() as any).error, 'ambiguous_project_reference');
+    assert.equal(runtime.createInputs.length, 0);
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });
