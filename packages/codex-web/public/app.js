@@ -6075,11 +6075,6 @@ function onNewSessionSubmit(event) {
   state.activeSubmissionId = '';
   state.draftSessionActive = true;
   state.newProjectId = selectedProjectId || state.newProjectId;
-  if (selectedProjectId) {
-    applySelectedProjectById(selectedProjectId);
-  } else if (state.newCwd.trim()) {
-    applySelectedLegacyProjectFromCwd(state.newCwd.trim());
-  }
   state.cwd = selectedProjectId ? '' : state.newCwd.trim();
   state.prompt = '';
   state.composerAttachments = [];
@@ -6399,11 +6394,6 @@ function openPendingSubmission(submissionId) {
   state.newSessionSettingsOpen = false;
   state.cwd = entry.cwd;
   state.newProjectId = entry.projectId || state.newProjectId;
-  if (entry.projectId) {
-    applySelectedProjectById(entry.projectId);
-  } else if (entry.cwd) {
-    applySelectedLegacyProjectFromCwd(entry.cwd);
-  }
   applySessionSettings({ settings: entry.settings });
   state.timeline = [submissionTimelineItem(entry)];
   state.prompt = '';
@@ -6788,6 +6778,14 @@ function isActiveNewSessionSubmission(entry) {
 function completeDeliveredSubmission(entry, normalized, payload) {
   const sessionId = normalized.sessionId;
   const session = normalized.session;
+  if (!entry.sessionId && sessionId && !knownSessionSummary(sessionId)) {
+    transitionSessionListStats(null, session || {
+      id: sessionId,
+      projectId: entry.projectId,
+      cwd: entry.cwd,
+      settings: entry.settings,
+    });
+  }
   if (session) {
     upsertSession(session);
   }
@@ -7248,6 +7246,7 @@ async function ensureSession() {
   if (!isAuthRequestCurrent(requestGeneration)) {
     return null;
   }
+  transitionSessionListStats(null, payload.session);
   state.currentSession = payload.session;
   state.sessionId = payload.session.id;
   migrateDraftPromptToSession(payload.session.id);
@@ -7307,8 +7306,12 @@ async function archiveSession(sessionId) {
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
+    const previous = knownSessionSummary(sessionId);
+    if (previous) {
+      transitionSessionListStats(previous, { ...previous, archived: true, readOnly: true });
+    }
     state.sessionArchiveOverrides.set(sessionId, true);
-    removeSession(sessionId);
+    removeSession(sessionId, { updateStats: false });
     SESSION_PAGINATION.resetScope('archived');
     persistSessionsCache();
     state.timelineCache.delete(sessionId);
@@ -7350,8 +7353,15 @@ async function unarchiveSession(sessionId) {
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
+    const previous = knownSessionSummary(sessionId);
+    if (previous || payload?.session) {
+      transitionSessionListStats(
+        previous,
+        payload?.session ? { ...mergeSessionSummary(previous, payload.session), archived: false } : null,
+      );
+    }
     state.sessionArchiveOverrides.set(sessionId, false);
-    removeSession(sessionId);
+    removeSession(sessionId, { updateStats: false });
     if (payload?.session) {
       upsertSession(payload.session);
     }
@@ -7511,6 +7521,7 @@ async function toggleSessionFavorite(sessionId) {
       return;
     }
     if (payload?.session) {
+      transitionSessionListStats(session, mergeSessionSummary(session, payload.session));
       upsertSession(payload.session);
     }
     state.status = favorite ? 'Session favorited' : 'Favorite removed';
@@ -10722,9 +10733,21 @@ function normalizeTurnStatus(status) {
     .replace(/[\s_-]+/g, '');
 }
 
-function removeSession(sessionId) {
+function knownSessionSummary(sessionId) {
+  return state.sessions.find((session) => session.id === sessionId)
+    || Object.values(state.sessionsByScope)
+      .flat()
+      .find((session) => session.id === sessionId)
+    || (state.currentSession?.id === sessionId ? state.currentSession : null);
+}
+
+function removeSession(sessionId, { updateStats = true } = {}) {
   if (!sessionId) {
     return;
+  }
+  const previous = updateStats ? knownSessionSummary(sessionId) : null;
+  if (previous) {
+    transitionSessionListStats(previous, null);
   }
   state.sessions = state.sessions.filter((session) => session.id !== sessionId);
   for (const scope of Object.keys(state.sessionsByScope)) {
@@ -10734,6 +10757,21 @@ function removeSession(sessionId) {
     state.currentSession = null;
   }
   persistSessionsCache();
+}
+
+function transitionSessionListStats(previous, next) {
+  SESSION_PAGINATION_API.transitionStatsByScope(state.sessionListStatsByScope, {
+    previous,
+    next,
+    projectScope: sessionProjectScope,
+    belongsToScope: (session, scope) => {
+      const archived = session?.archived === true;
+      if (scope === 'archived') {
+        return archived;
+      }
+      return !archived && (scope !== 'favorites' || isFavoriteSession(session));
+    },
+  });
 }
 
 function optimisticallyUpdateSessionInput(text) {
@@ -10837,6 +10875,7 @@ function restoreSessionsFromCacheForScope(scope, queryKey = SESSION_PAGINATION.q
   }
   state.sessionsByScope[normalizedScope] = cached;
   state.sessionsQueryByScope[normalizedScope] = queryKey;
+  SESSION_PAGINATION.applyStats(normalizedScope, cachedState.stats[normalizedScope]);
   if (normalizedScope === currentSessionScope()) {
     state.sessions = [...cached];
   }
@@ -10860,6 +10899,7 @@ function loadSessionsCacheScopes() {
         favorites: typeof queryKeys.favorites === 'string' ? queryKeys.favorites : SESSION_PAGINATION.baseListPath('favorites'),
         archived: typeof queryKeys.archived === 'string' ? queryKeys.archived : SESSION_PAGINATION.baseListPath('archived'),
       },
+      stats: parsed?.stats && typeof parsed.stats === 'object' ? parsed.stats : {},
     };
   } catch (_error) {
     localStorage.removeItem(SESSIONS_CACHE_KEY);
@@ -10870,6 +10910,7 @@ function loadSessionsCacheScopes() {
         favorites: SESSION_PAGINATION.baseListPath('favorites'),
         archived: SESSION_PAGINATION.baseListPath('archived'),
       },
+      stats: {},
     };
   }
 }
@@ -10881,8 +10922,9 @@ function persistSessionsCache() {
     archived: (state.sessionsByScope.archived || []).filter((session) => sessionBelongsToScope(session, 'archived')).map(serializeSessionSummaryForCache).filter(Boolean),
   };
   const queryKeys = { ...state.sessionsQueryByScope };
+  const stats = { ...state.sessionListStatsByScope };
   try {
-    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify({ scopes, queryKeys, savedAt: Date.now() }));
+    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify({ scopes, queryKeys, stats, savedAt: Date.now() }));
   } catch (error) {
     console.warn('[codex-web] sessions cache persist failed', error);
   }
@@ -12649,60 +12691,18 @@ function currentProjectScopeTitle() {
 }
 
 function workspaceProjects() {
-  const items = new Map();
-  for (const project of Array.isArray(state.projects) ? state.projects : []) {
-    const id = String(project?.id || '').trim();
-    if (!id) {
-      continue;
-    }
-    items.set(id, {
-      key: id,
-      id,
-      label: projectVisibleName(project, id),
-      defaultCwd: typeof project?.cwd === 'string' ? project.cwd : '',
-      sessionCount: 0,
-      latestAt: 0,
-      canCreate: project?.canCreate !== false,
-      favorite: project?.favorite === true,
-      source: 'managed',
-    });
-  }
-  for (const session of sessionListCandidates()) {
-    const scope = sessionProjectScope(session);
-    if (!scope.key) {
-      continue;
-    }
-    const existing = items.get(scope.key) || {
-      key: scope.key,
-      id: scope.id,
-      label: scope.label,
-      defaultCwd: scope.defaultCwd,
-      sessionCount: 0,
-      latestAt: 0,
-      canCreate: Boolean(scope.id),
-      favorite: false,
-      source: scope.id ? 'managed' : 'legacy',
-    };
-    existing.label = existing.label || scope.label;
-    existing.defaultCwd = existing.defaultCwd || scope.defaultCwd;
-    existing.sessionCount += 1;
-    existing.latestAt = Math.max(existing.latestAt || 0, scope.latestAt || 0);
-    if (!existing.id && scope.id) {
-      existing.id = scope.id;
-    }
-    items.set(scope.key, existing);
-  }
-  return [...items.values()].sort((left, right) => {
-    if (Boolean(right.favorite) !== Boolean(left.favorite)) {
-      return Number(Boolean(right.favorite)) - Number(Boolean(left.favorite));
-    }
-    if (right.sessionCount !== left.sessionCount) {
-      return right.sessionCount - left.sessionCount;
-    }
-    if ((right.latestAt || 0) !== (left.latestAt || 0)) {
-      return (right.latestAt || 0) - (left.latestAt || 0);
-    }
-    return String(left.label || '').localeCompare(String(right.label || ''));
+  return workspaceProjectSummary().projects;
+}
+
+function workspaceProjectSummary() {
+  const pendingSessions = currentSessionScope() === 'all' ? pendingSubmissionSessionSummaries() : [];
+  return SESSION_PAGINATION_API.summarizeWorkspaceProjects({
+    projects: state.projects,
+    sessions: state.sessions,
+    pendingSessions,
+    stats: state.sessionListStatsByScope[currentSessionScope()],
+    projectScope: sessionProjectScope,
+    projectVisibleName,
   });
 }
 
@@ -12714,7 +12714,7 @@ function currentSelectedProject() {
       id: '',
       label: 'All Sessions',
       defaultCwd: '',
-      sessionCount: state.sessions.length,
+      sessionCount: workspaceProjectSummary().totalCount,
       latestAt: 0,
       canCreate: true,
       favorite: false,
@@ -12794,13 +12794,13 @@ function renderWorkspaceProjectList() {
     key: '',
     id: '',
     label: t('All Sessions'),
-    sessionCount: sessionListCandidates().length,
+    sessionCount: workspaceProjectSummary().totalCount,
     source: 'all',
   };
   const projects = workspaceProjects();
   const renderProject = (project) => {
     const isActive = project.key === currentKey;
-    const count = project.sessionCount ? String(project.sessionCount) : project.source === 'all' ? String(sessionListCandidates().length) : '0';
+    const count = String(project.sessionCount || 0);
     const canFavorite = project.source !== 'all' && Boolean(project.id);
     const favorite = Boolean(project.favorite);
     const favoriteLabel = t(favorite ? 'Unfavorite {label}' : 'Favorite {label}', { label: project.label });
@@ -12920,16 +12920,6 @@ function applySelectedProjectById(projectId) {
   state.selectedProjectKey = normalizedId;
   state.selectedProjectId = normalizedId;
   state.selectedProjectLabel = projectVisibleName(fallback, normalizedId);
-}
-
-function applySelectedLegacyProjectFromCwd(cwd) {
-  const normalizedCwd = String(cwd || '').trim();
-  if (!normalizedCwd) {
-    return;
-  }
-  state.selectedProjectKey = `cwd:${normalizedCwd}`;
-  state.selectedProjectId = '';
-  state.selectedProjectLabel = cwdLeafName(normalizedCwd) || normalizedCwd;
 }
 
 function resetWorkspaceSessionContext() {

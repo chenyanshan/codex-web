@@ -799,9 +799,9 @@ async function handleRequest({
         ? { archived: true }
         : {};
     const requestedCwd = normalizeOptionalString(url.searchParams.get('cwd'));
-    const items = (await runtime.listSessions(options))
-      .filter((session) => !requestedCwd || normalizeOptionalString(session.cwd) === requestedCwd)
-      .map(presentSessionSummary);
+    const allItems = (await runtime.listSessions(options)).map(presentSessionSummary);
+    const items = allItems
+      .filter((session) => !requestedCwd || normalizeOptionalString(session.cwd) === requestedCwd);
     writeSessionListPage(response, url, items, {
       principalId: 'single-user',
       scope: sessionListScopeKey({
@@ -809,7 +809,7 @@ async function handleRequest({
         archivedOnly: stateFilter === 'archived',
         projectKey: requestedCwd ? `cwd:${requestedCwd}` : '',
       }),
-    });
+    }, allItems);
     return;
   }
 
@@ -3578,7 +3578,6 @@ async function handleMultiUserRequest({
       workspaceState.sessions
         .filter((appSession) => canReadWorkspaceAppSession(workspaceState, principal, appSession))
         .filter((appSession) => archivedOnly ? appSession.archived === true : appSession.archived !== true)
-        .filter((appSession) => !requestedProjectId || appSession.projectId === requestedProjectId)
         .map((appSession) => [appSession.codexThreadId, appSession]),
     );
     const pageContext = {
@@ -3609,7 +3608,13 @@ async function handleMultiUserRequest({
           includeWorkDetails: canViewProjectWorkDetails(principal, project),
         }));
       }
-      writeSessionListPage(response, url, items, pageContext);
+      writeSessionListPage(
+        response,
+        url,
+        filterSessionListItemsByProject(items, requestedProjectId),
+        pageContext,
+        items,
+      );
       return true;
     }
     if (archivedOnly) {
@@ -3644,7 +3649,13 @@ async function handleMultiUserRequest({
           includeWorkDetails: canViewProjectWorkDetails(principal, project),
         }));
       }
-      writeSessionListPage(response, url, items, pageContext);
+      writeSessionListPage(
+        response,
+        url,
+        filterSessionListItemsByProject(items, requestedProjectId),
+        pageContext,
+        items,
+      );
       return true;
     }
     const items = [];
@@ -3674,7 +3685,13 @@ async function handleMultiUserRequest({
         includeWorkDetails: canViewProjectWorkDetails(principal, project),
       }));
     }
-    writeSessionListPage(response, url, items, pageContext);
+    writeSessionListPage(
+      response,
+      url,
+      filterSessionListItemsByProject(items, requestedProjectId),
+      pageContext,
+      items,
+    );
     return true;
   }
 
@@ -5976,6 +5993,7 @@ function writeSessionListPage(
   url: URL,
   items: Array<Record<string, unknown>>,
   context: { principalId: string; scope: string },
+  catalogItems: Array<Record<string, unknown>> = items,
 ): void {
   try {
     const page = paginateSessionList(items, {
@@ -5984,7 +6002,10 @@ function writeSessionListPage(
       principalId: context.principalId,
       scope: context.scope,
     });
-    writeJson(response, 200, page);
+    writeJson(response, 200, {
+      ...page,
+      ...summarizeSessionList(catalogItems),
+    });
   } catch (error) {
     if (error instanceof InvalidSessionListCursorError) {
       writeJson(response, 400, {
@@ -5995,6 +6016,74 @@ function writeSessionListPage(
     }
     throw error;
   }
+}
+
+function filterSessionListItemsByProject(
+  items: Array<Record<string, unknown>>,
+  projectId: string,
+): Array<Record<string, unknown>> {
+  return projectId
+    ? items.filter((item) => normalizeOptionalString(item.projectId) === projectId)
+    : items;
+}
+
+function summarizeSessionList(items: Array<Record<string, unknown>>): Record<string, unknown> {
+  const uniqueItems = new Map<string, Record<string, unknown>>();
+  for (const item of items) {
+    const id = normalizeOptionalString(item.id);
+    if (id && !uniqueItems.has(id)) {
+      uniqueItems.set(id, item);
+    }
+  }
+  const projects = new Map<string, Record<string, unknown>>();
+  for (const item of uniqueItems.values()) {
+    const descriptor = sessionListProjectDescriptor(item);
+    const existing = projects.get(descriptor.projectKey);
+    if (existing) {
+      existing.sessionCount = Number(existing.sessionCount) + 1;
+      existing.latestAt = Math.max(Number(existing.latestAt), descriptor.latestAt);
+      continue;
+    }
+    projects.set(descriptor.projectKey, {
+      ...descriptor,
+      sessionCount: 1,
+    });
+  }
+  return {
+    totalCount: uniqueItems.size,
+    projectCounts: [...projects.values()].sort((left, right) => (
+      Number(right.sessionCount) - Number(left.sessionCount)
+      || Number(right.latestAt) - Number(left.latestAt)
+      || String(left.projectKey).localeCompare(String(right.projectKey))
+    )),
+  };
+}
+
+function sessionListProjectDescriptor(item: Record<string, unknown>): {
+  projectKey: string;
+  projectId: string | null;
+  projectDisplayName: string;
+  cwd?: string;
+  latestAt: number;
+} {
+  const projectId = normalizeOptionalString(item.projectId);
+  const cwd = normalizeOptionalString(item.cwd);
+  const displayName = cwdLeafName(item.projectDisplayName)
+    || cwdLeafName(cwd)
+    || cwdLeafName(item.projectName)
+    || normalizeOptionalString(item.title)
+    || 'Untitled Project';
+  const projectKey = projectId || (cwd ? `cwd:${cwd}` : `legacy:${displayName.toLocaleLowerCase()}`);
+  return {
+    projectKey,
+    projectId: projectId || null,
+    projectDisplayName: displayName,
+    ...(cwd ? { cwd } : {}),
+    latestAt: Math.max(
+      typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt) ? item.updatedAt : 0,
+      typeof item.lastInputAt === 'number' && Number.isFinite(item.lastInputAt) ? item.lastInputAt : 0,
+    ),
+  };
 }
 
 async function reconcileOppositeArchiveStates({

@@ -108,6 +108,17 @@ const fixtureOlderSession = {
   },
 };
 
+const fixtureSessionListStats = {
+  totalCount: 5,
+  projectCounts: [{
+    projectKey: 'project_browser_fixture',
+    projectId: 'project_browser_fixture',
+    projectDisplayName: 'yanshan_quant',
+    sessionCount: 5,
+    latestAt: fixtureSession.updatedAt,
+  }],
+};
+
 const fixtureHistorySession = {
   ...fixtureIdleSession,
   id: 'session_browser_history',
@@ -281,7 +292,7 @@ const jsonRoutes = new Map([
       favorite: true,
     }],
   }],
-  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureFileSession, fixtureHistorySession], nextCursor: 'older-page' }],
+  ['/api/sessions', { items: [fixtureSession, fixtureIdleSession, fixtureFileSession, fixtureHistorySession], nextCursor: 'older-page', ...fixtureSessionListStats }],
   ['/api/sessions/session_browser_fixture', { session: fixtureSession }],
   ['/api/sessions/session_browser_idle', { session: fixtureIdleSession }],
   ['/api/sessions/session_browser_archived', { session: fixtureArchivedSession }],
@@ -396,7 +407,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (pathname === '/api/sessions' && requestUrl.searchParams.get('cursor') === 'older-page') {
-      sendJson(response, 200, { items: [fixtureOlderSession], nextCursor: null });
+      sendJson(response, 200, { items: [fixtureOlderSession], nextCursor: null, ...fixtureSessionListStats });
       return;
     }
 

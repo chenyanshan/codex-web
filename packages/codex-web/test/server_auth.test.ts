@@ -1826,8 +1826,58 @@ test('GET /api/sessions?state=archived lists archived sessions in single-user mo
       headers: { Authorization: 'Bearer cw_token' },
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { items: [{ id: 'thread_archived' }], nextCursor: null });
+    const payload = await response.json();
+    assert.deepEqual(payload.items, [{ id: 'thread_archived' }]);
+    assert.equal(payload.nextCursor, null);
+    assert.equal(payload.totalCount, 1);
     assert.deepEqual(calls, [{ archived: true }]);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('single-user project session pages retain counts for the complete workspace', async () => {
+  const alpha = Array.from({ length: 40 }, (_, index) => ({
+    id: `alpha_${String(index).padStart(2, '0')}`,
+    cwd: '/repo/alpha',
+    projectName: 'alpha',
+    updatedAt: 1_000 - index,
+  }));
+  const beta = Array.from({ length: 20 }, (_, index) => ({
+    id: `beta_${String(index).padStart(2, '0')}`,
+    cwd: '/repo/beta',
+    projectName: 'beta',
+    updatedAt: 500 - index,
+  }));
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      listSessions: async () => [...alpha, ...beta],
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/sessions?cwd=${encodeURIComponent('/repo/alpha')}`, {
+      headers: { Authorization: 'Bearer cw_token' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+
+    assert.equal(payload.items.length, 30);
+    assert.equal(typeof payload.nextCursor, 'string');
+    assert.equal(payload.totalCount, 60);
+    assert.deepEqual(
+      payload.projectCounts.map((project: any) => ({
+        key: project.projectKey,
+        count: project.sessionCount,
+      })),
+      [
+        { key: 'cwd:/repo/alpha', count: 40 },
+        { key: 'cwd:/repo/beta', count: 20 },
+      ],
+    );
   } finally {
     await server.stop();
   }

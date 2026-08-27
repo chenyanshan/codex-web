@@ -13122,6 +13122,127 @@ test('desktop session selection keeps the workspace view active', async () => {
   assert.match(api.context.document.querySelector('#app').innerHTML, /Desktop answer/u);
 });
 
+test('opening a session from All Sessions preserves the All Sessions project filter', async () => {
+  const { api } = await loadAppHarness({
+    viewportWidth: 1280,
+    desktopPointer: true,
+    fetch: async (path) => {
+      if (path === '/api/sessions/session_alpha') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session: {
+              id: 'session_alpha',
+              projectId: 'project_a',
+              projectDisplayName: 'Project Alpha',
+              settings: { metadata: {} },
+              thread: { turns: [] },
+            },
+          }),
+        };
+      }
+      throw new Error(`compact endpoint unavailable: ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.projects = [
+    { id: 'project_a', displayName: 'Project Alpha' },
+    { id: 'project_b', displayName: 'Project Beta' },
+  ];
+  api.state.projectsLoaded = true;
+  api.state.selectedProjectKey = '';
+  api.state.selectedProjectId = '';
+  api.state.selectedProjectLabel = '';
+  api.state.sessions = [{
+    id: 'session_alpha',
+    projectId: 'project_a',
+    projectDisplayName: 'Project Alpha',
+    settings: { metadata: {} },
+  }];
+
+  await api.selectSession('session_alpha');
+
+  assert.equal(api.state.selectedProjectKey, '');
+  assert.equal(api.state.selectedProjectId, '');
+  const rail = api.renderDesktopProjectRail();
+  assert.match(rail, /data-project-scope-key=""[^>]*aria-pressed="true"/u);
+  assert.match(rail, /data-project-scope-key="project_a"[^>]*aria-pressed="false"/u);
+});
+
+test('opening a pending session from All Sessions preserves the All Sessions project filter', async () => {
+  const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: {
+      userId: 'user_1',
+      username: 'alice',
+      roleIds: ['role_user'],
+      isAdmin: false,
+      mode: 'multi',
+    },
+  };
+  api.state.projects = [{ id: 'project_a', displayName: 'Project Alpha' }];
+  api.state.projectsLoaded = true;
+  api.state.selectedProjectKey = '';
+  api.state.selectedProjectId = '';
+  api.state.selectedProjectLabel = '';
+  api.state.submissionOutbox.set('pending_project_a', {
+    id: 'pending_project_a',
+    ownerKey: 'multi:user_1',
+    text: 'Pending request',
+    status: 'pending',
+    sessionId: '',
+    projectId: 'project_a',
+    cwd: '',
+    settings: {},
+    attachments: [],
+    createdAt: 100,
+    updatedAt: 100,
+    attempts: 0,
+    nextAttemptAt: 0,
+    error: '',
+    retryable: true,
+    queuedMessageId: '',
+  });
+
+  await api.selectSession('local-submission:pending_project_a');
+
+  assert.equal(api.state.activeSubmissionId, 'pending_project_a');
+  assert.equal(api.state.selectedProjectKey, '');
+  assert.equal(api.state.selectedProjectId, '');
+  assert.equal(api.currentProjectScopeTitle(), 'All Sessions');
+});
+
+test('starting a project session from All Sessions preserves the All Sessions project filter', async () => {
+  const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: {
+      userId: 'user_1',
+      username: 'alice',
+      roleIds: ['role_user'],
+      isAdmin: false,
+      mode: 'multi',
+    },
+  };
+  api.state.projects = [{ id: 'project_a', displayName: 'Project Alpha' }];
+  api.state.projectsLoaded = true;
+  api.state.selectedProjectKey = '';
+  api.state.selectedProjectId = '';
+  api.state.selectedProjectLabel = '';
+  api.state.newProjectId = 'project_a';
+
+  api.onNewSessionSubmit({ preventDefault() {} });
+
+  assert.equal(api.state.draftSessionActive, true);
+  assert.equal(api.state.newProjectId, 'project_a');
+  assert.equal(api.state.selectedProjectKey, '');
+  assert.equal(api.state.selectedProjectId, '');
+  assert.equal(api.currentProjectScopeTitle(), 'All Sessions');
+});
+
 test('narrow computer windows use the single-pane session flow', async () => {
   const { api } = await loadAppHarness({
     viewportWidth: 900,
@@ -14458,6 +14579,125 @@ test('session list load more appends the next page without duplicating summaries
   assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['session_new', 'session_old']));
   assert.equal(api.state.sessions[0]?.firstUserInput, 'Newest task refreshed');
   assert.doesNotMatch(api.renderSessionCards(), /id="load-more-sessions-button"/u);
+});
+
+test('project rail counts use the complete workspace instead of the current 30-session page', async () => {
+  const alphaPage = Array.from({ length: 30 }, (_, index) => ({
+    id: `alpha_${index}`,
+    projectId: 'project_a',
+    projectDisplayName: 'Project Alpha',
+    updatedAt: 100 - index,
+    settings: { metadata: {} },
+  }));
+  const stats = {
+    totalCount: 75,
+    projectCounts: [
+      { projectKey: 'project_a', projectId: 'project_a', projectDisplayName: 'Project Alpha', sessionCount: 45, latestAt: 100 },
+      { projectKey: 'project_b', projectId: 'project_b', projectDisplayName: 'Project Beta', sessionCount: 30, latestAt: 90 },
+    ],
+  };
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    viewportWidth: 390,
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      if (path === '/api/sessions' || path === '/api/sessions?projectId=project_a') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ items: alphaPage, nextCursor: 'older', ...stats }),
+        };
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.projects = [
+    { id: 'project_a', displayName: 'Project Alpha' },
+    { id: 'project_b', displayName: 'Project Beta' },
+  ];
+  api.state.projectsLoaded = true;
+
+  await api.refreshSessionsList({ renderAfter: false, scope: 'all' });
+  assert.equal(api.state.sessions.length, 30);
+  assert.equal(
+    JSON.stringify(api.workspaceProjects().map((project) => [project.id, project.sessionCount])),
+    JSON.stringify([['project_a', 45], ['project_b', 30]]),
+  );
+  assert.match(api.renderDesktopProjectRail(), /data-project-scope-key=""[\s\S]*?project-rail-item-meta">75</u);
+
+  await api.selectProjectScope('project_a');
+  assert.deepEqual(fetchCalls, ['/api/sessions', '/api/sessions?projectId=project_a']);
+  assert.equal(api.state.sessions.length, 30);
+  assert.equal(
+    JSON.stringify(api.workspaceProjects().map((project) => [project.id, project.sessionCount])),
+    JSON.stringify([['project_a', 45], ['project_b', 30]]),
+  );
+});
+
+test('authoritative project counts update immediately when a favorite session is archived', async () => {
+  const session = {
+    id: 'session_alpha',
+    projectId: 'project_a',
+    projectDisplayName: 'Project Alpha',
+    favorite: true,
+    settings: { favorite: true, metadata: {} },
+  };
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_alpha/archive');
+      return { ok: true, status: 200, json: async () => ({ archived: true }) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.projects = [
+    { id: 'project_a', displayName: 'Project Alpha' },
+    { id: 'project_b', displayName: 'Project Beta' },
+  ];
+  api.state.projectsLoaded = true;
+  api.state.sessions = [session];
+  api.state.sessionsByScope.all = [session];
+  api.state.sessionsByScope.favorites = [session];
+  api.state.sessionListStatsByScope.all = {
+    totalCount: 75,
+    projectCounts: [
+      { projectKey: 'project_a', projectId: 'project_a', projectDisplayName: 'Project Alpha', sessionCount: 45, latestAt: 100 },
+      { projectKey: 'project_b', projectId: 'project_b', projectDisplayName: 'Project Beta', sessionCount: 30, latestAt: 90 },
+    ],
+  };
+  api.state.sessionListStatsByScope.favorites = {
+    totalCount: 10,
+    projectCounts: [
+      { projectKey: 'project_a', projectId: 'project_a', projectDisplayName: 'Project Alpha', sessionCount: 6, latestAt: 100 },
+      { projectKey: 'project_b', projectId: 'project_b', projectDisplayName: 'Project Beta', sessionCount: 4, latestAt: 90 },
+    ],
+  };
+  api.state.sessionListStatsByScope.archived = {
+    totalCount: 5,
+    projectCounts: [
+      { projectKey: 'project_b', projectId: 'project_b', projectDisplayName: 'Project Beta', sessionCount: 5, latestAt: 80 },
+    ],
+  };
+
+  await api.archiveSession(session.id);
+
+  assert.equal(api.state.sessionListStatsByScope.all.totalCount, 74);
+  assert.equal(
+    JSON.stringify(api.state.sessionListStatsByScope.all.projectCounts.map((project) => [project.projectId, project.sessionCount])),
+    JSON.stringify([['project_a', 44], ['project_b', 30]]),
+  );
+  assert.equal(api.state.sessionListStatsByScope.favorites.totalCount, 9);
+  assert.equal(
+    JSON.stringify(api.state.sessionListStatsByScope.favorites.projectCounts.map((project) => [project.projectId, project.sessionCount])),
+    JSON.stringify([['project_a', 5], ['project_b', 4]]),
+  );
+  assert.equal(api.state.sessionListStatsByScope.archived.totalCount, 6);
+  assert.equal(
+    JSON.stringify(api.state.sessionListStatsByScope.archived.projectCounts.map((project) => [project.projectId, project.sessionCount])),
+    JSON.stringify([['project_b', 5], ['project_a', 1]]),
+  );
 });
 
 test('session list load-more failures preserve the first page and expose a retry', async () => {

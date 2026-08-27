@@ -12,6 +12,7 @@
       sessionsLoadedByScope: scopeRecord(() => false),
       sessionsNextCursorByScope: scopeRecord(() => null),
       sessionsQueryByScope: scopeRecord(() => ''),
+      sessionListStatsByScope: scopeRecord(() => null),
       sessionsLoading: false,
       sessionsLoadingScope: null,
       sessionsLoadingMore: false,
@@ -100,6 +101,12 @@
       state.sessionsQueryByScope[normalizedScope] = '';
     }
 
+    function applyStats(scope, payload) {
+      const stats = normalizeSessionListStats(payload);
+      state.sessionListStatsByScope[normalizeScope(scope)] = stats;
+      return stats;
+    }
+
     function mergePage(existing, incoming) {
       const merged = [...existing];
       const indexes = new Map(merged.map((session, index) => [session.id, index]));
@@ -147,6 +154,7 @@
         state.sessionsLoadedByScope[normalizedScope] = true;
         state.sessionsNextCursorByScope[normalizedScope] = normalizeCursor(payload?.nextCursor);
         state.sessionsQueryByScope[normalizedScope] = expectedQuery;
+        applyStats(normalizedScope, payload);
         discardSupersededFailedSubmissions(sessions);
         syncCurrentWorkDetailsAccessFromSessions(sessions);
         enforceKnownWorkDetailsAccess();
@@ -193,6 +201,7 @@
         state.sessionsLoadedByScope[normalizedScope] = true;
         state.sessionsNextCursorByScope[normalizedScope] = normalizeCursor(payload?.nextCursor);
         state.sessionsQueryByScope[normalizedScope] = expectedQuery;
+        applyStats(normalizedScope, payload);
         discardSupersededFailedSubmissions(sessions);
         syncCurrentWorkDetailsAccessFromSessions(sessions);
         enforceKnownWorkDetailsAccess();
@@ -275,6 +284,7 @@
 
     return Object.freeze({
       baseListPath,
+      applyStats,
       listPath,
       loadMoreSessions,
       normalizeScope,
@@ -291,9 +301,229 @@
     return typeof value === 'string' && value ? value : null;
   }
 
+  function normalizeSessionListStats(payload) {
+    const totalCount = Number(payload?.totalCount);
+    if (!Number.isInteger(totalCount) || totalCount < 0 || !Array.isArray(payload?.projectCounts)) {
+      return null;
+    }
+    const projectCounts = [];
+    const seen = new Set();
+    for (const item of payload.projectCounts) {
+      const projectKey = String(item?.projectKey || '').trim();
+      const sessionCount = Number(item?.sessionCount);
+      if (!projectKey || seen.has(projectKey) || !Number.isInteger(sessionCount) || sessionCount < 0) {
+        continue;
+      }
+      seen.add(projectKey);
+      projectCounts.push({
+        projectKey,
+        projectId: String(item?.projectId || '').trim(),
+        projectDisplayName: String(item?.projectDisplayName || '').trim(),
+        cwd: String(item?.cwd || '').trim(),
+        sessionCount,
+        latestAt: Math.max(0, Number(item?.latestAt) || 0),
+      });
+    }
+    return { totalCount, projectCounts };
+  }
+
+  function summarizeWorkspaceProjects({
+    projects = [],
+    sessions = [],
+    pendingSessions = [],
+    stats = null,
+    projectScope,
+    projectVisibleName,
+  }) {
+    const normalizedStats = normalizeSessionListStats(stats);
+    const authoritative = Boolean(normalizedStats);
+    const aggregateStats = new Map();
+    for (const item of normalizedStats?.projectCounts || []) {
+      const scope = projectScope(item);
+      if (!scope?.key) {
+        continue;
+      }
+      const existing = aggregateStats.get(scope.key);
+      aggregateStats.set(scope.key, existing
+        ? {
+            ...existing,
+            sessionCount: existing.sessionCount + item.sessionCount,
+            latestAt: Math.max(existing.latestAt, item.latestAt),
+          }
+        : { ...scope, sessionCount: item.sessionCount, latestAt: item.latestAt });
+    }
+    const items = new Map();
+    for (const project of projects) {
+      const id = String(project?.id || '').trim();
+      if (!id) {
+        continue;
+      }
+      const stat = aggregateStats.get(id);
+      items.set(id, {
+        key: id,
+        id,
+        label: projectVisibleName(project, id),
+        defaultCwd: String(project?.cwd || ''),
+        sessionCount: stat?.sessionCount || 0,
+        latestAt: stat?.latestAt || 0,
+        canCreate: project?.canCreate !== false,
+        favorite: project?.favorite === true,
+        source: 'managed',
+        countAuthoritative: authoritative,
+      });
+    }
+    for (const stat of aggregateStats.values()) {
+      const existing = items.get(stat.key);
+      if (existing) {
+        existing.sessionCount = stat.sessionCount;
+        existing.latestAt = Math.max(existing.latestAt, stat.latestAt);
+        continue;
+      }
+      items.set(stat.key, {
+        key: stat.key,
+        id: stat.id || '',
+        label: stat.label,
+        defaultCwd: stat.defaultCwd || '',
+        sessionCount: stat.sessionCount,
+        latestAt: stat.latestAt,
+        canCreate: Boolean(stat.id),
+        favorite: false,
+        source: stat.id ? 'managed' : 'legacy',
+        countAuthoritative: true,
+      });
+    }
+    const mergeSession = (session, pending) => {
+      const scope = projectScope(session);
+      if (!scope?.key) {
+        return;
+      }
+      const existing = items.get(scope.key) || {
+        key: scope.key,
+        id: scope.id,
+        label: scope.label,
+        defaultCwd: scope.defaultCwd,
+        sessionCount: 0,
+        latestAt: 0,
+        canCreate: Boolean(scope.id),
+        favorite: false,
+        source: scope.id ? 'managed' : 'legacy',
+        countAuthoritative: authoritative,
+      };
+      existing.label = existing.label || scope.label;
+      existing.defaultCwd = existing.defaultCwd || scope.defaultCwd;
+      if (pending || !existing.countAuthoritative) {
+        existing.sessionCount += 1;
+      }
+      existing.latestAt = Math.max(existing.latestAt || 0, scope.latestAt || 0);
+      items.set(scope.key, existing);
+    };
+    sessions.forEach((session) => mergeSession(session, false));
+    pendingSessions.forEach((session) => mergeSession(session, true));
+    const sorted = [...items.values()].map(({ countAuthoritative: _ignored, ...item }) => item).sort((left, right) => (
+      Number(Boolean(right.favorite)) - Number(Boolean(left.favorite))
+      || right.sessionCount - left.sessionCount
+      || right.latestAt - left.latestAt
+      || String(left.label || '').localeCompare(String(right.label || ''))
+    ));
+    return {
+      projects: sorted,
+      totalCount: (normalizedStats?.totalCount ?? sessions.length) + pendingSessions.length,
+    };
+  }
+
+  function transitionStatsByScope(statsByScope, {
+    previous = null,
+    next = null,
+    projectScope,
+    belongsToScope,
+  }) {
+    if (!statsByScope || typeof projectScope !== 'function' || typeof belongsToScope !== 'function') {
+      return statsByScope;
+    }
+    for (const scope of scopes) {
+      const scopedPrevious = previous && belongsToScope(previous, scope) ? previous : null;
+      const scopedNext = next && belongsToScope(next, scope) ? next : null;
+      if (!scopedPrevious && !scopedNext) {
+        continue;
+      }
+      const adjusted = transitionSessionListStats(
+        statsByScope[scope],
+        scopedPrevious,
+        scopedNext,
+        projectScope,
+      );
+      if (adjusted) {
+        statsByScope[scope] = adjusted;
+      }
+    }
+    return statsByScope;
+  }
+
+  function transitionSessionListStats(stats, previous, next, projectScope) {
+    const normalized = normalizeSessionListStats(stats);
+    if (!normalized) {
+      return null;
+    }
+    const projects = new Map();
+    for (const item of normalized.projectCounts) {
+      const scope = projectScope(item);
+      if (scope?.key) {
+        projects.set(scope.key, { ...item });
+      }
+    }
+    const changeProjectCount = (session, delta) => {
+      const scope = projectScope(session);
+      if (!scope?.key) {
+        return;
+      }
+      const existing = projects.get(scope.key);
+      if (existing) {
+        const sessionCount = existing.sessionCount + delta;
+        if (sessionCount <= 0) {
+          projects.delete(scope.key);
+          return;
+        }
+        projects.set(scope.key, {
+          ...existing,
+          sessionCount,
+          latestAt: delta > 0 ? Math.max(existing.latestAt, scope.latestAt || 0) : existing.latestAt,
+        });
+        return;
+      }
+      if (delta < 0) {
+        return;
+      }
+      projects.set(scope.key, {
+        projectKey: scope.key,
+        projectId: scope.id || '',
+        projectDisplayName: scope.label || '',
+        cwd: scope.defaultCwd || '',
+        sessionCount: delta,
+        latestAt: scope.latestAt || 0,
+      });
+    };
+    if (previous) {
+      changeProjectCount(previous, -1);
+    }
+    if (next) {
+      changeProjectCount(next, 1);
+    }
+    return {
+      totalCount: Math.max(0, normalized.totalCount + Number(Boolean(next)) - Number(Boolean(previous))),
+      projectCounts: [...projects.values()].sort((left, right) => (
+        right.sessionCount - left.sessionCount
+        || right.latestAt - left.latestAt
+        || left.projectKey.localeCompare(right.projectKey)
+      )),
+    };
+  }
+
   globalScope.CodexWebSessionPagination = Object.freeze({
     createController,
     createState,
+    normalizeSessionListStats,
     resetAllState,
+    summarizeWorkspaceProjects,
+    transitionStatsByScope,
   });
 })(globalThis);

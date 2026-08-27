@@ -534,6 +534,8 @@ test('session pagination loads an older page without replacing visible sessions'
 
   const currentSession = page.locator('[data-session-id="session_browser_fixture"]');
   const loadMore = page.locator('#load-more-sessions-button');
+  await expect(page.locator('[data-project-scope-key=""] .project-rail-item-meta')).toHaveText('5');
+  await expect(page.locator('[data-project-scope-key="project_browser_fixture"] .project-rail-item-meta')).toHaveText('5');
   await expect(currentSession).toBeVisible();
   await expect(loadMore).toBeVisible();
   if (testInfo.project.name.startsWith('mobile-')) {
@@ -544,8 +546,45 @@ test('session pagination loads an older page without replacing visible sessions'
 
   await expect(currentSession).toBeVisible();
   await expect(page.locator('[data-session-id="session_browser_older"]')).toBeVisible();
+  await expect(page.locator('[data-project-scope-key=""] .project-rail-item-meta')).toHaveText('5');
   await expect(loadMore).toHaveCount(0);
+
+  const project = page.locator('[data-project-scope-key="project_browser_fixture"]');
+  if (await page.locator('#mobile-sidebar-toggle-button').isVisible()) {
+    await page.locator('#mobile-sidebar-toggle-button').click();
+    await expect(page.locator('.mobile-project-drawer')).toHaveClass(/is-open/u);
+  } else {
+    await page.locator('#desktop-sidebar-toggle-button').click();
+    await expect(page.locator('#main-sidebar')).toHaveCSS('width', '256px');
+  }
+  await expect(page.locator('[data-project-scope-key=""] .project-rail-item-meta')).toBeVisible();
+  await page.screenshot({
+    path: `/tmp/codex-web-session-pagination-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+
+  await project.click();
+  await expect(project).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-project-scope-key=""] .project-rail-item-meta')).toHaveText('5');
+  await expect(page.locator('[data-project-scope-key="project_browser_fixture"] .project-rail-item-meta')).toHaveText('5');
   expect(pageErrors).toEqual([]);
+});
+
+test('opening a session from All Sessions keeps All Sessions selected', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'The persistent desktop rail exposes the selection state directly.');
+  await page.goto('/');
+
+  const allSessions = page.locator('[data-project-scope-key=""]');
+  const project = page.locator('[data-project-scope-key="project_browser_fixture"]');
+  await expect(allSessions).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('[data-session-id="session_browser_idle"]').click();
+
+  await expect(allSessions).toHaveAttribute('aria-pressed', 'true');
+  await expect(project).toHaveAttribute('aria-pressed', 'false');
+  await page.screenshot({
+    path: '/tmp/codex-web-all-sessions-selection-desktop.png',
+    fullPage: true,
+  });
 });
 
 test('mobile composer expands after four lines and restores the compact attachment row', async ({ page }, testInfo) => {

@@ -331,6 +331,22 @@ test('multi-user session list omits conversation details while direct reads reta
 
 test('multi-user session pagination is applied after ownership filtering', async () => {
   const identityStore = await createIdentityStore();
+  await identityStore.upsertProject({
+    id: 'project_secondary',
+    internalName: 'secondary-repo',
+    cwd: '/Users/alice/secondary-repo',
+    displayName: 'Secondary Project',
+    enabled: true,
+  });
+  await identityStore.upsertRole({
+    id: 'role_user',
+    name: 'User',
+    isAdmin: false,
+    projectGrants: [
+      { projectId: 'project_allowed', canRead: true, canCreate: true, canWrite: true },
+      { projectId: 'project_secondary', canRead: true, canCreate: true, canWrite: true },
+    ],
+  });
   const aliceSessions = [{
     id: 'app_alice',
     threadId: 'thread_alice',
@@ -357,6 +373,23 @@ test('multi-user session pagination is applied after ownership filtering', async
       archiveSource: null,
     });
   }
+  const secondarySession = {
+    id: 'app_alice_secondary',
+    threadId: 'thread_alice_secondary',
+    updatedAt: 0,
+  };
+  await identityStore.upsertSession({
+    id: secondarySession.id,
+    codexThreadId: secondarySession.threadId,
+    projectId: 'project_secondary',
+    ownerUserId: 'user_alice',
+    createdAt: '2026-05-26T00:00:00.000Z',
+    updatedAt: '2026-05-26T00:00:00.000Z',
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: null,
+    archiveSource: null,
+  });
   const unrelated = Array.from({ length: 100 }, (_, index) => ({
     id: `thread_unrelated_${index}`,
     cwd: '/other/path',
@@ -380,6 +413,16 @@ test('multi-user session pagination is applied after ownership filtering', async
         thread: { turns: [] },
         timeline: [],
       })),
+      {
+        id: secondarySession.threadId,
+        cwd: '/secondary/path',
+        projectName: 'secondary/path',
+        updatedAt: secondarySession.updatedAt,
+        firstUserInput: 'Secondary project session',
+        settings: {},
+        thread: { turns: [] },
+        timeline: [],
+      },
     ],
   };
   const server = createCodexWebServer({
@@ -399,19 +442,43 @@ test('multi-user session pagination is applied after ownership filtering', async
     const first = await firstResponse.json();
     assert.equal(first.items.length, 30);
     assert.equal(typeof first.nextCursor, 'string');
+    assert.equal(first.totalCount, 36);
+    assert.deepEqual(first.projectCounts.map((project: any) => ({
+      projectId: project.projectId,
+      count: project.sessionCount,
+    })), [
+      { projectId: 'project_allowed', count: 35 },
+      { projectId: 'project_secondary', count: 1 },
+    ]);
 
     const secondResponse = await fetch(`${server.baseUrl}/api/sessions?cursor=${encodeURIComponent(first.nextCursor)}`, {
       headers: { Authorization: 'Bearer alice' },
     });
     assert.equal(secondResponse.status, 200);
     const second = await secondResponse.json();
-    assert.equal(second.items.length, 5);
+    assert.equal(second.items.length, 6);
     assert.equal(second.nextCursor, null);
 
     const combined = [...first.items, ...second.items];
-    assert.equal(new Set(combined.map((item: any) => item.id)).size, 35);
+    assert.equal(new Set(combined.map((item: any) => item.id)).size, 36);
     assert.equal(combined.every((item: any) => item.ownerUserId === 'user_alice'), true);
     assert.equal(combined.some((item: any) => String(item.id).includes('unrelated')), false);
+
+    const projectResponse = await fetch(`${server.baseUrl}/api/sessions?projectId=project_allowed`, {
+      headers: { Authorization: 'Bearer alice' },
+    });
+    assert.equal(projectResponse.status, 200);
+    const projectPage = await projectResponse.json();
+    assert.equal(projectPage.items.length, 30);
+    assert.equal(projectPage.items.every((item: any) => item.projectId === 'project_allowed'), true);
+    assert.equal(projectPage.totalCount, 36);
+    assert.deepEqual(projectPage.projectCounts.map((project: any) => ({
+      projectId: project.projectId,
+      count: project.sessionCount,
+    })), [
+      { projectId: 'project_allowed', count: 35 },
+      { projectId: 'project_secondary', count: 1 },
+    ]);
   } finally {
     await server.stop();
   }
