@@ -78,6 +78,44 @@
   color-scheme: light;
 }
 
+:root[data-theme="terminal"] {
+  --bg-base: #11151a;
+  --bg-panel: #171b20;
+  --bg-card: #171b20;
+  --bg-user-shared: #30353b;
+  --text-user: #f0f1f2;
+  --msg-sys-bg: #171b20;
+  --text-main: #d8dadd;
+  --text-muted: #91979f;
+  --border-color: #343a42;
+  --brand-color: #20c5c9;
+  --brand-text: #11151a;
+  --bg: #11151a;
+  --panel: #171b20;
+  --panel-2: #30353b;
+  --border: #343a42;
+  --border-strong: #626b75;
+  --control-border: var(--border-strong);
+  --text: #d8dadd;
+  --muted: #91979f;
+  --accent: #20c5c9;
+  --focus: var(--accent);
+  --accent-2: #20c5c9;
+  --on-accent: #11151a;
+  --info: #20c5c9;
+  --success: #83c995;
+  --warn: #d8be79;
+  --danger: #e47b78;
+  --code-bg: #11151a;
+  --code-text: #f0f1f2;
+  --code-border: #626b75;
+  --code-inline-bg: #30353b;
+  --code-inline-text: #f0f1f2;
+  --overlay: rgba(0, 0, 0, 0.68);
+  --shadow: 0 14px 32px rgba(0, 0, 0, 0.48);
+  color-scheme: dark;
+}
+
 :root[data-theme="dark-gold"] {
   --bg-base: #18181a;
   --bg-panel: #121212;
@@ -1322,6 +1360,13 @@ button:disabled {
   --preview-panel: #151515;
   --preview-border: #27272a;
   --preview-accent: #ffffff;
+}
+
+.theme-option[data-app-theme="terminal"] {
+  --preview-bg: #11151a;
+  --preview-panel: #30353b;
+  --preview-border: #626b75;
+  --preview-accent: #20c5c9;
 }
 
 .full-width-button {

@@ -1290,7 +1290,7 @@ test('settings keep appearance and new-session defaults separated without overfl
   await expect(settings.getByText('New sessions on this device', { exact: true })).toBeVisible();
   await expect(settings.locator('#default-model-select')).toHaveValue('gpt-5.6-sol');
   await expect(settings.locator('#default-reasoning-select')).toHaveValue('ultra');
-  await expect(settings.locator('[data-app-theme]')).toHaveCount(4);
+  await expect(settings.locator('[data-app-theme]')).toHaveCount(5);
   await expect(settings.locator('[data-session-layout-mode]')).toHaveCount(2);
 
   for (const [theme, chromeColor, colorScheme] of [
@@ -1298,6 +1298,7 @@ test('settings keep appearance and new-session defaults separated without overfl
     ['dark-gold', '#18181a', 'dark'],
     ['oled-black', '#000000', 'dark'],
     ['fresh-light', '#f4f5f7', 'light'],
+    ['terminal', '#11151a', 'dark'],
   ]) {
     await settings.locator(`[data-app-theme="${theme}"]`).click();
     await expect(settings.locator(`[data-app-theme="${theme}"]`)).toHaveAttribute('aria-pressed', 'true');
@@ -1351,11 +1352,16 @@ test('settings keep appearance and new-session defaults separated without overfl
 test('console session layout keeps Codex controls usable in a compact transcript', async ({ page }, testInfo) => {
   test.skip(!['mobile-portrait', 'desktop'].includes(testInfo.project.name), 'Phone and desktop cover the console session layout.');
   await page.addInitScript(() => {
+    window.localStorage.setItem('codexWebTheme', 'terminal');
     window.localStorage.setItem('codexWebSessionLayout', 'console');
     window.localStorage.removeItem('codexWebWorkspaceState');
   });
 
   await page.goto('/');
+  await expect.poll(() => page.evaluate(() => ({
+    theme: document.documentElement.dataset.theme,
+    layout: document.documentElement.dataset.sessionLayout,
+  }))).toEqual({ theme: 'terminal', layout: 'console' });
   if (testInfo.project.name === 'mobile-portrait') {
     await page.locator('[data-session-id="session_browser_fixture"]').click();
   }
@@ -1395,13 +1401,27 @@ test('console session layout keeps Codex controls usable in a compact transcript
     path: `/tmp/codex-web-console-session-${testInfo.project.name}.png`,
     fullPage: true,
   });
+
+  if (testInfo.project.name === 'desktop') {
+    await page.setViewportSize({ width: 768, height: 900 });
+    await expect(page.locator('#timeline')).toBeVisible();
+    const intermediateOverflow = await page.evaluate(() => Math.max(
+      document.body.scrollWidth,
+      document.documentElement.scrollWidth,
+    ));
+    expect(intermediateOverflow).toBeLessThanOrEqual(769);
+    await page.screenshot({
+      path: '/tmp/codex-web-console-session-768.png',
+      fullPage: true,
+    });
+  }
 });
 
-test('four themes keep canvas and chat surfaces aligned', async ({ page }, testInfo) => {
+test('five themes keep canvas and chat surfaces aligned', async ({ page }, testInfo) => {
   test.skip(!['mobile-compact', 'desktop'].includes(testInfo.project.name), 'One mobile and one desktop viewport cover theme surfaces.');
 
   await page.goto('/');
-  for (const theme of ['retro', 'dark-gold', 'oled-black', 'fresh-light']) {
+  for (const theme of ['retro', 'dark-gold', 'oled-black', 'fresh-light', 'terminal']) {
     await page.evaluate((nextTheme) => {
       window.localStorage.setItem('codexWebTheme', nextTheme);
       window.localStorage.removeItem('codexWebWorkspaceState');
@@ -1557,7 +1577,7 @@ test('dark themes keep block and inline code visibly separated', async ({ page }
   test.skip(testInfo.project.name !== 'desktop', 'One desktop viewport covers dark code surfaces.');
 
   await page.goto('/');
-  for (const theme of ['dark-gold', 'oled-black']) {
+  for (const theme of ['dark-gold', 'oled-black', 'terminal']) {
     await page.evaluate((nextTheme) => {
       window.localStorage.setItem('codexWebTheme', nextTheme);
     }, theme);

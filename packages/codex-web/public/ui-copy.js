@@ -148,6 +148,7 @@
       'Dark Gold': '黑金',
       'OLED Black': '纯粹黑',
       'Fresh Light': '清新白',
+      Terminal: '终端青',
       'Message Size': '消息字号',
       Small: '小',
       Medium: '中',

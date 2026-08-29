@@ -66,6 +66,7 @@ const THEMES = Object.freeze([
   { id: 'dark-gold', label: 'Dark Gold', chromeColor: '#18181a' },
   { id: 'oled-black', label: 'OLED Black', chromeColor: '#000000' },
   { id: 'fresh-light', label: 'Fresh Light', chromeColor: '#f4f5f7' },
+  { id: 'terminal', label: 'Terminal', chromeColor: '#11151a' },
 ]);
 const THEME_IDS = THEMES.map((theme) => theme.id);
 const DEFAULT_THEME = 'fresh-light';

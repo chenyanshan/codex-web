@@ -4,6 +4,7 @@
     'dark-gold': '#18181a',
     'oled-black': '#000000',
     'fresh-light': '#f4f5f7',
+    terminal: '#11151a',
   };
   let theme = 'fresh-light';
   try {

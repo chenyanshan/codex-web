@@ -12,6 +12,7 @@ const paletteSelectors = new Map([
   ['dark-gold', ':root[data-theme="dark-gold"]'],
   ['oled-black', ':root[data-theme="oled-black"]'],
   ['fresh-light', ':root[data-theme="fresh-light"]'],
+  ['terminal', ':root[data-theme="terminal"]'],
 ]);
 
 test('every theme meets contrast targets for text, actions, states, and controls', async () => {
@@ -74,13 +75,14 @@ test('every theme meets contrast targets for text, actions, states, and controls
   }
 });
 
-test('the four product themes keep the specified surface palette', async () => {
+test('the five product themes keep the specified surface palette', async () => {
   const css = await readFile(stylesUrl, 'utf8');
   const expected = {
     retro: ['#fcf9f2', '#f5efe3', '#ffffff', '#dfd6c8', '#2d2d2d', '#ffffff', '#4a4a4a', '#8a8a8a', '#e8decc', '#d97757'],
     'dark-gold': ['#18181a', '#121212', '#202022', '#42424a', '#f4f4f5', '#27272a', '#e4e4e7', '#a1a1aa', '#3f3f46', '#eab308'],
     'oled-black': ['#000000', '#000000', '#151515', '#38383f', '#ffffff', '#121212', '#f4f4f5', '#a1a1aa', '#27272a', '#ffffff'],
     'fresh-light': ['#f4f5f7', '#eaecef', '#ffffff', '#cfd4dc', '#111827', '#ffffff', '#1f2937', '#6b7280', '#e5e7eb', '#10b981'],
+    terminal: ['#11151a', '#171b20', '#171b20', '#30353b', '#f0f1f2', '#171b20', '#d8dadd', '#91979f', '#343a42', '#20c5c9'],
   };
   const keys = [
     'bg-base',
@@ -168,6 +170,11 @@ test('pre-style theme initialization restores saved themes and defaults to fresh
   assert.deepEqual(runThemeInit(source, 'oled-black'), {
     theme: 'oled-black',
     chromeColor: '#000000',
+    sessionLayout: 'current',
+  });
+  assert.deepEqual(runThemeInit(source, 'terminal'), {
+    theme: 'terminal',
+    chromeColor: '#11151a',
     sessionLayout: 'current',
   });
   assert.deepEqual(runThemeInit(source, 'unsupported'), {

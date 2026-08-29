@@ -107,6 +107,7 @@ test('markdown code surfaces use dedicated high-contrast theme tokens', async ()
 
   assert.match(styles, /:root\[data-theme="dark-gold"\]\s*\{[^}]*--code-bg:\s*#15171c;[^}]*--code-border:\s*#71717a;[^}]*--code-inline-bg:\s*#55555f;/su);
   assert.match(styles, /:root\[data-theme="oled-black"\]\s*\{[^}]*--code-bg:\s*#202026;[^}]*--code-border:\s*#71717a;[^}]*--code-inline-bg:\s*#4b4b55;/su);
+  assert.match(styles, /:root\[data-theme="terminal"\]\s*\{[^}]*--code-bg:\s*#11151a;[^}]*--code-border:\s*#626b75;[^}]*--code-inline-bg:\s*#30353b;/su);
   assert.match(styles, /\.markdown-body pre\s*\{[^}]*border:\s*1px solid var\(--code-border\);[^}]*background:\s*var\(--code-bg\);[^}]*color:\s*var\(--code-text\);/su);
   assert.match(styles, /\.markdown-body :not\(pre\) > code\s*\{[^}]*border:\s*0;[^}]*background:\s*var\(--code-inline-bg\);[^}]*color:\s*var\(--code-inline-text\);/su);
 });
@@ -2879,6 +2880,10 @@ test('app settings persist theme and default thread settings', async () => {
   assert.equal(storage.get('codexWebTheme'), 'oled-black');
   assert.equal(context.document.documentElement.dataset.theme, 'oled-black');
 
+  api.applyTheme('terminal');
+  assert.equal(storage.get('codexWebTheme'), 'terminal');
+  assert.equal(context.document.documentElement.dataset.theme, 'terminal');
+
   api.applyTheme('unsupported');
   assert.equal(storage.get('codexWebTheme'), 'fresh-light');
   assert.equal(context.document.documentElement.dataset.theme, 'fresh-light');
@@ -2889,6 +2894,7 @@ test('app settings persist theme and default thread settings', async () => {
     'dark-gold',
     'oled-black',
     'fresh-light',
+    'terminal',
   ]) {
     assert.match(settingsHtml, new RegExp(`data-app-theme="${theme}"`, 'u'));
   }
