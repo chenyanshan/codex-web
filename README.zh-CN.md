@@ -5,7 +5,7 @@
 这是一个自托管 Web 控制台，用来从手机、平板或桌面浏览器控制本机已经登录的
 Codex runtime。
 
-浏览器只是远程 UI。Mac 或 Linux 主机负责保存 Codex 凭据、启动 Codex
+浏览器只是远程 UI。宿主机负责保存 Codex 凭据、启动 Codex
 runtime、读写本地项目文件、执行 shell 命令，以及保存应用状态。公网访问、
 tunnel、反向代理不属于本仓库范围。
 
@@ -63,8 +63,8 @@ Codex Web 提供 Web 层多人访问控制 facade，只适用于成员彼此完�
   分开管理。
 - 在当前 session 对话内直接预览 Markdown、HTML、PDF、常见图片、网页链接，以及
   仍在保留期内的历史附件。
-- 仓库自带 `codex-web-user-context` skill，可在需要时读取当前 Codex Web
-  登录用户和项目上下文。
+- 仓库自带 `codex-web-user-context` skill，可在明确需要时通过回环 HTTP API
+  获取当前 Codex Web 登录用户和项目上下文。
 - macOS launchd 服务脚本和 Linux systemd 配置说明。
 - English / 简体中文 UI 语言设置，以及 admin/单用户可管理的站点标题。
 - 11 套经过对比度校验的主题，首次使用默认日光黄，并提供纸白、石墨、北境蓝、
@@ -301,12 +301,12 @@ Viewer 从项目中打开的文件不由 Codex Web 管理或删除。达到配�
 
 | 受管数据 | 默认策略 | 配置项 |
 | --- | --- | --- |
-| 状态目录 upload、turn 快照、旧报告、runtime context | 总计 2 GiB | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
+| 状态目录 upload、turn 快照、旧报告、旧版 runtime context | 总计 2 GiB | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
 | 项目内 upload | 每项目 512 MiB | `CODEX_WEB_PROJECT_UPLOAD_MAX_BYTES` |
 | 上传源文件 | TTL 7 天 | `CODEX_WEB_UPLOAD_TTL_SECONDS` |
 | turn 附件快照 | TTL 30 天 | `CODEX_WEB_TURN_ATTACHMENT_TTL_SECONDS` |
 | 旧报告 | TTL 365 天 | `CODEX_WEB_REPORT_TTL_SECONDS` |
-| runtime context 文件 | TTL 30 天 | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
+| 旧版本遗留的 runtime context 文件 | TTL 30 天 | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
 | 应用 timeline | 每 session 500 条、总计 16 MiB | `CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION`、`CODEX_WEB_TIMELINE_MAX_BYTES` |
 
 `~/.codex-web/reports/` 下的旧文件仍受对应 retention 与 quota 配置约束。该策略只为
@@ -375,6 +375,14 @@ mkdir -p ~/.codex/skills/codex-web-user-context
 cp -R skills/codex-web-user-context/. ~/.codex/skills/codex-web-user-context/
 ```
 
+PowerShell：
+
+```powershell
+$target = Join-Path $HOME ".codex\skills\codex-web-user-context"
+New-Item -ItemType Directory -Force $target | Out-Null
+Copy-Item "skills/codex-web-user-context/*" $target -Recurse -Force
+```
+
 开发时建议使用软链接：
 
 ```bash
@@ -382,15 +390,18 @@ mkdir -p ~/.codex/skills
 ln -s "$(pwd)/skills/codex-web-user-context" ~/.codex/skills/codex-web-user-context
 ```
 
-这个 skill 和前面的配套 skill 一样，仓库内自带，安装目标也是本机系统 Codex
-skills 目录 `~/.codex/skills/`。在 Codex Web turn 里，服务端会把同一个
-runtime context 绝对路径同时写入 turn 指令和 `CODEX_WEB_CONTEXT_FILE`；只有当前
-Codex catalog 中确实启用了该 skill，提示词才会要求使用它。
+> **升级时必须更新：**已经安装过该 skill 的用户，需要重新复制或安装
+> `skills/codex-web-user-context`，然后重启 Codex 以重新加载 skill catalog。
+> 旧版 skill 依赖 `CODEX_WEB_CONTEXT_FILE`，新版服务不再提供这个变量。
 
-如果 Codex 运行在文件系统命名空间不同的容器或 VM 中，需要把宿主机
-`<state-dir>/runtime-context/sessions` 挂载到运行时，并将
-`CODEX_WEB_RUNTIME_CONTEXT_DIR` 设置为运行时内的绝对目录。此时提示词和环境变量
-使用运行时路径；Codex 直接在宿主机运行时默认使用 state 目录下的路径。
+skill 会读取当前 `CODEX_THREAD_ID`，再通过 `CODEX_WEB_LOCAL_API_URL` 调用 Codex
+Web。服务端只接受真实 socket 来自回环地址（`127.0.0.1` 或 `::1`）的请求，按
+thread 映射实时的多人 session，并返回经过筛选的用户和项目字段；它不信任转发
+请求头，也不提供 session 枚举接口。
+
+普通 turn 的指令中不会再加入用户身份、项目元数据、skill 提示或 context 路径。
+runtime 只获得回环 API 的 origin，只有 skill 被明确使用时才发起查询。因此 Codex
+与 Codex Web 需要共享同一个宿主机网络命名空间。
 
 ## Runtime 状态
 

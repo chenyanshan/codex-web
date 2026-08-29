@@ -180,6 +180,7 @@ const WEBHOOK_STATUS_RATE_LIMIT_GLOBAL = 1_000;
 const WEBHOOK_STATUS_SYNC_MAX_ATTEMPTS = 3;
 const WEBHOOK_STATUS_SYNC_MAX_ENTRIES = 10_000;
 const WEBHOOK_ENDPOINT_PATH = '/api/webhook';
+const LOCAL_THREAD_CONTEXT_PATH_PREFIX = '/api/local/thread-context/';
 const LEGACY_WEBHOOK_SUBMISSION_ID_PATTERN = /^webhook:([0-9a-f]{64})$/u;
 const BUILD_ID_PLACEHOLDER = '__CODEX_WEB_BUILD_ID__';
 const DEFAULT_SITE_TITLE = 'Codex Web';
@@ -269,6 +270,7 @@ export function createCodexWebServer({
   });
   const sessionSubmissionOperations = new Map<string, Promise<SessionSubmissionExecution>>();
   const webhookStatusSyncAttempts = new Map<string, WebhookStatusSyncAttempt>();
+  let localApiUrl = `http://127.0.0.1:${config.port}`;
   const server = http.createServer((request, response) => {
     applySecurityResponseHeaders(response);
     void handleRequest({
@@ -287,6 +289,7 @@ export function createCodexWebServer({
       webhookRateLimiter,
       webhookStatusRateLimiter,
       webhookStatusSyncAttempts,
+      localApiUrl,
       registerSseCloser: (close) => {
         activeSseClosers.add(close);
         return () => {
@@ -327,6 +330,7 @@ export function createCodexWebServer({
           const address = server.address();
           if (address && typeof address === 'object') {
             baseUrl = `http://${address.address}:${address.port}`;
+            localApiUrl = `http://127.0.0.1:${address.port}`;
           }
           resolve();
         });
@@ -506,6 +510,7 @@ async function handleRequest({
   webhookRateLimiter,
   webhookStatusRateLimiter,
   webhookStatusSyncAttempts,
+  localApiUrl,
   registerSseCloser,
   closeSseConnections,
 }: {
@@ -524,6 +529,7 @@ async function handleRequest({
   webhookRateLimiter: FixedWindowRateLimiter;
   webhookStatusRateLimiter: FixedWindowRateLimiter;
   webhookStatusSyncAttempts: Map<string, WebhookStatusSyncAttempt>;
+  localApiUrl: string;
   registerSseCloser: (close: () => void) => () => void;
   closeSseConnections: () => void;
 }): Promise<void> {
@@ -547,6 +553,17 @@ async function handleRequest({
       asset = injectAppShellBootstrap(asset, siteTitleFromIdentityState(identityState));
     }
     writeStaticAsset({ request, response, url, asset });
+    return;
+  }
+
+  if (pathname.startsWith(LOCAL_THREAD_CONTEXT_PATH_PREFIX)) {
+    await handleLocalThreadContextRequest({
+      request,
+      response,
+      pathname,
+      method,
+      identityStore,
+    });
     return;
   }
 
@@ -597,6 +614,7 @@ async function handleRequest({
       sessionSubmissionOperations,
       webhookConversationStore,
       webhookRateLimiter,
+      localApiUrl,
     });
     return;
   }
@@ -666,6 +684,7 @@ async function handleRequest({
     config,
     sessionSubmissionStore,
     sessionSubmissionOperations,
+    localApiUrl,
   });
   if (submissionHandled) {
     return;
@@ -695,6 +714,7 @@ async function handleRequest({
       sessionFileStore,
       sessionSubmissionStore,
       sessionSubmissionOperations,
+      localApiUrl,
       registerSseCloser,
       closeSseConnections,
     });
@@ -1061,6 +1081,7 @@ async function handleRequest({
         config,
         store: sessionSubmissionStore,
         operations: sessionSubmissionOperations,
+        localApiUrl,
       });
       writeJson(response, execution.created ? 202 : 200, execution.response);
       return;
@@ -1414,6 +1435,7 @@ async function handleWebhookSessionRequest({
   sessionSubmissionOperations,
   webhookConversationStore,
   webhookRateLimiter,
+  localApiUrl,
 }: {
   request: IncomingMessage;
   response: ServerResponse;
@@ -1424,6 +1446,7 @@ async function handleWebhookSessionRequest({
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   webhookConversationStore: FileWebhookConversationStore;
   webhookRateLimiter: FixedWindowRateLimiter;
+  localApiUrl: string;
 }): Promise<void> {
   const token = extractBearerToken(request);
   const rateLimit = webhookRateLimiter.take(webhookRateLimitClientId(request, token));
@@ -1576,6 +1599,7 @@ async function handleWebhookSessionRequest({
         config,
         store: sessionSubmissionStore,
         operations: sessionSubmissionOperations,
+        localApiUrl,
         submissionDeliveryMode: deliveryMode,
         ...(clientRequestId && requestFingerprint ? {
           metadata: {
@@ -2242,6 +2266,7 @@ async function handleSessionSubmissionEndpoint({
   config,
   sessionSubmissionStore,
   sessionSubmissionOperations,
+  localApiUrl,
 }: {
   request: IncomingMessage;
   response: ServerResponse;
@@ -2255,6 +2280,7 @@ async function handleSessionSubmissionEndpoint({
   config: CodexWebConfig;
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
+  localApiUrl: string;
 }): Promise<boolean> {
   if (pathname === '/api/session-submission-attachments' && method === 'POST') {
     const scope = await resolveSessionSubmissionAttachmentScope({
@@ -2286,6 +2312,7 @@ async function handleSessionSubmissionEndpoint({
       config,
       store: sessionSubmissionStore,
       operations: sessionSubmissionOperations,
+      localApiUrl,
     });
     writeJson(response, execution.created ? 201 : 200, execution.response);
     return true;
@@ -2313,6 +2340,7 @@ async function handleSessionSubmissionEndpoint({
         runtime,
         config,
         store: sessionSubmissionStore,
+        localApiUrl,
       }),
     });
     writeJson(response, 200, execution.response);
@@ -2371,6 +2399,7 @@ async function submitSessionSubmission({
   config,
   store,
   operations,
+  localApiUrl,
   metadata,
   submissionDeliveryMode,
 }: {
@@ -2383,6 +2412,7 @@ async function submitSessionSubmission({
   config: CodexWebConfig;
   store: FileSessionSubmissionStore;
   operations: Map<string, Promise<SessionSubmissionExecution>>;
+  localApiUrl: string;
   metadata?: SessionSubmissionMetadata;
   submissionDeliveryMode?: WebhookDeliveryMode;
 }): Promise<SessionSubmissionExecution> {
@@ -2435,6 +2465,7 @@ async function submitSessionSubmission({
         runtime,
         config,
         store,
+        localApiUrl,
       });
     },
   });
@@ -2478,6 +2509,7 @@ async function advanceSessionSubmission({
   runtime,
   config,
   store,
+  localApiUrl,
 }: {
   record: CodexWebSessionSubmissionRecord;
   created: boolean;
@@ -2487,6 +2519,7 @@ async function advanceSessionSubmission({
   runtime: CodexWebRuntime;
   config: CodexWebConfig;
   store: FileSessionSubmissionStore;
+  localApiUrl: string;
 }): Promise<SessionSubmissionExecution> {
   let current = await store.read(record.ownerUserId, record.id) ?? record;
   try {
@@ -2531,8 +2564,8 @@ async function advanceSessionSubmission({
         identityStore,
         identityState,
         runtime,
-        config,
         store,
+        localApiUrl,
       });
       current = await store.read(record.ownerUserId, record.id) ?? current;
     }
@@ -2572,15 +2605,7 @@ async function advanceSessionSubmission({
       throw createHttpError(404, 'session_not_found', 'Session was not found.');
     }
     if (multiUser && target.appSession) {
-      const runtimeContext = await projectCodexWebRuntimeContext({
-        config,
-        runtime,
-        appSession: target.appSession,
-        user: target.identityState?.users.find((item) => item.id === target.appSession?.ownerUserId) ?? null,
-        project: target.project,
-      });
-      input.developerInstructions = runtimeContext.developerInstructions;
-      input.runtimeEnv = runtimeContext.runtimeEnv;
+      input.runtimeEnv = codexWebLocalApiEnvironment(localApiUrl);
     }
     const baselineSession = await runtime.readSession(target.runtimeSessionId) ?? target.runtimeSession;
     const baselineActiveTurnId = normalizeOptionalString(baselineSession.activeTurnId);
@@ -2825,16 +2850,16 @@ async function createSessionForSubmission({
   identityStore,
   identityState,
   runtime,
-  config,
   store,
+  localApiUrl,
 }: {
   record: CodexWebSessionSubmissionRecord;
   principal: CodexWebPrincipal;
   identityStore: CodexWebIdentityStoreLike | null;
   identityState: CodexWebIdentityState | null;
   runtime: CodexWebRuntime;
-  config: CodexWebConfig;
   store: FileSessionSubmissionStore;
+  localApiUrl: string;
 }): Promise<SessionSubmissionTarget> {
   const multiUser = isMultiUserSubmission(identityState, principal);
   if (!multiUser) {
@@ -2881,7 +2906,7 @@ async function createSessionForSubmission({
         title: record.payload.title,
         settings: record.payload.settings,
         cwd: project.cwd,
-        runtimeEnv: codexWebRuntimeContextEnvironment(config, record.sessionId!),
+        runtimeEnv: codexWebLocalApiEnvironment(localApiUrl),
       });
       const updatedRecord = await store.update(record.ownerUserId, record.id, (value) => ({
         ...value,
@@ -3370,6 +3395,7 @@ async function handleMultiUserRequest({
   sessionFileStore,
   sessionSubmissionStore,
   sessionSubmissionOperations,
+  localApiUrl,
   registerSseCloser,
   closeSseConnections,
 }: {
@@ -3388,6 +3414,7 @@ async function handleMultiUserRequest({
   sessionFileStore: FileSessionFileStore;
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
+  localApiUrl: string;
   registerSseCloser: (close: () => void) => () => void;
   closeSseConnections: () => void;
 }): Promise<boolean> {
@@ -3717,7 +3744,7 @@ async function handleMultiUserRequest({
     const runtimeSession = await runtime.createSession({
       ...(body as CreateSessionInput),
       cwd: project.cwd,
-      runtimeEnv: codexWebRuntimeContextEnvironment(config, appSessionId),
+      runtimeEnv: codexWebLocalApiEnvironment(localApiUrl),
     });
     const now = new Date().toISOString();
     const appSession = await identityStore.upsertSession({
@@ -4375,6 +4402,7 @@ async function handleMultiUserRequest({
         config,
         store: sessionSubmissionStore,
         operations: sessionSubmissionOperations,
+        localApiUrl,
       });
       writeJson(response, execution.created ? 202 : 200, execution.response);
       return true;
@@ -4400,15 +4428,7 @@ async function handleMultiUserRequest({
       writeSessionNotFound(response);
       return true;
     }
-    const runtimeContext = await projectCodexWebRuntimeContext({
-      config,
-      runtime,
-      appSession: resolved.appSession,
-      user: identityState.users.find((item) => item.id === resolved.appSession.ownerUserId) ?? null,
-      project: resolved.project,
-    });
-    input.developerInstructions = runtimeContext.developerInstructions;
-    input.runtimeEnv = runtimeContext.runtimeEnv;
+    input.runtimeEnv = codexWebLocalApiEnvironment(localApiUrl);
     const turn = await startSessionTurn({
       runtime,
       sessionId: resolved.appSession.codexThreadId,
@@ -6208,6 +6228,75 @@ function getClientAddress(request: IncomingMessage): string {
   return request.socket.remoteAddress || 'unknown';
 }
 
+async function handleLocalThreadContextRequest({
+  request,
+  response,
+  pathname,
+  method,
+  identityStore,
+}: {
+  request: IncomingMessage;
+  response: ServerResponse;
+  pathname: string;
+  method: string;
+  identityStore: CodexWebIdentityStoreLike | null;
+}): Promise<void> {
+  if (method !== 'GET' || !isLoopbackSocketAddress(request.socket.remoteAddress)) {
+    writeJson(response, 404, { error: 'Not found' });
+    return;
+  }
+  const encodedThreadId = pathname.slice(LOCAL_THREAD_CONTEXT_PATH_PREFIX.length);
+  if (!encodedThreadId || encodedThreadId.includes('/')) {
+    writeJson(response, 404, { error: 'Not found' });
+    return;
+  }
+  let threadId: string;
+  try {
+    threadId = decodeURIComponent(encodedThreadId).trim();
+  } catch {
+    writeJson(response, 404, { error: 'Not found' });
+    return;
+  }
+  if (!threadId || !identityStore) {
+    writeJson(response, 404, { error: 'Not found' });
+    return;
+  }
+  const identityState = await identityStore.readState();
+  if (identityState.settings.multiUserEnabled !== true) {
+    writeJson(response, 404, { error: 'Not found' });
+    return;
+  }
+  const appSession = findAppSessionByExternalId(identityState, threadId);
+  if (!appSession || appSession.codexThreadId !== threadId) {
+    writeJson(response, 404, { error: 'Not found' });
+    return;
+  }
+  const user = identityState.users.find((item) => item.id === appSession.ownerUserId) ?? null;
+  const project = findProject(identityState, appSession.projectId);
+  writeJson(response, 200, {
+    schemaVersion: 1,
+    appSessionId: appSession.id,
+    codexThreadId: appSession.codexThreadId,
+    owner: {
+      userId: user?.id ?? appSession.ownerUserId,
+      username: user?.username ?? appSession.ownerUserId,
+      email: user?.email ?? null,
+    },
+    project: {
+      id: project?.id ?? appSession.projectId,
+      displayName: projectDisplayName(project, appSession.projectId),
+    },
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export function isLoopbackSocketAddress(address: string | undefined): boolean {
+  const normalized = address?.trim().toLowerCase();
+  return normalized === '127.0.0.1'
+    || normalized === '::1'
+    || normalized === '::ffff:127.0.0.1';
+}
+
 async function loginWithPassword({
   auth,
   username,
@@ -6335,132 +6424,10 @@ async function steerSessionTurn({
   }
 }
 
-async function projectCodexWebRuntimeContext({
-  config,
-  runtime,
-  appSession,
-  user,
-  project,
-}: {
-  config: CodexWebConfig;
-  runtime: CodexWebRuntime;
-  appSession: CodexWebAppSession;
-  user: CodexWebUser | null;
-  project: CodexWebProject | null;
-}): Promise<{
-  canonicalContextPath: string;
-  developerInstructions: string;
-  runtimeEnv: Record<string, string>;
-}> {
-  const { contextPath, canonicalContextPath } = resolveCodexWebRuntimeContextPaths(config, appSession.id);
-  const payload = {
-    schemaVersion: 1,
-    appSessionId: appSession.id,
-    codexThreadId: appSession.codexThreadId,
-    owner: {
-      userId: user?.id ?? appSession.ownerUserId,
-      username: user?.username ?? appSession.ownerUserId,
-      email: user?.email ?? null,
-    },
-    project: {
-      id: project?.id ?? appSession.projectId,
-      displayName: projectDisplayName(project, appSession.projectId),
-    },
-    updatedAt: new Date().toISOString(),
-  };
-  const serialized = `${JSON.stringify(payload, null, 2)}\n`;
-  const skillAvailable = await codexWebUserContextSkillIsAvailable(runtime, project?.cwd ?? null);
-  return withStorageQuotaHttpError(() => withManagedStateStorageCapacity({
-    config,
-    incomingBytes: Buffer.byteLength(serialized),
-    operation: async () => {
-      await writePrivateRuntimeContextFile(contextPath, serialized);
-      return {
-        canonicalContextPath,
-        developerInstructions: [
-          'This turn is running under Codex Web.',
-          `Codex Web context file: ${canonicalContextPath}`,
-          skillAvailable
-            ? 'Use the codex-web-user-context skill if the current web user context is needed.'
-            : 'Use CODEX_WEB_CONTEXT_FILE when the current Codex Web user context is needed.',
-        ].join('\n'),
-        runtimeEnv: {
-          CODEX_WEB_CONTEXT_FILE: canonicalContextPath,
-        },
-      };
-    },
-  }));
-}
-
-function codexWebRuntimeContextEnvironment(
-  config: CodexWebConfig,
-  appSessionId: string,
-): Record<string, string> {
+function codexWebLocalApiEnvironment(localApiUrl: string): Record<string, string> {
   return {
-    CODEX_WEB_CONTEXT_FILE: resolveCodexWebRuntimeContextPaths(config, appSessionId).canonicalContextPath,
+    CODEX_WEB_LOCAL_API_URL: localApiUrl,
   };
-}
-
-function resolveCodexWebRuntimeContextPaths(
-  config: CodexWebConfig,
-  appSessionId: string,
-): { contextPath: string; canonicalContextPath: string } {
-  const runtimeContextHostDir = path.resolve(config.stateDir, 'runtime-context', 'sessions');
-  const runtimeContextDir = path.resolve(
-    normalizeOptionalString(config.runtimeContextDir) || runtimeContextHostDir,
-  );
-  const contextFileName = `${safePathSegment(appSessionId)}-${stableIdHash(appSessionId, 16)}.json`;
-  return {
-    contextPath: path.join(runtimeContextHostDir, contextFileName),
-    canonicalContextPath: path.join(runtimeContextDir, contextFileName),
-  };
-}
-
-async function codexWebUserContextSkillIsAvailable(
-  runtime: CodexWebRuntime,
-  cwd: string | null,
-): Promise<boolean> {
-  const hasAvailableSkill = (runtime as Partial<CodexWebRuntime>).hasAvailableSkill;
-  if (typeof hasAvailableSkill !== 'function') {
-    return false;
-  }
-  return hasAvailableSkill.call(runtime, 'codex-web-user-context', cwd);
-}
-
-async function writePrivateRuntimeContextFile(filePath: string, serialized: string): Promise<void> {
-  const directory = path.dirname(filePath);
-  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  const directoryStats = await fs.lstat(directory);
-  if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) {
-    throw new Error('Codex Web runtime context directory must be a regular directory.');
-  }
-
-  const tempPath = path.join(
-    directory,
-    `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
-  );
-  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
-  try {
-    const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-    handle = await fs.open(
-      tempPath,
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollow,
-      0o600,
-    );
-    await handle.writeFile(serialized, 'utf8');
-    await handle.chmod(0o600);
-    await handle.close();
-    handle = null;
-    await fs.rename(tempPath, filePath);
-    await fs.chmod(filePath, 0o600);
-    const stats = await fs.lstat(filePath);
-    if (!stats.isFile() || stats.isSymbolicLink()) {
-      throw new Error('Codex Web runtime context must be a regular file.');
-    }
-  } finally {
-    await handle?.close().catch(() => {});
-    await fs.unlink(tempPath).catch(() => {});
-  }
 }
 
 async function storeSessionAttachments({

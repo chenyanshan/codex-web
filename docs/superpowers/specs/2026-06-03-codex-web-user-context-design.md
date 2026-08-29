@@ -2,64 +2,73 @@
 
 ## Goal
 
-Add a small Codex Web specific user-context bridge so Codex skills can discover
-the currently logged-in Codex Web user when a turn needs that information.
+Provide the current authenticated Codex Web user and project to a Codex skill
+only when a task explicitly needs that information. Ordinary turns must not
+receive identity metadata or user-context instructions.
 
-At the same time, extend Codex Web users with an `email` field and expose it in
-the admin console.
+Codex Web users retain the optional `email` field exposed in the admin console.
 
 ## Scope
 
-- Add `email` to the persisted user model and admin APIs/UI.
-- Write a sanitized runtime context file for writable Codex Web turns.
-- Pass a short `developerInstructions` pointer so Codex can discover the
-  runtime context on demand.
-- Add a repository skill that explains how to read the projected context.
+- Keep `email` in the persisted user model and admin APIs/UI.
+- Expose a read-only loopback HTTP endpoint keyed by Codex thread id.
+- Pass only the loopback API origin to multi-user Codex runtimes.
+- Provide a cross-platform skill helper that fetches the current context on
+  demand.
 
 ## Non-Goals
 
-- Do not treat projected context as an authorization source.
-- Do not project passwords, tokens, hashes, grants, cwd secrets, or other
-  backend-only metadata into Codex-readable files.
-- Do not build full per-user prompt-profile editing in this change.
+- Do not use this context as an authorization source.
+- Do not return passwords, tokens, hashes, grants, project paths, or other
+  backend-only metadata.
+- Do not inject the context, endpoint instructions, or skill hints into normal
+  turn prompts.
+- Do not provide a session enumeration endpoint.
+- Do not create a tenant or host-user isolation boundary.
 
 ## Design
 
-Persist the authoritative user record in `identity.json` as before, now with an
-optional normalized `email` field.
-
-For each writable turn started through the authenticated Codex Web session path,
-the server writes a sanitized projection under:
+The authoritative user, project, and app-session records remain in
+`identity.json`. Codex already exposes the current `CODEX_THREAD_ID` to tools,
+so Codex Web adds only this runtime environment value:
 
 ```text
-~/.codex-web/runtime-context/sessions/<appSessionId>.json
+CODEX_WEB_LOCAL_API_URL=http://127.0.0.1:<listening-port>
 ```
 
-The file includes:
+When explicitly invoked, `codex-web-user-context` runs its Node helper. The
+helper validates the loopback origin and requests:
+
+```http
+GET /api/local/thread-context/<CODEX_THREAD_ID>
+```
+
+The server handles this route before bearer authentication because the real
+socket peer must be `127.0.0.1`, `::1`, or IPv4-mapped `127.0.0.1`. It does not
+trust `Host`, forwarded headers, or proxy metadata. Unknown threads, disabled
+multi-user mode, non-loopback callers, and malformed paths return `404`.
+
+The response uses `Cache-Control: no-store` and includes only:
 
 - schema version
 - app session id
 - Codex thread id
-- owner username
-- owner email when configured
-- owner display label derived from username for now
+- owner user id, username, and optional email
 - project id and display name
-- updated timestamp
+- response timestamp
 
-The server also passes a short `developerInstructions` string into the turn:
-
-- identify that the turn originated from Codex Web
-- include the runtime-context file path
-- tell Codex to use the `codex-web-user-context` skill when the current web
-  user context is needed
-
-The runtime keeps treating this as optional behavior layered on top of normal
-turn input. If the skill is never used, the turn still behaves normally.
+Codex Web no longer writes runtime-context files. Storage cleanup retains the
+old runtime-context TTL temporarily so files created by older versions expire.
 
 ## Testing
 
 - identity store persists and normalizes `email`
 - admin user create/list/update include `email`
-- admin UI renders and submits an email field
-- server start-turn writes the projected runtime context file
-- runtime forwards `developerInstructions` to the native client
+- loopback requests resolve distinct thread owners and projects without bearer
+  authentication
+- non-loopback address validation is strict and forwarded headers are ignored
+- unknown threads and disabled multi-user mode return `404`
+- new sessions and turns receive the actual loopback origin, including when the
+  configured test port is `0`
+- turns receive no user-context `developerInstructions` and no context file
+- the skill helper validates its environment and fetches the expected JSON

@@ -5,7 +5,7 @@ English | [中文](README.zh-CN.md)
 Self-hosted web console for controlling a local logged-in Codex runtime from a
 phone, tablet, or desktop browser.
 
-The browser is only a remote UI. The Mac or Linux host keeps Codex credentials,
+The browser is only a remote UI. The host machine keeps Codex credentials,
 starts the Codex runtime, reads and writes local project files, executes shell
 commands, and stores app state. Tunnel and reverse-proxy setup are intentionally
 outside this repository.
@@ -78,8 +78,8 @@ Untrusted users must be separated with distinct OS users, containers, or hosts.
   controls kept separate from per-browser defaults for new sessions.
 - Session-scoped file previews for Markdown, HTML, PDF, common images, web
   links, and retained attachments directly from the conversation.
-- A bundled `codex-web-user-context` skill for discovering the current Codex
-  Web user/project context from a server-projected runtime file.
+- A bundled `codex-web-user-context` skill that fetches the current Codex Web
+  user/project context on demand from a loopback HTTP API.
 - macOS launchd service helpers and Linux systemd setup instructions.
 - English and Simplified Chinese UI language setting, plus a backend-managed
   site title for admins/single-user installs.
@@ -399,12 +399,12 @@ then the oldest managed files.
 
 | Managed data | Default policy | Configuration |
 | --- | --- | --- |
-| State uploads, turn snapshots, legacy reports, runtime context | 2 GiB total | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
+| State uploads, turn snapshots, legacy reports, legacy runtime context | 2 GiB total | `CODEX_WEB_MANAGED_STORAGE_MAX_BYTES` |
 | Project-local uploads | 512 MiB per project | `CODEX_WEB_PROJECT_UPLOAD_MAX_BYTES` |
 | Uploaded source files | 7-day TTL | `CODEX_WEB_UPLOAD_TTL_SECONDS` |
 | Turn attachment snapshots | 30-day TTL | `CODEX_WEB_TURN_ATTACHMENT_TTL_SECONDS` |
 | Legacy reports | 365-day TTL | `CODEX_WEB_REPORT_TTL_SECONDS` |
-| Runtime context files | 30-day TTL | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
+| Legacy runtime context files from older versions | 30-day TTL | `CODEX_WEB_RUNTIME_CONTEXT_TTL_SECONDS` |
 | App timeline | 500 entries per session, 16 MiB total | `CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION`, `CODEX_WEB_TIMELINE_MAX_BYTES` |
 
 Legacy files under `~/.codex-web/reports/` remain subject to their configured
@@ -482,6 +482,14 @@ mkdir -p ~/.codex/skills/codex-web-user-context
 cp -R skills/codex-web-user-context/. ~/.codex/skills/codex-web-user-context/
 ```
 
+PowerShell:
+
+```powershell
+$target = Join-Path $HOME ".codex\skills\codex-web-user-context"
+New-Item -ItemType Directory -Force $target | Out-Null
+Copy-Item "skills/codex-web-user-context/*" $target -Recurse -Force
+```
+
 For active development, symlink it instead:
 
 ```bash
@@ -489,18 +497,21 @@ mkdir -p ~/.codex/skills
 ln -s "$(pwd)/skills/codex-web-user-context" ~/.codex/skills/codex-web-user-context
 ```
 
-This skill is bundled in the repository and should be installed into the local
-system Codex skills directory at `~/.codex/skills/` like the other shipped
-skills. During Codex Web turns, the server projects a small runtime context
-file and passes one canonical absolute path through both the turn instructions
-and `CODEX_WEB_CONTEXT_FILE`. The skill instruction is included only when that
-skill is enabled in the current Codex catalog.
+> **Upgrade required:** existing installations must copy/reinstall
+> `skills/codex-web-user-context` again and restart Codex so its skill catalog
+> reloads. The old skill expects `CODEX_WEB_CONTEXT_FILE`, which is no longer
+> provided.
 
-When Codex runs in a container or VM with a different filesystem namespace,
-mount the host directory `<state-dir>/runtime-context/sessions` into the
-runtime and set `CODEX_WEB_RUNTIME_CONTEXT_DIR` to that runtime-side absolute
-directory. The prompt and `CODEX_WEB_CONTEXT_FILE` then use the runtime path;
-the default for direct host execution is the host state directory itself.
+The skill reads the current `CODEX_THREAD_ID` and calls the Codex Web service
+through `CODEX_WEB_LOCAL_API_URL`. The server accepts this endpoint only from
+the real loopback socket (`127.0.0.1` or `::1`), maps the thread to its live
+multi-user session, and returns a sanitized user/project projection. It does
+not trust forwarded headers and does not expose a session-list endpoint.
+
+No user identity, project metadata, skill hint, or context path is added to
+ordinary turn instructions. Only the loopback API origin is made available to
+the runtime; the skill performs the request when it is explicitly needed.
+Codex and Codex Web must therefore share the same host network namespace.
 
 ## Runtime Status
 

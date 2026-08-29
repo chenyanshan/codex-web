@@ -245,15 +245,15 @@ test('app client projects runtime environment into new and resumed thread shell 
 
   await client.startThread({
     cwd: '/workspace',
-    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/first-turn.json' },
+    runtimeEnv: { CODEX_WEB_LOCAL_API_URL: 'http://127.0.0.1:43210' },
   });
   await client.resumeThread({
     threadId: 'thread_alice',
-    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/app-alice.json' },
+    runtimeEnv: { CODEX_WEB_LOCAL_API_URL: 'http://127.0.0.1:43211' },
   });
   await client.resumeThread({
     threadId: 'thread_new',
-    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: null },
+    runtimeEnv: { OPTIONAL_RUNTIME_VALUE: null },
   });
 
   assert.deepEqual(calls, [
@@ -261,8 +261,8 @@ test('app client projects runtime environment into new and resumed thread shell 
       method: 'thread/start',
       config: {
         shell_environment_policy: {
-          filters: { CODEX_WEB_CONTEXT_FILE: 'exclude' },
-          set: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/first-turn.json' },
+          filters: { CODEX_WEB_LOCAL_API_URL: 'exclude' },
+          set: { CODEX_WEB_LOCAL_API_URL: 'http://127.0.0.1:43210' },
         },
       },
     },
@@ -270,8 +270,8 @@ test('app client projects runtime environment into new and resumed thread shell 
       method: 'thread/resume',
       config: {
         shell_environment_policy: {
-          filters: { CODEX_WEB_CONTEXT_FILE: 'exclude' },
-          set: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/app-alice.json' },
+          filters: { CODEX_WEB_LOCAL_API_URL: 'exclude' },
+          set: { CODEX_WEB_LOCAL_API_URL: 'http://127.0.0.1:43211' },
         },
       },
     },
@@ -279,7 +279,7 @@ test('app client projects runtime environment into new and resumed thread shell 
       method: 'thread/resume',
       config: {
         shell_environment_policy: {
-          filters: { CODEX_WEB_CONTEXT_FILE: 'exclude' },
+          filters: { OPTIONAL_RUNTIME_VALUE: 'exclude' },
           set: {},
         },
       },

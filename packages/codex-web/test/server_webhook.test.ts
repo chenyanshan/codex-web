@@ -295,17 +295,17 @@ test('webhook management is self-scoped and one key keeps routing turns to the s
       title: 'Webhook review',
       settings: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
     });
-    assert.match(
-      runtimeEnv?.CODEX_WEB_CONTEXT_FILE,
-      new RegExp(`${firstPayload.session.id}-[0-9a-f]{16}\\.json$`, 'u'),
-    );
+    assert.deepEqual(runtimeEnv, {
+      CODEX_WEB_LOCAL_API_URL: `http://127.0.0.1:${new URL(server.baseUrl).port}`,
+    });
     assert.equal(runtime.startInputs[0]?.sessionId, 'thread_1');
     assert.equal(runtime.startInputs[0]?.input.text, 'Review the incoming change');
     assert.deepEqual(runtime.startInputs[0]?.input.settings, {
       model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
     });
-    assert.match(runtime.startInputs[0]?.input.developerInstructions, /Codex Web context file:/u);
+    assert.deepEqual(runtime.startInputs[0]?.input.runtimeEnv, runtimeEnv);
+    assert.equal(runtime.startInputs[0]?.input.developerInstructions, undefined);
 
     const state = await identityStore.readState();
     assert.equal(state.sessions.length, 1);

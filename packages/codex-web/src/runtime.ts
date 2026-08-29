@@ -1576,7 +1576,7 @@ export class CodexWebRuntime {
           threadId,
           approvalPolicy: permissions.approvalPolicy,
           sandboxMode: permissions.sandboxMode,
-          runtimeEnv: runtimeEnv ?? { CODEX_WEB_CONTEXT_FILE: null },
+          runtimeEnv: runtimeEnv ?? {},
           developerInstructions: developerInstructions ?? null,
         });
         break;

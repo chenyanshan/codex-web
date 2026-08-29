@@ -15,7 +15,6 @@ test('service config defaults to LAN-facing binding and external state paths', (
   assert.equal(config.authPath, '/Users/alice/.codex-web/auth.json');
   assert.equal(config.reportsDir, '/Users/alice/.codex-web/reports');
   assert.equal(config.reportIndexPath, '/Users/alice/.codex-web/report-index.json');
-  assert.equal(config.runtimeContextDir, '/Users/alice/.codex-web/runtime-context/sessions');
   assert.equal(config.envPath, '/Users/alice/.config/codex-web/service.env');
   assert.equal(config.publicSharesEnabled, false);
   assert.equal(config.publicShareTtlSeconds, 86_400);
@@ -43,7 +42,6 @@ test('service config accepts explicit local-only host and port', () => {
       CODEX_WEB_UPLOAD_TTL_SECONDS: '1234',
       CODEX_WEB_TIMELINE_MAX_ENTRIES_PER_SESSION: '42',
       CODEX_WEB_TIMELINE_MAX_BYTES: '98765',
-      CODEX_WEB_RUNTIME_CONTEXT_DIR: '/runtime/codex-web/contexts',
     },
     homeDir: '/Users/alice',
   });
@@ -59,7 +57,6 @@ test('service config accepts explicit local-only host and port', () => {
   assert.equal(config.uploadTtlSeconds, 1_234);
   assert.equal(config.timelineMaxEntriesPerSession, 42);
   assert.equal(config.timelineMaxBytes, 98_765);
-  assert.equal(config.runtimeContextDir, '/runtime/codex-web/contexts');
 });
 
 test('service config reads the env file selected by CODEX_WEB_ENV_PATH', (t) => {

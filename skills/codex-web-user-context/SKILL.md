@@ -1,41 +1,44 @@
 ---
 name: codex-web-user-context
-description: Use when a Codex turn needs to discover the current authenticated Codex Web user, their email, or the current Codex Web project context from a server-projected runtime context file.
+description: Use only when a task explicitly needs the current authenticated Codex Web user, their email, the Codex Web app session id, or the current Codex Web project. Fetches this context on demand from the local Codex Web service.
 ---
 
 # Codex Web User Context
 
 ## Overview
 
-Read the Codex Web runtime context file when a task needs the current Codex Web
-user or project context.
+Fetch the current Codex Web user and project only when the task actually needs
+that information. Ordinary coding turns do not need this skill.
 
-This skill is for convenience and coordination only. It is not an authorization
+This context is for convenience and coordination. It is not an authorization
 source.
 
 ## When To Use
 
-Use this skill when the current turn needs details such as:
+Use this skill only when the task explicitly requires one or more of:
 
-- which Codex Web user requested the work
+- the Codex Web user who requested the work
 - the user's email address
 - the Codex Web app session id
-- the current Codex Web project display name
+- the current Codex Web project id or display name
 
-The server sets `CODEX_WEB_CONTEXT_FILE` for the current Codex thread and also
-injects the same path in a short `developerInstructions` hint.
+Do not use it merely because a turn is running under Codex Web.
 
 ## Workflow
 
-1. Read `CODEX_WEB_CONTEXT_FILE` from the turn's runtime environment.
-2. Confirm that the `developerInstructions` path, when present, is the same:
+1. Locate this skill's `scripts/read-context.mjs` file.
+2. Run it with Node:
 
 ```text
-Codex Web context file: <absolute-runtime-path-to-session-context.json>
+node <absolute-skill-directory>/scripts/read-context.mjs
 ```
 
-3. Read exactly that JSON file.
-4. Use only the projected fields you need.
+3. Read the JSON printed to stdout.
+4. Use only the fields required by the task.
+
+The helper reads `CODEX_THREAD_ID` and `CODEX_WEB_LOCAL_API_URL` from the turn's
+runtime environment. It validates that the API URL uses loopback HTTP before
+requesting the context for exactly the current Codex thread.
 
 ## Expected Context Shape
 
@@ -59,11 +62,8 @@ Codex Web context file: <absolute-runtime-path-to-session-context.json>
 
 ## Constraints
 
-- Do not assume the file exists outside Codex Web started turns.
-- Do not use this file for permission checks.
-- Do not expect passwords, auth tokens, hashed secrets, or backend-only grants
-  to be present.
-- If the file is missing, say that the current turn does not expose Codex Web
-  runtime context.
-- Do not scan the runtime-context directory or use another session's file when
-  the variable is missing or the projected field is `null`.
+- Do not use this context for permission checks.
+- Do not expect passwords, auth tokens, hashed secrets, or backend-only grants.
+- Do not call a non-loopback URL or replace `CODEX_THREAD_ID` with another id.
+- Do not probe or enumerate other sessions.
+- If the helper reports that context is unavailable, say so instead of guessing.

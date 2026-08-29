@@ -1564,7 +1564,7 @@ test('runtime forwards developer instructions to the native turn client', async 
   assert.equal(startTurnCalls[0]?.developerInstructions, 'Use the codex-web-user-context skill when needed.');
 });
 
-test('runtime scopes context environment to each resumed session and clears it for a new session', async () => {
+test('runtime scopes local API environment to each resumed session and leaves ordinary sessions clean', async () => {
   const resumeCalls: any[] = [];
   const threads = [createThread('thread_context'), createThread('thread_new')];
   const client: CodexWebRuntimeClient = {
@@ -1595,7 +1595,7 @@ test('runtime scopes context environment to each resumed session and clears it f
 
   await runtime.startTurn('thread_context', {
     text: 'read context',
-    runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/alice.json' },
+    runtimeEnv: { CODEX_WEB_LOCAL_API_URL: 'http://127.0.0.1:43210' },
   });
   await runtime.startTurn('thread_new', { text: 'new session' });
 
@@ -1605,11 +1605,11 @@ test('runtime scopes context environment to each resumed session and clears it f
   })), [
     {
       threadId: 'thread_context',
-      runtimeEnv: { CODEX_WEB_CONTEXT_FILE: '/runtime/contexts/alice.json' },
+      runtimeEnv: { CODEX_WEB_LOCAL_API_URL: 'http://127.0.0.1:43210' },
     },
     {
       threadId: 'thread_new',
-      runtimeEnv: { CODEX_WEB_CONTEXT_FILE: null },
+      runtimeEnv: {},
     },
   ]);
 });

@@ -11,7 +11,6 @@ export interface CodexWebConfig {
   authPath: string;
   reportsDir: string;
   reportIndexPath: string;
-  runtimeContextDir: string;
   envPath: string;
   debug: boolean;
   publicSharesEnabled: boolean;
@@ -51,10 +50,6 @@ export function loadServiceConfig(options: {
   };
   const stateDir = normalizeString(merged.CODEX_WEB_STATE_DIR)
     || path.join(homeDir, '.codex-web');
-  const runtimeContextHostDir = path.resolve(stateDir, 'runtime-context', 'sessions');
-  const runtimeContextDir = path.resolve(
-    normalizeString(merged.CODEX_WEB_RUNTIME_CONTEXT_DIR) || runtimeContextHostDir,
-  );
   const port = parsePort(merged.CODEX_WEB_PORT, 43210);
   return {
     host: normalizeString(merged.CODEX_WEB_HOST) || '0.0.0.0',
@@ -65,7 +60,6 @@ export function loadServiceConfig(options: {
     authPath: path.join(stateDir, 'auth.json'),
     reportsDir: path.join(stateDir, 'reports'),
     reportIndexPath: path.join(stateDir, 'report-index.json'),
-    runtimeContextDir,
     envPath,
     debug: parseBoolean(merged.CODEX_WEB_DEBUG, false),
     publicSharesEnabled: parseBoolean(merged.CODEX_WEB_PUBLIC_SHARES_ENABLED, false),

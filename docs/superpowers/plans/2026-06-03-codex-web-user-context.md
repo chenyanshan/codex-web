@@ -1,61 +1,40 @@
 # Codex Web User Context Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Updated after replacing the original file-projection design. The current
+> architecture is defined in
+> `docs/superpowers/specs/2026-06-03-codex-web-user-context-design.md`.
 
-**Goal:** Add Codex Web user-context projection for skills and extend users with an email field in storage, API, and admin UI.
+**Goal:** Let a bundled skill fetch the current Codex Web user/project context
+on demand without adding identity data or instructions to ordinary turns.
 
-**Architecture:** Extend the existing identity store and admin surface with a normalized optional `email` field, then project a sanitized per-session context file from the authenticated server path before writable turns begin. Reuse the existing `developerInstructions` turn parameter to point Codex at the projected context and add a small repo-local skill describing how to consume it.
+**Architecture:** Codex Web passes a loopback HTTP origin into multi-user Codex
+runtimes. The skill combines it with Codex's existing `CODEX_THREAD_ID` and
+calls a loopback-only endpoint that returns a sanitized live projection.
 
-**Tech Stack:** Node.js, TypeScript, existing Codex Web server/runtime modules, browser-side vanilla JS admin UI, Node test runner.
+### Task 1: Backend behavior
 
----
+- [x] Add a loopback-only thread-context endpoint before bearer authentication.
+- [x] Map the Codex thread id to the app session, owner, and project.
+- [x] Return `404` for remote callers, unknown threads, and disabled multi-user
+  mode.
+- [x] Pass the actual listening port through `CODEX_WEB_LOCAL_API_URL`.
+- [x] Stop generating context files and user-context turn instructions.
 
-### Task 1: Lock backend behavior with tests
+### Task 2: Skill
 
-**Files:**
-- Modify: `packages/codex-web/test/identity_store.test.ts`
-- Modify: `packages/codex-web/test/server_multi_user.test.ts`
-- Modify: `packages/codex-web/test/runtime.test.ts`
+- [x] Add a cross-platform Node helper with loopback URL validation and timeout.
+- [x] Limit skill triggering to tasks that explicitly need user/project context.
+- [x] Validate the skill package and helper behavior.
 
-- [ ] Add failing tests for normalized user email persistence and update behavior.
-- [ ] Add failing tests for runtime forwarding `developerInstructions`.
-- [ ] Add failing tests for multi-user turn start writing a runtime-context file and passing a context pointer into the turn.
+### Task 3: Documentation and compatibility
 
-### Task 2: Implement backend model and runtime-context projection
+- [x] Document the HTTP workflow in English and Chinese READMEs.
+- [x] Warn existing users to reinstall the skill and restart Codex.
+- [x] Keep TTL cleanup for context files left by older versions.
 
-**Files:**
-- Modify: `packages/codex-web/src/identity_store.ts`
-- Modify: `packages/codex-web/src/runtime.ts`
-- Modify: `packages/codex-web/src/server.ts`
+### Task 4: Verification
 
-- [ ] Extend user types and normalization with optional `email`.
-- [ ] Allow admin create/update/list routes to accept and present `email`.
-- [ ] Add runtime support for optional `developerInstructions` on turn input.
-- [ ] Add server-side runtime-context file projection under `stateDir/runtime-context/sessions/`.
-
-### Task 3: Lock admin UI behavior with tests
-
-**Files:**
-- Modify: `packages/codex-web/test/public_ui.test.ts`
-
-- [ ] Add failing tests for rendering the admin user email field and submitting it in create/update requests.
-
-### Task 4: Implement admin UI and repo skill
-
-**Files:**
-- Modify: `packages/codex-web/public/app.js`
-- Create: `skills/codex-web-user-context/SKILL.md`
-- Create: `skills/codex-web-user-context/agents/openai.yaml`
-
-- [ ] Add admin form and user-row email support.
-- [ ] Add the Codex Web user-context skill metadata and usage instructions.
-
-### Task 5: Verify
-
-**Files:**
-- Modify: `README.md`
-- Modify: `README.zh-CN.md`
-- Modify: `install.md`
-
-- [ ] Document the new skill alongside the existing bundled skill docs.
-- [ ] Run focused tests and `npm run typecheck`.
+- [x] Cover endpoint access, owner isolation, environment forwarding, and clean
+  turn instructions with focused tests.
+- [x] Cover helper success and failure behavior.
+- [x] Run the complete repository test and typecheck suites before release.
