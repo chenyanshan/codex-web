@@ -1369,7 +1369,8 @@ test('console session layout keeps Codex controls usable in a compact transcript
   }
 
   await expect(page.locator('#timeline')).toBeVisible();
-  await expect(page.locator('.message-card.assistant').first()).toHaveCSS('background-color', 'rgb(23, 27, 32)');
+  await expect(page.locator('#timeline')).toHaveCSS('background-color', 'rgb(23, 27, 32)');
+  await expect(page.locator('.message-card.assistant').first()).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(page.locator('html')).toHaveCSS('background-color', 'rgb(17, 21, 26)');
   await expect(page.locator('.console-composer-status')).toBeVisible();
   await expect(page.locator('.console-status-model')).toContainText('gpt-5.6-sol');

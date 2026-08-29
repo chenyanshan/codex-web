@@ -5162,7 +5162,7 @@ pre.command {
 :root[data-session-layout="console"] .timeline {
   gap: 18px;
   padding: 16px 10px var(--composer-offset);
-  background: var(--bg);
+  background: var(--msg-sys-bg);
   scroll-padding-bottom: var(--composer-offset);
 }
 
@@ -5207,10 +5207,10 @@ pre.command {
   position: relative;
   justify-self: stretch;
   max-width: min(100%, 1180px);
-  padding: 10px 12px 10px 30px;
+  padding: 2px 12px 8px 30px;
   border: 0;
   border-radius: 0;
-  background: var(--msg-sys-bg);
+  background: transparent;
   box-shadow: none;
 }
 
@@ -5372,7 +5372,7 @@ pre.command {
   justify-content: flex-start;
   align-items: stretch;
   padding: 16px 10px 0;
-  background: var(--bg);
+  background: var(--msg-sys-bg);
 }
 
 :root[data-session-layout="console"] .console-session-intro {

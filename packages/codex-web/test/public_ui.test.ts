@@ -2967,7 +2967,9 @@ test('console session layout styles stay scoped and preserve the current layout'
 
   assert.match(styles, /\.session-layout-toggle\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/su);
   assert.match(styles, /:root\[data-session-layout="console"\] \.message-card\.user\s*\{[^}]*justify-self:\s*stretch;[^}]*border-radius:\s*2px;/su);
-  assert.match(styles, /:root\[data-session-layout="console"\] \.message-card\.assistant\s*\{[^}]*background:\s*var\(--msg-sys-bg\);[^}]*box-shadow:\s*none;/su);
+  assert.match(styles, /:root\[data-session-layout="console"\] \.timeline\s*\{[^}]*background:\s*var\(--msg-sys-bg\);/su);
+  assert.match(styles, /:root\[data-session-layout="console"\] \.message-card\.assistant\s*\{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/su);
+  assert.match(styles, /:root\[data-session-layout="console"\] \.new-session-empty-state\s*\{[^}]*background:\s*var\(--msg-sys-bg\);/su);
   assert.match(styles, /:root\[data-session-layout="console"\] \.composer-wrap\s*\{[^}]*border-top:\s*1px solid var\(--session-console-line\);/su);
   assert.match(styles, /:root\[data-session-layout="console"\] \.console-composer-status\s*\{[^}]*order:\s*3;/su);
   assert.match(styles, /:root:not\(\[data-session-layout="console"\]\) \.message-card\.user\.delivery-failed\s*\{[^}]*max-width:\s*calc\(100% - 68px\);/su);
