@@ -1364,9 +1364,13 @@ test('console session layout keeps Codex controls usable in a compact transcript
   }))).toEqual({ theme: 'terminal', layout: 'console' });
   if (testInfo.project.name === 'mobile-portrait') {
     await page.locator('[data-session-id="session_browser_fixture"]').click();
+  } else {
+    await page.locator('[data-session-id="session_browser_history"]').click();
   }
 
   await expect(page.locator('#timeline')).toBeVisible();
+  await expect(page.locator('.message-card.assistant').first()).toHaveCSS('background-color', 'rgb(23, 27, 32)');
+  await expect(page.locator('html')).toHaveCSS('background-color', 'rgb(17, 21, 26)');
   await expect(page.locator('.console-composer-status')).toBeVisible();
   await expect(page.locator('.console-status-model')).toContainText('gpt-5.6-sol');
   if (testInfo.project.name === 'mobile-portrait') {

@@ -5207,10 +5207,10 @@ pre.command {
   position: relative;
   justify-self: stretch;
   max-width: min(100%, 1180px);
-  padding: 2px 12px 8px 30px;
+  padding: 10px 12px 10px 30px;
   border: 0;
   border-radius: 0;
-  background: transparent;
+  background: var(--msg-sys-bg);
   box-shadow: none;
 }
 
