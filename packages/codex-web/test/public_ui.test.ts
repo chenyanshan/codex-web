@@ -10164,6 +10164,101 @@ test('existing-session optimistic messages persist before the turn request can f
   await sending;
 });
 
+test('existing-session outbox records retain project ownership for pagination recovery', async () => {
+  const { api, storage } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/sessions/session_alpha/turns');
+      return {
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'unavailable', message: 'Retry later' }),
+      };
+    },
+  });
+  const session = {
+    id: 'session_alpha',
+    projectId: 'project_alpha',
+    projectDisplayName: 'Project Alpha',
+    cwd: '/repo/alpha',
+    settings: { metadata: {} },
+  };
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: {
+      userId: 'user_1',
+      username: 'alice',
+      roleIds: ['role_user'],
+      isAdmin: false,
+      mode: 'multi',
+    },
+  };
+  api.state.projects = [{ id: 'project_alpha', displayName: 'Project Alpha', cwd: '/repo/alpha' }];
+  api.state.projectsLoaded = true;
+  api.state.view = 'chat';
+  api.state.sessionId = session.id;
+  api.state.currentSession = session;
+  api.state.sessions = [session];
+  api.state.prompt = 'Keep this session project';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  const [submission] = api.state.submissionOutbox.values();
+  const [[, storedValue]] = submissionStorageEntries(storage);
+  const stored = JSON.parse(storedValue).entry;
+  assert.equal(submission?.sessionId, 'session_alpha');
+  assert.equal(submission?.projectId, 'project_alpha');
+  assert.equal(submission?.cwd, '/repo/alpha');
+  assert.equal(stored.projectId, 'project_alpha');
+  assert.equal(stored.cwd, '/repo/alpha');
+});
+
+test('existing-session requests keep the turns endpoint body after ownership is persisted', async () => {
+  const calls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      calls.push({ path, body: JSON.parse(options.body) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          type: 'command',
+          command: { name: 'help', action: 'show', message: 'Command complete' },
+          session: {
+            id: 'session_alpha',
+            projectId: 'project_alpha',
+            cwd: '/repo/alpha',
+            settings: { metadata: {} },
+          },
+        }),
+      };
+    },
+  });
+  const session = {
+    id: 'session_alpha',
+    projectId: 'project_alpha',
+    projectDisplayName: 'Project Alpha',
+    cwd: '/repo/alpha',
+    settings: { metadata: {} },
+  };
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = session.id;
+  api.state.currentSession = session;
+  api.state.sessions = [session];
+  api.state.prompt = 'Use the existing turn route';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.path, '/api/sessions/session_alpha/turns');
+  assert.equal(calls[0]?.body.text, 'Use the existing turn route');
+  assert.deepEqual(Object.keys(calls[0]?.body).sort(), ['settings', 'submissionId', 'text']);
+  assert.equal(Object.hasOwn(calls[0]?.body, 'projectId'), false);
+  assert.equal(Object.hasOwn(calls[0]?.body, 'cwd'), false);
+});
+
 test('a delayed turn response cannot attach itself to a newly selected session', async () => {
   let resolveTurn;
   const turnReady = new Promise((resolve) => {
@@ -10279,6 +10374,47 @@ test('new-session submission persists before the network request can finish', as
   assert.equal(api.state.sessionId, 'session_new');
   assert.equal(api.state.turnId, 'turn_new');
   assert.equal(api.state.timeline[0]?.turnId, 'turn_new');
+});
+
+test('new-session pending records stay in the selected managed project', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      assert.equal(path, '/api/session-submissions');
+      return {
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'unavailable', message: 'Retry later' }),
+      };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: {
+      userId: 'user_1',
+      username: 'alice',
+      roleIds: ['role_user'],
+      isAdmin: false,
+      mode: 'multi',
+    },
+  };
+  api.state.projects = [{ id: 'project_alpha', displayName: 'Project Alpha', cwd: '/repo/alpha' }];
+  api.state.projectsLoaded = true;
+  api.state.view = 'chat';
+  api.state.draftSessionActive = true;
+  api.state.newProjectId = 'project_alpha';
+  api.state.prompt = 'Create this in Project Alpha';
+
+  await api.onComposerSubmit({ preventDefault() {} });
+
+  const [submission] = api.state.submissionOutbox.values();
+  const projects = api.workspaceProjects();
+  assert.equal(submission?.sessionId, '');
+  assert.equal(submission?.projectId, 'project_alpha');
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0]?.id, 'project_alpha');
+  assert.equal(projects[0]?.label, 'Project Alpha');
+  assert.doesNotMatch(api.renderDesktopProjectRail(), /Unknown project/u);
 });
 
 test('a background new-session retry cannot take over a fresh draft', async () => {
@@ -12997,6 +13133,123 @@ test('workspace projects put favorites first and then sort by session count', as
   ];
 
   assert.equal(JSON.stringify(api.workspaceProjects().map((project) => project.id)), JSON.stringify(['project_b', 'project_a', 'project_c']));
+});
+
+test('pending existing-session records outside the current page keep their managed project', async () => {
+  const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: {
+      userId: 'user_1',
+      username: 'alice',
+      roleIds: ['role_user'],
+      isAdmin: false,
+      mode: 'multi',
+    },
+  };
+  api.state.projects = [{ id: 'project_alpha', displayName: 'Project Alpha', cwd: '/repo/alpha' }];
+  api.state.projectsLoaded = true;
+  api.state.sessions = [];
+  api.state.submissionOutbox.set('pending_alpha', {
+    id: 'pending_alpha',
+    ownerKey: 'multi:user_1',
+    text: 'Retry the off-page session',
+    status: 'failed',
+    sessionId: 'session_alpha',
+    projectId: 'project_alpha',
+    cwd: '/repo/alpha',
+    settings: {},
+    attachments: [],
+    createdAt: 100,
+    updatedAt: 100,
+    attempts: 1,
+    nextAttemptAt: 0,
+    error: 'Network unavailable',
+    retryable: true,
+    queuedMessageId: '',
+  });
+
+  const projects = api.workspaceProjects();
+  const rail = api.renderDesktopProjectRail();
+
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0]?.id, 'project_alpha');
+  assert.equal(projects[0]?.label, 'Project Alpha');
+  assert.equal(projects[0]?.sessionCount, 1);
+  assert.doesNotMatch(rail, /Unknown project/u);
+});
+
+test('legacy existing-session outbox recovery never creates an Unknown project', async () => {
+  const legacyEntries = [
+    {
+      id: 'legacy_cached',
+      ownerKey: 'multi:user_1',
+      text: 'Recover from the cached session',
+      status: 'pending',
+      sessionId: 'session_cached',
+      settings: {},
+      attachments: [],
+      createdAt: 100,
+      updatedAt: 100,
+      attempts: 0,
+      nextAttemptAt: 0,
+      error: '',
+      retryable: true,
+      queuedMessageId: '',
+    },
+    {
+      id: 'legacy_unresolved',
+      ownerKey: 'multi:user_1',
+      text: 'Do not invent a project',
+      status: 'pending',
+      sessionId: 'session_unresolved',
+      settings: {},
+      attachments: [],
+      createdAt: 200,
+      updatedAt: 200,
+      attempts: 0,
+      nextAttemptAt: 0,
+      error: '',
+      retryable: true,
+      queuedMessageId: '',
+    },
+  ];
+  const storage = Object.fromEntries(legacyEntries.map((entry) => [
+    `codexWebSubmissionOutbox:${entry.id}`,
+    JSON.stringify({ version: 1, entry }),
+  ]));
+  const { api } = await loadAppHarness({ storage, viewportWidth: 1280, desktopPointer: true });
+  api.state.authSession = {
+    id: 'auth_1',
+    principal: {
+      userId: 'user_1',
+      username: 'alice',
+      roleIds: ['role_user'],
+      isAdmin: false,
+      mode: 'multi',
+    },
+  };
+  api.state.projects = [{ id: 'project_alpha', displayName: 'Project Alpha', cwd: '/repo/alpha' }];
+  api.state.projectsLoaded = true;
+  api.state.sessions = [];
+  api.state.sessionsByScope.all = [{
+    id: 'session_cached',
+    projectId: 'project_alpha',
+    projectDisplayName: 'Project Alpha',
+    cwd: '/repo/alpha',
+    settings: { metadata: {} },
+  }];
+
+  const projects = api.workspaceProjects();
+  const rail = api.renderDesktopProjectRail();
+
+  assert.equal(api.state.submissionOutbox.size, 2);
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0]?.id, 'project_alpha');
+  assert.equal(projects[0]?.label, 'Project Alpha');
+  assert.equal(projects[0]?.sessionCount, 1);
+  assert.doesNotMatch(rail, /Unknown project/u);
+  assert.doesNotMatch(rail, /session_unresolved/u);
 });
 
 test('project rail keeps one project list with svg favorite controls', async () => {

@@ -6534,6 +6534,7 @@ function createComposerSubmission(text, {
     throw new Error('Too many messages are waiting to send. Retry or cancel one before sending another.');
   }
   const sessionId = String(preferredSessionId || state.sessionId || '').trim();
+  const existingSessionOwnership = sessionId ? submissionOwnership({ sessionId }) : null;
   const attachments = includeComposerAttachments ? readyComposerAttachments() : [];
   return upsertSubmissionOutboxEntry({
     id: `${submissionIdPrefix}${createSubmissionId()}`,
@@ -6541,8 +6542,8 @@ function createComposerSubmission(text, {
     text,
     status: 'pending',
     sessionId,
-    projectId: sessionId ? '' : currentNewProjectId(),
-    cwd: sessionId ? '' : state.cwd.trim(),
+    projectId: sessionId ? existingSessionOwnership?.projectId || '' : currentNewProjectId(),
+    cwd: sessionId ? existingSessionOwnership?.cwd || '' : state.cwd.trim(),
     settings: collectSettings(),
     attachments,
     createdAt: Date.now(),
@@ -12634,27 +12635,41 @@ function pendingSubmissionSessionSummaries() {
   const knownSessionIds = new Set(state.sessions.map((session) => session.id));
   return pendingSubmissionEntries()
     .filter((entry) => !entry.sessionId || !knownSessionIds.has(entry.sessionId))
-    .map((entry) => {
-      const project = (Array.isArray(state.projects) ? state.projects : [])
-        .find((candidate) => candidate?.id === entry.projectId);
-      return {
+    .flatMap((entry) => {
+      const ownership = submissionOwnership(entry);
+      if (!ownership) {
+        return [];
+      }
+      return [{
         id: localSubmissionSessionId(entry.id),
         submissionId: entry.id,
         localSubmission: true,
         deliveryState: entry.status,
         deliveryFailureVisible: submissionFailureIsVisible(entry),
         retryable: entry.retryable,
-        projectId: entry.projectId || undefined,
-        projectDisplayName: projectVisibleName(project, entry.projectId),
-        cwd: entry.cwd,
+        projectId: ownership.projectId || undefined,
+        projectDisplayName: ownership.projectDisplayName,
+        cwd: ownership.cwd,
         firstUserInput: entry.text,
         lastUserInput: entry.text,
         preview: entry.text,
         lastInputAt: entry.updatedAt,
         updatedAt: entry.updatedAt,
         settings: entry.settings,
-      };
+      }];
     });
+}
+
+function submissionOwnership(entry) {
+  return SESSION_PAGINATION_API.resolveSubmissionOwnership({
+    entry,
+    session: entry.sessionId ? knownSessionSummary(entry.sessionId) : null,
+    currentSessionId: state.sessionId,
+    currentCwd: state.cwd,
+    resolveProject: matchingManagedProjectForSession,
+    visibleProjectName: projectVisibleName,
+    leafName: cwdLeafName,
+  });
 }
 
 function sessionListCandidates() {

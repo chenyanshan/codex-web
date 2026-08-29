@@ -327,6 +327,45 @@
     return { totalCount, projectCounts };
   }
 
+  function resolveSubmissionOwnership({
+    entry = {},
+    session = null,
+    currentSessionId = '',
+    currentCwd = '',
+    resolveProject,
+    visibleProjectName,
+    leafName,
+  }) {
+    const sessionId = String(entry.sessionId || '').trim();
+    const projectId = String(entry.projectId || session?.projectId || '').trim();
+    const cwd = String(
+      entry.cwd
+      || session?.cwd
+      || (sessionId && sessionId === currentSessionId ? currentCwd : ''),
+    ).trim();
+    const candidate = {
+      projectId,
+      cwd,
+      projectDisplayName: session?.projectDisplayName || '',
+      projectName: session?.projectName || '',
+    };
+    const project = resolveProject(candidate);
+    const resolvedProjectId = String(project?.id || projectId).trim();
+    if (sessionId && !resolvedProjectId && !cwd) {
+      return null;
+    }
+    return {
+      projectId: resolvedProjectId,
+      cwd,
+      projectDisplayName: project
+        ? visibleProjectName(project, resolvedProjectId)
+        : leafName(candidate.projectDisplayName)
+          || leafName(candidate.projectName)
+          || leafName(cwd)
+          || (resolvedProjectId ? visibleProjectName(null, resolvedProjectId) : visibleProjectName(null)),
+    };
+  }
+
   function summarizeWorkspaceProjects({
     projects = [],
     sessions = [],
@@ -522,6 +561,7 @@
     createController,
     createState,
     normalizeSessionListStats,
+    resolveSubmissionOwnership,
     resetAllState,
     summarizeWorkspaceProjects,
     transitionStatsByScope,

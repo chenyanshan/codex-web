@@ -145,6 +145,76 @@ test('mobile project navigation remains a full drawer without the desktop rail t
   expect(box.width).toBeGreaterThanOrEqual(240);
 });
 
+test('off-page and legacy outbox records never create an Unknown project', async ({ page }, testInfo) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    const base = {
+      ownerKey: 'single',
+      status: 'failed',
+      settings: {},
+      attachments: [],
+      createdAt: Date.parse('2026-07-15T08:03:00.000Z'),
+      updatedAt: Date.parse('2026-07-15T08:03:00.000Z'),
+      attempts: 3,
+      nextAttemptAt: 0,
+      error: 'Network unavailable',
+      retryable: true,
+      queuedMessageId: '',
+    };
+    const entries = [
+      {
+        ...base,
+        id: 'off_page_managed',
+        text: 'Retry an off-page project session',
+        sessionId: 'session_outside_first_page',
+        projectId: 'project_browser_fixture',
+        cwd: '/Users/test/yanshan_quant',
+      },
+      {
+        ...base,
+        id: 'legacy_unresolved',
+        text: 'Do not invent a project for this legacy record',
+        sessionId: 'session_without_cached_ownership',
+      },
+    ];
+    for (const entry of entries) {
+      window.localStorage.setItem(
+        `codexWebSubmissionOutbox:${encodeURIComponent(entry.id)}`,
+        JSON.stringify({ version: 1, entry }),
+      );
+    }
+  });
+
+  await page.goto('/');
+  await expect(page.locator('[data-session-id="local-submission:off_page_managed"]')).toContainText('Retry an off-page project session');
+  await expect(page.locator('[data-session-id="local-submission:legacy_unresolved"]')).toHaveCount(0);
+  await expect(page.getByText('Unknown project', { exact: true })).toHaveCount(0);
+
+  const mobileToggle = page.locator('#mobile-sidebar-toggle-button');
+  if (await mobileToggle.isVisible()) {
+    await mobileToggle.click();
+    await expect(page.locator('.mobile-project-drawer')).toHaveClass(/is-open/u);
+  } else {
+    await page.locator('#desktop-sidebar-toggle-button').click();
+    await expect(page.locator('#main-sidebar')).toHaveCSS('width', '256px');
+  }
+  await expect(page.locator('[data-project-scope-key="project_browser_fixture"]')).toBeVisible();
+  await expect(page.getByText('Unknown project', { exact: true })).toHaveCount(0);
+
+  const layout = await page.evaluate(() => ({
+    bodyScrollWidth: document.body.scrollWidth,
+    documentScrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(Math.max(layout.bodyScrollWidth, layout.documentScrollWidth)).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  expect(pageErrors).toEqual([]);
+  await page.screenshot({
+    path: `/tmp/codex-web-outbox-project-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+});
+
 test('failed session messages can be dismissed without leaving a stuck list badge', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     const submissionId = 'failed_browser_message';
