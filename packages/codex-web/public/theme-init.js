@@ -15,6 +15,15 @@
     // Storage can be unavailable in strict or private browser contexts.
   }
   document.documentElement.dataset.theme = theme;
+  let sessionLayout = 'current';
+  try {
+    if (localStorage.getItem('codexWebSessionLayout') === 'console') {
+      sessionLayout = 'console';
+    }
+  } catch (_error) {
+    // Storage can be unavailable in strict or private browser contexts.
+  }
+  document.documentElement.dataset.sessionLayout = sessionLayout;
   const themeColorMeta = document.querySelector('meta[name="theme-color"]');
   themeColorMeta?.setAttribute('content', themeColors[theme]);
 })();

@@ -1291,6 +1291,7 @@ test('settings keep appearance and new-session defaults separated without overfl
   await expect(settings.locator('#default-model-select')).toHaveValue('gpt-5.6-sol');
   await expect(settings.locator('#default-reasoning-select')).toHaveValue('ultra');
   await expect(settings.locator('[data-app-theme]')).toHaveCount(4);
+  await expect(settings.locator('[data-session-layout-mode]')).toHaveCount(2);
 
   for (const [theme, chromeColor, colorScheme] of [
     ['retro', '#fcf9f2', 'light'],
@@ -1322,6 +1323,17 @@ test('settings keep appearance and new-session defaults separated without overfl
   ));
   expect(clippedThemeNames).toEqual([]);
 
+  await settings.locator('[data-session-layout-mode="console"]').click();
+  await expect(settings.locator('[data-session-layout-mode="console"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.evaluate(() => ({
+    layout: document.documentElement.dataset.sessionLayout,
+    savedLayout: window.localStorage.getItem('codexWebSessionLayout'),
+  }))).toEqual({ layout: 'console', savedLayout: 'console' });
+
+  await settings.locator('[data-session-layout-mode="current"]').click();
+  await expect(settings.locator('[data-session-layout-mode="current"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.sessionLayout)).toBe('current');
+
   const geometry = await settings.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
@@ -1332,6 +1344,55 @@ test('settings keep appearance and new-session defaults separated without overfl
   expect(geometry.scrollHeight).toBeGreaterThanOrEqual(geometry.clientHeight);
   await page.screenshot({
     path: `/tmp/codex-web-browser-${testInfo.project.name}-settings.png`,
+    fullPage: true,
+  });
+});
+
+test('console session layout keeps Codex controls usable in a compact transcript', async ({ page }, testInfo) => {
+  test.skip(!['mobile-portrait', 'desktop'].includes(testInfo.project.name), 'Phone and desktop cover the console session layout.');
+  await page.addInitScript(() => {
+    window.localStorage.setItem('codexWebSessionLayout', 'console');
+    window.localStorage.removeItem('codexWebWorkspaceState');
+  });
+
+  await page.goto('/');
+  if (testInfo.project.name === 'mobile-portrait') {
+    await page.locator('[data-session-id="session_browser_fixture"]').click();
+  }
+
+  await expect(page.locator('#timeline')).toBeVisible();
+  await expect(page.locator('.console-composer-status')).toBeVisible();
+  await expect(page.locator('.console-status-model')).toContainText('gpt-5.6-sol');
+  if (testInfo.project.name === 'mobile-portrait') {
+    await expect(page.getByRole('button', { name: 'Accept' })).toBeVisible();
+  }
+  await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+
+  const prompt = page.locator('#prompt-input');
+  await prompt.fill('Queue this from the console session layout');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.locator('.message-card.user').last()).toContainText('Queue this from the console session layout');
+  await expect(page.locator('.submission-delivery-actions')).toBeVisible();
+  await expect(page.locator('.submission-cancel-button')).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const userMessage = document.querySelector('.message-card.user')?.getBoundingClientRect();
+    const timeline = document.querySelector('#timeline')?.getBoundingClientRect();
+    const composer = document.querySelector('.composer-wrap')?.getBoundingClientRect();
+    return {
+      bodyWidth: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth),
+      viewportWidth: window.innerWidth,
+      userWidth: userMessage?.width || 0,
+      timelineWidth: timeline?.width || 0,
+      composerHeight: composer?.height || 0,
+    };
+  });
+  expect(geometry.bodyWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.userWidth).toBeGreaterThan(geometry.timelineWidth * 0.9);
+  expect(geometry.composerHeight).toBeLessThan(testInfo.project.name === 'desktop' ? 150 : 190);
+
+  await page.screenshot({
+    path: `/tmp/codex-web-console-session-${testInfo.project.name}.png`,
     fullPage: true,
   });
 });

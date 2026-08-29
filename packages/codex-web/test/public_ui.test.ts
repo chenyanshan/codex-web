@@ -2923,6 +2923,50 @@ test('app settings persist theme and default thread settings', async () => {
   assert.equal(api.state.sandboxMode, 'workspace-write');
 });
 
+test('session layout defaults to current and persists the console workspace independently', async () => {
+  const { api, storage, context } = await loadAppHarness();
+
+  assert.equal(api.state.sessionLayout, 'current');
+  assert.equal(context.document.documentElement.dataset.sessionLayout, 'current');
+  let settingsHtml = api.renderAppSettings().innerHTML;
+  assert.match(settingsHtml, /data-session-layout-mode="current" aria-pressed="true"/u);
+  assert.match(settingsHtml, /data-session-layout-mode="console" aria-pressed="false"/u);
+
+  api.applySessionLayout('console');
+  assert.equal(api.state.sessionLayout, 'console');
+  assert.equal(storage.get('codexWebSessionLayout'), 'console');
+  assert.equal(context.document.documentElement.dataset.sessionLayout, 'console');
+
+  api.state.codexConfigDefaults = { model: 'gpt-5.6-sol', reasoningEffort: 'ultra' };
+  api.state.cwd = '/Users/test/a-project-with-a-long-directory-name';
+  api.state.pendingTurn = true;
+  api.state.status = 'Turn running';
+  const statusHtml = api.renderComposerStatus();
+  assert.match(statusHtml, /class="composer-status console-composer-status"/u);
+  assert.match(statusHtml, />gpt-5\.6-sol · ultra</u);
+  assert.match(statusHtml, />Working</u);
+  assert.match(statusHtml, />\/Users\/test\/a-project-with-a-long-directory-name</u);
+
+  settingsHtml = api.renderAppSettings().innerHTML;
+  assert.match(settingsHtml, /data-session-layout-mode="console" aria-pressed="true"/u);
+
+  api.applySessionLayout('unsupported');
+  assert.equal(api.state.sessionLayout, 'current');
+  assert.equal(storage.get('codexWebSessionLayout'), 'current');
+  assert.equal(context.document.documentElement.dataset.sessionLayout, 'current');
+});
+
+test('console session layout styles stay scoped and preserve the current layout', async () => {
+  const styles = await readFile(stylesUrl, 'utf8');
+
+  assert.match(styles, /\.session-layout-toggle\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/su);
+  assert.match(styles, /:root\[data-session-layout="console"\] \.message-card\.user\s*\{[^}]*justify-self:\s*stretch;[^}]*border-radius:\s*2px;/su);
+  assert.match(styles, /:root\[data-session-layout="console"\] \.message-card\.assistant\s*\{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/su);
+  assert.match(styles, /:root\[data-session-layout="console"\] \.composer-wrap\s*\{[^}]*border-top:\s*1px solid var\(--session-console-line\);/su);
+  assert.match(styles, /:root\[data-session-layout="console"\] \.console-composer-status\s*\{[^}]*order:\s*3;/su);
+  assert.match(styles, /:root:not\(\[data-session-layout="console"\]\) \.message-card\.user\.delivery-failed\s*\{[^}]*max-width:\s*calc\(100% - 68px\);/su);
+});
+
 test('app settings render per-user webhook controls on mobile and desktop settings surfaces', async () => {
   const { api, context } = await loadAppHarness();
   context.window.location.origin = 'https://codex.example';
@@ -5540,14 +5584,16 @@ test('chat settings drawer no longer exposes activity detail controls', async ()
 });
 
 test('app settings page exposes message font size controls scoped to chat messages', async () => {
-  const [app, styles] = await Promise.all([
+  const [app, uiKit, styles] = await Promise.all([
     readFile(appUrl, 'utf8'),
+    readFile(uiKitUrl, 'utf8'),
     readFile(stylesUrl, 'utf8'),
   ]);
 
   assert.match(app, /const MESSAGE_FONT_SIZE_KEY = 'codexWebMessageFontSize';/u);
-  assert.match(app, /class="toggle message-size-toggle"/u);
-  assert.match(app, /function renderAppSettings\(\)[\s\S]*data-message-font-size="small"[\s\S]*data-message-font-size="medium"[\s\S]*data-message-font-size="large"/u);
+  assert.match(app, /function renderAppearanceSettingsSection\(\)[\s\S]*UI\.renderAppearanceSettings/u);
+  assert.match(uiKit, /class="toggle message-size-toggle"/u);
+  assert.match(uiKit, /function renderAppearanceSettings\([\s\S]*data-message-font-size="small"[\s\S]*data-message-font-size="medium"[\s\S]*data-message-font-size="large"/u);
   assert.doesNotMatch(app, /function renderSettingsDrawer\(\)[\s\S]*data-message-font-size="small"/u);
   assert.match(app, /for \(const button of document\.querySelectorAll\('\[data-message-font-size\]'\)\)/u);
   assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*font-size:\s*var\(--message-font-size\);/su);
@@ -18079,6 +18125,8 @@ globalThis.__codexWebTest = {
 	  toggleAdminUserEnabled: typeof toggleAdminUserEnabled === 'function' ? toggleAdminUserEnabled : null,
 	  deleteAdminUser: typeof deleteAdminUser === 'function' ? deleteAdminUser : null,
 	  applyTheme: typeof applyTheme === 'function' ? applyTheme : null,
+	  applySessionLayout: (layout, options) => UI.applySessionLayout(state, layout, options),
+	  setSessionLayout: typeof setSessionLayout === 'function' ? setSessionLayout : null,
 	  applySiteTitle: typeof applySiteTitle === 'function' ? applySiteTitle : null,
 	  applyLanguage: typeof applyLanguage === 'function' ? applyLanguage : null,
 	  translateUi: typeof translateUi === 'function' ? translateUi : null,

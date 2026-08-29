@@ -158,18 +158,32 @@ test('pre-style theme initialization restores saved themes and defaults to fresh
   assert.deepEqual(runThemeInit(source, null), {
     theme: 'fresh-light',
     chromeColor: '#f4f5f7',
+    sessionLayout: 'current',
   });
   assert.deepEqual(runThemeInit(source, 'dark-gold'), {
     theme: 'dark-gold',
     chromeColor: '#18181a',
+    sessionLayout: 'current',
   });
   assert.deepEqual(runThemeInit(source, 'oled-black'), {
     theme: 'oled-black',
     chromeColor: '#000000',
+    sessionLayout: 'current',
   });
   assert.deepEqual(runThemeInit(source, 'unsupported'), {
     theme: 'fresh-light',
     chromeColor: '#f4f5f7',
+    sessionLayout: 'current',
+  });
+  assert.deepEqual(runThemeInit(source, 'fresh-light', 'console'), {
+    theme: 'fresh-light',
+    chromeColor: '#f4f5f7',
+    sessionLayout: 'console',
+  });
+  assert.deepEqual(runThemeInit(source, 'fresh-light', 'unsupported'), {
+    theme: 'fresh-light',
+    chromeColor: '#f4f5f7',
+    sessionLayout: 'current',
   });
 });
 
@@ -219,12 +233,16 @@ function relativeLuminance(color: string): number {
   return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
 }
 
-function runThemeInit(source: string, savedTheme: string | null): { theme: string; chromeColor: string } {
+function runThemeInit(
+  source: string,
+  savedTheme: string | null,
+  savedSessionLayout: string | null = null,
+): { theme: string; chromeColor: string; sessionLayout: string } {
   const dataset: Record<string, string> = {};
   let chromeColor = '';
   vm.runInNewContext(source, {
     localStorage: {
-      getItem: () => savedTheme,
+      getItem: (key: string) => key === 'codexWebSessionLayout' ? savedSessionLayout : savedTheme,
     },
     document: {
       documentElement: { dataset },
@@ -235,5 +253,5 @@ function runThemeInit(source: string, savedTheme: string | null): { theme: strin
       }),
     },
   });
-  return { theme: dataset.theme, chromeColor };
+  return { theme: dataset.theme, chromeColor, sessionLayout: dataset.sessionLayout };
 }

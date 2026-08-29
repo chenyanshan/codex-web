@@ -1,4 +1,7 @@
 (function installCodexWebUi(globalObject) {
+  const SESSION_LAYOUT_KEY = 'codexWebSessionLayout';
+  const SESSION_LAYOUTS = Object.freeze(['current', 'console']);
+  const DEFAULT_SESSION_LAYOUT = 'current';
   const iconPaths = Object.freeze({
     admin: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
     archive: '<rect x="3" y="5" width="18" height="4" rx="1"/><path d="M5 9v10h14V9M9 13h6"/>',
@@ -110,6 +113,99 @@
     } catch (_error) {
       // The UI state still applies for this page when browser storage is unavailable.
     }
+  }
+
+  function normalizeSessionLayout(layout) {
+    return SESSION_LAYOUTS.includes(layout) ? layout : DEFAULT_SESSION_LAYOUT;
+  }
+
+  function readSessionLayout() {
+    try {
+      return normalizeSessionLayout(globalObject.localStorage.getItem(SESSION_LAYOUT_KEY));
+    } catch (_error) {
+      return DEFAULT_SESSION_LAYOUT;
+    }
+  }
+
+  function applySessionLayout(state, layout, options = {}) {
+    const nextLayout = normalizeSessionLayout(layout);
+    state.sessionLayout = nextLayout;
+    globalObject.document.documentElement.dataset.sessionLayout = nextLayout;
+    if (options.persist !== false) {
+      globalObject.localStorage.setItem(SESSION_LAYOUT_KEY, nextLayout);
+    }
+    return nextLayout;
+  }
+
+  function renderAppearanceSettings({ state, themes = [] } = {}) {
+    return `
+        <section class="settings-section">
+          <div class="settings-section-title">Appearance</div>
+          <div class="settings-field">
+            <div class="settings-field-label">Language</div>
+            <div class="toggle language-toggle" role="group" aria-label="Language">
+              <button type="button" data-app-language="en" aria-pressed="${String(state.language === 'en')}">English</button>
+              <button type="button" data-app-language="zh-CN" aria-pressed="${String(state.language === 'zh-CN')}">中文</button>
+            </div>
+          </div>
+          <div class="settings-field">
+            <div class="settings-field-label">Theme</div>
+            <div class="theme-picker" role="group" aria-label="Theme">
+              ${themes.map((theme) => `
+                <button class="theme-option" type="button" data-app-theme="${escapeHtml(theme.id)}" aria-pressed="${String(state.theme === theme.id)}">
+                  <span class="theme-swatch" aria-hidden="true">
+                    <span class="theme-swatch-surface"></span>
+                    <span class="theme-swatch-accent"></span>
+                  </span>
+                  <span class="theme-option-name">${escapeHtml(theme.label)}</span>
+                </button>
+              `).join('')}
+            </div>
+          </div>
+          <div class="settings-field">
+            <div class="settings-field-label">Session layout</div>
+            <div class="toggle session-layout-toggle" role="group" aria-label="Session layout">
+              <button type="button" data-session-layout-mode="current" aria-pressed="${String(state.sessionLayout === 'current')}">Current</button>
+              <button type="button" data-session-layout-mode="console" aria-pressed="${String(state.sessionLayout === 'console')}">Console</button>
+            </div>
+          </div>
+          <div class="settings-field">
+            <div class="settings-field-label">Message Size</div>
+            <div class="toggle message-size-toggle" role="group" aria-label="Message Size">
+              <button type="button" data-message-font-size="small" aria-pressed="${String(state.messageFontSize === 'small')}">Small</button>
+              <button type="button" data-message-font-size="medium" aria-pressed="${String(state.messageFontSize === 'medium')}">Medium</button>
+              <button type="button" data-message-font-size="large" aria-pressed="${String(state.messageFontSize === 'large')}">Large</button>
+            </div>
+          </div>
+        </section>
+    `;
+  }
+
+  function renderConsoleSessionIntro({ ariaLabel, siteTitle, sessionLabel, modelLabel, modelStatus, directoryLabel, location } = {}) {
+    return `
+    <section class="console-session-intro" aria-label="${escapeHtml(ariaLabel)}">
+      <div class="console-session-intro-heading">
+        <span class="console-session-prompt" aria-hidden="true">&rsaquo;_</span>
+        <strong data-i18n-skip>${escapeHtml(siteTitle)}</strong>
+        <span>${escapeHtml(sessionLabel)}</span>
+      </div>
+      <dl class="console-session-meta">
+        <div><dt>${escapeHtml(modelLabel)}:</dt><dd data-i18n-skip>${escapeHtml(modelStatus)}</dd></div>
+        <div><dt>${escapeHtml(directoryLabel)}:</dt><dd data-i18n-skip title="${escapeHtml(location)}">${escapeHtml(location)}</dd></div>
+      </dl>
+    </section>
+    `;
+  }
+
+  function renderConsoleComposerStatus({ tone, content, modelStatus, location } = {}) {
+    return `
+      <div class="composer-status console-composer-status" data-tone="${escapeHtml(tone)}" role="status" aria-live="polite" aria-atomic="true">
+        <span class="console-status-model" data-i18n-skip>${escapeHtml(modelStatus)}</span>
+        <span class="console-status-separator" aria-hidden="true">·</span>
+        ${content || ''}
+        <span class="console-status-path" data-i18n-skip title="${escapeHtml(location)}">${escapeHtml(location)}</span>
+      </div>
+    `;
   }
 
   function createComposerRenderer(context) {
@@ -231,11 +327,18 @@
   }
 
   globalObject.CodexWebUi = Object.freeze({
+    DEFAULT_SESSION_LAYOUT,
+    applySessionLayout,
     bindSidebarTooltips,
     createComposerRenderer,
     hideTooltip,
     icon,
     readStoredBoolean,
+    readSessionLayout,
+    renderAppearanceSettings,
+    renderConsoleComposerStatus,
+    renderConsoleSessionIntro,
+    normalizeSessionLayout,
     segmentedControl,
     storeBoolean,
   });

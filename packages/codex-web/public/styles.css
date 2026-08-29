@@ -5092,3 +5092,443 @@ pre.command {
     padding: 6px;
   }
 }
+
+.session-layout-toggle {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+:root[data-session-layout="console"] {
+  --session-console-bar: color-mix(in srgb, var(--panel-2) 88%, var(--bg));
+  --session-console-line: color-mix(in srgb, var(--border-strong) 48%, var(--border));
+  --session-console-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Monaco, Consolas, "Liberation Mono", "PingFang SC", monospace;
+}
+
+:root[data-session-layout="console"] .chat-topbar {
+  background: color-mix(in srgb, var(--bg) 92%, var(--panel));
+  border-bottom-color: var(--session-console-line);
+  font-family: var(--session-console-mono);
+}
+
+:root[data-session-layout="console"] .chat-topbar .project-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:root[data-session-layout="console"] .timeline {
+  gap: 18px;
+  padding: 16px 10px var(--composer-offset);
+  background: var(--bg);
+  scroll-padding-bottom: var(--composer-offset);
+}
+
+:root[data-session-layout="console"] .message-card {
+  width: 100%;
+  max-width: none;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .message-card.user {
+  position: relative;
+  justify-self: stretch;
+  padding: 11px 14px 11px 34px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--session-console-bar);
+  box-shadow: inset 2px 0 var(--session-console-line);
+  color: var(--text);
+  font-family: var(--session-console-mono);
+}
+
+:root[data-session-layout="console"] .message-card.user::before {
+  position: absolute;
+  top: 11px;
+  left: 12px;
+  color: var(--accent);
+  content: "\203A";
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+:root[data-session-layout="console"] .message-card.user .message-text,
+:root[data-session-layout="console"] .message-card.user .markdown-body,
+:root[data-session-layout="console"] .message-card.user .message-attachment-kind,
+:root[data-session-layout="console"] .message-card.user .message-attachment-name {
+  color: var(--text);
+}
+
+:root[data-session-layout="console"] .message-card.assistant {
+  position: relative;
+  justify-self: stretch;
+  max-width: min(100%, 1180px);
+  padding: 2px 12px 8px 30px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .message-card.assistant::before {
+  position: absolute;
+  top: 11px;
+  left: 12px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+
+:root[data-session-layout="console"] .message-card.system {
+  justify-self: stretch;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--info);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--info) 6%, var(--panel));
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .message-card.system.goal-message {
+  border-left-color: var(--success);
+  background: color-mix(in srgb, var(--success) 7%, var(--panel));
+}
+
+:root[data-session-layout="console"] .message-card.error-message {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .message-card.user.delivery-failed {
+  padding-right: 76px;
+}
+
+:root[data-session-layout="console"] .message-card.user .submission-delivery-actions {
+  right: 10px;
+  bottom: 50%;
+  transform: translateY(50%);
+}
+
+:root[data-session-layout="console"] .timeline > .card:not(.message-card) {
+  border-color: var(--session-console-line);
+  border-left-width: 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--panel) 86%, var(--bg));
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .timeline > .card:not(.message-card) .card-header {
+  margin-bottom: 6px;
+  font-family: var(--session-console-mono);
+}
+
+:root[data-session-layout="console"] .timeline .markdown-body pre {
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .composer-wrap {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
+  border-top: 1px solid var(--session-console-line);
+  background: var(--bg);
+  font-family: var(--session-console-mono);
+}
+
+:root[data-session-layout="console"] .queued-messages {
+  order: 1;
+  width: auto;
+  max-width: none;
+  margin: 6px 8px;
+}
+
+:root[data-session-layout="console"] .queued-message-row {
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .composer {
+  order: 2;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--session-console-bar);
+  box-shadow: none;
+}
+
+:root[data-session-layout="console"] .composer.ring-theme,
+:root[data-session-layout="console"] .composer:focus-within {
+  border: 0;
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+:root[data-session-layout="console"] .composer-error {
+  margin: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, var(--session-console-bar));
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+:root[data-session-layout="console"] .composer.is-expanded {
+  min-height: min(84dvh, 640px);
+}
+
+:root[data-session-layout="console"] .console-composer-status {
+  order: 3;
+  width: 100%;
+  min-height: 26px;
+  margin: 0;
+  padding: 0 12px;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+:root[data-session-layout="console"] .console-composer-status::before,
+:root[data-session-layout="console"] .console-composer-status::after {
+  display: none;
+}
+
+:root[data-session-layout="console"] .console-status-model {
+  color: var(--info);
+}
+
+:root[data-session-layout="console"] .console-status-separator {
+  color: var(--muted);
+}
+
+:root[data-session-layout="console"] .console-status-path {
+  min-width: 0;
+  justify-self: end;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-session-layout="console"] .composer-status-action:hover,
+:root[data-session-layout="console"] .composer-status-action:focus-visible {
+  color: var(--text);
+}
+
+:root[data-session-layout="console"] .new-session-empty-state {
+  justify-content: flex-start;
+  align-items: stretch;
+  padding: 16px 10px 0;
+  background: var(--bg);
+}
+
+:root[data-session-layout="console"] .console-session-intro {
+  width: min(100%, 480px);
+  padding: 14px 16px;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--session-console-line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: var(--session-console-mono);
+  font-size: 12px;
+}
+
+:root[data-session-layout="console"] .console-session-intro-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+:root[data-session-layout="console"] .console-session-intro-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-session-layout="console"] .console-session-prompt {
+  color: var(--accent);
+}
+
+:root[data-session-layout="console"] .console-session-meta {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+:root[data-session-layout="console"] .console-session-meta > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+:root[data-session-layout="console"] .console-session-meta dt,
+:root[data-session-layout="console"] .console-session-meta dd {
+  min-width: 0;
+  margin: 0;
+}
+
+:root[data-session-layout="console"] .console-session-meta dd {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-session-layout="console"] .new-session-empty-state .composer-wrap.is-centered {
+  width: calc(100% + 20px);
+  margin: auto -10px 0;
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
+  border-top: 1px solid var(--session-console-line);
+  background: var(--bg);
+}
+
+:root[data-session-layout="console"] .new-session-empty-state .composer.is-centered {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+@media (min-width: 1280px) and (hover: hover) and (pointer: fine) {
+  :root[data-session-layout="console"] .desktop-chat-pane .timeline {
+    padding: 18px 16px var(--composer-offset);
+  }
+
+  :root[data-session-layout="console"] .desktop-chat-pane .message-card.user,
+  :root[data-session-layout="console"] .desktop-chat-pane .message-card.assistant,
+  :root[data-session-layout="console"] .desktop-chat-pane .message-card.system {
+    max-width: none;
+  }
+
+  :root[data-session-layout="console"] .desktop-chat-pane .composer-wrap {
+    padding: 0;
+  }
+
+  :root[data-session-layout="console"] .desktop-chat-pane .composer {
+    width: 100%;
+    min-height: 0;
+  }
+
+  :root[data-session-layout="console"] .desktop-chat-pane .message-editor-shell:not(.is-expanded) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  :root[data-session-layout="console"] .desktop-chat-pane .message-editor-shell:not(.is-expanded) textarea {
+    min-height: 54px;
+    max-height: 116px;
+    padding: 15px 12px 11px;
+  }
+
+  :root[data-session-layout="console"] .desktop-chat-pane .message-editor-shell:not(.is-expanded) .composer-toolbar {
+    min-height: 54px;
+    padding: 5px 8px;
+    align-self: end;
+  }
+
+  :root[data-session-layout="console"] .new-session-empty-state {
+    padding: 18px 16px 0;
+  }
+
+  :root[data-session-layout="console"] .new-session-empty-state .composer-wrap.is-centered {
+    width: calc(100% + 32px);
+    margin-right: -16px;
+    margin-left: -16px;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  :root[data-session-layout="console"] .compact-composer-row {
+    padding: 0 4px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  :root[data-session-layout="console"] .compact-composer-row > .composer-leading-controls,
+  :root[data-session-layout="console"] .compact-composer-row > .composer-trailing-controls {
+    display: flex;
+    flex-direction: row;
+    align-self: end;
+    gap: 0;
+  }
+
+  :root[data-session-layout="console"] .composer-leading-controls .composer-expand-button,
+  :root[data-session-layout="console"] .composer-leading-controls .attach-button,
+  :root[data-session-layout="console"] .composer-trailing-controls .new-session-settings-button,
+  :root[data-session-layout="console"] .composer-trailing-controls .compact-send,
+  :root[data-session-layout="console"] .composer.is-expandable .composer-leading-controls .attach-button,
+  :root[data-session-layout="console"] .composer-trailing-controls.has-new-session-settings .compact-send {
+    grid-row: auto;
+  }
+
+  :root[data-session-layout="console"] .message-editor-shell:not(.is-expanded) textarea {
+    min-height: 52px;
+    max-height: 116px;
+    padding: 12px 8px 9px;
+  }
+
+  :root[data-session-layout="console"] .composer.is-expanded .compact-composer-row {
+    padding: 0;
+    display: block;
+  }
+}
+
+@media (max-width: 620px) {
+  :root:not([data-session-layout="console"]) .message-card.user.delivery-failed {
+    max-width: calc(100% - 68px);
+  }
+
+  :root[data-session-layout="console"] .chat-topbar {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 5px);
+    padding-bottom: 5px;
+  }
+
+  :root[data-session-layout="console"] .timeline {
+    gap: 14px;
+    padding-right: 7px;
+    padding-left: 7px;
+  }
+
+  :root[data-session-layout="console"] .message-card.user {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  :root[data-session-layout="console"] .message-card.assistant {
+    padding-right: 8px;
+    padding-left: 26px;
+  }
+
+  :root[data-session-layout="console"] .message-card.assistant::before {
+    left: 9px;
+  }
+
+  :root[data-session-layout="console"] .console-composer-status {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 6px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  :root[data-session-layout="console"] .console-status-path {
+    display: none;
+  }
+
+  :root[data-session-layout="console"] .console-session-intro {
+    width: 100%;
+    padding: 12px;
+    font-size: 11px;
+  }
+}

@@ -177,6 +177,7 @@ const state = {
   desktopSettingsOpen: false,
   desktopOverlay: null,
   theme: normalizeTheme(localStorage.getItem(THEME_KEY)),
+  sessionLayout: UI.readSessionLayout(),
   siteTitle: INITIAL_SITE_TITLE,
   globalSettings: {
     siteTitle: INITIAL_SITE_TITLE,
@@ -357,6 +358,7 @@ const submissionRequestControllers = new Map();
 
 bootstrap();
 applyTheme(state.theme, { persist: false });
+UI.applySessionLayout(state, state.sessionLayout, { persist: false });
 applySiteTitle(state.siteTitle, { persist: false });
 applyMessageFontSize(state.messageFontSize, { persist: false });
 applyLanguage(state.language, { persist: false });
@@ -1645,40 +1647,7 @@ function renderAppSettingsSections() {
 }
 
 function renderAppearanceSettingsSection() {
-  return `
-        <section class="settings-section">
-          <div class="settings-section-title">Appearance</div>
-          <div class="settings-field">
-            <div class="settings-field-label">Language</div>
-            <div class="toggle language-toggle" role="group" aria-label="Language">
-              <button type="button" data-app-language="en" aria-pressed="${String(state.language === 'en')}">English</button>
-              <button type="button" data-app-language="zh-CN" aria-pressed="${String(state.language === 'zh-CN')}">中文</button>
-            </div>
-          </div>
-          <div class="settings-field">
-            <div class="settings-field-label">Theme</div>
-            <div class="theme-picker" role="group" aria-label="Theme">
-              ${THEMES.map((theme) => `
-                <button class="theme-option" type="button" data-app-theme="${escapeAttribute(theme.id)}" aria-pressed="${String(state.theme === theme.id)}">
-                  <span class="theme-swatch" aria-hidden="true">
-                    <span class="theme-swatch-surface"></span>
-                    <span class="theme-swatch-accent"></span>
-                  </span>
-                  <span class="theme-option-name">${escapeHtml(theme.label)}</span>
-                </button>
-              `).join('')}
-            </div>
-          </div>
-          <div class="settings-field">
-            <div class="settings-field-label">Message Size</div>
-            <div class="toggle message-size-toggle" role="group" aria-label="Message Size">
-              <button type="button" data-message-font-size="small" aria-pressed="${String(state.messageFontSize === 'small')}">Small</button>
-              <button type="button" data-message-font-size="medium" aria-pressed="${String(state.messageFontSize === 'medium')}">Medium</button>
-              <button type="button" data-message-font-size="large" aria-pressed="${String(state.messageFontSize === 'large')}">Large</button>
-            </div>
-          </div>
-        </section>
-  `;
+  return UI.renderAppearanceSettings({ state, themes: THEMES });
 }
 
 function renderDefaultThreadSettingsSection() {
@@ -1968,12 +1937,28 @@ function renderChatContent({ desktop = false } = {}) {
 }
 
 function renderNewSessionEmptyState(composerClassName, { desktop = false } = {}) {
+  const intro = state.sessionLayout === 'console'
+    ? renderConsoleSessionIntro()
+    : '<h1 class="new-session-slogan" data-i18n-skip>AI 只是工具，其回答未必正确无误。</h1>';
   return `
       <main class="new-session-empty-state">
-        <h1 class="new-session-slogan" data-i18n-skip>AI 只是工具，其回答未必正确无误。</h1>
+        ${intro}
         ${renderComposer(composerClassName, { desktop, centered: true })}
       </main>
   `;
+}
+
+function renderConsoleSessionIntro() {
+  const location = currentSessionLocation();
+  return UI.renderConsoleSessionIntro({
+    ariaLabel: t('Session context'),
+    siteTitle: state.siteTitle,
+    sessionLabel: t('New Session'),
+    modelLabel: t('Model'),
+    modelStatus: configuredSessionModelStatus(),
+    directoryLabel: t('Directory'),
+    location,
+  });
 }
 
 function canConfigureNewSessionDraft() {
@@ -2725,7 +2710,26 @@ function renderComposerStatus() {
   const content = canOpenWork
     ? `<button class="composer-status-action" type="button" id="open-work-details-button" aria-haspopup="dialog" aria-expanded="${String(state.workDetailsOpen)}" aria-label="${escapeAttribute(`${label}. ${t('Work details')}`)}"><span>${escapeHtml(label)}</span><span class="composer-status-disclosure" aria-hidden="true">&#8250;</span></button>`
     : `<span>${escapeHtml(label)}</span>`;
+  if (state.sessionLayout === 'console') {
+    const cwd = currentSessionLocation();
+    return UI.renderConsoleComposerStatus({
+      tone: composerStatusTone(),
+      content,
+      modelStatus: configuredSessionModelStatus(),
+      location: cwd,
+    });
+  }
   return `<div class="composer-status${canOpenWork ? ' can-open-work' : ''}" data-tone="${escapeAttribute(composerStatusTone())}" role="status" aria-live="polite" aria-atomic="true">${content}</div>`;
+}
+
+function configuredSessionModelStatus() {
+  const configuredModel = state.model || state.codexConfigDefaults.model || t('Codex default');
+  const configuredReasoning = state.reasoningEffort || state.codexConfigDefaults.reasoningEffort || '';
+  return [configuredModel, configuredReasoning].filter(Boolean).join(' · ');
+}
+
+function currentSessionLocation() {
+  return state.cwd || state.currentSession?.cwd || t('New Session');
 }
 
 function composerStatusLabel() {
@@ -4689,6 +4693,12 @@ function bindGlobalEvents() {
     listenRendered(button, 'click', () => {
       applyTheme(button.getAttribute('data-app-theme') || DEFAULT_THEME);
       render();
+    });
+  }
+
+  for (const button of document.querySelectorAll('[data-session-layout-mode]')) {
+    listenRendered(button, 'click', () => {
+      setSessionLayout(button.getAttribute('data-session-layout-mode') || UI.DEFAULT_SESSION_LAYOUT);
     });
   }
 
@@ -13730,6 +13740,17 @@ function applyTheme(theme, options = {}) {
   if (options.persist !== false) {
     localStorage.setItem(THEME_KEY, nextTheme);
   }
+}
+
+function setSessionLayout(layout) {
+  const nextLayout = UI.normalizeSessionLayout(layout);
+  if (nextLayout === state.sessionLayout) {
+    return;
+  }
+  withTimelineBottomOffsetPreserved(() => {
+    UI.applySessionLayout(state, nextLayout);
+    withTimelineScrollPreserved(() => render());
+  });
 }
 
 function applySiteTitle(title, options = {}) {
