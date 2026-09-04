@@ -2141,7 +2141,8 @@ function webhookFingerprintProjectId(
 
 function webhookProjectReferenceMatches(project: CodexWebProject, reference: string): boolean {
   return project.id === reference
-    || projectDisplayNameKey(project.displayName) === projectDisplayNameKey(reference);
+    || projectDisplayNameKey(project.displayName) === projectDisplayNameKey(reference)
+    || projectDisplayNameKey(project.internalName) === projectDisplayNameKey(reference);
 }
 
 function normalizeWebhookOptionalSetting(
@@ -2171,17 +2172,18 @@ function resolveWebhookProjectReference(
   if (idMatch) {
     return idMatch;
   }
-  const displayNameKey = projectDisplayNameKey(reference);
-  const displayNameMatches = availableProjects.filter(
-    (project) => projectDisplayNameKey(project.displayName) === displayNameKey,
+  const referenceKey = projectDisplayNameKey(reference);
+  const referenceMatches = availableProjects.filter(
+    (project) => projectDisplayNameKey(project.displayName) === referenceKey
+      || projectDisplayNameKey(project.internalName) === referenceKey,
   );
-  if (displayNameMatches.length > 1) {
-    const normalizedCwds = displayNameMatches.map((project) => normalizedCwd(project.cwd));
+  if (referenceMatches.length > 1) {
+    const normalizedCwds = referenceMatches.map((project) => normalizedCwd(project.cwd));
     const allMatchSameCwd = normalizedCwds.every((cwd) => (
       cwd !== null && cwd === normalizedCwds[0]
     ));
     if (allMatchSameCwd) {
-      const canonicalMatches = displayNameMatches.filter((project) => !isAdminLegacyProject(project));
+      const canonicalMatches = referenceMatches.filter((project) => !isAdminLegacyProject(project));
       if (canonicalMatches.length === 1) {
         return canonicalMatches[0]!;
       }
@@ -2192,7 +2194,7 @@ function resolveWebhookProjectReference(
       'More than one available project has that display name and no unique canonical project could be selected. Use the internal project id.',
     );
   }
-  return displayNameMatches[0] ?? null;
+  return referenceMatches[0] ?? null;
 }
 
 function isAdminLegacyProject(project: CodexWebProject): boolean {

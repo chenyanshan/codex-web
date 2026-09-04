@@ -954,13 +954,21 @@ test('webhook project references ignore display-name case and reject same names 
     assert.equal((await exactId.json() as any).session.projectId, 'project_duplicate');
     assert.equal(runtime.createInputs[1]?.cwd, '/private/duplicate-project');
 
+    const internalName = await webhookRequest(server.baseUrl, key, 'internal-name-project', {
+      text: 'Use the internal project name',
+      projectId: 'shared',
+    });
+    assert.equal(internalName.status, 201);
+    assert.equal((await internalName.json() as any).session.projectId, 'project_shared');
+    assert.equal(runtime.createInputs[2]?.cwd, '/private/shared-project');
+
     const unknownName = await webhookRequest(server.baseUrl, key, 'unknown-project-name', {
       text: 'Unknown projects must not run',
       projectId: 'Missing Project',
     });
     assert.equal(unknownName.status, 404);
     assert.equal((await unknownName.json() as any).error, 'project_not_found');
-    assert.equal(runtime.createInputs.length, 2);
+    assert.equal(runtime.createInputs.length, 3);
   } finally {
     await server.stop();
     await fs.rm(stateDir, { recursive: true, force: true });
