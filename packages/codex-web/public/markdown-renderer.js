@@ -21,12 +21,24 @@
     return String(value || '').replace(/:\d+(?::\d+)?$/u, '');
   }
 
+  function normalizeSessionFileDestination(value) {
+    const destination = decodeHtmlEntityText(value).trim();
+    if (destination.startsWith('<') && destination.endsWith('>')) {
+      return destination.slice(1, -1).trim();
+    }
+    return destination;
+  }
+
   function isSessionFilePath(value) {
-    const filePath = stripSessionFileLocationSuffix(decodeHtmlEntityText(value).trim());
-    if (!filePath || /^(?:[a-z][a-z\d+.-]*:|#)/iu.test(filePath)) {
+    const filePath = stripSessionFileLocationSuffix(normalizeSessionFileDestination(value));
+    if (
+      !filePath
+      || /^(?:[a-z][a-z\d+.-]*:|#)/iu.test(filePath)
+      || /[<>\u0000-\u001f\u007f]/u.test(filePath)
+    ) {
       return false;
     }
-    return /\.(?:md|markdown|html?|pdf|png|jpe?g|gif|webp|bmp|avif|tiff?|[cm]?[jt]sx?|jsonc?|ya?ml|toml|css|scss|less|sh|bash|zsh|fish|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp)(?:[?#][^\s]*)?$/iu.test(filePath);
+    return /\.[\p{L}\p{N}][\p{L}\p{N}._+-]{0,31}(?:[?#][^\s]*)?$/iu.test(filePath);
   }
 
   function isLegacyReportPath(value) {
@@ -35,13 +47,13 @@
 
   function createRenderer({ canRenderSessionFileLink = () => true } = {}) {
     function renderSessionFileLink(label, href) {
-      const filePath = decodeHtmlEntityText(href);
+      const filePath = normalizeSessionFileDestination(href);
       return `<a href="#" class="session-file-link" data-session-file-path="${escapeHtml(filePath)}">${label}</a>`;
     }
 
     function linkPlainSessionFilePaths(html) {
       return String(html || '').replace(
-        /(^|[\s:：>（(])((?:(?:~?\/|\.\.?\/)?(?:[^\s\/<>"'`()]+\/)*[^\s\/<>"'`(),，。！？!?；;]+\.(?:md|markdown|html?|pdf|png|jpe?g|gif|webp|bmp|avif|tiff?)))(?=$|[\s<),，。！？!?；;:：])/giu,
+        /(^|[\s:：>（(])((?:(?:~?\/|\.\.?\/)?(?:[^\s\/<>"'`()：:]+\/)*[^\s\/<>"'`(),，。！？!?；;：:]+\.(?:md|markdown|html?|pdf|txt|rtf|docx?|odt|xlsx?|xlsm|ods|csv|tsv|pptx?|odp|epub|png|jpe?g|gif|webp|bmp|avif|tiff?|svg|heic|mp3|wav|m4a|flac|mp4|mov|webm|zip|7z|rar|tar|gz|tgz|bz2|xz|zst|[cm]?[jt]sx?|jsonc?|jsonl|xml|ya?ml|toml|ini|conf|log|sql|sqlite|db|css|scss|less|sh|bash|zsh|fish|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp|bin|dmg|pkg|apk|ipa|exe)))(?=$|[\s<),，。！？!?；;:：])/giu,
         (_match, prefix, filePath) => {
           if (!isSessionFilePath(filePath) || !canRenderSessionFileLink(filePath)) {
             return `${prefix}${filePath}`;
@@ -59,8 +71,8 @@
         return token;
       };
       let source = String(value || '');
-      source = source.replace(/\[([^\]]+)\]\(([^)\s]+)\)/gu, (match, label, href) => {
-        const decodedHref = decodeHtmlEntityText(href);
+      source = source.replace(/\[([^\]\r\n]+)\]\(\s*(?:<([^>\r\n]+)>|([^)\s]+))\s*\)/gu, (match, label, wrappedHref, plainHref) => {
+        const decodedHref = normalizeSessionFileDestination(wrappedHref ?? plainHref);
         if (/^https?:\/\//iu.test(decodedHref)) {
           return reserve(`<a href="${escapeHtml(decodedHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
         }
@@ -286,6 +298,7 @@
     decodeHtmlEntityText,
     isLegacyReportPath,
     isSessionFilePath,
+    normalizeSessionFileDestination,
     stripSessionFileLocationSuffix,
   });
 })(globalThis);

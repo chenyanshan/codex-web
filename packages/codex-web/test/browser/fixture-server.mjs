@@ -200,7 +200,7 @@ const fixtureFileTimeline = [
     role: 'assistant',
     label: 'Assistant',
     meta: 'final',
-    text: 'Generated [Browser session guide](docs/browser-session-guide.md) and [sandboxed HTML preview](docs/browser-sandbox.html) in this project.',
+    text: 'Generated [Browser session guide](docs/browser-session-guide.md), [sandboxed HTML preview](docs/browser-sandbox.html), and [download the deduplicated XLSX file](<tmp/20260904_cmd42_receive_ip_unique.xlsx>) in this project.',
   },
 ];
 
@@ -240,6 +240,16 @@ const fixtureSessionFiles = new Map([
     source: 'project',
     updatedAt: '2026-07-15T07:32:00.000Z',
     data: Buffer.from('<meta http-equiv="refresh" content="0;url=/html-refresh-target"><link rel="stylesheet" href="/html-probe.css"><script>document.documentElement.dataset.scriptRan="true"</script><img src="/html-probe.png" alt="blocked"><h1>Sandboxed HTML</h1>'),
+  }],
+  ['tmp/20260904_cmd42_receive_ip_unique.xlsx', {
+    id: 'sf_browser_xlsx',
+    sessionId: 'session_browser_files',
+    name: '20260904_cmd42_receive_ip_unique.xlsx',
+    kind: 'file',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    source: 'project',
+    updatedAt: '2026-09-04T02:00:00.000Z',
+    data: Buffer.from('browser xlsx fixture'),
   }],
   ['/state/turn-attachments/browser/history-image.png', {
     id: 'sf_browser_history_image',

@@ -1027,6 +1027,50 @@ test('historical image attachment opens in the session viewer and returns to its
   await expect(attachment).toBeVisible();
 });
 
+test('assistant xlsx link downloads the host file on remote browser layouts', async ({ page }, testInfo) => {
+  test.skip(
+    !['mobile-portrait', 'mobile-landscape', 'desktop'].includes(testInfo.project.name),
+    'Download rendering is checked at phone, intermediate, and desktop widths.',
+  );
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await page.goto('/');
+  await page.locator('[data-session-id="session_browser_files"]').click();
+
+  const fileLink = page.getByRole('link', { name: 'download the deduplicated XLSX file' });
+  await expect(fileLink).toBeVisible();
+  await expect(fileLink).toHaveAttribute('data-session-file-path', 'tmp/20260904_cmd42_receive_ip_unique.xlsx');
+  await page.screenshot({
+    path: `/tmp/codex-web-xlsx-link-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+
+  await fileLink.click();
+  const genericFile = page.locator('.session-file-generic');
+  await expect(genericFile).toBeVisible();
+  await expect(genericFile).toContainText('20260904_cmd42_receive_ip_unique.xlsx');
+  const downloadLink = genericFile.getByRole('link', { name: 'Download' });
+  await expect(downloadLink).toHaveAttribute('download', '20260904_cmd42_receive_ip_unique.xlsx');
+
+  const downloadPromise = page.waitForEvent('download');
+  await downloadLink.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('20260904_cmd42_receive_ip_unique.xlsx');
+
+  const layout = await page.evaluate(() => ({
+    bodyScrollWidth: document.body.scrollWidth,
+    documentScrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(Math.max(layout.bodyScrollWidth, layout.documentScrollWidth)).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  expect(pageErrors).toEqual([]);
+  await page.screenshot({
+    path: `/tmp/codex-web-xlsx-download-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+});
+
 test('sandboxed HTML preview blocks scripts, remote assets, and refresh navigation', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'One desktop browser covers HTML sandbox enforcement.');
 

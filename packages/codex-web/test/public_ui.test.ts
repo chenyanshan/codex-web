@@ -9257,6 +9257,49 @@ test('session file viewer previews pdf and image blobs and revokes URLs on switc
   assert.deepEqual(revoked, ['blob:file-1', 'blob:file-2']);
 });
 
+test('session file viewer downloads xlsx paths as generic files', async () => {
+  const calls = [];
+  const { api, context } = await loadAppHarness({
+    URL: {
+      createObjectURL: () => 'blob:xlsx-download',
+      revokeObjectURL() {},
+    },
+    fetch: async (requestPath, options = {}) => {
+      calls.push({ path: requestPath, options });
+      if (requestPath === '/api/sessions/session_1/files/resolve') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            file: {
+              id: 'file_xlsx',
+              name: '20260904_cmd42_receive_ip_unique.xlsx',
+              kind: 'file',
+              mimeType: 'application/octet-stream',
+              sizeBytes: 4096,
+              contentUrl: '/api/sessions/session_1/files/file_xlsx/content',
+            },
+          }),
+        };
+      }
+      return { ok: true, status: 200, blob: async () => new Blob(['xlsx']) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/home/ubuntu/workspace/AIOps', settings: { metadata: {} } };
+
+  await api.openSessionFileByPath('/home/ubuntu/workspace/AIOps/tmp/20260904_cmd42_receive_ip_unique.xlsx');
+
+  assert.equal(JSON.parse(calls[0].options.body).path, '/home/ubuntu/workspace/AIOps/tmp/20260904_cmd42_receive_ip_unique.xlsx');
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer token');
+  const html = context.document.querySelector('#app').innerHTML;
+  assert.match(html, /class="session-file-generic"/u);
+  assert.match(html, /href="blob:xlsx-download" download="20260904_cmd42_receive_ip_unique\.xlsx"/u);
+});
+
 test('closing a session file restores the prior chat timeline position', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => path.endsWith('/resolve')
@@ -14339,26 +14382,28 @@ test('assistant project file links and explicit bare paths open in the session f
   assert.match(plainHtml, /data-session-file-path="images\/preview\.tiff"/u);
 });
 
-test('assistant web links stay external while unsupported local files stay plain', async () => {
+test('assistant download links support office files, angle destinations, and bare data paths', async () => {
   const { api } = await loadAppHarness();
 
   const markdownHtml = api.renderTimelineItem({
     kind: 'message',
     role: 'assistant',
     label: 'Assistant',
-    text: '[OpenAI](https://openai.com/docs) [Data](docs/data.csv)',
+    text: '[OpenAI](https://openai.com/docs) [下载去重后的 XLSX 文件](</home/ubuntu/workspace/AIOps/tmp/20260904_cmd42_receive_ip_unique.xlsx>) [带空格的表格](<exports/monthly report.xlsx>)',
   });
   assert.match(markdownHtml, /href="https:\/\/openai\.com\/docs" target="_blank" rel="noopener noreferrer"/u);
-  assert.doesNotMatch(markdownHtml, /data-session-file-path="docs\/data\.csv"/u);
+  assert.match(markdownHtml, /data-session-file-path="\/home\/ubuntu\/workspace\/AIOps\/tmp\/20260904_cmd42_receive_ip_unique\.xlsx"/u);
+  assert.match(markdownHtml, /data-session-file-path="exports\/monthly report\.xlsx"/u);
+  assert.doesNotMatch(markdownHtml, /data-session-file-path="&lt;|\.xlsx&gt;"/u);
 
   const plainHtml = api.renderTimelineItem({
     kind: 'message',
     role: 'assistant',
     label: 'Assistant',
-    text: '查看这个文件：docs/data.csv',
+    text: '查看这个文件：docs/data.csv，也可下载 exports/archive.zip。',
   });
-  assert.doesNotMatch(plainHtml, /class="session-file-link"|data-session-file-path=/u);
-  assert.match(plainHtml, /docs\/data\.csv/u);
+  assert.match(plainHtml, /data-session-file-path="docs\/data\.csv"/u);
+  assert.match(plainHtml, /data-session-file-path="exports\/archive\.zip"/u);
 });
 
 test('session menu and navigation no longer expose reports UI', async () => {
