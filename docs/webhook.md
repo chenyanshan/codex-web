@@ -245,6 +245,37 @@ Authorization: Bearer cwwh_...
 
 ## 9. 多用户隔离示例
 
+### AIOps IM 网关信封
+
+AIOps 网关可以直接提交生产 IM 信封（包括 Feishu `event.message` 形态），无需先把
+消息压扁成仅含 `text` 的自定义 payload。服务端会在 ingress 阶段解析
+`message_id`、`chat_type`/`conversation_type`、`create_time`/`timestamp`、
+`continuation` 和 `user_json`，并将解析后的字段构造成固定的 Codex 上下文；这些
+协议字段不会交给模型自行猜测。支持私聊（`p2p`/`private`）和临时会话
+（`temporary`/`temp`），时间戳同时支持秒和毫秒。
+
+信封中的消息 ID 会作为默认 `clientRequestId`（也可显式提供该字段），因此网关重试
+不会重复创建 Turn。逻辑会话仍由 `Idempotency-Key` 决定，不能把单条消息 ID 当作
+会话键。`continuation` 只会沿用该幂等会话已经持久化的上下文；协议版本变化时旧
+Session 会失效并创建新 Session。
+
+如果信封缺少必需字段或结构无效，服务端会在任务 accepted 之前返回 HTTP 400：
+
+```json
+{
+  "error": {
+    "code": "INVALID_REQUEST_ENVELOPE",
+    "message": "...",
+    "stage": "ingress",
+    "retryable": false
+  }
+}
+```
+
+协议解析、Session、工具调用或 Codex 内部错误在 accepted 之后都会进入 `failed`，并
+通过状态接口的 `error.code`、`error.message` 和 `error.retryable` 返回；不会伪装成
+assistant 文本。状态接口不会返回 `completed` 搭配“网关请求格式无效，请重试”。
+
 `Idempotency-Key` 按 Webhook 用户隔离。Alice 和 Bob 即使使用相同的业务 ID，也会进入
 各自独立的 session：
 

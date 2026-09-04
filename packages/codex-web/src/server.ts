@@ -83,6 +83,12 @@ import {
   webhookSubmissionId,
   type WebhookDeliveryMode,
 } from './webhook_submission.js';
+import {
+  AIOPS_PROMPT_VERSION,
+  AIOPS_SCHEMA_VERSION,
+  parseAioPsWebhookEnvelope,
+  type AioPsWebhookEnvelope,
+} from './aiops_webhook.js';
 
 export interface CodexWebAuthLike {
   isConfigured(): Promise<boolean>;
@@ -1538,6 +1544,7 @@ async function handleWebhookSessionRequest({
 
   const idempotencyKey = normalizeWebhookIdempotencyKey(request.headers['idempotency-key']);
   const rawBody = await readJsonBody(request);
+  const aiopsEnvelope = parseAioPsWebhookEnvelope(rawBody);
   const revalidatedIdentityState = await identityStore.readState();
   const revalidatedCredential = revalidatedIdentityState.webhookCredentials.find((item) => (
     item.id === currentCredential.id
@@ -1573,12 +1580,20 @@ async function handleWebhookSessionRequest({
       }
 
       let conversation = await webhookConversationStore.read(lockedPrincipal.userId, conversationKeyHash);
+      const staleAioopsConversation = Boolean(
+        conversation
+        && aiopsEnvelope
+        && !(await isAioPsConversationCompatible(conversation, runtime)),
+      );
+      if (staleAioopsConversation) {
+        conversation = null;
+      }
       const legacySubmissionId = `webhook:${conversationKeyHash}`;
-      const legacySubmission = conversation
+      const legacySubmission = conversation || staleAioopsConversation
         ? null
         : await sessionSubmissionStore.read(lockedPrincipal.userId, legacySubmissionId);
       if (!conversation && legacySubmission?.status === 'submitted' && legacySubmission.sessionId) {
-        const firstBody = normalizeWebhookSessionBody(rawBody, lockedIdentityState, lockedPrincipal, null);
+        const firstBody = normalizeWebhookSessionBody(rawBody, lockedIdentityState, lockedPrincipal, null, aiopsEnvelope);
         const bound = await webhookConversationStore.bind({
           ownerUserId: lockedPrincipal.userId,
           keyHash: conversationKeyHash,
@@ -1586,6 +1601,7 @@ async function handleWebhookSessionRequest({
           projectId: legacySubmission.payload.projectId,
           createdAt: legacySubmission.createdAt,
           updatedAt: new Date().toISOString(),
+          protocolVersion: aiopsEnvelope ? AIOPS_SCHEMA_VERSION : null,
         });
         conversation = bound.conversation;
         const firstPayload = normalizeSessionSubmissionPayload(firstBody, null);
@@ -1601,12 +1617,14 @@ async function handleWebhookSessionRequest({
         }
       }
 
-      const clientRequestId = normalizeOptionalWebhookClientRequestId(rawBody.clientRequestId);
+      const clientRequestId = normalizeOptionalWebhookClientRequestId(
+        aiopsEnvelope?.clientRequestId ?? rawBody.clientRequestId,
+      );
       const deliveryMode = normalizeWebhookDeliveryMode(rawBody.deliveryMode);
       const createsConversation = conversation === null;
       let body: Record<string, unknown>;
       try {
-        body = normalizeWebhookSessionBody(rawBody, lockedIdentityState, lockedPrincipal, conversation);
+        body = normalizeWebhookSessionBody(rawBody, lockedIdentityState, lockedPrincipal, conversation, aiopsEnvelope);
       } catch (error) {
         if (
           clientRequestId
@@ -1626,7 +1644,7 @@ async function handleWebhookSessionRequest({
         ? hashWebhookRequestFingerprint({
             conversationKeyHash,
             projectId: webhookFingerprintProjectId(body, conversation),
-            text: String(rawBody.text),
+            text: String(body.text),
             title: normalizeOptionalString(rawBody.title) || null,
             model: typeof rawBody.model === 'string' ? rawBody.model.trim() : null,
             reasoningEffort: typeof rawBody.reasoningEffort === 'string' ? rawBody.reasoningEffort.trim() : null,
@@ -1669,14 +1687,18 @@ async function handleWebhookSessionRequest({
         throw createHttpError(409, 'webhook_conversation_conflict', 'This Idempotency-Key is bound to another session.');
       }
       if (createsConversation) {
-        const bound = await webhookConversationStore.bind({
+        const nextConversation = {
           ownerUserId: lockedPrincipal.userId,
           keyHash: conversationKeyHash,
           sessionId,
           projectId: typeof body.projectId === 'string' ? body.projectId : null,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        });
+          protocolVersion: aiopsEnvelope ? AIOPS_SCHEMA_VERSION : null,
+        };
+        const bound = staleAioopsConversation
+          ? { conversation: await webhookConversationStore.replace(nextConversation), created: true }
+          : await webhookConversationStore.bind(nextConversation);
         if (bound.conversation.sessionId !== sessionId) {
           throw createHttpError(409, 'webhook_conversation_conflict', 'This Idempotency-Key is bound to another session.');
         }
@@ -1738,15 +1760,39 @@ async function handleWebhookSubmissionStatusRequest({
       'clientRequestId must use 1-128 letters, numbers, dots, underscores, colons, or dashes.',
     );
   }
-  const record = await sessionSubmissionStore.read(principal.userId, webhookSubmissionId(clientRequestId));
+  let record = await sessionSubmissionStore.read(principal.userId, webhookSubmissionId(clientRequestId));
   if (!record || record.source !== 'webhook' || record.clientRequestId !== clientRequestId) {
     throw createHttpError(404, 'submission_not_found', 'Webhook submission was not found.');
   }
-  const projected = await projectWebhookSubmissionStatus(
-    record,
-    runtime,
-    webhookStatusSyncAttempts,
-  );
+  let projected: Awaited<ReturnType<typeof projectWebhookSubmissionStatus>>;
+  try {
+    projected = await projectWebhookSubmissionStatus(record, runtime, webhookStatusSyncAttempts);
+  } catch (error) {
+    projected = {
+      status: 'failed',
+      finalText: null,
+      error: {
+        code: 'turn_status_read_failed',
+        message: error instanceof Error ? error.message : 'The turn status could not be read.',
+        retryable: true,
+      },
+    };
+  }
+  if (
+    projected.status === 'failed'
+    && projected.error
+    && projected.error.code !== 'final_response_sync_failed'
+    && record.status !== 'failed'
+  ) {
+    const persisted = await sessionSubmissionStore.update(record.ownerUserId, record.id, (value) => ({
+      ...value,
+      status: 'failed',
+      result: null,
+      error: projected.error,
+      updatedAt: new Date().toISOString(),
+    }));
+    record = persisted;
+  }
   writeJson(response, 200, {
     clientRequestId,
     status: projected.status,
@@ -1874,6 +1920,19 @@ function webhookRateLimitClientId(request: IncomingMessage, token: string | null
   return `token:${crypto.createHash('sha256').update(token).digest('base64url')}`;
 }
 
+async function isAioPsConversationCompatible(
+  conversation: CodexWebWebhookConversation,
+  runtime: CodexWebRuntime,
+): Promise<boolean> {
+  if (conversation.protocolVersion !== AIOPS_SCHEMA_VERSION) {
+    return false;
+  }
+  const session = await runtime.readSession(conversation.sessionId).catch(() => null);
+  const metadata = session?.settings?.metadata as Record<string, unknown> | undefined;
+  return metadata?.aiopsSchemaVersion === AIOPS_SCHEMA_VERSION
+    && metadata.aiopsPromptVersion === AIOPS_PROMPT_VERSION;
+}
+
 function webhookPrincipalForCredential(
   state: CodexWebIdentityState,
   credential: CodexWebWebhookCredential,
@@ -1915,6 +1974,7 @@ function normalizeWebhookSessionBody(
   identityState: CodexWebIdentityState,
   principal: CodexWebPrincipal,
   conversation: CodexWebWebhookConversation | null,
+  aiopsEnvelope: AioPsWebhookEnvelope | null = null,
 ): Record<string, unknown> {
   const allowedFields = new Set([
     'text',
@@ -1926,14 +1986,15 @@ function normalizeWebhookSessionBody(
     'deliveryMode',
     'attachmentIds',
   ]);
-  if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+  if (!aiopsEnvelope && Object.keys(body).some((key) => !allowedFields.has(key))) {
     throw createHttpError(
       400,
       'invalid_webhook_payload',
       'Webhook session requests contain unsupported fields.',
     );
   }
-  if (typeof body.text !== 'string' || !body.text.trim()) {
+  const text = aiopsEnvelope?.text ?? body.text;
+  if (typeof text !== 'string' || !text.trim()) {
     throw createHttpError(400, 'invalid_webhook_payload', 'text is required.');
   }
   if (body.title !== undefined && typeof body.title !== 'string') {
@@ -1947,11 +2008,21 @@ function normalizeWebhookSessionBody(
   const settings = {
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(aiopsEnvelope ? {
+      metadata: {
+        aiopsPromptVersion: AIOPS_PROMPT_VERSION,
+        aiopsSchemaVersion: AIOPS_SCHEMA_VERSION,
+        conversationType: aiopsEnvelope.conversationType,
+        messageTime: aiopsEnvelope.messageTime,
+      },
+    } : {}),
   };
 
-  const hasProjectId = Object.prototype.hasOwnProperty.call(body, 'projectId');
+  const envelopeProjectId = aiopsEnvelope?.projectId ?? null;
+  const projectIdValue = envelopeProjectId ?? body.projectId;
+  const hasProjectId = envelopeProjectId !== null || Object.prototype.hasOwnProperty.call(body, 'projectId');
   if (identityState.settings.multiUserEnabled === true) {
-    const projectReference = typeof body.projectId === 'string' ? body.projectId.trim() : '';
+    const projectReference = typeof projectIdValue === 'string' ? projectIdValue.trim() : '';
     if (!projectReference) {
       throw createHttpError(400, 'invalid_webhook_payload', 'projectId is required in multi-user mode.');
     }
@@ -1972,7 +2043,7 @@ function normalizeWebhookSessionBody(
         );
       }
       return {
-        text: body.text,
+        text,
         sessionId: conversation.sessionId,
         settings,
         attachmentIds,
@@ -1983,7 +2054,7 @@ function normalizeWebhookSessionBody(
       throw createHttpError(404, 'project_not_found', 'Project was not found.');
     }
     return {
-      text: body.text,
+      text,
       projectId: project.id,
       ...(body.title !== undefined ? { title: body.title } : {}),
       settings,
@@ -1996,14 +2067,14 @@ function normalizeWebhookSessionBody(
   }
   if (conversation) {
     return {
-      text: body.text,
+      text,
       sessionId: conversation.sessionId,
       settings,
       attachmentIds,
     };
   }
   return {
-    text: body.text,
+    text,
     ...(body.title !== undefined ? { title: body.title } : {}),
     settings,
     attachmentIds,
@@ -2760,10 +2831,14 @@ async function advanceSessionSubmission({
       target,
       principal,
     });
+    const submittedTurnId = normalizeOptionalString(result.turnId);
+    if (!submittedTurnId && record.source === 'webhook') {
+      throw createHttpError(502, 'turn_not_started', 'Codex did not return a turn id.');
+    }
     current = await store.update(current.ownerUserId, current.id, (value) => ({
       ...value,
       status: 'submitted',
-      turnId: normalizeOptionalString(result.turnId) || null,
+      turnId: submittedTurnId,
       result: presentedResult,
       turnBaseline: null,
       payload: redactSubmittedPayload(value.payload),
@@ -7822,6 +7897,7 @@ interface HttpError extends Error {
   code: string;
   activeTurnId?: string;
   retryable?: boolean;
+  stage?: string;
 }
 
 function createHttpError(statusCode: number, code: string, message: string): HttpError {
@@ -7874,12 +7950,23 @@ function writeErrorResponse({
       code: error.code,
       message: error.message,
     });
-    writeJson(response, error.statusCode, {
-      error: error.code,
-      message: error.message,
-      ...(error.activeTurnId ? { activeTurnId: error.activeTurnId } : {}),
-      ...(error.retryable === true ? { retryable: true } : {}),
-    });
+    if (error.code === 'INVALID_REQUEST_ENVELOPE') {
+      writeJson(response, error.statusCode, {
+        error: {
+          code: error.code,
+          message: error.message,
+          retryable: error.retryable === true,
+          stage: error.stage ?? 'ingress',
+        },
+      });
+    } else {
+      writeJson(response, error.statusCode, {
+        error: error.code,
+        message: error.message,
+        ...(error.activeTurnId ? { activeTurnId: error.activeTurnId } : {}),
+        ...(error.retryable === true ? { retryable: true } : {}),
+      });
+    }
     return;
   }
   writeRequestLog({

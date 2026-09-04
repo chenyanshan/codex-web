@@ -13,6 +13,7 @@ export interface CodexWebWebhookConversation {
   projectId: string | null;
   createdAt: string;
   updatedAt: string;
+  protocolVersion?: string | null;
 }
 
 interface WebhookConversationFile {
@@ -50,6 +51,16 @@ export class FileWebhookConversationStore {
       file.conversations[key] = normalized;
       await this.writeFile(file);
       return { conversation: normalized, created: true };
+    });
+  }
+
+  async replace(conversation: CodexWebWebhookConversation): Promise<CodexWebWebhookConversation> {
+    return withFileLock(`${this.conversationPath}.lock`, async () => {
+      const file = await this.readFile();
+      const normalized = normalizeConversation(conversation);
+      file.conversations[conversationKey(normalized.ownerUserId, normalized.keyHash)] = normalized;
+      await this.writeFile(file);
+      return normalized;
     });
   }
 
@@ -165,6 +176,7 @@ function normalizeConversation(value: CodexWebWebhookConversation): CodexWebWebh
     projectId: nullableString(value.projectId),
     createdAt,
     updatedAt: normalizeString(value.updatedAt) || createdAt,
+    protocolVersion: nullableString(value.protocolVersion),
   };
 }
 

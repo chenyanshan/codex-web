@@ -370,6 +370,102 @@ test('webhook management is self-scoped and one key keeps routing turns to the s
   }
 });
 
+test('production-shaped AIOps IM envelopes are parsed before submission and invalid envelopes fail at ingress', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-aiops-envelope-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  const key = (await identityStore.setWebhookEnabled('user_alice', true)).key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const payload = {
+      schema: '2.0',
+      projectId: 'Shared Project',
+      event: {
+        message: {
+          message_id: 'om_prod_1',
+          create_time: '1720000000',
+          chat_type: 'p2p',
+          message_type: 'text',
+          content: JSON.stringify({ text: '查询支付服务最近一小时错误' }),
+        },
+      },
+      user_json: { tenant: 'tenant-a', user: 'alice' },
+      continuation: { previous: 'none' },
+      clientRequestId: 'fsmsg:tenant-a:om_prod_1',
+    };
+    const accepted = await webhookRequest(server.baseUrl, key, 'work:prod:chat:g1', payload);
+    assert.equal(accepted.status, 201);
+    assert.equal(runtime.createInputs.length, 1);
+    assert.match(runtime.startInputs[0]?.input.text ?? '', /查询支付服务最近一小时错误/u);
+    assert.match(runtime.startInputs[0]?.input.text ?? '', /conversation_type: private/u);
+    assert.equal(JSON.stringify(runtime.startInputs[0]?.input).includes('fsmsg:tenant-a:om_prod_1'), false);
+
+    const invalid = await webhookRequest(server.baseUrl, key, 'work:prod:bad:g1', {
+      schema: '2.0',
+      event: { message: { message_id: 'missing-time', chat_type: 'temporary' } },
+    });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual((await invalid.json() as any).error, {
+      code: 'INVALID_REQUEST_ENVELOPE',
+      message: 'AIOps IM envelope must include conversation type, message id, message time, and text.',
+      stage: 'ingress',
+      retryable: false,
+    });
+    assert.equal(runtime.createInputs.length, 1);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('AIOps protocol version changes invalidate a legacy conversation session', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-aiops-version-'));
+  const identityStore = await createMultiUserStore(stateDir);
+  const key = (await identityStore.setWebhookEnabled('user_alice', true)).key!;
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: alicePrincipal }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir),
+  });
+  await server.start();
+  try {
+    const legacy = await webhookRequest(server.baseUrl, key, 'work:versioned', {
+      projectId: 'Shared Project',
+      text: 'legacy message',
+    });
+    assert.equal(legacy.status, 201);
+    const legacySessionId = (await legacy.json() as any).submission.sessionId;
+    const next = await webhookRequest(server.baseUrl, key, 'work:versioned', {
+      projectId: 'Shared Project',
+      clientRequestId: 'fsmsg:versioned:1',
+      text: 'ignored by envelope',
+      event: {
+        message: {
+          message_id: 'om_versioned',
+          create_time: '1720000000',
+          chat_type: 'p2p',
+          content: JSON.stringify({ text: 'new protocol message' }),
+        },
+      },
+    });
+    assert.equal(next.status, 201);
+    const nextSessionId = (await next.json() as any).submission.sessionId;
+    assert.notEqual(nextSessionId, legacySessionId);
+    assert.equal(runtime.createInputs.length, 2);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('the same webhook conversation key is isolated between different owners', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-owner-isolation-'));
   const identityStore = await createMultiUserStore(stateDir);

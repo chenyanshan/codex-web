@@ -75,11 +75,30 @@ export function projectWebhookTurnStatus(turn: WebhookTurnSnapshot): {
   }
   if (isCompletedStatus(status)) {
     const finalText = finalAssistantText(turn);
+    if (isProtocolErrorText(finalText)) {
+      return {
+        status: 'failed',
+        finalText: null,
+        error: {
+          code: 'INVALID_REQUEST_ENVELOPE',
+          message: 'The request envelope was rejected by the AIOps protocol handler.',
+          retryable: false,
+        },
+      };
+    }
     return finalText
       ? { status: 'completed', finalText, error: null }
       : { status: 'running', finalText: null, error: null };
   }
   return { status: 'running', finalText: null, error: null };
+}
+
+function isProtocolErrorText(value: string | null): boolean {
+  if (!value) return false;
+  const normalized = value.replace(/\s+/gu, '').toLowerCase();
+  return normalized === '网关请求格式无效，请重试'
+    || normalized === '网关请求格式无效,请重试'
+    || normalized.includes('invalidrequestenvelope');
 }
 
 export function webhookTurnNeedsFinalSync(turn: WebhookTurnSnapshot): boolean {

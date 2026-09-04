@@ -9,6 +9,13 @@ export {
 } from './access_control.js';
 export { loadServiceConfig, readEnvFile, type CodexWebConfig } from './config.js';
 export {
+  AIOPS_PROMPT_VERSION,
+  AIOPS_SCHEMA_VERSION,
+  parseAioPsWebhookEnvelope,
+  parseAIOpsWebhookEnvelope,
+  type AioPsWebhookEnvelope,
+} from './aiops_webhook.js';
+export {
   CodexWebEventBus,
   type CodexWebEventListener,
   type CodexWebStoredEvent,
