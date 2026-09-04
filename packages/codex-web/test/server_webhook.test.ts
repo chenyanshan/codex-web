@@ -1133,6 +1133,72 @@ test('single-user webhooks use the server default cwd and reject unsupported pay
   }
 });
 
+test('webhooks resolve uploaded attachment ids into protected turn snapshots', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-attachments-'));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-webhook-project-'));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  const created = await identityStore.setWebhookEnabled('local-admin', true);
+  const runtime = runtimeStub();
+  const server = createCodexWebServer({
+    auth: authFor({ browser: null }),
+    identityStore,
+    runtime: runtime as any,
+    config: createConfig(stateDir, projectDir),
+  });
+  await server.start();
+  try {
+    const form = new FormData();
+    form.append('files', new Blob(['%PDF-1.7 test'], { type: 'application/pdf' }), 'report.pdf');
+    const uploaded = await fetch(`${server.baseUrl}/api/session-submission-attachments?cwd=${encodeURIComponent(projectDir)}`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer browser' },
+      body: form,
+    });
+    assert.equal(uploaded.status, 201);
+    const attachment = (await uploaded.json() as any).items[0];
+    assert.match(attachment.id, /^att_[0-9a-f]{20}$/u);
+
+    const submitted = await webhookRequest(server.baseUrl, created.key!, 'pdf-request', {
+      text: 'Inspect this PDF',
+      clientRequestId: 'pdf-client-request',
+      attachmentIds: [attachment.id],
+    });
+    assert.equal(submitted.status, 201);
+    const input = runtime.startInputs[0]?.input;
+    assert.equal(input.attachments[0].kind, 'file');
+    assert.match(input.attachments[0].localPath, /turn-attachments\/local-admin\/thread_1\//u);
+    assert.equal(await fs.readFile(input.attachments[0].localPath, 'utf8'), '%PDF-1.7 test');
+    assert.equal((await fs.lstat(input.attachments[0].localPath)).isSymbolicLink(), false);
+
+    const imageForm = new FormData();
+    imageForm.append('files', new Blob(['png-bytes'], { type: 'image/png' }), 'diagram.png');
+    const imageUpload = await fetch(`${server.baseUrl}/api/session-submission-attachments?cwd=${encodeURIComponent(projectDir)}`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer browser' },
+      body: imageForm,
+    });
+    const imageAttachment = (await imageUpload.json() as any).items[0];
+    const imageSubmitted = await webhookRequest(server.baseUrl, created.key!, 'image-request', {
+      text: 'Inspect this image',
+      clientRequestId: 'image-client-request',
+      attachmentIds: [imageAttachment.id],
+    });
+    assert.equal(imageSubmitted.status, 201);
+    assert.equal(runtime.startInputs[1]?.input.attachments[0]?.kind, 'image');
+
+    const conflict = await webhookRequest(server.baseUrl, created.key!, 'pdf-request', {
+      text: 'Inspect this PDF',
+      clientRequestId: 'pdf-client-request',
+      attachmentIds: ['att_ffffffffffffffffffff'],
+    });
+    assert.equal(conflict.status, 409);
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.rm(projectDir, { recursive: true, force: true });
+  }
+});
+
 test('webhooks accept optional model and reasoning effort as non-empty strings', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-model-settings-'));
   const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });

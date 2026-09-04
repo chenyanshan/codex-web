@@ -33,6 +33,7 @@ import {
 } from './identity_store.js';
 import { FileReportStore } from './report_store.js';
 import type { CodexWebReport } from './report_store.js';
+import { FileAttachmentStore } from './attachment_store.js';
 import {
   FileSessionFileStore,
   SessionFileBusyError,
@@ -233,6 +234,8 @@ interface StoredUploadAttachment {
   displayPath: string;
 }
 
+const MAX_ATTACHMENT_IDS = 32;
+
 export function createCodexWebServer({
   auth,
   runtime,
@@ -268,6 +271,10 @@ export function createCodexWebServer({
   const webhookConversationStore = providedWebhookConversationStore ?? new FileWebhookConversationStore({
     stateDir: config.stateDir,
   });
+  const attachmentStore = new FileAttachmentStore({
+    stateDir: config.stateDir,
+    ttlSeconds: config.uploadTtlSeconds,
+  });
   const sessionSubmissionOperations = new Map<string, Promise<SessionSubmissionExecution>>();
   const webhookStatusSyncAttempts = new Map<string, WebhookStatusSyncAttempt>();
   let localApiUrl = `http://127.0.0.1:${config.port}`;
@@ -285,6 +292,7 @@ export function createCodexWebServer({
       sessionSubmissionStore,
       sessionSubmissionOperations,
       webhookConversationStore,
+      attachmentStore,
       loginRateLimiter,
       webhookRateLimiter,
       webhookStatusRateLimiter,
@@ -323,6 +331,7 @@ export function createCodexWebServer({
         sessionSubmissionStore,
         webhookConversationStore,
       });
+      await attachmentStore.prune();
       await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
         server.listen(config.port, config.host, () => {
@@ -506,6 +515,7 @@ async function handleRequest({
   sessionSubmissionStore,
   sessionSubmissionOperations,
   webhookConversationStore,
+  attachmentStore,
   loginRateLimiter,
   webhookRateLimiter,
   webhookStatusRateLimiter,
@@ -525,6 +535,7 @@ async function handleRequest({
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   webhookConversationStore: FileWebhookConversationStore;
+  attachmentStore: FileAttachmentStore;
   loginRateLimiter: FixedWindowRateLimiter;
   webhookRateLimiter: FixedWindowRateLimiter;
   webhookStatusRateLimiter: FixedWindowRateLimiter;
@@ -613,6 +624,7 @@ async function handleRequest({
       sessionSubmissionStore,
       sessionSubmissionOperations,
       webhookConversationStore,
+      attachmentStore,
       webhookRateLimiter,
       localApiUrl,
     });
@@ -685,6 +697,7 @@ async function handleRequest({
     sessionSubmissionStore,
     sessionSubmissionOperations,
     localApiUrl,
+    attachmentStore,
   });
   if (submissionHandled) {
     return;
@@ -715,6 +728,7 @@ async function handleRequest({
       sessionSubmissionStore,
       sessionSubmissionOperations,
       localApiUrl,
+      attachmentStore,
       registerSseCloser,
       closeSseConnections,
     });
@@ -1035,6 +1049,7 @@ async function handleRequest({
       request,
       config,
       principal,
+      attachmentStore,
       projectCwd: normalizeOptionalString(session.cwd),
       projectKey: `cwd-${stableIdHash(normalizeOptionalString(session.cwd) || sessionId, 16)}`,
     });
@@ -1082,6 +1097,7 @@ async function handleRequest({
         store: sessionSubmissionStore,
         operations: sessionSubmissionOperations,
         localApiUrl,
+        attachmentStore,
       });
       writeJson(response, execution.created ? 202 : 200, execution.response);
       return;
@@ -1098,6 +1114,7 @@ async function handleRequest({
       sessionId,
       projectCwd: '',
       projectKey: '',
+      attachmentStore,
     });
     if (!input) {
       writeSessionNotFound(response);
@@ -1434,6 +1451,7 @@ async function handleWebhookSessionRequest({
   sessionSubmissionStore,
   sessionSubmissionOperations,
   webhookConversationStore,
+  attachmentStore,
   webhookRateLimiter,
   localApiUrl,
 }: {
@@ -1445,6 +1463,7 @@ async function handleWebhookSessionRequest({
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   webhookConversationStore: FileWebhookConversationStore;
+  attachmentStore: FileAttachmentStore;
   webhookRateLimiter: FixedWindowRateLimiter;
   localApiUrl: string;
 }): Promise<void> {
@@ -1582,6 +1601,7 @@ async function handleWebhookSessionRequest({
             model: typeof rawBody.model === 'string' ? rawBody.model.trim() : null,
             reasoningEffort: typeof rawBody.reasoningEffort === 'string' ? rawBody.reasoningEffort.trim() : null,
             deliveryMode,
+            attachmentIds: normalizeWebhookAttachmentIds(rawBody.attachmentIds),
           })
         : null;
       const submissionId = clientRequestId
@@ -1600,6 +1620,7 @@ async function handleWebhookSessionRequest({
         store: sessionSubmissionStore,
         operations: sessionSubmissionOperations,
         localApiUrl,
+        attachmentStore,
         submissionDeliveryMode: deliveryMode,
         ...(clientRequestId && requestFingerprint ? {
           metadata: {
@@ -1873,6 +1894,7 @@ function normalizeWebhookSessionBody(
     'reasoningEffort',
     'clientRequestId',
     'deliveryMode',
+    'attachmentIds',
   ]);
   if (Object.keys(body).some((key) => !allowedFields.has(key))) {
     throw createHttpError(
@@ -1889,6 +1911,7 @@ function normalizeWebhookSessionBody(
   }
   normalizeOptionalWebhookClientRequestId(body.clientRequestId);
   normalizeWebhookDeliveryMode(body.deliveryMode);
+  const attachmentIds = normalizeWebhookAttachmentIds(body.attachmentIds);
   const model = normalizeWebhookOptionalSetting(body, 'model');
   const reasoningEffort = normalizeWebhookOptionalSetting(body, 'reasoningEffort');
   const settings = {
@@ -1922,6 +1945,7 @@ function normalizeWebhookSessionBody(
         text: body.text,
         sessionId: conversation.sessionId,
         settings,
+        attachmentIds,
       };
     }
     const project = resolveWebhookProjectReference(identityState, principal, projectReference);
@@ -1933,6 +1957,7 @@ function normalizeWebhookSessionBody(
       projectId: project.id,
       ...(body.title !== undefined ? { title: body.title } : {}),
       settings,
+      attachmentIds,
     };
   }
 
@@ -1944,13 +1969,35 @@ function normalizeWebhookSessionBody(
       text: body.text,
       sessionId: conversation.sessionId,
       settings,
+      attachmentIds,
     };
   }
   return {
     text: body.text,
     ...(body.title !== undefined ? { title: body.title } : {}),
     settings,
+    attachmentIds,
   };
+}
+
+function normalizeWebhookAttachmentIds(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw createHttpError(400, 'invalid_webhook_payload', 'attachmentIds must be an array.');
+  }
+  if (value.length > MAX_ATTACHMENT_IDS) {
+    throw createHttpError(400, 'invalid_webhook_payload', `attachmentIds may contain at most ${MAX_ATTACHMENT_IDS} items.`);
+  }
+  const ids = value.map((item) => typeof item === 'string' ? item.trim() : '');
+  if (ids.some((id) => !id)) {
+    throw createHttpError(400, 'invalid_webhook_payload', 'attachmentIds must contain non-empty strings.');
+  }
+  if (new Set(ids).size !== ids.length) {
+    throw createHttpError(400, 'invalid_webhook_payload', 'attachmentIds must not contain duplicates.');
+  }
+  return ids;
 }
 
 function normalizeOptionalWebhookClientRequestId(value: unknown): string | null {
@@ -2267,6 +2314,7 @@ async function handleSessionSubmissionEndpoint({
   sessionSubmissionStore,
   sessionSubmissionOperations,
   localApiUrl,
+  attachmentStore,
 }: {
   request: IncomingMessage;
   response: ServerResponse;
@@ -2281,6 +2329,7 @@ async function handleSessionSubmissionEndpoint({
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   localApiUrl: string;
+  attachmentStore: FileAttachmentStore;
 }): Promise<boolean> {
   if (pathname === '/api/session-submission-attachments' && method === 'POST') {
     const scope = await resolveSessionSubmissionAttachmentScope({
@@ -2294,6 +2343,7 @@ async function handleSessionSubmissionEndpoint({
       request,
       config,
       principal,
+      attachmentStore,
       projectCwd: scope.projectCwd,
       projectKey: scope.projectKey,
     });
@@ -2313,6 +2363,7 @@ async function handleSessionSubmissionEndpoint({
       store: sessionSubmissionStore,
       operations: sessionSubmissionOperations,
       localApiUrl,
+      attachmentStore,
     });
     writeJson(response, execution.created ? 201 : 200, execution.response);
     return true;
@@ -2341,6 +2392,7 @@ async function handleSessionSubmissionEndpoint({
         config,
         store: sessionSubmissionStore,
         localApiUrl,
+        attachmentStore,
       }),
     });
     writeJson(response, 200, execution.response);
@@ -2400,6 +2452,7 @@ async function submitSessionSubmission({
   store,
   operations,
   localApiUrl,
+  attachmentStore,
   metadata,
   submissionDeliveryMode,
 }: {
@@ -2413,6 +2466,7 @@ async function submitSessionSubmission({
   store: FileSessionSubmissionStore;
   operations: Map<string, Promise<SessionSubmissionExecution>>;
   localApiUrl: string;
+  attachmentStore: FileAttachmentStore;
   metadata?: SessionSubmissionMetadata;
   submissionDeliveryMode?: WebhookDeliveryMode;
 }): Promise<SessionSubmissionExecution> {
@@ -2466,6 +2520,7 @@ async function submitSessionSubmission({
         config,
         store,
         localApiUrl,
+        attachmentStore,
       });
     },
   });
@@ -2510,6 +2565,7 @@ async function advanceSessionSubmission({
   config,
   store,
   localApiUrl,
+  attachmentStore,
 }: {
   record: CodexWebSessionSubmissionRecord;
   created: boolean;
@@ -2520,6 +2576,7 @@ async function advanceSessionSubmission({
   config: CodexWebConfig;
   store: FileSessionSubmissionStore;
   localApiUrl: string;
+  attachmentStore: FileAttachmentStore;
 }): Promise<SessionSubmissionExecution> {
   let current = await store.read(record.ownerUserId, record.id) ?? record;
   try {
@@ -2589,7 +2646,9 @@ async function advanceSessionSubmission({
       attachmentIds: current.payload.attachmentIds,
     };
     const multiUser = isMultiUserSubmission(target.identityState ?? identityState, principal);
-    const projectCwd = normalizeOptionalString(target.project?.cwd) || normalizeOptionalString(target.runtimeSession.cwd);
+    const projectCwd = normalizeOptionalString(target.project?.cwd)
+      || normalizeOptionalString(target.runtimeSession.cwd)
+      || (!multiUser ? normalizeOptionalString(config.defaultCwd) : '');
     const input = await normalizeStartTurnInput({
       body: turnBody,
       config,
@@ -2600,6 +2659,7 @@ async function advanceSessionSubmission({
       projectKey: multiUser
         ? safePathSegment(target.project?.id || target.appSession?.projectId || `cwd-${stableIdHash(projectCwd, 16)}`)
         : '',
+      attachmentStore,
     });
     if (!input) {
       throw createHttpError(404, 'session_not_found', 'Session was not found.');
@@ -3179,7 +3239,7 @@ function redactSubmittedPayload(
     settings: {},
     text: '',
     attachments: [],
-    attachmentIds: [],
+    attachmentIds: [...payload.attachmentIds],
   };
 }
 
@@ -3297,6 +3357,9 @@ function normalizeSessionSubmissionPayload(
   const attachmentIds = Array.isArray(body.attachmentIds)
     ? body.attachmentIds.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
     : [];
+  if (attachmentIds.length > MAX_ATTACHMENT_IDS) {
+    throw createHttpError(400, 'invalid_submission', `attachmentIds may contain at most ${MAX_ATTACHMENT_IDS} items.`);
+  }
   if (Array.isArray(body.attachmentIds) && attachmentIds.length !== body.attachmentIds.length) {
     throw createHttpError(400, 'invalid_submission', 'attachmentIds must contain non-empty strings.');
   }
@@ -3396,6 +3459,7 @@ async function handleMultiUserRequest({
   sessionSubmissionStore,
   sessionSubmissionOperations,
   localApiUrl,
+  attachmentStore,
   registerSseCloser,
   closeSseConnections,
 }: {
@@ -3415,6 +3479,7 @@ async function handleMultiUserRequest({
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   localApiUrl: string;
+  attachmentStore: FileAttachmentStore;
   registerSseCloser: (close: () => void) => () => void;
   closeSseConnections: () => void;
 }): Promise<boolean> {
@@ -4403,6 +4468,7 @@ async function handleMultiUserRequest({
         store: sessionSubmissionStore,
         operations: sessionSubmissionOperations,
         localApiUrl,
+        attachmentStore,
       });
       writeJson(response, execution.created ? 202 : 200, execution.response);
       return true;
@@ -4423,6 +4489,7 @@ async function handleMultiUserRequest({
       sessionId: resolved.appSession.codexThreadId,
       projectCwd,
       projectKey: safePathSegment(resolved.project?.id || resolved.appSession.projectId || `cwd-${stableIdHash(projectCwd, 16)}`),
+      attachmentStore,
     });
     if (!input) {
       writeSessionNotFound(response);
@@ -4475,6 +4542,7 @@ async function handleMultiUserRequest({
       request,
       config,
       principal,
+      attachmentStore,
       projectCwd,
       projectKey: safePathSegment(resolved.project?.id || resolved.appSession.projectId || `cwd-${stableIdHash(projectCwd, 16)}`),
     });
@@ -6434,12 +6502,14 @@ async function storeSessionAttachments({
   request,
   config,
   principal,
+  attachmentStore,
   projectCwd,
   projectKey,
 }: {
   request: IncomingMessage;
   config: CodexWebConfig;
   principal: CodexWebPrincipal;
+  attachmentStore: FileAttachmentStore;
   projectCwd: string;
   projectKey: string;
 }): Promise<StoredUploadAttachment[]> {
@@ -6463,6 +6533,10 @@ async function storeSessionAttachments({
           rootDir: projectStorage,
           storage: 'project',
           createProjectGitignore: true,
+          attachmentStore,
+          ownerUserId: principal.userId,
+          projectCwd,
+          projectKey,
         }),
       }));
     } catch (error) {
@@ -6487,6 +6561,10 @@ async function storeSessionAttachments({
         rootDir: stateStorage,
         storage: 'state',
         createProjectGitignore: false,
+        attachmentStore,
+        ownerUserId: principal.userId,
+        projectCwd,
+        projectKey,
       }),
     }));
   } catch (error) {
@@ -6505,6 +6583,7 @@ async function normalizeStartTurnInput({
   sessionId,
   projectCwd,
   projectKey,
+  attachmentStore,
 }: {
   body: Record<string, unknown>;
   config: CodexWebConfig;
@@ -6513,17 +6592,31 @@ async function normalizeStartTurnInput({
   sessionId: string;
   projectCwd: string;
   projectKey: string;
+  attachmentStore: FileAttachmentStore;
 }): Promise<StartTurnInput | null> {
-  if (!hasRequestAttachments(body)) {
-    return body as unknown as StartTurnInput;
-  }
   let resolvedProjectCwd = normalizeOptionalString(projectCwd);
-  if (!resolvedProjectCwd) {
+  const needsFileResolution = hasRequestAttachments(body)
+    || (Array.isArray(body.attachmentIds) && body.attachmentIds.length > 0);
+  if (needsFileResolution && !resolvedProjectCwd) {
     const session = await runtime.readSession(sessionId);
     if (!session) {
       return null;
     }
     resolvedProjectCwd = normalizeOptionalString(session.cwd);
+  }
+  const resolvedIds = await resolveAttachmentIds({
+    attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds : [],
+    attachmentStore,
+    principal,
+    projectCwd: resolvedProjectCwd || '',
+    projectKey,
+    config,
+  });
+  const effectiveBody = resolvedIds.length > 0
+    ? { ...body, attachments: [...(Array.isArray(body.attachments) ? body.attachments : []), ...resolvedIds] }
+    : body;
+  if (!hasRequestAttachments(effectiveBody)) {
+    return effectiveBody as unknown as StartTurnInput;
   }
   const allowedRoots = allowedUploadRoots({
     config,
@@ -6531,7 +6624,7 @@ async function normalizeStartTurnInput({
     projectCwd: resolvedProjectCwd,
     projectKey: projectKey || `cwd-${stableIdHash(resolvedProjectCwd || sessionId, 16)}`,
   });
-  const normalizedAttachments = (body.attachments as unknown[]).map((raw) => {
+  const normalizedAttachments = (effectiveBody.attachments as unknown[]).map((raw) => {
     const attachment = normalizeAttachmentRequest(raw);
     if (!attachment) {
       throw createHttpError(400, 'invalid_attachment', 'Attachment payload is invalid.');
@@ -6555,9 +6648,74 @@ async function normalizeStartTurnInput({
     });
   }
   return {
-    ...(body as unknown as StartTurnInput),
+    ...(effectiveBody as unknown as StartTurnInput),
     attachments,
   };
+}
+
+async function resolveAttachmentIds({
+  attachmentIds,
+  attachmentStore,
+  principal,
+  projectCwd,
+  projectKey,
+  config,
+}: {
+  attachmentIds: unknown[];
+  attachmentStore: FileAttachmentStore;
+  principal: CodexWebPrincipal;
+  projectCwd: string;
+  projectKey: string;
+  config: CodexWebConfig;
+}): Promise<Array<{ kind: 'image' | 'file'; localPath: string; fileName: string; mimeType: string | null }>> {
+  if (attachmentIds.length === 0) {
+    return [];
+  }
+  await attachmentStore.prune();
+  if (attachmentIds.length > MAX_ATTACHMENT_IDS || attachmentIds.some((id) => typeof id !== 'string' || !id.trim())) {
+    throw createHttpError(400, 'invalid_attachment_ids', 'attachmentIds must contain at most 32 non-empty strings.');
+  }
+  const expectedProjectKey = projectKey || `cwd-${stableIdHash(normalizeOptionalString(projectCwd) || 'unknown', 16)}`;
+  const roots = allowedUploadRoots({ config, principal, projectCwd, projectKey: expectedProjectKey });
+  const resolved = [];
+  for (const rawId of attachmentIds) {
+    const id = String(rawId).trim();
+    const record = await attachmentStore.read(id);
+    if (!record) {
+      throw createHttpError(404, 'attachment_not_found', `Attachment ${id} was not found.`);
+    }
+    if (record.ownerUserId !== principal.userId) {
+      throw createHttpError(403, 'attachment_forbidden', `Attachment ${id} is not owned by this principal.`);
+    }
+    if (Date.parse(record.expiresAt) <= Date.now()) {
+      throw createHttpError(410, 'attachment_expired', `Attachment ${id} has expired.`);
+    }
+    if (record.projectKey !== expectedProjectKey || (record.projectCwd && normalizeOptionalString(projectCwd)
+      && path.resolve(record.projectCwd) !== path.resolve(projectCwd))) {
+      throw createHttpError(403, 'attachment_forbidden', `Attachment ${id} is outside the current project.`);
+    }
+    const candidate = path.resolve(record.localPath);
+    if (!roots.some((root) => isPathInside(candidate, root))) {
+      throw createHttpError(403, 'attachment_forbidden', `Attachment ${id} is outside the allowed storage root.`);
+    }
+    let stats;
+    try {
+      await rejectPathSymlinks(roots.find((root) => isPathInside(candidate, root))!, candidate);
+      stats = await fs.lstat(candidate);
+    } catch {
+      throw createHttpError(400, 'attachment_unreadable', `Attachment ${id} is not readable.`);
+    }
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.size > MAX_UPLOAD_FILE_BYTES) {
+      throw createHttpError(400, 'attachment_unreadable', `Attachment ${id} is not a valid regular file.`);
+    }
+    resolved.push({
+      kind: record.kind,
+      localPath: candidate,
+      fileName: record.fileName,
+      mimeType: record.mimeType,
+    });
+  }
+  return resolved;
 }
 
 function hasRequestAttachments(body: Record<string, unknown>): boolean {
@@ -6744,11 +6902,19 @@ async function writeUploadFiles({
   rootDir,
   storage,
   createProjectGitignore,
+  attachmentStore,
+  ownerUserId,
+  projectCwd,
+  projectKey,
 }: {
   files: ParsedUploadFile[];
   rootDir: string;
   storage: 'project' | 'state';
   createProjectGitignore: boolean;
+  attachmentStore: FileAttachmentStore;
+  ownerUserId: string;
+  projectCwd: string;
+  projectKey: string;
 }): Promise<StoredUploadAttachment[]> {
   await ensureUploadDirectory(rootDir, createProjectGitignore);
   const root = path.resolve(rootDir);
@@ -6761,7 +6927,7 @@ async function writeUploadFiles({
       throw createHttpError(400, 'invalid_upload', 'Upload path is invalid.');
     }
     await fs.writeFile(localPath, file.data, { flag: 'wx', mode: 0o600 });
-    items.push({
+    const item = {
       id,
       kind: file.mimeType?.toLowerCase().startsWith('image/') ? 'image' : 'file',
       fileName: file.fileName,
@@ -6770,7 +6936,19 @@ async function writeUploadFiles({
       storage,
       localPath,
       displayPath: localPath,
+    } satisfies StoredUploadAttachment;
+    await attachmentStore.record({
+      attachmentId: id,
+      ownerUserId,
+      projectCwd: normalizeOptionalString(projectCwd) || null,
+      projectKey,
+      fileName: item.fileName,
+      mimeType: item.mimeType,
+      kind: item.kind,
+      sizeBytes: item.sizeBytes,
+      localPath: item.localPath,
     });
+    items.push(item);
   }
   return items;
 }

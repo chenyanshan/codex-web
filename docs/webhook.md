@@ -113,7 +113,33 @@ review 或 compact turn 不能接收 steer。此时请求返回
 完全相同的 `Idempotency-Key`、`clientRequestId` 和 JSON 内容重试。Codex Web 不会为 busy
 请求建立后台队列。
 
-## 5. 选择模型和思考强度
+## 5. 传入原始附件
+
+IM 网关先使用普通登录 token 将文件上传到受认证端点：
+
+```text
+POST /api/session-submission-attachments?projectId=<project-id>
+Authorization: Bearer <session-token>
+Content-Type: multipart/form-data
+```
+
+单用户模式也可以使用 `cwd=<configured-project-cwd>`。响应中的 `items[].id` 是短期
+`attachmentId`，服务端会保存其用户、项目/工作目录、文件元数据和过期时间。随后将 ID
+放入 Webhook JSON；不要把本地路径或二进制内容放入 Webhook 请求：
+
+```json
+{
+  "text": "检查这个 PDF 和截图",
+  "projectId": "CodeX Web",
+  "attachmentIds": ["att_0123456789abcdef0123"]
+}
+```
+
+`attachmentIds` 必须是最多 32 个不重复的非空字符串。每个 ID 都会在提交时重新校验
+归属、项目范围、过期时间、普通文件类型、存储根目录和 25 MiB 单文件限制。PDF 作为
+文件附件传入，PNG/JPEG/WebP 等图片保留图片附件语义并支持 `localImage`。
+
+## 6. 选择模型和思考强度
 
 `model` 和 `reasoningEffort` 都是可选字段：
 
@@ -138,7 +164,7 @@ curl --request POST 'https://codex-web.example/api/webhook' \
 模型参数只在启动新 turn 时生效。如果消息被 steer 到正在运行的 turn，它会沿用当前
 turn 的模型和思考强度。
 
-## 6. 请求参数
+## 7. 请求参数
 
 | 字段 | 是否必填 | 说明 |
 | --- | --- | --- |
@@ -149,13 +175,14 @@ turn 的模型和思考强度。
 | `reasoningEffort` | 否 | 新 turn 使用的思考强度。 |
 | `clientRequestId` | 否 | 单条消息幂等键；1 到 128 个安全字符。 |
 | `deliveryMode` | 否 | `steer` 或 `reject_if_busy`，默认 `steer`。 |
+| `attachmentIds` | 否 | 受认证上传接口返回的附件 ID，最多 32 个。 |
 
 只接受以上字段。不能通过 Webhook 传入 `cwd`、`sessionId`、`attachments`、sandbox 或
 approval policy。
 
 `Idempotency-Key` header 必填，去除首尾空格后长度必须为 1 到 256 个字符。
 
-## 7. 成功响应
+## 8. 成功响应
 
 第一次创建对话：
 
@@ -214,7 +241,7 @@ Authorization: Bearer cwwh_...
 `turnId` 对应的 final assistant message，不包含 commentary 或内部 reasoning。建议运行中每
 2 秒轮询一次，连续错误时指数退避到 10 秒。
 
-## 8. 多用户隔离示例
+## 9. 多用户隔离示例
 
 `Idempotency-Key` 按 Webhook 用户隔离。Alice 和 Bob 即使使用相同的业务 ID，也会进入
 各自独立的 session：
@@ -235,7 +262,7 @@ curl -X POST 'https://codex-web.example/api/webhook' \
   -d '{"projectId":"CodeX Web","text":"处理 Bob 的任务"}'
 ```
 
-## 9. 常见错误
+## 10. 常见错误
 
 | HTTP 状态 | 错误码 | 含义 |
 | --- | --- | --- |
@@ -255,7 +282,7 @@ curl -X POST 'https://codex-web.example/api/webhook' \
 
 当前每个 Webhook key 最多 10 次请求/分钟。
 
-## 10. 重试注意事项
+## 11. 重试注意事项
 
 `Idempotency-Key` 只负责把请求路由到同一个 session，不负责单条消息去重。需要安全重试时
 必须提供稳定的 `clientRequestId`。
@@ -266,7 +293,7 @@ curl -X POST 'https://codex-web.example/api/webhook' \
 当前 1.0 只保证服务持续运行期间的请求幂等和状态查询，不承诺 Codex Web 进程重启窗口内
 的幂等恢复或终态恢复。
 
-## 11. 安全说明
+## 12. 安全说明
 
 - Webhook key 是 bearer credential，应按密码保护。
 - key 必须放在 `Authorization` header，不能放在 URL。

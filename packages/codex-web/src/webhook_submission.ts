@@ -10,6 +10,7 @@ export interface WebhookRequestFingerprintInput {
   model: string | null;
   reasoningEffort: string | null;
   deliveryMode: WebhookDeliveryMode;
+  attachmentIds?: string[];
 }
 
 export interface WebhookTurnSnapshot {
