@@ -115,15 +115,17 @@ review 或 compact turn 不能接收 steer。此时请求返回
 
 ## 5. 传入原始附件
 
-IM 网关先使用普通登录 token 将文件上传到受认证端点：
+IM 网关可以直接使用同一枚 Webhook key 将文件上传到受限的附件端点：
 
 ```text
 POST /api/session-submission-attachments?projectId=<project-id>
-Authorization: Bearer <session-token>
+Authorization: Bearer <webhook-key>
 Content-Type: multipart/form-data
 ```
 
-单用户模式也可以使用 `cwd=<configured-project-cwd>`。响应中的 `items[].id` 是短期
+这里的 `Authorization` 使用 Webhook key（不是普通网页登录 token）。该 key 只在这个
+附件上传端点获得额外的上传权限，不能因此访问其他普通 API。单用户模式也可以使用
+`cwd=<configured-project-cwd>`。响应中的 `items[].id` 是短期
 `attachmentId`，服务端会保存其用户、项目/工作目录、文件元数据和过期时间。随后将 ID
 放入 Webhook JSON；不要把本地路径或二进制内容放入 Webhook 请求：
 

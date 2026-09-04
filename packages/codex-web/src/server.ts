@@ -661,6 +661,36 @@ async function handleRequest({
   }
 
   const authContext = await authenticateRequest({ auth, request });
+  if (
+    !authContext
+    && pathname === '/api/session-submission-attachments'
+    && method === 'POST'
+  ) {
+    const webhookPrincipal = await authenticateWebhookPrincipal(
+      identityStore,
+      extractBearerToken(request),
+    );
+    if (webhookPrincipal) {
+      const webhookIdentityState = identityStore ? await identityStore.readState() : null;
+      await handleSessionSubmissionEndpoint({
+        request,
+        response,
+        pathname,
+        method,
+        url,
+        principal: webhookPrincipal,
+        identityStore,
+        identityState: webhookIdentityState,
+        runtime,
+        config,
+        sessionSubmissionStore,
+        sessionSubmissionOperations,
+        localApiUrl,
+        attachmentStore,
+      });
+      return;
+    }
+  }
   if (!authContext) {
     response.writeHead(401, {
       'Content-Type': 'application/json; charset=utf-8',

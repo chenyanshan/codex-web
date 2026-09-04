@@ -1151,7 +1151,7 @@ test('webhooks resolve uploaded attachment ids into protected turn snapshots', a
     form.append('files', new Blob(['%PDF-1.7 test'], { type: 'application/pdf' }), 'report.pdf');
     const uploaded = await fetch(`${server.baseUrl}/api/session-submission-attachments?cwd=${encodeURIComponent(projectDir)}`, {
       method: 'POST',
-      headers: { Authorization: 'Bearer browser' },
+      headers: { Authorization: `Bearer ${created.key}` },
       body: form,
     });
     assert.equal(uploaded.status, 201);
@@ -1174,7 +1174,7 @@ test('webhooks resolve uploaded attachment ids into protected turn snapshots', a
     imageForm.append('files', new Blob(['png-bytes'], { type: 'image/png' }), 'diagram.png');
     const imageUpload = await fetch(`${server.baseUrl}/api/session-submission-attachments?cwd=${encodeURIComponent(projectDir)}`, {
       method: 'POST',
-      headers: { Authorization: 'Bearer browser' },
+      headers: { Authorization: `Bearer ${created.key}` },
       body: imageForm,
     });
     const imageAttachment = (await imageUpload.json() as any).items[0];
