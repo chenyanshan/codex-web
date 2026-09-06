@@ -1483,12 +1483,23 @@ export class CodexWebRuntime {
       if (!isIncludeTurnsRetryableError(error)) {
         throw error;
       }
-      const thread = await this.client.readThread(threadId, false);
-      if (thread) {
-        return thread;
+      try {
+        const thread = await this.client.readThread(threadId, false);
+        if (thread) {
+          return thread;
+        }
+      } catch (fallbackError) {
+        if (!isListTurnsUnsupportedError(fallbackError)) {
+          throw fallbackError;
+        }
       }
-      return this.resumeAndReadThread(threadId);
+      return this.findThreadSummaryInList(threadId);
     }
+  }
+
+  private async findThreadSummaryInList(threadId: string): Promise<ProviderThreadSummary | null> {
+    const result = await this.client.listThreads({ limit: 100, archived: false });
+    return result.items.find((thread) => thread.threadId === threadId) ?? null;
   }
 
   private async resumeAndReadThread(threadId: string): Promise<ProviderThreadSummary | null> {
@@ -1500,6 +1511,16 @@ export class CodexWebRuntime {
     } catch (error) {
       if (isMissingThreadError(error)) {
         return null;
+      }
+      if (isListTurnsUnsupportedError(error)) {
+        try {
+          return await this.client.readThread(threadId, false);
+        } catch (fallbackError) {
+          if (!isListTurnsUnsupportedError(fallbackError)) {
+            throw fallbackError;
+          }
+          return this.findThreadSummaryInList(threadId);
+        }
       }
       throw error;
     }
@@ -1516,7 +1537,14 @@ export class CodexWebRuntime {
         throw error;
       }
     }
-    return this.client.readThread(threadId, false);
+    try {
+      return await this.client.readThread(threadId, false);
+    } catch (error) {
+      if (!isListTurnsUnsupportedError(error)) {
+        throw error;
+      }
+      return this.findThreadSummaryInList(threadId);
+    }
   }
 
   private readArchivedThreadSummary(threadId: string): ProviderThreadSummary | null {
@@ -1582,6 +1610,9 @@ export class CodexWebRuntime {
         break;
       } catch (error) {
         const retryDelay = this.threadClosingRetryDelaysMs[attempt];
+        if (isListTurnsUnsupportedError(error)) {
+          return;
+        }
         if (retryDelay === undefined || !isThreadClosingError(error)) {
           throw error;
         }
@@ -3132,9 +3163,15 @@ function isIncludeTurnsRetryableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /includeTurns is unavailable before first user message/i.test(message)
     || /ephemeral threads do not support includeTurns/i.test(message)
+    || /list_turns is not supported yet/i.test(message)
     || /not materialized yet/i.test(message)
     || /empty session file/i.test(message)
     || /rollout .* is empty/i.test(message);
+}
+
+function isListTurnsUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /list_turns is not supported yet/i.test(message);
 }
 
 export function isMissingThreadError(error: unknown): boolean {

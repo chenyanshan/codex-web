@@ -541,8 +541,16 @@ export class CodexAppClient extends EventEmitter {
   }
 
   async readThread(threadId: string, includeTurns = false): Promise<ProviderThreadSummary | null> {
-    const result: any = await this.request('thread/read', { threadId, includeTurns }, { timeoutMs: 10_000 });
-    return result?.thread ? mapThread(result.thread, includeTurns) : null;
+    try {
+      const result: any = await this.request('thread/read', { threadId, includeTurns }, { timeoutMs: 10_000 });
+      return result?.thread ? mapThread(result.thread, includeTurns) : null;
+    } catch (error) {
+      if (!includeTurns || !isListTurnsUnsupportedError(error)) {
+        throw error;
+      }
+      const result: any = await this.request('thread/read', { threadId, includeTurns: false }, { timeoutMs: 10_000 });
+      return result?.thread ? mapThread(result.thread, false) : null;
+    }
   }
 
   async archiveThread(threadId: string): Promise<void> {
@@ -3858,6 +3866,11 @@ function isThreadMaterializationPendingError(error) {
 function isIncludeTurnsUnsupportedError(error) {
   const message = error instanceof Error ? error.message : String(error);
   return /ephemeral threads do not support includeTurns/i.test(message);
+}
+
+function isListTurnsUnsupportedError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /list_turns is not supported yet/i.test(message);
 }
 
 function isRequestTimeoutError(error) {
