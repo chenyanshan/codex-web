@@ -1952,6 +1952,23 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+/* Session titles use the same two-line reading rhythm as the ordinary list. */
+.admin-session-row .admin-row-title-line {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.admin-session-row .admin-row-main {
+  flex: 1 1 auto;
+  min-height: calc(var(--session-summary-line-height) * 2);
+  line-height: var(--session-summary-line-height);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .admin-row-meta {
   color: var(--muted);
   font-size: 12px;

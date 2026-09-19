@@ -2804,6 +2804,8 @@ test('admin console uses dense mobile-safe management rows', async () => {
   assert.match(styles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*border-left-color:\s*var\(--accent\);/su);
   assert.match(styles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
   assert.match(styles, /\.admin-row-main\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
+  assert.match(styles, /\.admin-session-row \.admin-row-main\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
+  assert.match(styles, /\.admin-session-row \.admin-row-main\s*\{[^}]*text-overflow:\s*ellipsis;/su);
   assert.match(styles, /\.admin-session-open\s*\{[^}]*text-align:\s*left;/su);
   assert.match(styles, /\.admin-console-page \.danger,[\s\S]*\.admin-console-page \.danger:focus-visible:not\(:disabled\)\s*\{[^}]*color:\s*var\(--danger\);/su);
   assert.match(adminUi, /class="admin-table admin-project-table"/u);

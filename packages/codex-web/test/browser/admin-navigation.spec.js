@@ -88,3 +88,34 @@ test('admin session list keeps its width and scroll position when opening and sw
     await returnToAdminList(page);
   }
 });
+
+test('admin session titles follow the ordinary list two-line clamp', async ({ page }, info) => {
+  test.skip(!['desktop', 'mobile-portrait'].includes(info.project.name));
+  await page.route('**/api/admin/sessions?*', route => route.fulfill({ json: {
+    items: [{
+      ...sessions[0],
+      title: 'A very long session title that should stay compact and continue with an ellipsis instead of expanding the management list row across the whole page',
+      summary: 'A long latest prompt preview that remains independently limited to two lines.',
+    }],
+    hasMore: false,
+  } }));
+  await openAdminConsole(page, info.project.name);
+  const title = page.locator('.admin-session-row .admin-row-main').first();
+  await expect(title).toBeVisible();
+  const geometry = await title.evaluate(element => {
+    const style = getComputedStyle(element);
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      lineHeight: parseFloat(style.lineHeight),
+      lineClamp: style.webkitLineClamp,
+      rowHeight: element.closest('.admin-session-row')?.getBoundingClientRect().height || 0,
+      viewportWidth: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(geometry.lineClamp).toBe('2');
+  expect(geometry.clientHeight).toBeLessThanOrEqual(geometry.lineHeight * 2 + 2);
+  expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
+  expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+});
