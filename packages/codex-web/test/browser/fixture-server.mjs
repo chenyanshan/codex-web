@@ -326,6 +326,25 @@ const server = createServer(async (request, response) => {
     const requestUrl = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
     const pathname = requestUrl.pathname;
 
+    const compactMatch = /^\/api\/sessions\/([^/]+)\/(status|timeline)$/.exec(pathname);
+    if (compactMatch) {
+      const full = jsonRoutes.get(`/api/sessions/${compactMatch[1]}`);
+      if (!full) { sendJson(response, 404, { error: 'session_not_found' }); return; }
+      const { thread, timeline: storedTimeline, ...summary } = full.session;
+      if (compactMatch[2] === 'status') { sendJson(response, 200, { session: summary }); return; }
+      const timeline = storedTimeline || (thread?.turns || []).flatMap((turn) =>
+        (turn.items || []).filter((item) => item.type === 'message').map((item, index) => ({
+          id: `${turn.id}_${index}`, projectionKey: `${turn.id}_${index}`, turnId: turn.id,
+          kind: 'message', role: item.role, label: item.role === 'user' ? 'You' : 'Assistant',
+          text: item.text, meta: 'history',
+        })));
+      const limit = Math.max(1, Math.min(50, Number(requestUrl.searchParams.get('limit')) || 50));
+      const before = requestUrl.searchParams.has('before') ? Number(requestUrl.searchParams.get('before')) : timeline.length;
+      const start = Math.max(0, before - limit);
+      sendJson(response, 200, { session: summary, items: timeline.slice(start, before), hasMore: start > 0, nextBefore: start > 0 ? start : null });
+      return;
+    }
+
     if (pathname === '/healthz') {
       sendText(response, 200, 'ok');
       return;

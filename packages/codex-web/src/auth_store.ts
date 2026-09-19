@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { withFileLock } from './file_lock.js';
 
 const PASSWORD_ITERATIONS = 310_000;
 const KEY_LENGTH = 32;
@@ -12,9 +13,11 @@ export interface AuthSession {
   deviceName: string;
   createdAt: string;
   lastSeenAt: string;
+  expiresAt?: string;
 }
 
 export interface AuthState {
+  revision?: number;
   passwordHash?: string;
   passwordSalt?: string;
   passwordIterations?: number;
@@ -26,6 +29,7 @@ export interface PublicAuthSession {
   deviceName: string;
   createdAt: string;
   lastSeenAt: string;
+  expiresAt?: string;
   principal?: {
     userId: string;
     username: string;
@@ -48,22 +52,35 @@ export interface PasswordHashRecord {
 export class AuthStore {
   private readonly authPath: string;
 
+  private tokenSnapshot: { version: string; sessions: Map<string, AuthSession>; configured: boolean } | null = null;
+
   private mutationLock: Promise<void> = Promise.resolve();
 
-  constructor({ authPath }: { authPath: string }) {
+  constructor({ authPath, sessionTtlMs = 90 * 24 * 60 * 60 * 1000 }: { authPath: string; sessionTtlMs?: number }) {
     this.authPath = authPath;
+    this.sessionTtlMs = sessionTtlMs;
   }
 
+  private readonly sessionTtlMs: number;
+
+  private backupHealthy = true;
+
+  diagnostics(): { backupHealthy: boolean } { return { backupHealthy: this.backupHealthy }; }
+
   async isConfigured(): Promise<boolean> {
-    const state = await this.readState();
-    return Boolean(state.passwordHash && state.passwordSalt);
+    return (await this.readTokenSnapshot()).configured;
   }
 
   async setPassword(password: string): Promise<void> {
     await this.withMutationLock(async () => {
       const normalized = normalizePassword(password);
       const salt = crypto.randomBytes(32).toString('base64url');
-      const state = await this.readState();
+      let state: AuthState;
+      try { state = await this.readState(); } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        await fs.copyFile(this.authPath, `${this.authPath}.corrupt-${Date.now()}`);
+        state = { sessions: [] };
+      }
       state.passwordSalt = salt;
       state.passwordHash = await hashPassword(normalized, salt, PASSWORD_ITERATIONS);
       state.passwordIterations = PASSWORD_ITERATIONS;
@@ -96,6 +113,7 @@ export class AuthStore {
         deviceName: normalizeDeviceName(deviceName),
         createdAt: now,
         lastSeenAt: now,
+        expiresAt: new Date(Date.now() + this.sessionTtlMs).toISOString(),
       };
       state.sessions = [...state.sessions, session];
       await this.writeState(state);
@@ -112,21 +130,22 @@ export class AuthStore {
     if (!normalized) {
       return null;
     }
+    const tokenHash = hashToken(normalized);
+    const findValid = (state: AuthState) => state.sessions.find((session) => safeEqual(session.tokenHash, tokenHash)
+      && Date.parse(session.expiresAt ?? session.createdAt) + (session.expiresAt ? 0 : this.sessionTtlMs) > Date.now());
+    const candidate = (await this.readTokenSnapshot()).sessions.get(tokenHash);
+    const session = candidate && Date.parse(candidate.expiresAt ?? candidate.createdAt) + (candidate.expiresAt ? 0 : this.sessionTtlMs) > Date.now() ? candidate : null;
+    if (!session) return null;
+    if (Date.now() - Date.parse(session.lastSeenAt) < 30_000) return toPublicSession(session);
     return this.withMutationLock(async () => {
       const state = await this.readState();
-      const tokenHash = hashToken(normalized);
-      const index = state.sessions.findIndex((session) => safeEqual(session.tokenHash, tokenHash));
-      if (index < 0) {
-        return null;
+      const current = findValid(state);
+      if (!current) return null;
+      if (Date.now() - Date.parse(current.lastSeenAt) >= 30_000) {
+        current.lastSeenAt = new Date().toISOString();
+        await this.writeState(state);
       }
-      const session = state.sessions[index]!;
-      const updated = {
-        ...session,
-        lastSeenAt: new Date().toISOString(),
-      };
-      state.sessions[index] = updated;
-      await this.writeState(state);
-      return toPublicSession(updated);
+      return toPublicSession(current);
     });
   }
 
@@ -143,11 +162,52 @@ export class AuthStore {
     });
   }
 
+  private async readTokenSnapshot(): Promise<{ sessions: Map<string, AuthSession>; configured: boolean }> {
+    const version = async () => {
+      try { const stat = await fs.stat(this.authPath, { bigint: true }); return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}`; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'; throw error; }
+    };
+    const before = await version();
+    if (this.tokenSnapshot?.version === before) return this.tokenSnapshot;
+    const state = await this.readState();
+    const snapshot = { version: before, sessions: new Map(state.sessions.map(session => [session.tokenHash, session])), configured: Boolean(state.passwordHash && state.passwordSalt) };
+    if (await version() === before) this.tokenSnapshot = snapshot;
+    return snapshot;
+  }
+
+  async listSessions(token: string): Promise<PublicAuthSession[]> {
+    if (!await this.verifyToken(token)) return [];
+    return (await this.readState()).sessions.filter((session) =>
+      Date.parse(session.expiresAt ?? session.createdAt) + (session.expiresAt ? 0 : this.sessionTtlMs) > Date.now()).map(toPublicSession);
+  }
+
+  async revokeSession(token: string, id: string): Promise<void> {
+    await this.withMutationLock(async () => {
+      const state = await this.readState();
+      if (!state.sessions.some((session) => safeEqual(session.tokenHash, hashToken(token)))) return;
+      state.sessions = state.sessions.filter((session) => session.id !== id);
+      await this.writeState(state);
+    });
+  }
+
+  async revokeOtherSessions(token: string): Promise<void> {
+    await this.withMutationLock(async () => {
+      const state = await this.readState();
+      const current = state.sessions.find((session) => safeEqual(session.tokenHash, hashToken(token)));
+      if (!current) return;
+      state.sessions = [current];
+      await this.writeState(state);
+    });
+  }
+
   async readState(): Promise<AuthState> {
     try {
       const raw = await fs.readFile(this.authPath, 'utf8');
       const parsed = JSON.parse(raw) as Partial<AuthState>;
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.sessions)
+        || (Boolean(parsed.passwordHash) !== Boolean(parsed.passwordSalt))) throw new SyntaxError('Invalid authentication state');
       return {
+        revision: Number(parsed.revision) || 0,
         passwordHash: typeof parsed.passwordHash === 'string' ? parsed.passwordHash : undefined,
         passwordSalt: typeof parsed.passwordSalt === 'string' ? parsed.passwordSalt : undefined,
         passwordIterations: Number.isFinite(parsed.passwordIterations)
@@ -180,6 +240,7 @@ export class AuthStore {
   private async writeState(state: AuthState): Promise<void> {
     await fs.mkdir(path.dirname(this.authPath), { recursive: true, mode: 0o700 });
     const payload = JSON.stringify({
+      revision: (state.revision ?? 0) + 1,
       passwordHash: state.passwordHash,
       passwordSalt: state.passwordSalt,
       passwordIterations: state.passwordIterations ?? PASSWORD_ITERATIONS,
@@ -194,6 +255,13 @@ export class AuthStore {
       await fs.chmod(tempPath, 0o600).catch(() => {});
       await fs.rename(tempPath, this.authPath);
       await fs.chmod(this.authPath, 0o600).catch(() => {});
+      // Backup is for explicit operator recovery only: automatic rollback could resurrect credentials.
+      const backupTemp = `${tempPath}.backup`;
+      try {
+        await fs.writeFile(backupTemp, `${payload}\n`, { mode: 0o600 });
+        await fs.rename(backupTemp, `${this.authPath}.backup`);
+        this.backupHealthy = true;
+      } catch { this.backupHealthy = false; } finally { await fs.rm(backupTemp, { force: true }).catch(() => {}); }
     } catch (error) {
       await fs.rm(tempPath, { force: true }).catch(() => {});
       throw error;
@@ -208,7 +276,7 @@ export class AuthStore {
     });
     await prior.catch(() => {});
     try {
-      return await operation();
+      return await withFileLock(`${this.authPath}.lock`, operation);
     } finally {
       release();
     }
@@ -297,6 +365,7 @@ function normalizeSession(raw: unknown): AuthSession | null {
     deviceName: normalizeDeviceName(session.deviceName),
     createdAt: session.createdAt,
     lastSeenAt: session.lastSeenAt,
+    expiresAt: session.expiresAt,
   };
 }
 
@@ -312,5 +381,6 @@ function toPublicSession(session: AuthSession): PublicAuthSession {
     deviceName: session.deviceName,
     createdAt: session.createdAt,
     lastSeenAt: session.lastSeenAt,
+    expiresAt: session.expiresAt,
   };
 }

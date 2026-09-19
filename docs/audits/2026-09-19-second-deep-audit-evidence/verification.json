@@ -1,0 +1,82 @@
+{
+  "checkedAt": "2026-09-19T05:30:05.838720+00:00",
+  "scope": "Read-only product audit using isolated Chromium fixtures, synthetic users/sessions, real HTTP auth/store implementations with stub Codex runtime",
+  "interpretation": "Diagnostic scripts completed; recorded product defects remain unresolved. Completion is not a passing remediation acceptance test.",
+  "productSourcesChangedInAudit": false,
+  "sourceHashesMatchRecordedBaseline": true,
+  "sourceSha256": {
+    "packages/codex-web/public/app.js": "c7c22bc71bf5d0068572ed21ee27f491516078672f359da44bab88427b703564",
+    "packages/codex-web/public/admin-ui.js": "825c641840de5b2e5c80b242a4e50ec10b5a47d43327d4179dff560575f32820",
+    "packages/codex-web/public/styles.css": "56a780c8200e6f3d84fa4d4ed380b2713dc38032a77c1f12fca6ffd7d3087dab",
+    "packages/codex-web/public/network-recovery.js": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253",
+    "packages/codex-web/public/session-loader.js": "db774079eb38e2cb34184aab2776807489421e3beb7bc6f78166cf22348b83be",
+    "packages/codex-web/src/identity_store.ts": "b95d9b35ab1c280790da250a16803cb7f18ed7c23a44f9ef964ed109c56dcf46",
+    "packages/codex-web/src/server.ts": "07b846d78bf4f5686fec0e5dd458bdaa89d9554f549eeef72327692876a5b856",
+    "packages/codex-web/src/report_store.ts": "cccc823228bff34330c19edbc0ac6eab8221e0d9c8e666bb4a03d78a9131ede3",
+    "packages/codex-web/src/http_metrics.ts": "2a733d7d4b759d874ba272586638b0d9ee53bdc3904214153ef8755726417bc9",
+    "packages/codex-web/public/service-worker.js": "41b0269ae9e9d1f38613368ce58f5c86ad49d789822b86057c49c19bf96beee0",
+    "packages/codex-web/public/index.html": "ded2c29fd8f92852d7e1c8b1276663d8dd62080dc129552c0a5203e56b747c6b",
+    "packages/codex-web/public/ui-kit.js": "dd3958f7730097994e7018ebd7b019c4fb64653ef28daaa54b1875447daf26ea"
+  },
+  "diagnostics": {
+    "browser-checks.json": {
+      "cases": 12,
+      "completedAt": "2026-09-19T05:28:15.835Z",
+      "execution": "completed"
+    },
+    "session-checks.json": {
+      "cases": 11,
+      "completedAt": "2026-09-19T05:17:14.764Z",
+      "execution": "completed"
+    },
+    "server-checks.json": {
+      "cases": 7,
+      "completedAt": "2026-09-19T05:23:27.382Z",
+      "execution": "completed"
+    }
+  },
+  "browserCaseCount": 23,
+  "serverAndResourceCaseCount": 7,
+  "screenshotsViewed": [
+    "compact-admin-projects.png",
+    "compact-admin-roles.png",
+    "compact-admin-sessions.png",
+    "compact-admin-users.png",
+    "desktop-admin-oled-users.png",
+    "desktop-admin-partial-failure.png",
+    "desktop-admin-projects.png",
+    "desktop-admin-roles.png",
+    "desktop-admin-save-failed.png",
+    "desktop-admin-sessions.png",
+    "desktop-admin-stale-observer.png",
+    "desktop-admin-users.png",
+    "desktop-admin-wrong-edit-draft.png",
+    "desktop-foreground-scroll-jump.png",
+    "intermediate-admin-projects.png",
+    "intermediate-admin-roles.png",
+    "intermediate-admin-sessions.png",
+    "intermediate-admin-users.png",
+    "phone-admin-projects.png",
+    "phone-admin-roles.png",
+    "phone-admin-sessions.png",
+    "phone-admin-users.png",
+    "phone-browser-history-pull.png",
+    "phone-pwa-history-pull.png",
+    "phone-refresh-failure-feedback.png"
+  ],
+  "previousProductVerification": {
+    "path": "../2026-09-19-weak-network-remediation-evidence/verification.json",
+    "rerunInThisAudit": false,
+    "unitPassed": 468,
+    "browserPassed": 91,
+    "browserConditionalSkips": 179,
+    "typecheck": "passed",
+    "build": "passed",
+    "lint": "passed"
+  },
+  "limitations": [
+    "PWA standalone is emulated in Chromium, not physical iOS Safari or an installed iOS PWA",
+    "Synthetic timings are not production P95 or physical phone timings",
+    "No real account tokens, private session data, Codex jobs or service configuration were used by audit experiments"
+  ]
+}

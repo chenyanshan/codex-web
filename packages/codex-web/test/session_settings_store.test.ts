@@ -14,7 +14,7 @@ test('file session settings store persists session favorite flag', async (t) => 
   const settingsPath = path.join(dir, 'session-settings.json');
   const store = new FileSessionSettingsStore({ settingsPath });
 
-  store.set('thread_favorite', {
+  (await store.set('thread_favorite', {
     bridgeSessionId: 'thread_favorite',
     model: null,
     reasoningEffort: null,
@@ -29,11 +29,11 @@ test('file session settings store persists session favorite flag', async (t) => 
     updatedAt: 1,
     favorite: true,
     favoriteOrder: 4,
-  } as any);
+  } as any));
 
   const reloaded = new FileSessionSettingsStore({ settingsPath });
-  assert.equal((reloaded.get('thread_favorite') as any)?.favorite, true);
-  assert.equal((reloaded.get('thread_favorite') as any)?.favoriteOrder, 4);
+  assert.equal(((await reloaded.get('thread_favorite')) as any)?.favorite, true);
+  assert.equal(((await reloaded.get('thread_favorite')) as any)?.favoriteOrder, 4);
 });
 
 test('file session settings store re-reads state for every mutation', async (t) => {
@@ -43,13 +43,13 @@ test('file session settings store re-reads state for every mutation', async (t) 
   const first = new FileSessionSettingsStore({ settingsPath });
   const previouslyLoaded = new FileSessionSettingsStore({ settingsPath });
 
-  first.set('thread_one', createSettings('thread_one', 1));
-  assert.ok(previouslyLoaded.get('thread_one'));
-  first.set('thread_two', createSettings('thread_two', 2));
-  previouslyLoaded.set('thread_three', createSettings('thread_three', 3));
+  (await first.set('thread_one', createSettings('thread_one', 1)));
+  assert.ok((await previouslyLoaded.get('thread_one')));
+  (await first.set('thread_two', createSettings('thread_two', 2)));
+  (await previouslyLoaded.set('thread_three', createSettings('thread_three', 3)));
 
   assert.deepEqual(
-    new FileSessionSettingsStore({ settingsPath }).list().map(([sessionId]) => sessionId).sort(),
+    (await new FileSessionSettingsStore({ settingsPath }).list()).map(([sessionId]) => sessionId).sort(),
     ['thread_one', 'thread_three', 'thread_two'],
   );
 });
@@ -61,7 +61,7 @@ test('file session settings store serializes concurrent writers across processes
 
   await Promise.all(['alpha', 'beta', 'gamma'].map((prefix) => runSettingsWorker(settingsPath, prefix, 15)));
 
-  const entries = new FileSessionSettingsStore({ settingsPath }).list();
+  const entries = (await new FileSessionSettingsStore({ settingsPath }).list());
   assert.equal(entries.length, 45);
   assert.equal(new Set(entries.map(([sessionId]) => sessionId)).size, 45);
 });
@@ -74,8 +74,8 @@ test('file session settings store fails closed on corrupted state', async (t) =>
   await fs.writeFile(settingsPath, corrupted);
   const store = new FileSessionSettingsStore({ settingsPath });
 
-  assert.throws(() => store.get('thread_one'), SyntaxError);
-  assert.throws(() => store.set('thread_one', createSettings('thread_one', 1)), SyntaxError);
+  await assert.rejects(async () => (await store.get('thread_one')), SyntaxError);
+  await assert.rejects(async () => (await store.set('thread_one', createSettings('thread_one', 1))), SyntaxError);
   assert.equal(await fs.readFile(settingsPath, 'utf8'), corrupted);
 });
 
@@ -103,7 +103,7 @@ function runSettingsWorker(settingsPath: string, prefix: string, count: number):
     const store = new FileSessionSettingsStore({ settingsPath: process.env.SETTINGS_PATH });
     for (let index = 0; index < Number(process.env.ENTRY_COUNT); index += 1) {
       const sessionId = process.env.ENTRY_PREFIX + '_' + index;
-      store.set(sessionId, {
+      await store.set(sessionId, {
         bridgeSessionId: sessionId,
         model: null,
         reasoningEffort: null,

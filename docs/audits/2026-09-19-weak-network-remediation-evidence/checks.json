@@ -1,0 +1,155 @@
+{
+  "measuredAt": "2026-09-19T04:50:06.012Z",
+  "environment": "Isolated fixture, synthetic accounts and sessions, Chromium fault injection",
+  "scenarios": [
+    {
+      "name": "history_renders_before_slow_status",
+      "responseMs": 77,
+      "visibleMs": 202,
+      "waitingNotReportedAsFailure": true,
+      "draftPreserved": true,
+      "view": "phone",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "status_renders_before_history_and_remains_authoritative",
+      "waitingNotReportedAsFailure": true,
+      "pendingAfterLateTimeline": true,
+      "view": "compact",
+      "geometry": {
+        "width": 320,
+        "scrollWidth": 320
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "models_do_not_block_session_list_or_chat",
+      "listResponseMs": 50,
+      "listVisibleMs": 84,
+      "draftPreserved": true,
+      "view": "desktop",
+      "geometry": {
+        "width": 1440,
+        "scrollWidth": 1440
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "fresh_cross_device_activity_survives_cached_idle_status",
+      "pendingTurn": true,
+      "view": "intermediate",
+      "geometry": {
+        "width": 980,
+        "scrollWidth": 980
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "late_model_list_preserves_explicit_draft_settings",
+      "reasoningEffort": "low",
+      "draftPreserved": true,
+      "view": "phone",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "transient_sse_502_automatically_recovers",
+      "recoveredMs": 841,
+      "eventRequestsDuringRecovery": 2,
+      "taskRemainsRunning": true,
+      "view": "phone",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "transient_sse_503_automatically_recovers",
+      "recoveredMs": 1152,
+      "eventRequestsDuringRecovery": 2,
+      "taskRemainsRunning": true,
+      "view": "phone",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "auth_recovers_on_network_return_with_coalesced_focus",
+      "authRequests": 2,
+      "recoveredWithoutReload": true,
+      "view": "intermediate",
+      "geometry": {
+        "width": 980,
+        "scrollWidth": 980
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "auth_401_does_not_loop_or_restore_revoked_token",
+      "attempts": 1,
+      "view": "phone",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "durable_outbox_waits_for_confirmed_identity_and_reuses_submission",
+      "attempts": 2,
+      "stableSubmissionId": true,
+      "unconfirmedIdentityWrites": 0,
+      "view": "phone",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "errors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "new_modules_precache_and_offline_draft_survive_reload",
+      "restoredMs": 44,
+      "historyRetained": true,
+      "draftRetained": true,
+      "onlineReauthWithoutReload": true,
+      "origin": "http://127.0.0.1:41743",
+      "view": "phone",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "errors": [],
+      "assetFailures": []
+    }
+  ],
+  "completedAt": "2026-09-19T04:51:21.564Z",
+  "appSourceSha256": "c7c22bc71bf5d0068572ed21ee27f491516078672f359da44bab88427b703564",
+  "sourceSha256": {
+    "app.js": "c7c22bc71bf5d0068572ed21ee27f491516078672f359da44bab88427b703564",
+    "network-recovery.js": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253",
+    "session-loader.js": "db774079eb38e2cb34184aab2776807489421e3beb7bc6f78166cf22348b83be",
+    "service-worker.js": "41b0269ae9e9d1f38613368ce58f5c86ad49d789822b86057c49c19bf96beee0",
+    "index.html": "ded2c29fd8f92852d7e1c8b1276663d8dd62080dc129552c0a5203e56b747c6b",
+    "ui-kit.js": "dd3958f7730097994e7018ebd7b019c4fb64653ef28daaa54b1875447daf26ea"
+  }
+}

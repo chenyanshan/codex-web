@@ -1,0 +1,80 @@
+{
+  "checkedAt": "2026-09-19T05:00:33.154Z",
+  "sourceSha256": {
+    "app.js": "c7c22bc71bf5d0068572ed21ee27f491516078672f359da44bab88427b703564",
+    "network-recovery.js": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253",
+    "session-loader.js": "db774079eb38e2cb34184aab2776807489421e3beb7bc6f78166cf22348b83be",
+    "service-worker.js": "41b0269ae9e9d1f38613368ce58f5c86ad49d789822b86057c49c19bf96beee0",
+    "index.html": "ded2c29fd8f92852d7e1c8b1276663d8dd62080dc129552c0a5203e56b747c6b",
+    "ui-kit.js": "dd3958f7730097994e7018ebd7b019c4fb64653ef28daaa54b1875447daf26ea"
+  },
+  "unit": {
+    "passed": 468,
+    "failed": 0
+  },
+  "browser": {
+    "passed": 91,
+    "skipped": 179,
+    "failed": 0,
+    "skipReason": "Viewport/project conditions"
+  },
+  "typecheck": "passed",
+  "build": {
+    "status": "passed",
+    "assets": 25,
+    "bytes": 765234
+  },
+  "lint": "passed",
+  "builtPublic": {
+    "status": "passed",
+    "scripts": 16,
+    "emittedAppBytes": 336097,
+    "browserErrors": []
+  },
+  "appSourceBytes": 495312,
+  "sourceBudgetBytes": 500000,
+  "independentScenarios": 11,
+  "screenshotsViewed": [
+    "phone-fast-history.png",
+    "compact-fast-status.png",
+    "desktop-slow-models-usable-chat.png",
+    "phone-502-reconnecting.png",
+    "intermediate-auth-recovered.png",
+    "phone-offline-shell.png"
+  ],
+  "scope": "Isolated fixture and synthetic data, Chromium fault injection; not physical cellular/iOS/P95 testing",
+  "deployment": {
+    "checkedAt": "2026-09-19T04:58:55.888Z",
+    "label": "com.chenyanshan.codex-web",
+    "previousPid": 97903,
+    "pid": 4266,
+    "state": "running",
+    "previousBuildId": "36e07a0a6454d38f1f38",
+    "buildId": "aff5f81501d4d8edb820",
+    "homeStatus": 200,
+    "assets": {
+      "app.js": {
+        "status": 200,
+        "matchesSource": true,
+        "sha256": "db8dcd30a74302378e7b8d97747a605996a4c76894b52ce91b04e57340380d49"
+      },
+      "session-rename.js": {
+        "status": 200,
+        "matchesSource": true,
+        "sha256": "495ebf6b9c71753f37df37befad9afd84507ab38aeedd984d149b6a3ca81bd24"
+      },
+      "network-recovery.js": {
+        "status": 200,
+        "matchesSource": true,
+        "sha256": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253"
+      },
+      "session-loader.js": {
+        "status": 200,
+        "matchesSource": true,
+        "sha256": "db774079eb38e2cb34184aab2776807489421e3beb7bc6f78166cf22348b83be"
+      }
+    },
+    "unauthenticatedListStatus": 401,
+    "unauthenticatedRenameStatus": 401
+  }
+}

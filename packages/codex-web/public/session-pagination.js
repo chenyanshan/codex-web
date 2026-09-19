@@ -76,6 +76,7 @@
     escapeHtml,
     icon,
   }) {
+    let indexingTimer = null;
     const listPath = (scope, options) => sessionListPath(state, scope, options);
     const baseListPath = (scope) => listPath(scope, { includeProject: false });
     const queryKey = (scope) => listPath(scope);
@@ -146,7 +147,7 @@
       const path = listPath(normalizedScope, { cursor: pageCursor });
       if (background) {
         const payload = await (request || apiFetch(path));
-        if (!isAuthRequestCurrent(requestGeneration)) {
+        if (!isAuthRequestCurrent(requestGeneration) || expectedQuery !== queryKey(normalizedScope)) {
           return [];
         }
         const sessions = normalizeSessionsForScope(payload, normalizedScope);
@@ -213,6 +214,16 @@
         ) {
           return sessions;
         }
+        state.sessionsIndexing = payload?.directoryComplete === false;
+        if (indexingTimer) clearTimeout(indexingTimer);
+        if (state.sessionsIndexing) {
+          indexingTimer = setTimeout(() => {
+            indexingTimer = null;
+            if (isAuthRequestCurrent(requestGeneration) && expectedQuery === queryKey(normalizedScope) && normalizedScope === currentSessionScope()) {
+              void refreshSessionsList({ scope: normalizedScope, renderAfter: true }).catch(() => {});
+            }
+          }, 1000);
+        }
         state.sessions = [...sessions];
         state.sessionsScope = normalizedScope;
         syncCurrentSessionFromList();
@@ -266,6 +277,7 @@
 
     function renderPagination() {
       const scope = currentSessionScope();
+      if (state.sessionsIndexing) return `<div class="session-list-pagination" role="status">${escapeHtml(translate('Indexing sessions…'))}</div>`;
       if (state.sessionsLoadingMore && state.sessionsLoadingMoreScope === scope) {
         return `<div class="session-list-pagination" role="status">${escapeHtml(translate('Loading older sessions...'))}</div>`;
       }

@@ -1,0 +1,2517 @@
+{
+  "metadata": {
+    "reviewDate": "2026-09-19",
+    "timezone": "Asia/Shanghai",
+    "baselineCommit": "23fb2a9",
+    "node": "v24.4.1",
+    "chromium": "149.0.7827.55",
+    "dataset": "Isolated synthetic fixtures; no live Codex tasks or real user state",
+    "frontendStressCpuThrottle": 4,
+    "capturedAtUtc": "2026-09-18T17:17:05.764665+00:00"
+  },
+  "checks": {
+    "build": "passed",
+    "typecheck": "passed",
+    "lint": "passed",
+    "nativeUnit": {
+      "passed": 57,
+      "failed": 0
+    },
+    "webUnit": {
+      "passed": 911,
+      "failed": 0
+    },
+    "browser": {
+      "passed": 74,
+      "failed": 0,
+      "conditionallySkipped": 151,
+      "workers": 5
+    },
+    "compiledFrontendSmoke": {
+      "scriptsLoaded": 13,
+      "browserErrors": [],
+      "emittedAppBytes": 337666
+    },
+    "memoryRegression": {
+      "thresholdsUnchanged": true,
+      "focusedRepeatsPassed": 3,
+      "fullBrowserRunPassed": true
+    }
+  },
+  "baselineStartup": {
+    "commit": "23fb2a9",
+    "assets": [
+      {
+        "file": "index.html",
+        "raw": 1772,
+        "gzip": 608
+      },
+      {
+        "file": "theme-init.js",
+        "raw": 999,
+        "gzip": 459
+      },
+      {
+        "file": "styles.css",
+        "raw": 112311,
+        "gzip": 17075
+      },
+      {
+        "file": "pwa-pull-refresh.js",
+        "raw": 3853,
+        "gzip": 1079
+      },
+      {
+        "file": "ui-copy.js",
+        "raw": 14842,
+        "gzip": 5077
+      },
+      {
+        "file": "ui-kit.js",
+        "raw": 18291,
+        "gzip": 4807
+      },
+      {
+        "file": "attachment-utils.js",
+        "raw": 4987,
+        "gzip": 1449
+      },
+      {
+        "file": "markdown-renderer.js",
+        "raw": 10753,
+        "gzip": 3076
+      },
+      {
+        "file": "admin-ui.js",
+        "raw": 19671,
+        "gzip": 4400
+      },
+      {
+        "file": "session-pagination.js",
+        "raw": 19691,
+        "gzip": 4312
+      },
+      {
+        "file": "app.js",
+        "raw": 499750,
+        "gzip": 101099
+      }
+    ],
+    "totals": {
+      "raw": 706920,
+      "gzip": 143441
+    }
+  },
+  "frontend": {
+    "geometry": {
+      "sizes": {
+        ".composer-wrap": {
+          "rect": {
+            "x": 0,
+            "y": 728,
+            "width": 390,
+            "height": 116,
+            "top": 728,
+            "right": 390,
+            "bottom": 844,
+            "left": 0
+          },
+          "fontSize": "16px",
+          "lineHeight": "normal"
+        },
+        "#prompt-input": {
+          "rect": {
+            "x": 61,
+            "y": 788,
+            "width": 268,
+            "height": 46,
+            "top": 788,
+            "right": 329,
+            "bottom": 834,
+            "left": 61
+          },
+          "fontSize": "16px",
+          "lineHeight": "25.6px"
+        },
+        "#open-work-details-button": {
+          "rect": {
+            "x": 138.765625,
+            "y": 734,
+            "width": 112.453125,
+            "height": 44,
+            "top": 734,
+            "right": 251.21875,
+            "bottom": 778,
+            "left": 138.765625
+          },
+          "fontSize": "12px",
+          "lineHeight": "12px"
+        },
+        ".approval-actions button": {
+          "rect": {
+            "x": 27,
+            "y": 428.34375,
+            "width": 106.65625,
+            "height": 44,
+            "top": 428.34375,
+            "right": 133.65625,
+            "bottom": 472.34375,
+            "left": 27
+          },
+          "fontSize": "16px",
+          "lineHeight": "normal"
+        },
+        "#composer-refresh-button": null
+      },
+      "meta": null
+    },
+    "render": [
+      {
+        "count": 4,
+        "characters": 2759,
+        "domNodes": 191,
+        "renderMs": [
+          23.699999928474426,
+          2.899999976158142,
+          1.600000023841858,
+          2.700000047683716
+        ],
+        "dirtyUpdateMs": [
+          1,
+          1.899999976158142,
+          2.5,
+          0.7999999523162842,
+          0.6000000238418579
+        ]
+      },
+      {
+        "count": 100,
+        "characters": 68420,
+        "domNodes": 4220,
+        "renderMs": [
+          94.90000009536743,
+          1.1999999284744263,
+          2.700000047683716,
+          2.5
+        ],
+        "dirtyUpdateMs": [
+          2.799999952316284,
+          2.5999999046325684,
+          2.600000023841858,
+          2.5,
+          0.8999999761581421
+        ]
+      },
+      {
+        "count": 500,
+        "characters": 342220,
+        "domNodes": 4220,
+        "renderMs": [
+          40.89999997615814,
+          2.9000000953674316,
+          1,
+          2.799999952316284
+        ],
+        "dirtyUpdateMs": [
+          1,
+          4,
+          0.8999999761581421,
+          0.7000000476837158,
+          0.8000000715255737
+        ]
+      }
+    ],
+    "assets": [
+      {
+        "file": "index.html",
+        "raw": 2064,
+        "gzip": 653,
+        "brotli": 588
+      },
+      {
+        "file": "theme-init.js",
+        "raw": 525,
+        "gzip": 335,
+        "brotli": 318
+      },
+      {
+        "file": "styles.css",
+        "raw": 97667,
+        "gzip": 16850,
+        "brotli": 18027
+      },
+      {
+        "file": "pwa-pull-refresh.js",
+        "raw": 1754,
+        "gzip": 787,
+        "brotli": 761
+      },
+      {
+        "file": "ui-copy.js",
+        "raw": 13163,
+        "gzip": 5350,
+        "brotli": 5536
+      },
+      {
+        "file": "ui-kit.js",
+        "raw": 13611,
+        "gzip": 4234,
+        "brotli": 4212
+      },
+      {
+        "file": "attachment-utils.js",
+        "raw": 2351,
+        "gzip": 1064,
+        "brotli": 1061
+      },
+      {
+        "file": "markdown-renderer.js",
+        "raw": 4632,
+        "gzip": 2258,
+        "brotli": 2311
+      },
+      {
+        "file": "ui-localization.js",
+        "raw": 3851,
+        "gzip": 1910,
+        "brotli": 1932
+      },
+      {
+        "file": "session-file-viewer.js",
+        "raw": 6820,
+        "gzip": 2471,
+        "brotli": 2459
+      },
+      {
+        "file": "webhook-settings.js",
+        "raw": 7738,
+        "gzip": 2355,
+        "brotli": 2360
+      },
+      {
+        "file": "request-context.js",
+        "raw": 335,
+        "gzip": 239,
+        "brotli": 222
+      },
+      {
+        "file": "draft-store.js",
+        "raw": 1610,
+        "gzip": 795,
+        "brotli": 789
+      },
+      {
+        "file": "session-pagination.js",
+        "raw": 9470,
+        "gzip": 3467,
+        "brotli": 3534
+      },
+      {
+        "file": "app.js",
+        "raw": 337666,
+        "gzip": 82187,
+        "brotli": 80104
+      }
+    ],
+    "menu": {
+      "synchronousClickMs": [
+        55.5,
+        12.100000023841858,
+        15.100000023841858,
+        10.800000071525574,
+        15.100000023841858,
+        12.100000023841858
+      ],
+      "nextFrameMs": [
+        91.89999997615814,
+        15,
+        21.5,
+        14.800000071525574,
+        19.300000071525574,
+        15
+      ],
+      "domNodes": 4220
+    },
+    "assetTotals": {
+      "raw": 503257,
+      "gzip": 124955
+    }
+  },
+  "storage": {
+    "node": "v24.4.1",
+    "timeline": [
+      {
+        "sizeMiB": 1,
+        "firstReadMigrationMs": 13.25,
+        "readMedianMs": 0.05,
+        "readMaxMs": 13.25,
+        "appendMedianMs": 1.57,
+        "appendMaxMs": 1.83
+      },
+      {
+        "sizeMiB": 8,
+        "firstReadMigrationMs": 45.46,
+        "readMedianMs": 0.08,
+        "readMaxMs": 45.46,
+        "appendMedianMs": 2.63,
+        "appendMaxMs": 2.71
+      },
+      {
+        "sizeMiB": 15,
+        "firstReadMigrationMs": 100.51,
+        "readMedianMs": 0.07,
+        "readMaxMs": 100.51,
+        "appendMedianMs": 3.97,
+        "appendMaxMs": 4.22
+      }
+    ],
+    "asyncLock": {
+      "timeoutMs": 250,
+      "error": "file_lock_busy",
+      "mainThreadTimerDelayMs": 0.22
+    }
+  },
+  "http": {
+    "node": "v24.4.1",
+    "directory": {
+      "status": 200,
+      "pageItems": 30,
+      "indexing": true,
+      "directoryComplete": false,
+      "providerCallsAtResponse": 2,
+      "coldMs": 24.25,
+      "providerCallsAfterCompletion": 10,
+      "warmMedianMs": 0.72,
+      "warmP95Ms": 1.34,
+      "providerCallsAfter20Warm": 10
+    },
+    "search": {
+      "ids": [
+        "thread_00109",
+        "thread_00108",
+        "thread_00107",
+        "thread_00106",
+        "thread_00105",
+        "thread_00104",
+        "thread_00103",
+        "thread_00102",
+        "thread_00101",
+        "thread_00100",
+        "thread_00010"
+      ],
+      "complete": true,
+      "indexing": false
+    },
+    "history": {
+      "firstItems": 50,
+      "nextItems": 50,
+      "firstHasMore": true,
+      "readsAfterFirst": 1,
+      "readsAfterSecond": 1
+    },
+    "static": {
+      "medianMs": 1.28,
+      "maxMs": 1.67
+    },
+    "metrics": {
+      "http": {
+        "requests": 44,
+        "errors": 0,
+        "active": 1,
+        "requestP95Ms": 0.43179100000000403,
+        "eventLoopP95Ms": 12.607487,
+        "sseReplays": 0,
+        "sseResets": 0
+      },
+      "staticCache": {
+        "hits": 21,
+        "misses": 23,
+        "entries": 23,
+        "retainedBytes": 1301955
+      },
+      "storage": {
+        "scans": 0,
+        "scannedFiles": 0,
+        "backgroundFailures": 0
+      },
+      "runtime": {
+        "directory": {
+          "providerPages": 10,
+          "firstPageReads": 21,
+          "completeReads": 2,
+          "failures": 0
+        },
+        "history": {
+          "historyBuilds": 1,
+          "historyHits": 1,
+          "retainedSessions": 1
+        }
+      }
+    }
+  },
+  "auth": {
+    "verify100": {
+      "elapsedMs": 2.8,
+      "primaryCommits": 1
+    },
+    "passwordRotation": {
+      "oldTokenAccepted": false,
+      "oldPasswordAccepted": false,
+      "newPasswordAccepted": true
+    }
+  },
+  "shareTtl": {
+    "streamOpenStatus": 200,
+    "expiredNewRequestStatus": 404,
+    "existingStreamClosed": true,
+    "postExpiryMessageDelivered": false
+  },
+  "browserProbes": {
+    "browser": "149.0.7827.55",
+    "visual": [
+      {
+        "name": "desktop",
+        "layout": {
+          "viewport": 1440,
+          "scroll": 1440,
+          "nodes": 239,
+          "composer": {
+            "x": 435,
+            "y": 672,
+            "width": 1005,
+            "height": 228,
+            "top": 672,
+            "right": 1440,
+            "bottom": 900,
+            "left": 435
+          },
+          "buttons": [
+            {
+              "label": "",
+              "width": 55,
+              "height": 38
+            },
+            {
+              "label": "展开侧边栏",
+              "width": 55,
+              "height": 38
+            },
+            {
+              "label": "收藏",
+              "width": 114,
+              "height": 36
+            },
+            {
+              "label": "最近",
+              "width": 114,
+              "height": 36
+            },
+            {
+              "label": "已归档会话",
+              "width": 40,
+              "height": 36
+            },
+            {
+              "label": "New session",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "搜索",
+              "width": 50,
+              "height": 36
+            },
+            {
+              "label": "取消收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "停止",
+              "width": 50,
+              "height": 36
+            },
+            {
+              "label": "会话菜单",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "接受",
+              "width": 259.328125,
+              "height": 38
+            },
+            {
+              "label": "本会话允许",
+              "width": 259.34375,
+              "height": 38
+            },
+            {
+              "label": "拒绝",
+              "width": 259.328125,
+              "height": 38
+            },
+            {
+              "label": "添加文件",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "刷新会话",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "发送",
+              "width": 42,
+              "height": 38
+            }
+          ]
+        },
+        "errors": []
+      },
+      {
+        "name": "mobile",
+        "layout": {
+          "viewport": 390,
+          "scroll": 390,
+          "nodes": 114,
+          "composer": {
+            "x": 0,
+            "y": 622,
+            "width": 390,
+            "height": 222,
+            "top": 622,
+            "right": 390,
+            "bottom": 844,
+            "left": 0
+          },
+          "buttons": [
+            {
+              "label": "接受",
+              "width": 106.65625,
+              "height": 38
+            },
+            {
+              "label": "本会话允许",
+              "width": 106.671875,
+              "height": 38
+            },
+            {
+              "label": "拒绝",
+              "width": 106.671875,
+              "height": 38
+            },
+            {
+              "label": "刷新会话",
+              "width": 38,
+              "height": 38
+            }
+          ]
+        },
+        "errors": []
+      },
+      {
+        "name": "tablet",
+        "layout": {
+          "viewport": 768,
+          "scroll": 768,
+          "nodes": 114,
+          "composer": {
+            "x": 0,
+            "y": 678,
+            "width": 768,
+            "height": 222,
+            "top": 678,
+            "right": 768,
+            "bottom": 900,
+            "left": 0
+          },
+          "buttons": [
+            {
+              "label": "接受",
+              "width": 230,
+              "height": 38
+            },
+            {
+              "label": "本会话允许",
+              "width": 230,
+              "height": 38
+            },
+            {
+              "label": "拒绝",
+              "width": 230,
+              "height": 38
+            },
+            {
+              "label": "刷新会话",
+              "width": 38,
+              "height": 38
+            }
+          ]
+        },
+        "errors": []
+      },
+      {
+        "name": "breakpoint1279",
+        "layout": {
+          "viewport": 1279,
+          "scroll": 1279,
+          "nodes": 239,
+          "composer": {
+            "x": 336,
+            "y": 672,
+            "width": 943,
+            "height": 228,
+            "top": 672,
+            "right": 1279,
+            "bottom": 900,
+            "left": 336
+          },
+          "buttons": [
+            {
+              "label": "所有会话",
+              "width": 39,
+              "height": 46
+            },
+            {
+              "label": "yanshan_quant",
+              "width": 39,
+              "height": 46
+            },
+            {
+              "label": "",
+              "width": 39,
+              "height": 38
+            },
+            {
+              "label": "展开侧边栏",
+              "width": 39,
+              "height": 38
+            },
+            {
+              "label": "收藏",
+              "width": 74.5,
+              "height": 36
+            },
+            {
+              "label": "最近",
+              "width": 74.5,
+              "height": 36
+            },
+            {
+              "label": "已归档会话",
+              "width": 40,
+              "height": 36
+            },
+            {
+              "label": "New session",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "搜索",
+              "width": 50,
+              "height": 36
+            },
+            {
+              "label": "取消收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "停止",
+              "width": 50,
+              "height": 36
+            },
+            {
+              "label": "会话菜单",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "接受",
+              "width": 259.328125,
+              "height": 38
+            },
+            {
+              "label": "本会话允许",
+              "width": 259.34375,
+              "height": 38
+            },
+            {
+              "label": "拒绝",
+              "width": 259.328125,
+              "height": 38
+            },
+            {
+              "label": "添加文件",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "刷新会话",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "发送",
+              "width": 42,
+              "height": 38
+            }
+          ]
+        },
+        "errors": []
+      },
+      {
+        "name": "breakpoint1280",
+        "layout": {
+          "viewport": 1280,
+          "scroll": 1280,
+          "nodes": 239,
+          "composer": {
+            "x": 435,
+            "y": 672,
+            "width": 845,
+            "height": 228,
+            "top": 672,
+            "right": 1280,
+            "bottom": 900,
+            "left": 435
+          },
+          "buttons": [
+            {
+              "label": "",
+              "width": 55,
+              "height": 38
+            },
+            {
+              "label": "展开侧边栏",
+              "width": 55,
+              "height": 38
+            },
+            {
+              "label": "收藏",
+              "width": 114,
+              "height": 36
+            },
+            {
+              "label": "最近",
+              "width": 114,
+              "height": 36
+            },
+            {
+              "label": "已归档会话",
+              "width": 40,
+              "height": 36
+            },
+            {
+              "label": "New session",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "搜索",
+              "width": 50,
+              "height": 36
+            },
+            {
+              "label": "取消收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "收藏",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "归档",
+              "width": 34,
+              "height": 34
+            },
+            {
+              "label": "停止",
+              "width": 50,
+              "height": 36
+            },
+            {
+              "label": "会话菜单",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "接受",
+              "width": 251.65625,
+              "height": 38
+            },
+            {
+              "label": "本会话允许",
+              "width": 251.671875,
+              "height": 38
+            },
+            {
+              "label": "拒绝",
+              "width": 251.671875,
+              "height": 38
+            },
+            {
+              "label": "添加文件",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "刷新会话",
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "发送",
+              "width": 42,
+              "height": 38
+            }
+          ]
+        },
+        "errors": []
+      }
+    ],
+    "bugs": {
+      "stale404": {
+        "before": 4,
+        "beforeFailure": {
+          "text": "\n      \n        \n          你\n          历史\n        \n        \n        Earlier file viewer question 6\n        \n        \n      \n    \n      \n        \n          助手\n          历史\n        \n        \n        Earlier file viewer answer 6\n        \n        \n      \n    \n      \n        \n          你\n          历史\n        \n        \n        This image was uploaded in an earlier turn.\n        \n        \n          \n            \n              图片\n              history-image.png\n              46 KB · image/png\n              ›\n            \n  \n        \n  \n        \n      \n    \n      \n        \n          助手\n          最终\n        \n        \n        Generated Browser session guide, sandboxed HTML preview, and download the deduplicated XLSX file in this project.\n        \n        \n      \n    ",
+          "workspace": {
+            "view": "chat",
+            "sessionId": "session_browser_files",
+            "savedAt": 1789751636528,
+            "owner": "single",
+            "draft": null
+          },
+          "status": "就绪",
+          "cards": [
+            "session_browser_fixture",
+            "session_browser_files",
+            "session_browser_idle",
+            "session_browser_history"
+          ]
+        },
+        "afterFailure": {
+          "text": "\n      \n        \n          你\n          历史\n        \n        \n        Earlier file viewer question 6\n        \n        \n      \n    \n      \n        \n          助手\n          历史\n        \n        \n        Earlier file viewer answer 6\n        \n        \n      \n    \n      \n        \n          你\n          历史\n        \n        \n        This image was uploaded in an earlier turn.\n        \n        \n          \n            \n              图片\n              history-image.png\n              46 KB · image/png\n              ›\n            \n  \n        \n  \n        \n      \n    \n      \n        \n          助手\n          最终\n        \n        \n        Generated Browser session guide, sandboxed HTML preview, and download the deduplicated XLSX file in this project.\n        \n        \n      \n    ",
+          "workspace": {
+            "view": "chat",
+            "sessionId": "session_browser_files",
+            "savedAt": 1789751636528,
+            "owner": "single",
+            "draft": null
+          },
+          "status": "就绪",
+          "cards": [
+            "session_browser_fixture",
+            "session_browser_files",
+            "session_browser_idle",
+            "session_browser_history"
+          ]
+        }
+      },
+      "partialTimeline": {
+        "text": "历史加载失败，请重试以恢复消息。重试\n      \n        \n          你\n          预览\n        \n        \n        Oldest browser question\n        \n        \n      \n    ",
+        "workspace": {
+          "view": "chat",
+          "sessionId": "session_browser_history",
+          "savedAt": 1789751637875,
+          "owner": "single",
+          "draft": null
+        },
+        "status": "就绪",
+        "cards": [
+          "session_browser_fixture",
+          "session_browser_files",
+          "session_browser_idle",
+          "session_browser_history"
+        ],
+        "body": "C\n所\nY\n收藏\n最近\n搜索全部会话\n搜索\n全部状态\n工作中\n等待审批\n失败\n暂无近期活动\nVerify the mobile workspace\n活动中\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nOpen generated files and retained attachments\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nOldest browser question\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nHistory scroll fixture\nyanshan_quant\n本轮已结束\n历史加载失败，请重试以恢复消息。\n重试\n\nOldest browser question\n\n就绪\n刷新\n发送"
+      },
+      "draftAfterReload": "未发送草稿：请保留这个排查计划。"
+    },
+    "htmlPreview": {
+      "requests": [
+        "http://127.0.0.1:41743/html-probe.css",
+        "http://127.0.0.1:41743/html-probe.png"
+      ],
+      "responses": [],
+      "failed": [
+        {
+          "url": "http://127.0.0.1:41743/html-probe.css",
+          "error": "",
+          "blockedReason": "csp"
+        },
+        {
+          "url": "http://127.0.0.1:41743/html-probe.png",
+          "error": "",
+          "blockedReason": "csp"
+        }
+      ],
+      "routed": []
+    }
+  },
+  "visual": {
+    "contrast": [
+      {
+        "theme": "fresh-light",
+        "items": [
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              80,
+              89,
+              102,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 7.09
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              17,
+              24,
+              39,
+              255
+            ],
+            "background": [
+              207,
+              212,
+              220,
+              255
+            ],
+            "font": "12px",
+            "contrast": 11.91
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              17,
+              24,
+              39,
+              255
+            ],
+            "background": [
+              207,
+              212,
+              220,
+              255
+            ],
+            "font": "12px",
+            "contrast": 11.91
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              80,
+              89,
+              102,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 7.09
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card",
+            "foreground": [
+              80,
+              89,
+              102,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 7.09
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              80,
+              89,
+              102,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 7.09
+          }
+        ]
+      },
+      {
+        "theme": "retro",
+        "items": [
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              97,
+              91,
+              83,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 6.71
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              45,
+              45,
+              45,
+              255
+            ],
+            "background": [
+              223,
+              214,
+              200,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.57
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              45,
+              45,
+              45,
+              255
+            ],
+            "background": [
+              223,
+              214,
+              200,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.57
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              97,
+              91,
+              83,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 6.71
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card",
+            "foreground": [
+              97,
+              91,
+              83,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 6.71
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              97,
+              91,
+              83,
+              255
+            ],
+            "background": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "font": "12px",
+            "contrast": 6.71
+          }
+        ]
+      },
+      {
+        "theme": "terminal",
+        "items": [
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              178,
+              184,
+              191,
+              255
+            ],
+            "background": [
+              23,
+              27,
+              32,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.65
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              240,
+              241,
+              242,
+              255
+            ],
+            "background": [
+              48,
+              53,
+              59,
+              255
+            ],
+            "font": "12px",
+            "contrast": 10.94
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              240,
+              241,
+              242,
+              255
+            ],
+            "background": [
+              48,
+              53,
+              59,
+              255
+            ],
+            "font": "12px",
+            "contrast": 10.94
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              178,
+              184,
+              191,
+              255
+            ],
+            "background": [
+              23,
+              27,
+              32,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.65
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card",
+            "foreground": [
+              178,
+              184,
+              191,
+              255
+            ],
+            "background": [
+              23,
+              27,
+              32,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.65
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              178,
+              184,
+              191,
+              255
+            ],
+            "background": [
+              23,
+              27,
+              32,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.65
+          }
+        ]
+      },
+      {
+        "theme": "dark-gold",
+        "items": [
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              32,
+              32,
+              34,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.34
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              244,
+              244,
+              245,
+              255
+            ],
+            "background": [
+              66,
+              66,
+              74,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.06
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              244,
+              244,
+              245,
+              255
+            ],
+            "background": [
+              66,
+              66,
+              74,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.06
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              32,
+              32,
+              34,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.34
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              32,
+              32,
+              34,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.34
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              32,
+              32,
+              34,
+              255
+            ],
+            "font": "12px",
+            "contrast": 8.34
+          }
+        ]
+      },
+      {
+        "theme": "oled-black",
+        "items": [
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              21,
+              21,
+              21,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.37
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "background": [
+              56,
+              56,
+              63,
+              255
+            ],
+            "font": "12px",
+            "contrast": 11.63
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card is-active",
+            "foreground": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "background": [
+              56,
+              56,
+              63,
+              255
+            ],
+            "font": "12px",
+            "contrast": 11.63
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              21,
+              21,
+              21,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.37
+          },
+          {
+            "component": "session-preview",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              21,
+              21,
+              21,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.37
+          },
+          {
+            "component": "session-card-meta",
+            "cardClass": "session-card",
+            "foreground": [
+              185,
+              185,
+              193,
+              255
+            ],
+            "background": [
+              21,
+              21,
+              21,
+              255
+            ],
+            "font": "12px",
+            "contrast": 9.37
+          }
+        ]
+      }
+    ],
+    "viewports": [
+      {
+        "name": "phone",
+        "width": 390,
+        "height": 844,
+        "touch": true,
+        "geometry": {
+          "width": 390,
+          "scrollWidth": 390,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 46,
+              "height": 44,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 106.65625,
+              "height": 44,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 106.671875,
+              "height": 44,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 106.671875,
+              "height": 44,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "runtimeAfter2200ms": "已连接 · 已运行 2s · 最近工作事件 2s",
+          "settings": {
+            "rect": {
+              "x": 9,
+              "y": 142,
+              "width": 372,
+              "height": 637,
+              "top": 142,
+              "right": 381,
+              "bottom": 779,
+              "left": 9
+            },
+            "scrollHeight": 701,
+            "clientHeight": 637
+          },
+          "permissions": [
+            {
+              "text": "只读",
+              "rect": {
+                "x": 140,
+                "y": 635,
+                "width": 210,
+                "height": 44,
+                "top": 635,
+                "right": 350,
+                "bottom": 679,
+                "left": 140
+              }
+            },
+            {
+              "text": "修改前询问",
+              "rect": {
+                "x": 140,
+                "y": 683,
+                "width": 210,
+                "height": 44,
+                "top": 683,
+                "right": 350,
+                "bottom": 727,
+                "left": 140
+              }
+            },
+            {
+              "text": "完全访问",
+              "rect": {
+                "x": 140,
+                "y": 731,
+                "width": 210,
+                "height": 44,
+                "top": 731,
+                "right": 350,
+                "bottom": 775,
+                "left": 140
+              }
+            }
+          ],
+          "draftAfterMenu": "保留草稿和焦点"
+        },
+        "errors": []
+      },
+      {
+        "name": "compact",
+        "width": 320,
+        "height": 568,
+        "touch": true,
+        "geometry": {
+          "width": 320,
+          "scrollWidth": 320,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 46,
+              "height": 44,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 83.328125,
+              "height": 44,
+              "font": "14px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 83.34375,
+              "height": 44,
+              "font": "14px"
+            },
+            {
+              "text": "拒绝",
+              "width": 83.328125,
+              "height": 44,
+              "font": "14px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 105.59375,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 9,
+              "y": 160,
+              "width": 302,
+              "height": 343,
+              "top": 160,
+              "right": 311,
+              "bottom": 503,
+              "left": 9
+            },
+            "scrollHeight": 701,
+            "clientHeight": 343
+          },
+          "permissions": [
+            {
+              "text": "只读",
+              "rect": {
+                "x": 140,
+                "y": 339,
+                "width": 140,
+                "height": 44,
+                "top": 339,
+                "right": 280,
+                "bottom": 383,
+                "left": 140
+              }
+            },
+            {
+              "text": "修改前询问",
+              "rect": {
+                "x": 140,
+                "y": 387,
+                "width": 140,
+                "height": 44,
+                "top": 387,
+                "right": 280,
+                "bottom": 431,
+                "left": 140
+              }
+            },
+            {
+              "text": "完全访问",
+              "rect": {
+                "x": 140,
+                "y": 435,
+                "width": 140,
+                "height": 44,
+                "top": 435,
+                "right": 280,
+                "bottom": 479,
+                "left": 140
+              }
+            }
+          ],
+          "draftAfterMenu": "保留草稿和焦点"
+        },
+        "errors": []
+      },
+      {
+        "name": "tablet",
+        "width": 768,
+        "height": 900,
+        "touch": false,
+        "geometry": {
+          "width": 768,
+          "scrollWidth": 768,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 46,
+              "height": 44,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 230,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 230,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 230,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 25,
+              "y": 144,
+              "width": 718,
+              "height": 587,
+              "top": 144,
+              "right": 743,
+              "bottom": 731,
+              "left": 25
+            },
+            "scrollHeight": 605,
+            "clientHeight": 587
+          }
+        },
+        "errors": []
+      },
+      {
+        "name": "before-medium",
+        "width": 979,
+        "height": 900,
+        "touch": false,
+        "geometry": {
+          "width": 979,
+          "scrollWidth": 979,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 46,
+              "height": 36,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 300.328125,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 300.34375,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 300.328125,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 130.5,
+              "y": 159,
+              "width": 718,
+              "height": 578,
+              "top": 159,
+              "right": 848.5,
+              "bottom": 737,
+              "left": 130.5
+            },
+            "scrollHeight": 578,
+            "clientHeight": 578
+          }
+        },
+        "errors": []
+      },
+      {
+        "name": "medium",
+        "width": 980,
+        "height": 900,
+        "touch": false,
+        "geometry": {
+          "width": 980,
+          "scrollWidth": 980,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 50,
+              "height": 36,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 184.65625,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 184.671875,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 184.671875,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [
+            {
+              "class": "desktop-project-rail",
+              "width": 56
+            },
+            {
+              "class": "desktop-session-pane",
+              "width": 280
+            },
+            {
+              "class": "desktop-chat-pane",
+              "width": 644
+            }
+          ],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 361,
+              "y": 153,
+              "width": 594,
+              "height": 578,
+              "top": 153,
+              "right": 955,
+              "bottom": 731,
+              "left": 361
+            },
+            "scrollHeight": 578,
+            "clientHeight": 578
+          }
+        },
+        "errors": []
+      },
+      {
+        "name": "intermediate",
+        "width": 1100,
+        "height": 900,
+        "touch": false,
+        "geometry": {
+          "width": 1100,
+          "scrollWidth": 1100,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 50,
+              "height": 36,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 224.65625,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 224.671875,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 224.671875,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [
+            {
+              "class": "desktop-project-rail",
+              "width": 56
+            },
+            {
+              "class": "desktop-session-pane",
+              "width": 280
+            },
+            {
+              "class": "desktop-chat-pane",
+              "width": 764
+            }
+          ],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 361,
+              "y": 153,
+              "width": 714,
+              "height": 578,
+              "top": 153,
+              "right": 1075,
+              "bottom": 731,
+              "left": 361
+            },
+            "scrollHeight": 578,
+            "clientHeight": 578
+          }
+        },
+        "errors": []
+      },
+      {
+        "name": "before-wide",
+        "width": 1279,
+        "height": 900,
+        "touch": false,
+        "geometry": {
+          "width": 1279,
+          "scrollWidth": 1279,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 50,
+              "height": 36,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 259.328125,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 259.34375,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 259.328125,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [
+            {
+              "class": "desktop-project-rail",
+              "width": 56
+            },
+            {
+              "class": "desktop-session-pane",
+              "width": 280
+            },
+            {
+              "class": "desktop-chat-pane",
+              "width": 943
+            }
+          ],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 378.5,
+              "y": 153,
+              "width": 858,
+              "height": 578,
+              "top": 153,
+              "right": 1236.5,
+              "bottom": 731,
+              "left": 378.5
+            },
+            "scrollHeight": 578,
+            "clientHeight": 578
+          }
+        },
+        "errors": []
+      },
+      {
+        "name": "wide",
+        "width": 1280,
+        "height": 900,
+        "touch": false,
+        "geometry": {
+          "width": 1280,
+          "scrollWidth": 1280,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 50,
+              "height": 36,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 251.65625,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 251.671875,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 251.671875,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [
+            {
+              "class": "desktop-project-rail",
+              "width": 72
+            },
+            {
+              "class": "desktop-session-pane",
+              "width": 363
+            },
+            {
+              "class": "desktop-chat-pane",
+              "width": 845
+            }
+          ],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 460,
+              "y": 153,
+              "width": 795,
+              "height": 578,
+              "top": 153,
+              "right": 1255,
+              "bottom": 731,
+              "left": 460
+            },
+            "scrollHeight": 578,
+            "clientHeight": 578
+          }
+        },
+        "errors": []
+      },
+      {
+        "name": "desktop",
+        "width": 1440,
+        "height": 900,
+        "touch": false,
+        "geometry": {
+          "width": 1440,
+          "scrollWidth": 1440,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 50,
+              "height": 36,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 259.328125,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 259.34375,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 259.328125,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [
+            {
+              "class": "desktop-project-rail",
+              "width": 72
+            },
+            {
+              "class": "desktop-session-pane",
+              "width": 363
+            },
+            {
+              "class": "desktop-chat-pane",
+              "width": 1005
+            }
+          ],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 508.5,
+              "y": 153,
+              "width": 858,
+              "height": 578,
+              "top": 153,
+              "right": 1366.5,
+              "bottom": 731,
+              "left": 508.5
+            },
+            "scrollHeight": 578,
+            "clientHeight": 578
+          }
+        },
+        "errors": []
+      },
+      {
+        "name": "zoom-equivalent",
+        "width": 720,
+        "height": 450,
+        "touch": false,
+        "geometry": {
+          "width": 720,
+          "scrollWidth": 720,
+          "overflowElements": [],
+          "targets": [
+            {
+              "text": "停止",
+              "width": 46,
+              "height": 44,
+              "font": "12px"
+            },
+            {
+              "text": "接受",
+              "width": 214,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "本会话允许",
+              "width": 214,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "拒绝",
+              "width": 214,
+              "height": 38,
+              "font": "16px"
+            },
+            {
+              "text": "工作中 · 等待审批›",
+              "width": 112.453125,
+              "height": 44,
+              "font": "12px"
+            }
+          ],
+          "panes": [],
+          "runtime": "已连接 · 已运行 0s · 最近工作事件 0s",
+          "settings": {
+            "rect": {
+              "x": 19,
+              "y": 144,
+              "width": 682,
+              "height": 137,
+              "top": 144,
+              "right": 701,
+              "bottom": 281,
+              "left": 19
+            },
+            "scrollHeight": 605,
+            "clientHeight": 137
+          },
+          "permissions": [
+            {
+              "text": "只读",
+              "rect": {
+                "x": 150,
+                "y": 213,
+                "width": 170.65625,
+                "height": 44,
+                "top": 213,
+                "right": 320.65625,
+                "bottom": 257,
+                "left": 150
+              }
+            },
+            {
+              "text": "修改前询问",
+              "rect": {
+                "x": 324.65625,
+                "y": 213,
+                "width": 170.671875,
+                "height": 44,
+                "top": 213,
+                "right": 495.328125,
+                "bottom": 257,
+                "left": 324.65625
+              }
+            },
+            {
+              "text": "完全访问",
+              "rect": {
+                "x": 499.328125,
+                "y": 213,
+                "width": 170.671875,
+                "height": 44,
+                "top": 213,
+                "right": 670,
+                "bottom": 257,
+                "left": 499.328125
+              }
+            }
+          ],
+          "draftAfterMenu": "保留草稿和焦点"
+        },
+        "errors": []
+      }
+    ],
+    "initialErrors": []
+  },
+  "dependencyAudit": {
+    "auditReportVersion": 2,
+    "vulnerabilities": {},
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "dependencies": {
+        "prod": 5,
+        "dev": 123,
+        "optional": 28,
+        "peer": 0,
+        "peerOptional": 0,
+        "total": 127
+      }
+    }
+  },
+  "productionDependencyAudit": {
+    "auditReportVersion": 2,
+    "vulnerabilities": {},
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "dependencies": {
+        "prod": 5,
+        "dev": 123,
+        "optional": 28,
+        "peer": 0,
+        "peerOptional": 0,
+        "total": 127
+      }
+    }
+  },
+  "sourceAppBytes": 499331,
+  "verifiedCodeSha256": {
+    ".github/workflows/ci.yml": "6d9772e4af3da65a67a589c52e219d788b4bd3cb28538366884b521a08ab142d",
+    "package-lock.json": "998f884203d31d28dce30af0c280c2a86d1bec0bfe8c9c138dad4afe3ef7d913",
+    "packages/codex-web/package.json": "1847aba0961dc221112c5be1c5ddadac14e84f95bf0d3ed7c40d5e43d0af80eb",
+    "packages/codex-web/public/admin-ui.js": "825c641840de5b2e5c80b242a4e50ec10b5a47d43327d4179dff560575f32820",
+    "packages/codex-web/public/app.js": "388469ab416a0719f52c660a5cb9db8ed5ea55f28ecb6a32614a01a87e179ab2",
+    "packages/codex-web/public/draft-store.js": "450b40aad5f1c71edd244a9dd971025755a8536de6ce7dc31059dca679802940",
+    "packages/codex-web/public/index.html": "91fa9e5f56127848abeb522c0d4e67776a568b5bb0a7bd4975629da5a89c3bd1",
+    "packages/codex-web/public/request-context.js": "c4ea60d1af381bd02c2a71b7ef2b735aef9ef81fb33342f44a3411b043c10e5d",
+    "packages/codex-web/public/service-worker.js": "f1443d348fac8fd62483f1083deb06711b83ef4784dceff4fc8516b586b9b8bb",
+    "packages/codex-web/public/session-file-viewer.js": "31f3c17a8742afb9e57c9a72777c69fb19eef508827860003e73cd4098b26f90",
+    "packages/codex-web/public/session-pagination.js": "56227b7bc0d642c1d6c5259a871fa703be1b59bbf8b81542660598d8507f4a1f",
+    "packages/codex-web/public/styles.css": "3c20d6dc3f52aaa284bbdc2ff5fe6dc130e98ece5734d5e897612e69e73b0dc4",
+    "packages/codex-web/public/ui-copy.js": "558662f7c2ce69e654e9542a60cd6f068cdd187c67a6e1550d26731d44fd4b42",
+    "packages/codex-web/public/ui-localization.js": "de5f834fb0eb6d94e5867abf59a3e4c3b0be2404f536b2846f33ddd79ac97e18",
+    "packages/codex-web/public/webhook-settings.js": "a9f3c61c5d710360d5f7c9ed89f1af969cba9905736a3830dc3a39cb95c696aa",
+    "packages/codex-web/scripts/build-public.mjs": "526369016d0c11f817d2e13508fa8db5d47e68018397453dd129e95e4ecda5d4",
+    "packages/codex-web/scripts/smoke-built-public.mjs": "62d2b7ee23a2cb196501515edf93277e8278b39f460796bf674e4c7067456c6a",
+    "packages/codex-web/src/auth_store.ts": "208fac3af4aac72e132662976e8ab7fcae48cb44262a44ef9d004326c5a5d9b1",
+    "packages/codex-web/src/http_metrics.ts": "2a733d7d4b759d874ba272586638b0d9ee53bdc3904214153ef8755726417bc9",
+    "packages/codex-web/src/hybrid_auth_store.ts": "501d64166bfe9b15cbeba8c66639b84ebd501a8c0a8b78f8aae70162ac6f1016",
+    "packages/codex-web/src/identity_store.ts": "b95d9b35ab1c280790da250a16803cb7f18ed7c23a44f9ef964ed109c56dcf46",
+    "packages/codex-web/src/runtime.ts": "5572d000042758658be472b33332411933db7573beab646d06046d47c57e1ae5",
+    "packages/codex-web/src/server.ts": "32b5b77b2314092b33d635264520abc99d51350910da1d0c2688a14b0ff826e3",
+    "packages/codex-web/src/session_directory.ts": "ca5513378fa6c0de94d1371715f581a9bee85b04887628d189cad7a155b56e51",
+    "packages/codex-web/src/session_file_store.ts": "6074cb0199aecb2821bd4406645bf8cc22385f3618fc80d64fc52639019de352",
+    "packages/codex-web/src/session_list_page.ts": "db54fafefd2f7cee95f1c59eaac2dfc176b10c4f41847a9944458f0ba1ffbb81",
+    "packages/codex-web/src/session_partition_store.ts": "eac7de66a72fc2ce3147fe9dfd61dc905b7cebd9aeada294f04ac6fd81ff4643",
+    "packages/codex-web/src/session_settings_store.ts": "2dd7bec41bd8d1873347fbda42c9473f46ea1438c2a67e910e14957da810e501",
+    "packages/codex-web/src/session_timeline_store.ts": "7a070321d712052526b992bdfbba6a6f60251350862d498764a62fe6bdb3cdff",
+    "packages/codex-web/src/static_asset_cache.ts": "b63fe21193bc9b8ac302583a9abce3abc592b5a990b6e47b66e2e6cf488153b4",
+    "packages/codex-web/src/storage_governance.ts": "56acf049b9bdbb27ae7790c1224c0862a7869accdf0508cb5f9fa13d47733710",
+    "packages/codex-web/src/task_runner.ts": "feffe8d349dcf037e7a37d0db4c5a0abf025b0c4bacbae2b81b0f1ef58e68cf5",
+    "packages/codex-web/test/auth_store.test.ts": "9f3fad0cb0905bcc53db842d0d58c68defce5b35ebd7c15fa62ba60e70517562",
+    "packages/codex-web/test/browser/fixture-server.mjs": "c6a64d918596441a2b19274ac5bbe6d960af651fbb6d67ff8e8118ec8f75525b",
+    "packages/codex-web/test/browser/remediation.spec.js": "131071bc4b4afefa1ea014c53c0030064d4e34d945d97f9790b2095f0e7b797c",
+    "packages/codex-web/test/browser/workspace.spec.js": "52abaa868498b4141c88584df8a6d131687882130b860efd4b0d020bec85ef45",
+    "packages/codex-web/test/build_public.test.ts": "735788781f74af1f03896d973ba6ea2818f70629665337019aa77b921382c321",
+    "packages/codex-web/test/frontend_budget.test.ts": "930a471228867eef2ff6a6a66e341ab34bb1379a15889cd4f5c2f93cbabbff2c",
+    "packages/codex-web/test/frontend_contracts.test.ts": "c3ec436793a17305c2e0671bb8ba5116bef58b1fd7e6d25f463f198446a8a6f1",
+    "packages/codex-web/test/hybrid_auth_store.test.ts": "42564cdab0713df82790e20c96f08e1f55bfd2ed170180178210a7c0477d976d",
+    "packages/codex-web/test/public_ui.test.ts": "751d549460eaadb1644c623c3ab5be7681b5dde0951dae6356ae926b7df3d36c",
+    "packages/codex-web/test/runtime.test.ts": "f51625f9998f65527af5f4f92cac8e375dd2a4261202e2d1e6074a099cf4543b",
+    "packages/codex-web/test/runtime_scaling.test.ts": "96c37679b854afcfe137a0f4803c62939936bea37bfa0ae44294ff05056b112c",
+    "packages/codex-web/test/server_auth.test.ts": "a1838a873717a61123d83901762a57d0cb767012986766529eef9e6ff49aeb14",
+    "packages/codex-web/test/server_multi_user.test.ts": "a57115be1056585a8305224b48db04b61cd7991000a9a4020954adca90633d5d",
+    "packages/codex-web/test/server_session_files.test.ts": "b6557a9c3bdbbae632fe0e1d2a370d43a39c2cd5dcb6bc42d482bb2a3a3813eb",
+    "packages/codex-web/test/server_sse_backpressure.test.ts": "77d42395f3bb608d3b385e713c23bd2467dda41c11d86655c47b0459bae6e073",
+    "packages/codex-web/test/service_worker_cache.test.ts": "f8af4266c02b270d15bf33f43dd1196e2f61f103baed221a14f5c0c8dc1d78b6",
+    "packages/codex-web/test/session_list_page.test.ts": "f4ddfaad6b335992ca3e15c265e0962d24271bdeb6febd809cb95bc8a6a68fcf",
+    "packages/codex-web/test/session_settings_store.test.ts": "3e4234c0224be3be12079ed30a23c2290314dbc4fd8494784e2d381e188486f8",
+    "packages/codex-web/test/session_timeline_store.test.ts": "84788d49c5aa24bfa2dcfc228126e949cf041c764eb9e6758f1cdd24aa24666e",
+    "packages/codex-web/test/static_asset_cache.test.ts": "8238c3deec0288dc332c62b8f2f2b32a3b29d1e84152bb083baf1adcb37cd7c9",
+    "packages/codex-web/test/task_runner.test.ts": "f62bd96ad51a8dfafcf806ef6079ef5aeefa2259fe8cb0f79e22895096d4def5",
+    "packages/codex-web/tsconfig.frontend.json": "4cdf3403bcf1ec13c827c7a6b8085cbc3f88b5082945bdbbb46f3977b81d775a"
+  }
+}

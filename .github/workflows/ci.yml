@@ -44,6 +44,9 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Compiled frontend smoke test
+        run: npm run test:built-public --workspace @codex-mobile-web-app/codex-web
+
       - name: Browser regression tests
         run: npm run test:browser
 

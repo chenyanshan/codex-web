@@ -63,3 +63,13 @@ test('session list cursors cannot be reused for another user or filter', () => {
     cursor: first.nextCursor,
   }), InvalidSessionListCursorError);
 });
+
+test('mutable callers cannot reuse a stale sorted cursor index', () => {
+  const items = [{ id: 'old', updatedAt: 1 }, { id: 'new', updatedAt: 2 }];
+  const options = { scope: 'all', principalId: 'user', limit: 1 };
+  assert.equal(paginateSessionList(items, options).items[0]?.id, 'new');
+  items[0]!.updatedAt = 3;
+  assert.equal(paginateSessionList(items, options).items[0]?.id, 'old');
+  items.push({ id: 'newest', updatedAt: 4 });
+  assert.equal(paginateSessionList(items, options).items[0]?.id, 'newest');
+});

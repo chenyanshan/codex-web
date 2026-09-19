@@ -564,6 +564,31 @@ Install the user LaunchAgent:
 scripts/service/install-codex-web-launchd-user.sh
 ```
 
+The installer builds and verifies the production `dist` output before changing
+the service. Existing plist files are backed up under
+`~/.codex-web/service-backups/`. A detached helper reloads the plist because
+`kickstart` alone retains the loaded job's previous arguments.
+The helper waits for launchd to finish unloading, retries transient startup
+errors, and restores the saved plist if the new process cannot stay running.
+Its one-shot result is available with
+`launchctl print gui/$(id -u)/com.chenyanshan.codex-web.restart` and in
+`~/.codex-web/logs/com.chenyanshan.codex-web.restart.log` (exit 2 means the
+requested change failed but the previous launch configuration was recovered).
+This checks process startup; verify `/version.json` and the UI after deployment.
+An isolated macOS lifecycle gate covers reload, failed startup recovery, and
+restart without changing the real service: `node scripts/service/verify-launchd-lifecycle.mjs`.
+
+To switch back to source mode for diagnosis or rollback of the delivery mode:
+
+```bash
+CODEX_WEB_SERVICE_MODE=source scripts/service/install-codex-web-launchd-user.sh
+```
+
+Run the installer without this variable to return to `dist`. This switches the
+delivery mode of the current checkout; reverting application code requires the
+corresponding source revision and a fresh build. State and `service.env` are
+preserved in both modes.
+
 Service helpers:
 
 ```bash

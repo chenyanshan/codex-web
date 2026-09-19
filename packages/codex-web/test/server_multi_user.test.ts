@@ -214,7 +214,10 @@ async function waitForSseClose(reader: ReadableStreamDefaultReader<Uint8Array>):
   let timeout: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
-      reader.read().then((result) => result.done).catch(() => true),
+      (async () => {
+        try { while (!(await reader.read()).done) { /* Drain frames queued before revocation. */ } return true; }
+        catch { return true; }
+      })(),
       new Promise<boolean>((resolve) => {
         timeout = setTimeout(() => resolve(false), 1_000);
       }),
@@ -794,7 +797,13 @@ test('disabling member work details closes existing streams and restricts subseq
     reader = stream.body.getReader();
     const initial = await reader.read();
     assert.equal(initial.done, false);
-    assert.match(new TextDecoder().decode(initial.value), /turn\.started/u);
+    let initialText = new TextDecoder().decode(initial.value);
+    while (!initialText.includes('turn.started')) {
+      const next = await reader.read();
+      assert.equal(next.done, false);
+      initialText += new TextDecoder().decode(next.value);
+    }
+    assert.match(initialText, /turn\.started/u);
 
     const patch = await fetch(`${server.baseUrl}/api/admin/projects/project_allowed`, {
       method: 'PATCH',
@@ -1955,6 +1964,19 @@ test('admin audit filters archived and active sessions and can read archived det
     assert.equal(activeOnly.status, 200);
     const activePayload = await activeOnly.json();
     assert.equal(activePayload.items.some((item: any) => item.id === 'app_archived'), false);
+    const pagedIds: string[] = [];
+    let cursor = '';
+    do {
+      const response = await fetch(`${server.baseUrl}/api/admin/sessions?state=all&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { headers: { Authorization: 'Bearer admin' } });
+      assert.equal(response.status, 200);
+      const page = await response.json();
+      assert.ok(page.items.length <= 1);
+      pagedIds.push(...page.items.map((item: any) => item.id));
+      cursor = page.nextCursor || '';
+      assert.equal(page.hasMore, Boolean(cursor));
+    } while (cursor);
+    assert.deepEqual(new Set(pagedIds), new Set([...activePayload.items.map((item: any) => item.id), 'app_archived']));
+    assert.equal(pagedIds.length, new Set(pagedIds).size);
 
     const detail = await fetch(`${server.baseUrl}/api/admin/sessions/app_archived`, {
       headers: { Authorization: 'Bearer admin' },
@@ -2388,6 +2410,11 @@ test('share capabilities expose only same-project reports referenced by public a
     assert.equal(contentPayload.content, '# Linked report\n');
     assert.equal(contentPayload.report.id, linkedReportId);
     assert.equal(contentPayload.report.path, undefined);
+    const shareDownloadRoot = `${server.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/reports/`;
+    const linkedDownload = await fetch(`${shareDownloadRoot}${encodeURIComponent(linkedReportId)}/download`);
+    assert.equal(linkedDownload.status, 200);
+    assert.equal(await linkedDownload.text(), '# Linked report\n');
+    assert.equal((await fetch(`${shareDownloadRoot}${encodeURIComponent(unlistedReportId)}/download`)).status, 404);
 
     const unlistedResponse = await fetch(
       `${server.baseUrl}/api/share/${encodeURIComponent(precreated.token)}/reports/${encodeURIComponent(unlistedReportId)}/content`,
@@ -3509,6 +3536,8 @@ test('lightweight session status preserves multi-user session ownership checks',
         settings: {},
         activeTurnId: null,
         activityState: null,
+        turnStartedAt: 1000,
+        lastBusinessActivityAt: 2000,
         thread: { turns: [] },
         timeline: [],
       };
@@ -3538,6 +3567,8 @@ test('lightweight session status preserves multi-user session ownership checks',
     const ownPayload = (await own.json()) as any;
     assert.equal(ownPayload.session.id, 'app_alice');
     assert.equal('goal' in ownPayload.session, false);
+    assert.equal(ownPayload.session.turnStartedAt, 1000);
+    assert.equal(ownPayload.session.lastBusinessActivityAt, 2000);
   } finally {
     await server.stop();
   }
@@ -3613,6 +3644,11 @@ test('multi-user reports are filtered by project grants and omit server paths', 
       headers: { Authorization: 'Bearer alice' },
     });
     assert.equal(denied.status, 404);
+    const deniedDownload = await fetch(`${server.baseUrl}/api/reports/${encodeURIComponent(deniedId)}/download`, { headers: { Authorization: 'Bearer alice' } });
+    assert.equal(deniedDownload.status, 404);
+    const allowedDownload = await fetch(`${server.baseUrl}/api/reports/${encodeURIComponent(allowedId)}/download`, { headers: { Authorization: 'Bearer alice' } });
+    assert.equal(allowedDownload.status, 200);
+    assert.equal(await allowedDownload.text(), '# Allowed\n');
 
     const favoriteMutation = await fetch(`${server.baseUrl}/api/reports/${encodeURIComponent(allowedId)}/favorite`, {
       method: 'PATCH',
@@ -4107,4 +4143,110 @@ test('public share capabilities require the feature flag and become invalid afte
     await modeReader?.cancel().catch(() => {});
     await enabledServer.stop();
   }
+});
+
+test('private SSE survives unrelated identity writes but closes before delivering after project revocation', async () => {
+  const identityStore = await createIdentityStore();
+  let listener: ((entry: any) => void) | undefined;
+  let closed = false;
+  const server = createCodexWebServer({
+    auth: authFor({ alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' } }),
+    identityStore, config: createConfig(), runtime: { ...runtimeStub(),
+      subscribeToTurn: (_id: string, callback: (entry: any) => void) => { listener = callback; return () => { closed = true; }; },
+    } as any,
+  });
+  await server.start();
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/turns/turn_alice/events`, { headers: { Authorization: 'Bearer alice' }, signal: controller.signal });
+    const reader = response.body!.getReader();
+    await reader.read();
+    const original = (await identityStore.readState()).sessions.find(session => session.id === 'app_alice')!;
+    await identityStore.upsertSession({ ...original, updatedAt: new Date().toISOString() });
+    listener!({ sequence: 1, event: { id: 'allowed', type: 'turn.started', turnId: 'turn_alice', threadId: 'thread_alice' } });
+    const allowed = await reader.read();
+    assert.equal(allowed.done, false);
+    assert.match(new TextDecoder().decode(allowed.value), /allowed/);
+    assert.equal(closed, false);
+    await identityStore.upsertRole({ id: 'role_user', name: 'User', isAdmin: false, projectGrants: [] });
+    listener!({ sequence: 2, event: { id: 'forbidden-after-revoke', type: 'assistant.delta', turnId: 'turn_alice', text: 'private', phase: 'final_answer' } });
+    const ended = await reader.read();
+    assert.equal(ended.done, true);
+    assert.equal(closed, true);
+  } finally { controller.abort(); await server.stop(); }
+});
+
+test('trusted-team directory pages use partial indexing and invalidate scoped projections on grant changes', async () => {
+  const identityStore = await createIdentityStore();
+  let titleReads = 0;
+  const session = { id: 'thread_alice', settings: {}, updatedAt: 1, get title() { titleReads++; return 'Find this task'; } };
+  const items = [session];
+  const directoryCalls: boolean[] = [];
+  const server = createCodexWebServer({ identityStore, config: createConfig(),
+    auth: authFor({ alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' } }),
+    runtime: { ...runtimeStub(), listSessions: async () => { throw new Error('must use bounded directory'); },
+      listSessionDirectory: async (options: { complete?: boolean }) => { directoryCalls.push(options.complete === true); return { items, complete: options.complete === true }; },
+    } as any,
+  });
+  await server.start();
+  try {
+    const request = async (query = '') => (await fetch(`${server.baseUrl}/api/sessions${query}`, { headers: { Authorization: 'Bearer alice' } })).json();
+    const first = await request();
+    assert.equal(first.indexing, true); assert.equal(first.nextCursor, null); assert.equal(first.items.length, 1);
+    const reads = titleReads;
+    const warm = await request();
+    assert.equal(warm.items.length, 1); assert.equal(titleReads, reads);
+    assert.equal((await request('?q=Find')).items.length, 1);
+    assert.deepEqual(directoryCalls, [false, false, true]);
+    await identityStore.upsertRole({ id: 'role_user', name: 'User', isAdmin: false, projectGrants: [] });
+    assert.equal((await request()).items.length, 0);
+  } finally { await server.stop(); }
+});
+
+test('rename capability follows session write access in list/status/timeline and rejects other owners, observers and archives', async () => {
+  const identityStore = await createIdentityStore();
+  const calls: string[] = [];
+  const summary = (id: string) => ({ id, title: 'Native title', updatedAt: 1, settings: {}, thread: { turns: [] }, timeline: [] });
+  const runtime = {
+    ...runtimeStub(),
+    listSessions: async () => [summary('thread_alice'), summary('thread_bob')],
+    readSessionStatus: async (id: string) => summary(id),
+    readSessionTimeline: async (id: string) => summary(id),
+    renameSession: async (id: string, title: string) => { calls.push(id); return { ...summary(id), title }; },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({ alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' }, admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' } }),
+    identityStore, runtime: runtime as any, config: createConfig(),
+  });
+  await server.start();
+  const headers = { Authorization: 'Bearer alice', 'Content-Type': 'application/json' };
+  const rename = (id: string, token = 'alice') => fetch(`${server.baseUrl}/api/sessions/${id}/name`, { method: 'PATCH', headers: { ...headers, Authorization: `Bearer ${token}` }, body: JSON.stringify({ name: 'My name' }) });
+  try {
+    for (const suffix of ['', '/status', '/timeline']) {
+      const response = await fetch(`${server.baseUrl}/api/sessions/app_alice${suffix}`, { headers });
+      assert.equal((await response.json()).session.canRename, true);
+    }
+    const saved = await rename('app_alice');
+    assert.equal(saved.status, 200);
+    const { session } = await saved.json();
+    assert.equal(session.id, 'app_alice');
+    assert.equal(session.title, 'My name');
+    assert.equal(session.canRename, true);
+    assert.equal(session.thread, undefined);
+    assert.equal((await rename('app_bob')).status, 404);
+    assert.equal((await rename('app_alice', 'admin')).status, 404);
+    await identityStore.upsertRole({ id: 'role_user', name: 'Reader', isAdmin: false, projectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: false, canWrite: false }] });
+    for (const suffix of ['', '/status', '/timeline']) {
+      const response = await fetch(`${server.baseUrl}/api/sessions/app_alice${suffix}`, { headers });
+      assert.equal((await response.json()).session.canRename, false);
+    }
+    const list = await fetch(`${server.baseUrl}/api/sessions`, { headers });
+    assert.equal((await list.json()).items[0].canRename, false);
+    assert.equal((await rename('app_alice')).status, 404);
+    await identityStore.upsertRole({ id: 'role_user', name: 'Writer', isAdmin: false, projectGrants: [{ projectId: 'project_allowed', canRead: true, canCreate: true, canWrite: true }] });
+    const stored = (await identityStore.readState()).sessions.find((item) => item.id === 'app_alice')!;
+    await identityStore.upsertSession({ ...stored, archived: true });
+    assert.equal((await rename('app_alice')).status, 409);
+    assert.deepEqual(calls, ['thread_alice']);
+  } finally { await server.stop(); }
 });

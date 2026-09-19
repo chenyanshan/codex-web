@@ -15,6 +15,11 @@ const uiKitUrl = new URL('../public/ui-kit.js', import.meta.url);
 const attachmentUtilsUrl = new URL('../public/attachment-utils.js', import.meta.url);
 const markdownRendererUrl = new URL('../public/markdown-renderer.js', import.meta.url);
 const adminUiUrl = new URL('../public/admin-ui.js', import.meta.url);
+const requestContextUrl = new URL('../public/request-context.js', import.meta.url);
+const draftStoreUrl = new URL('../public/draft-store.js', import.meta.url);
+const localizationUrl = new URL('../public/ui-localization.js', import.meta.url);
+const fileViewerUrl = new URL('../public/session-file-viewer.js', import.meta.url);
+const webhookSettingsUrl = new URL('../public/webhook-settings.js', import.meta.url);
 const sessionPaginationUrl = new URL('../public/session-pagination.js', import.meta.url);
 
 test('mobile UI exposes iOS PWA install metadata and registers a service worker', async () => {
@@ -43,7 +48,7 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(index, /<script src="\/ui-copy\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(index, /<script src="\/attachment-utils\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(index, /<script src="\/markdown-renderer\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
-  assert.match(index, /<script src="\/admin-ui\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.doesNotMatch(index, /<script src="\/admin-ui\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(index, /<script src="\/session-pagination\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.ok(index.indexOf('src="/attachment-utils.js') < index.indexOf('src="/app.js'));
   assert.ok(index.indexOf('src="/session-pagination.js') < index.indexOf('src="/app.js'));
@@ -1410,7 +1415,7 @@ test('admin console opens from settings and loads management overview', async ()
       if (path === '/api/admin/roles') {
         return { ok: true, status: 200, json: async () => ({ items: [{ id: 'role_user', name: 'User' }] }) };
       }
-      if (path === '/api/admin/sessions') {
+      if (path === '/api/admin/sessions?state=all&limit=30') {
         return {
           ok: true,
           status: 200,
@@ -1428,11 +1433,9 @@ test('admin console opens from settings and loads management overview', async ()
 
   assert.equal(api.state.view, 'admin');
   assert.deepEqual(fetchCalls, [
-    '/api/admin/settings',
-    '/api/admin/projects',
+    '/api/admin/sessions?state=all&limit=30',
     '/api/admin/users',
-    '/api/admin/roles',
-    '/api/admin/sessions',
+    '/api/admin/projects',
   ]);
   const html = api.renderAdminConsole().innerHTML;
   assert.match(html, /Admin Console/u);
@@ -1486,11 +1489,9 @@ test('admin console stays open while restore auth finishes in the background', a
 
   assert.equal(api.state.view, 'admin');
   assert.deepEqual(pending.slice(5).map((request) => request.path), [
-    '/api/admin/settings',
-    '/api/admin/projects',
+    '/api/admin/sessions?state=all&limit=30',
     '/api/admin/users',
-    '/api/admin/roles',
-    '/api/admin/sessions',
+    '/api/admin/projects',
   ]);
 
   pending[1]?.resolve({ ok: true, status: 200, json: async () => ({ settings: { siteTitle: 'Codex Web' }, permissions: { canSetSiteTitle: true } }) });
@@ -1522,6 +1523,8 @@ test('mobile keeps New visible while secondary actions live in the project drawe
   api.state.mobileSidebarOpen = true;
 
   const html = api.renderSessionList().innerHTML;
+
+  assert.doesNotMatch(html, /type="search"|id="session-activity-filter"/u);
   const topbar = html.match(/<header class="topbar page-topbar mobile-session-topbar">([\s\S]*?)<\/header>/u)?.[1] || '';
   const drawerFooter = html.match(/<div class="project-rail-footer">([\s\S]*?)<\/div>/u)?.[1] || '';
 
@@ -1536,7 +1539,7 @@ test('mobile keeps New visible while secondary actions live in the project drawe
   assert.doesNotMatch(drawerFooter, /rail-show-sessions-button/u);
 });
 
-test('admin console renders four-page management layout with RBAC controls', async () => {
+test('admin console opens entity editors on demand with RBAC controls', async () => {
   const { api } = await loadAppHarness();
 
   api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
@@ -1567,6 +1570,7 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.match(html, /id="admin-session-user-filter"/u);
 
   api.state.admin.page = 'projects';
+  api.state.admin.editorKind = 'project';
   html = api.renderAdminConsole().innerHTML;
 
   assert.match(html, /id="admin-project-form"/u);
@@ -1578,7 +1582,7 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.match(html, /name="cwd"/u);
   assert.match(html, /name="showWorkDetailsToMembers" type="checkbox" checked/u);
   assert.match(html, /Members can view work details/u);
-  assert.match(html, /<td data-label="Display Name" data-i18n-skip>a<\/td>/u);
+  assert.match(html, /<td data-label="Display Name" data-i18n-skip><strong>a<\/strong><\/td>/u);
   assert.match(html, /<td data-label="Work details">Members<\/td>/u);
   assert.match(html, /data-admin-edit-project="project_a"/u);
 
@@ -1587,6 +1591,7 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.doesNotMatch(html, /name="internalName"/u);
 
   api.state.admin.page = 'roles';
+  api.state.admin.editorKind = 'role';
   api.state.admin.editingProjectId = '';
   html = api.renderAdminConsole().innerHTML;
   assert.match(html, /id="admin-role-form"/u);
@@ -1602,6 +1607,7 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.match(html, /name="projectIds" type="checkbox" value="project_a" checked/u);
 
   api.state.admin.page = 'users';
+  api.state.admin.editorKind = 'user';
   html = api.renderAdminConsole().innerHTML;
   assert.match(html, /id="admin-user-form"/u);
   assert.doesNotMatch(html, /<span>User ID<\/span>/u);
@@ -1627,7 +1633,7 @@ test('admin console renders four-page management layout with RBAC controls', asy
   assert.match(html, /id="admin-session-user-filter"/u);
   assert.match(html, /id="admin-session-project-filter"/u);
   assert.match(html, /<option value="project_a" data-i18n-skip>a<\/option>/u);
-  assert.match(html, /class="admin-row-main" data-i18n-skip>a<\/span>/u);
+  assert.match(html, /alice · a/u);
   assert.match(html, /Observer Mode/u);
 });
 
@@ -1671,9 +1677,8 @@ test('admin console defaults to audit, exposes selected-session state, and prote
 
   let html = api.renderAdminConsole().innerHTML;
   assert.match(html, /data-admin-page="sessions" aria-pressed="true" aria-current="page"/u);
-  assert.match(html, /class="admin-nav-count" data-i18n-skip>1[<][/]span>/u);
+  assert.match(html, /class="admin-page-count" data-i18n-skip>1 sessions<\/span>/u);
   assert.match(html, /class="admin-observed-panel is-empty"/u);
-  assert.match(html, /No session selected/u);
 
   api.state.admin.observedSession = { id: 'session_1' };
   html = api.renderAdminConsole().innerHTML;
@@ -1761,7 +1766,7 @@ test('admin management actions post project, role, and user changes', async () =
       if (path === '/api/admin/roles') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
-      if (path === '/api/admin/sessions') {
+      if (path === '/api/admin/sessions?state=all&limit=30') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -1840,7 +1845,7 @@ test('admin project form creates with POST and edits with PATCH while retaining 
       if (path === '/api/admin/roles') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
-      if (path === '/api/admin/sessions') {
+      if (path === '/api/admin/sessions?state=all&limit=30') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -1850,6 +1855,7 @@ test('admin project form creates with POST and edits with PATCH while retaining 
   api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
   api.state.admin.loaded = true;
   api.state.admin.page = 'projects';
+  api.state.admin.editorKind = 'project';
 
   const html = api.renderAdminConsole().innerHTML;
   assert.match(html, /name="activeSessionLimit"/u);
@@ -1920,7 +1926,7 @@ test('admin user edit saves email role and enabled state without per-user projec
       if (path === '/api/admin/roles') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
-      if (path === '/api/admin/sessions') {
+      if (path === '/api/admin/sessions?state=all&limit=30') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -2013,7 +2019,7 @@ test('admin explicit user disable and delete actions call the patch and delete e
       if (path === '/api/admin/roles') {
         return { ok: true, status: 200, json: async () => ({ items: [{ id: 'role_viewer', name: 'Viewer' }] }) };
       }
-      if (path === '/api/admin/sessions') {
+      if (path === '/api/admin/sessions?state=all&limit=30') {
         return { ok: true, status: 200, json: async () => ({ items: [] }) };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -2052,7 +2058,7 @@ test('admin session audit refresh includes user and project filters', async () =
   const { api } = await loadAppHarness({
     fetch: async (path) => {
       fetchCalls.push(path);
-      if (path === '/api/admin/sessions?userId=user_1&projectId=project_a') {
+      if (path === '/api/admin/sessions?userId=user_1&projectId=project_a&state=all&limit=30') {
         return {
           ok: true,
           status: 200,
@@ -2069,7 +2075,7 @@ test('admin session audit refresh includes user and project filters', async () =
 
   const sessions = await api.refreshAdminSessions({ projectId: 'project_a', renderAfter: false });
 
-  assert.deepEqual(fetchCalls, ['/api/admin/sessions?userId=user_1&projectId=project_a']);
+  assert.deepEqual(fetchCalls, ['/api/admin/sessions?userId=user_1&projectId=project_a&state=all&limit=30']);
   assert.deepEqual(sessions, [{ id: 'session_1', ownerUserId: 'user_1', projectId: 'project_a' }]);
 });
 
@@ -2090,7 +2096,7 @@ test('admin session audit project filter includes projects discovered from sessi
   assert.match(html, /<option value="project_legacy" data-i18n-skip>Legacy Repo<\/option>/u);
 });
 
-test('admin observed sessions open read-only history from the earliest message', async () => {
+test('admin observed sessions open read-only history at the beginning', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
       if (path === '/api/admin/sessions/session_observed') {
@@ -2126,6 +2132,7 @@ test('admin observed sessions open read-only history from the earliest message',
 
   const timeline = context.document.querySelector('#timeline');
   assert.equal(timeline.scrollTop, 0);
+  assert.equal(api.state.timelineShouldFollowLatest, false);
   assert.equal(api.state.currentSession.readOnly, true);
   assert.equal(api.state.sessionHistoryStartIndex, 0);
   assert.match(api.renderChat().innerHTML, /First observed question/u);
@@ -2319,8 +2326,8 @@ test('desktop admin observed sessions do not open inside the normal workspace se
 
   api.showSessionList();
 
-  assert.equal(api.state.view, 'admin');
-  assert.match(api.renderAdminConsole().innerHTML, /session_observed/u);
+  assert.equal(api.state.view, 'sessions');
+  assert.equal(api.state.admin.observedSession, null);
 });
 
 test('observer sessions and share sessions render read-only chat without composer actions', async () => {
@@ -2644,7 +2651,7 @@ test('share routes do not refresh private session metadata after loading', async
   assert.equal(context.localStorage.getItem('codexWebToken'), 'existing_device_token');
 });
 
-test('share routes open read-only history from the earliest message', async () => {
+test('share routes open read-only history at the latest message', async () => {
   const { api, context } = await loadAppHarness({
     pathname: '/share/cws_public_token',
     fetch: async (path) => {
@@ -2673,7 +2680,7 @@ test('share routes open read-only history from the earliest message', async () =
   await api.loadSharedSessionFromLocation();
 
   const timeline = context.document.querySelector('#timeline');
-  assert.equal(timeline.scrollTop, 0);
+  assert.equal(timeline.scrollTop, timeline.scrollHeight);
   assert.match(api.renderChat().innerHTML, /First shared question/u);
 });
 
@@ -3459,16 +3466,19 @@ test('Chinese language setting localizes settings, chat, and admin management UI
   assert.match(chatHtml, /id="send-button"[\s\S]*<span class="visually-hidden">发送<\/span>[\s\S]*<\/button>/u);
 
   api.state.admin.page = 'projects';
+  api.state.admin.editorKind = 'project';
   const adminHtml = api.renderAdminConsole().innerHTML;
   assert.match(adminHtml, /管理控制台/u);
   assert.match(adminHtml, /项目管理/u);
   assert.match(adminHtml, /角色管理/u);
   assert.match(adminHtml, /用户管理/u);
   assert.match(adminHtml, /会话审计/u);
-  assert.match(adminHtml, /多用户模式/u);
+  api.state.admin.page = 'system';
+  assert.match(api.renderAdminConsole().innerHTML, /多用户模式/u);
   assert.match(adminHtml, /保存项目/u);
 
   api.state.admin.page = 'users';
+  api.state.admin.editorKind = 'user';
   const adminUsersHtml = api.renderAdminConsole().innerHTML;
   assert.match(adminUsersHtml, /保存用户/u);
 });
@@ -3709,7 +3719,7 @@ test('Chinese chat timeline skips bulk localization for many conversation items'
 
   const html = api.renderChat().innerHTML;
 
-  assert.match(html, /<main class="timeline" id="timeline" data-i18n-skip>/u);
+  assert.match(html, /<main class="timeline" id="timeline"[^>]*data-i18n-skip>/u);
   assert.match(html, /<span class="card-title">你<\/span>/u);
   assert.match(html, /<span class="card-title">助手<\/span>/u);
   assert.match(html, /<span class="card-kind">最终<\/span>/u);
@@ -4149,7 +4159,7 @@ test('narrow desktop prompt paste uploads clipboard files through the attachment
   assert.equal(filesHandled, true);
   assert.equal(filePastePrevented, true);
   assert.equal(api.state.prompt, 'Keep this text');
-  assert.equal(JSON.stringify(uploadRequests), JSON.stringify([['pasted-image.png', 'pasted-notes.txt']]));
+  assert.equal(JSON.stringify(uploadRequests), JSON.stringify([['pasted-image.png'], ['pasted-notes.txt']]));
   assert.equal(JSON.stringify(api.state.composerAttachments.map((attachment) => ({
     status: attachment.status,
     kind: attachment.uploaded?.kind,
@@ -4501,7 +4511,7 @@ test('dialogs and drawers expose modal semantics, focus scopes, and live status 
 test('full renders clear managed inert state before replacing the DOM tree', async () => {
   const app = await readFile(appUrl, 'utf8');
 
-  assert.match(app, /function render\(\)\s*\{[\s\S]*?detachTimelineScrollTracking\(\);\s*clearManagedInert\(\);\s*app\.innerHTML = '';/u);
+  assert.match(app, /function render\(\)\s*\{[\s\S]*?detachTimelineScrollTracking\(\);\s*clearManagedInert\(\);[\s\S]*?app\.innerHTML = '';/u);
   assert.match(app, /function detachTimelineScrollTracking\(\)[\s\S]*removeEventListener\('scroll', updateTimelineFollowState\)[\s\S]*removeEventListener\('wheel', handleTimelineWheel\)/u);
 });
 
@@ -4569,7 +4579,7 @@ test('expanded composer positions collapse and Send inside a single editor surfa
   assert.doesNotMatch(styles, /\.composer\.is-expanded \.compact-composer-row textarea\s*\{[^}]*max-height:\s*min\(72dvh,\s*560px\);/su);
 });
 
-test('running turns keep message sending available and expose Stop only in session settings', async () => {
+test('running turns keep message sending available with primary and contextual Stop controls', async () => {
   const [app, uiKit] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(uiKitUrl, 'utf8'),
@@ -5634,11 +5644,14 @@ test('message font size loads from storage and applies root variables', async ()
   ]);
 });
 
-test('changing message font size preserves timeline bottom offset', async () => {
+test('changing message font size preserves the reading offset when no message anchor is available', async () => {
   const { api, storage, context } = await loadAppHarness();
 
   let fontApplied = false;
   const timeline = {
+    getAttribute: (name) => name === 'data-session-id' ? String(api.state.sessionId || '') : null,
+    getBoundingClientRect: () => ({ top: 0, bottom: 400, height: 400 }),
+    querySelectorAll: () => [],
     _scrollTop: 420,
     clientHeight: 500,
     get scrollTop() {
@@ -5671,7 +5684,7 @@ test('changing message font size preserves timeline bottom offset', async () => 
 
   assert.equal(api.state.messageFontSize, 'large');
   assert.equal(storage.get('codexWebMessageFontSize'), 'large');
-  assert.equal(timeline.scrollTop, 600);
+  assert.equal(timeline.scrollTop, 420);
 });
 
 test('prompt focus protection keeps timeline scroll anchored during keyboard reflow', async () => {
@@ -5732,16 +5745,16 @@ test('session file viewer uses its own scroll container instead of the outer doc
 test('desktop workspace CSS waits for enough room before creating three panes', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /@media \(min-width:\s*1280px\) and \(orientation:\s*landscape\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
+  assert.match(styles, /@media \(min-width:\s*980px\) and \(orientation:\s*landscape\) and \(hover:\s*hover\) and \(pointer:\s*fine\)/u);
   assert.match(styles, /\.desktop-workspace\s*\{[^}]*display:\s*grid;/su);
   assert.match(styles, /\.desktop-workspace\s*\{[^}]*grid-template-columns:\s*72px 363px minmax\(640px,\s*1fr\);/su);
   assert.match(styles, /\.desktop-workspace\.sidebar-expanded\s*\{[^}]*grid-template-columns:\s*256px 363px minmax\(640px,\s*1fr\);/su);
   assert.match(styles, /\.desktop-project-rail,\s*\.desktop-session-pane\s*\{[^}]*overflow:\s*hidden;/su);
   assert.match(styles, /\.desktop-session-list\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.match(styles, /\.desktop-chat-pane\s*\{[^}]*position:\s*relative;/su);
-  assert.match(styles, /\.desktop-project-rail > \.project-rail-header\s*\{[^}]*height:\s*66px;/su);
-  assert.match(styles, /\.desktop-session-pane-topbar\s*\{[^}]*height:\s*66px;/su);
-  assert.match(styles, /\.desktop-chat-topbar\s*\{[^}]*height:\s*66px;/su);
+  assert.match(styles, /\.desktop-project-rail > \.project-rail-header\s*\{[^}]*height:\s*56px;/su);
+  assert.match(styles, /\.desktop-session-pane-topbar\s*\{[^}]*height:\s*56px;/su);
+  assert.match(styles, /\.desktop-chat-topbar\s*\{[^}]*height:\s*56px;/su);
   assert.match(styles, /\.desktop-chat-pane \.message-card\.assistant,\s*\.desktop-chat-pane \.message-card\.system\s*\{[^}]*max-width:\s*min\(72ch,\s*88%\);/su);
   assert.match(styles, /\.desktop-chat-pane \.message-card\.user\s*\{[^}]*max-width:\s*min\(68ch,\s*78%\);/su);
 });
@@ -5759,10 +5772,10 @@ test('desktop project rail and session workspace use distinct theme backgrounds'
 test('desktop composer is anchored inside the right chat pane', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*position:\s*absolute;/su);
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*left:\s*0;/su);
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*right:\s*0;/su);
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.timeline\s*\{[^}]*padding-bottom:\s*var\(--composer-offset\);/su);
+  assert.match(styles, /@media \(min-width:\s*980px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*position:\s*absolute;/su);
+  assert.match(styles, /@media \(min-width:\s*980px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*left:\s*0;/su);
+  assert.match(styles, /@media \(min-width:\s*980px\)[\s\S]*\.desktop-chat-pane \.composer-wrap\s*\{[^}]*right:\s*0;/su);
+  assert.match(styles, /@media \(min-width:\s*980px\)[\s\S]*\.desktop-chat-pane \.timeline\s*\{[^}]*padding-bottom:\s*var\(--composer-offset\);/su);
 });
 
 test('mobile session navigation still clears active session when returning to list', async () => {
@@ -5791,6 +5804,9 @@ test('composer bottom gap stays tight above the keyboard safe area', async () =>
 test('timeline follows the latest messages until the user scrolls upward', async () => {
   const { api, context } = await loadAppHarness();
   const timeline = {
+    getAttribute: (name) => name === 'data-session-id' ? String(api.state.sessionId || '') : null,
+    getBoundingClientRect: () => ({ top: 0, bottom: 400, height: 400 }),
+    querySelectorAll: () => [],
     _scrollTop: 800,
     clientHeight: 200,
     scrollHeight: 1000,
@@ -6042,9 +6058,9 @@ test('session list scroll position is restored when returning from chat or refre
   assert.match(app, /function restoreSessionListScroll\(\)/u);
   assert.match(app, /function rememberSessionListScroll\(\)/u);
   assert.match(app, /if \(state\.view === 'sessions'\) \{\s*restoreSessionListScroll\(\);/u);
-  assert.match(app, /showSessionList\(\) \{\s*savePromptDraftForCurrentSession\(\);\s*saveCurrentTimeline\(\);[\s\S]*rememberSessionListScroll\(\);/u);
+  assert.match(app, /function showSessionList\([\s\S]*cancelSessionOpen\(\);\s*savePromptDraftForCurrentSession\(\);\s*saveCurrentTimeline\(\);[\s\S]*rememberSessionListScroll\(\);/u);
   assert.match(app, /function bindSessionCardEvents\(root = document\)[\s\S]*listenRendered\(root, 'click',[\s\S]*rememberSessionListScroll\(\);[\s\S]*selectSession\(sessionId\);/u);
-  assert.match(app, /function refreshCurrentView\(\)[\s\S]*rememberSessionListScroll\(\);[\s\S]*await refreshSessionsList/u);
+  assert.match(app, /function refreshCurrentView\([^)]*\)[\s\S]*rememberSessionListScroll\(\);[\s\S]*await refreshSessionsList/u);
 });
 
 test('chat render keeps the timeline at the latest content by default', async () => {
@@ -6085,10 +6101,10 @@ test('mobile timeline reserves the measured composer height', async () => {
 test('opening a session jumps straight to the latest timeline content', async () => {
   const app = await readFile(appUrl, 'utf8');
 
-  assert.match(app, /function scrollTimelineToBottom\(\)[\s\S]*timeline\.scrollTop = timeline\.scrollHeight;/u);
+  assert.match(app, /function scrollTimelineToBottom\(\)[\s\S]*restoreTimelineViewport\(latestTimelineViewportSnapshot\(\)\);/u);
   assert.doesNotMatch(app, /window\.scrollTo\(/u);
   assert.match(app, /async function selectSession\(sessionId\)[\s\S]*render\(\);\s*scrollTimelineToOpenPositionForSession\(nextSession\);/u);
-  assert.match(app, /function scrollTimelineToOpenPositionForSession\(session\)[\s\S]*scrollTimelineToBottom\(\);/u);
+  assert.match(app, /function scrollTimelineToOpenPositionForSession\(_session, saved = null\)[\s\S]*scrollTimelineToBottom\(\);/u);
 });
 
 test('opening a session renders from the list summary before the detail request finishes', async () => {
@@ -6179,6 +6195,7 @@ test('session summaries preserve cached pending messages while detail is unavail
 test('stale session detail does not overwrite a cached pending message', async () => {
   const { api } = await loadAppHarness({
     fetch: async (path) => {
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_pending');
       return {
         ok: true,
@@ -6212,7 +6229,7 @@ test('stale session detail does not overwrite a cached pending message', async (
     timeline: [
       { id: 'history_old_user', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Earlier question' },
       { id: 'history_old_assistant', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Earlier answer' },
-      { id: 'local_user_pending', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Weak network message' },
+      { id: 'local_user_pending', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Weak network message', historyAnchorId: 'assistant_turn_old_final' },
     ],
     batches: new Map(),
     approvals: new Map(),
@@ -6233,6 +6250,7 @@ test('stale detail does not mistake a repeated pending prompt for an earlier occ
           json: async () => ({ error: 'route_not_found' }),
         };
       }
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_repeat');
       return {
         ok: true,
@@ -6266,7 +6284,7 @@ test('stale detail does not mistake a repeated pending prompt for an earlier occ
     timeline: [
       { id: 'history_continue', kind: 'message', role: 'user', label: 'You', meta: 'history', text: 'Continue' },
       { id: 'history_answer', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history', text: 'Earlier continuation' },
-      { id: 'local_continue', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Continue' },
+      { id: 'local_continue', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Continue', historyAnchorId: 'assistant_turn_old_final' },
     ],
     batches: new Map(),
     approvals: new Map(),
@@ -6279,9 +6297,18 @@ test('stale detail does not mistake a repeated pending prompt for an earlier occ
   assert.equal(repeated.at(-1)?.meta, 'pending');
 });
 
+test('cached history normalization retains the submission receipt and its original boundary', async () => {
+  const { api } = await loadAppHarness();
+  const receipt = { id: 'local_user_receipt', kind: 'message', role: 'user', label: 'You', meta: 'pending', text: 'Keep my new instruction', turnId: 'long_goal', clientMessageId: 'stable-client', submissionId: 'saved-submission', deliveryLabel: 'Server received', historyAnchorId: 'previous-answer' };
+  const history = api.hydrateTimelineFromSession({ id: 'receipt_session', timeline: [receipt] });
+  assert.equal(history.length, 1);
+  for (const field of ['submissionId', 'clientMessageId', 'deliveryLabel', 'historyAnchorId']) assert.equal(history[0][field], receipt[field]);
+});
+
 test('confirmed session detail replaces a matching cached pending message without duplication', async () => {
   const { api } = await loadAppHarness({
     fetch: async (path) => {
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_confirmed');
       return {
         ok: true,
@@ -6361,6 +6388,7 @@ test('confirmed attachment history replaces an acknowledged upload-path cache en
           json: async () => ({ error: 'route_not_found' }),
         };
       }
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_attachment_confirmed');
       return {
         ok: true,
@@ -6688,6 +6716,7 @@ test('session open falls back to legacy full detail only when both compact endpo
       if (path.endsWith('/status') || path.includes('/timeline?')) {
         return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       }
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_legacy_open');
       return {
         ok: true,
@@ -7209,7 +7238,7 @@ test('mobile UI uses session list, compact composer, settings drawer, and histor
   assert.match(app, /settingsOpen/u);
   assert.match(app, /function renderComposerStatus\(\)/u);
   assert.match(app, /composer-status/u);
-  assert.match(app, /<div class="composer-wrap \$\{composerClassName\}\$\{centeredClassName\}">\s*\$\{state\.composerExpanded \|\| centered \? '' : renderComposerStatus\(\)\}\s*\$\{renderQueuedMessages\(\)\}\s*<form class="composer bg-shared ring-theme \$\{composerClassName\}\$\{centeredClassName\}"/u);
+  assert.match(app, /<div class="composer-wrap \$\{composerClassName\}\$\{centeredClassName\}">\s*<div style="display:contents">\$\{state\.composerExpanded \|\| centered \? '' : renderComposerStatus\(\)\}<\/div>\s*<div style="display:contents">\$\{renderQueuedMessages\(\)\}<\/div>\s*<form class="composer bg-shared ring-theme \$\{composerClassName\}\$\{centeredClassName\}"/u);
   assert.doesNotMatch(app, /----- \$\{escapeHtml\(composerStatusLabel\(\)\)\} -----/u);
   assert.doesNotMatch(app, /Turn started/u);
   assert.doesNotMatch(app, /Turn completed/u);
@@ -8301,7 +8330,8 @@ test('work dialog scopes activity to the current turn and windows long runs', as
   });
   const frozenHtml = api.renderWorkDetailsDialog();
   assert.match(frozenHtml, /1 new activity/u);
-  assert.doesNotMatch(frozenHtml, /command-200</u);
+  assert.doesNotMatch(frozenHtml, /data-work-event-id="current_200"/u);
+  assert.match(frozenHtml, /work-progress-current[^>]*>command-200</u);
 
   api.state.workDetailsFollowLatest = true;
   api.handleWorkDetailToggle({
@@ -8387,7 +8417,7 @@ test('session refresh while chat is open keeps the latest timeline position', as
   const app = await readFile(appUrl, 'utf8');
 
   assert.doesNotMatch(app, /if \(state\.view === 'sessions' \|\| hydrateTimeline\)[\s\S]*scrollTimelineToBottom\(\);/u);
-  assert.match(app, /if \(state\.sessionId === sessionId\) \{\s*renderChatWithTimelineRestored\(\(\) => \{\}\);\s*if \(hydrateTimeline && state\.view === 'chat'\) \{\s*scrollTimelineToBottomIfFollowingLatest\(\);/u);
+  assert.match(app, /nextTimelineRestoreSnapshot = snapshot;\s*renderChatWithTimelineRestored\(\(\) => \{\}\);/u);
 });
 
 test('turn events update the chat timeline without replacing the focused composer', async () => {
@@ -8982,6 +9012,7 @@ test('chat metadata refresh preserves composer selection', async () => {
 test('chat refresh preserves the focused composer selection through status rerenders', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_1');
       return {
         ok: true,
@@ -9080,7 +9111,7 @@ test('opening a session markdown path shows loading then fetches content with be
           json: async () => ({ file: { id: 'file_audit', name: 'audit.md', kind: 'markdown', mimeType: 'text/markdown', sizeBytes: 18, contentUrl: '/api/sessions/session_1/files/signed-audit/content' } }),
         };
       }
-      if (path === '/api/sessions/session_1/files/signed-audit/content') {
+      if (path === '/api/sessions/session_1/files/signed-audit/content?preview=1') {
         return { ok: true, status: 200, text: async () => '# Audit' };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -9130,7 +9161,7 @@ test('admin observed sessions open documents through scoped read-only routes and
           }),
         };
       }
-      if (requestPath === '/api/admin/sessions/session_observed/files/file_observed/content') {
+      if (requestPath === '/api/admin/sessions/session_observed/files/file_observed/content?preview=1') {
         return { ok: true, status: 200, text: async () => '# Observed document' };
       }
       throw new Error(`unexpected fetch ${requestPath}`);
@@ -9150,7 +9181,7 @@ test('admin observed sessions open documents through scoped read-only routes and
 
   assert.deepEqual(calls.map((call) => call.path), [
     '/api/admin/sessions/session_observed/files/resolve',
-    '/api/admin/sessions/session_observed/files/file_observed/content',
+    '/api/admin/sessions/session_observed/files/file_observed/content?preview=1',
   ]);
   assert.equal(api.state.view, 'file');
   assert.match(context.document.querySelector('#app').innerHTML, /Observed document/u);
@@ -9323,7 +9354,7 @@ test('closing a session file restores the prior chat timeline position', async (
   api.closeSessionFileViewer();
 
   const restored = context.document.querySelector('#timeline');
-  assert.equal(restored.scrollTop, restored.scrollHeight - restored.clientHeight - 360);
+  assert.equal(restored.scrollTop, 640);
 });
 
 test('session file viewer renders a focused not-found error with retry', async () => {
@@ -9496,7 +9527,7 @@ test('session names prefer the last cwd segment over long stored project labels'
 
   assert.match(listHtml, /class="session-project" data-i18n-skip>project-beta<\/span>/u);
   assert.doesNotMatch(listHtml, />workspace\/project-beta</u);
-  assert.match(chatHtml, /class="project-title" data-i18n-skip>project-beta<\/div>/u);
+  assert.match(chatHtml, /class="chat-project-context"[^>]*data-i18n-skip[^>]*>project-beta<\/div>/u);
 });
 
 test('session cards use a neutral title when no prompt exists', async () => {
@@ -9519,7 +9550,7 @@ test('session cards use a neutral title when no prompt exists', async () => {
   assert.doesNotMatch(html, /No cwd/u);
 });
 
-test('session cards use the first task as identity when a provider title also exists', async () => {
+test('session cards prioritize the native title and keep the latest input as summary', async () => {
   const { api } = await loadAppHarness();
   api.state.sessions = [{
     id: 'session_identity',
@@ -9532,9 +9563,33 @@ test('session cards use the first task as identity when a provider title also ex
 
   const html = api.renderSessionCards();
 
-  assert.match(html, /class="session-title" data-i18n-skip>Original task request<\/span>/u);
+  assert.match(html, /class="session-title" data-i18n-skip>Generated provider title<\/span>/u);
   assert.match(html, /class="session-preview" data-i18n-skip>Latest follow-up<\/span>/u);
-  assert.doesNotMatch(html, /Generated provider title/u);
+  assert.doesNotMatch(html, /Original task request/u);
+});
+
+test('native names and unnamed fallbacks stay consistent across cards and chat without duplicate summaries', async () => {
+  const { api } = await loadAppHarness();
+  const cases = [
+    { title: '  Native name  ', firstUserInput: 'First prompt', lastUserInput: 'First prompt', expected: 'Native name', summary: 'First prompt' },
+    { title: 'Native name', firstUserInput: 'First prompt', lastUserInput: 'Latest follow-up', expected: 'Native name', summary: 'Latest follow-up' },
+    { title: 'Same text', lastUserInput: ' Same   text ', expected: 'Same text', summary: '' },
+    { title: '  \n ', firstUserInput: 'First prompt', lastUserInput: 'First prompt', expected: 'First prompt', summary: '' },
+    { title: null, preview: 'Preview only', expected: 'Preview only', summary: '' },
+    { title: 'Native name', preview: 'Single prompt preview', expected: 'Native name', summary: 'Single prompt preview' },
+    { title: '', expected: 'New Session', summary: '' },
+  ];
+  for (const item of cases) {
+    const session = { id: 'named', cwd: '/repo/project', settings: { metadata: {} }, ...item };
+    api.state.sessions = [session];
+    api.state.currentSession = session;
+    const card = api.renderSessionCards();
+    const chat = api.renderChat().innerHTML;
+    assert.ok(card.includes(`class="session-title" data-i18n-skip>${item.expected}</span>`));
+    assert.ok(chat.includes(`data-i18n-skip>${item.expected}</div>`));
+    if (item.summary) assert.ok(card.includes(`class="session-preview" data-i18n-skip>${item.summary}</span>`));
+    else assert.doesNotMatch(card, /class="session-preview"/u);
+  }
 });
 
 test('session cards surface lightweight activity states and prioritize approvals', async () => {
@@ -9852,8 +9907,8 @@ test('stream failures render a visible timeline error instead of only composer s
   const { api } = await loadAppHarness({
     fetch: async () => ({
       ok: false,
-      status: 500,
-      json: async () => ({ error: 'internal_error', message: 'SSE failed hard' }),
+      status: 400,
+      json: async () => ({ error: 'invalid_stream_request', message: 'SSE failed hard' }),
     }),
   });
 
@@ -9957,8 +10012,8 @@ test('stream failures persist visible errors through the backend session timelin
       if (path === '/api/turns/turn_stream_error/events') {
         return {
           ok: false,
-          status: 500,
-          json: async () => ({ error: 'internal_error', message: 'SSE failed hard' }),
+          status: 400,
+          json: async () => ({ error: 'invalid_stream_request', message: 'SSE failed hard' }),
         };
       }
       if (path === '/api/sessions/session_1/timeline') {
@@ -12474,9 +12529,6 @@ test('session list defaults to recents and keeps archive as an icon tool', async
   assert.match(app, /id="open-new-session-button"/u);
   assert.match(app, /id="open-app-settings-button"/u);
   assert.doesNotMatch(app, /id="rail-open-new-session-button"/u);
-  assert.doesNotMatch(app, /sessionSearchQuery/u);
-  assert.doesNotMatch(app, /renderSessionSearchField/u);
-  assert.doesNotMatch(app, /id="session-search-input"/u);
   assert.match(app, /UI\.segmentedControl\(\{/u);
   assert.match(app, /value:\s*'favorites',\s*label:\s*t\('Favorites'\)/u);
   assert.match(app, /value:\s*'time',\s*label:\s*t\('Recents'\)/u);
@@ -12531,7 +12583,7 @@ test('mobile session tools keep favorites recents and archive icon visible in on
   assert.match(styles, /\.segmented-control button\[aria-pressed="true"\]\s*\{[^}]*box-shadow:\s*0 2px 6px/su);
 });
 
-test('project navigation uses rounded hover and active surfaces without adding search', async () => {
+test('project navigation keeps rounded hover and active surfaces', async () => {
   const [app, styles] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(stylesUrl, 'utf8'),
@@ -12543,7 +12595,6 @@ test('project navigation uses rounded hover and active surfaces without adding s
   assert.match(styles, /\.project-rail-item:hover,[\s\S]*\.project-rail-action:focus-visible\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 62%,\s*transparent\);/su);
   assert.match(styles, /\.project-rail-item\.is-active,\s*\.project-rail-action\.is-active\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
   assert.match(styles, /\.project-rail-item\.is-active \.project-rail-marker\s*\{[^}]*background:\s*var\(--brand-color\);[^}]*color:\s*var\(--brand-text\);/su);
-  assert.doesNotMatch(app, /sessionSearchQuery|renderSessionSearchField|id="session-search-input"/u);
 });
 
 test('desktop project rail defaults to a 72px monogram sidebar and expands to 256px', async () => {
@@ -12573,7 +12624,6 @@ test('desktop project rail defaults to a 72px monogram sidebar and expands to 25
   assert.match(app, /if \(state\.desktopSidebarExpanded === null\)[\s\S]*state\.desktopSidebarExpanded = state\.projects\.length >= 2;[\s\S]*UI\.storeBoolean\?\.\(DESKTOP_SIDEBAR_KEY, state\.desktopSidebarExpanded\);/u);
   assert.match(app, /workspace\?\.classList\.toggle\('sidebar-expanded', state\.desktopSidebarExpanded\);/u);
   assert.doesNotMatch(app, /state\.desktopSidebarExpanded = !state\.desktopSidebarExpanded;[\s\S]{0,120}render\(\);/u);
-  assert.doesNotMatch(app, /global-search|session-search-input|renderSessionSearchField/u);
 });
 
 test('desktop sidebar defaults from project count and restores an explicit browser preference', async () => {
@@ -12707,7 +12757,7 @@ test('clicking the archived filter switches to archived sessions', async () => {
   assert.match(context.document.querySelector('#app').innerHTML, /data-session-id="session_archived"/u);
 });
 
-test('opening a read-only session from the session list starts at the earliest message', async () => {
+test('opening a read-only session from the session list starts at the latest message', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
       if (path === '/api/sessions/session_archived') {
@@ -12743,7 +12793,7 @@ test('opening a read-only session from the session list starts at the earliest m
   await api.selectSession('session_archived');
 
   const timeline = context.document.querySelector('#timeline');
-  assert.equal(timeline.scrollTop, 0);
+  assert.equal(timeline.scrollTop, timeline.scrollHeight);
   assert.equal(api.state.sessionHistoryStartIndex, 0);
   assert.match(api.renderChat().innerHTML, /First archived question/u);
 });
@@ -12751,11 +12801,13 @@ test('opening a read-only session from the session list starts at the earliest m
 test('layout mode uses desktop workspace only on sufficiently wide pointer-based windows', async () => {
   const { api, context } = await loadAppHarness({ viewportWidth: 1280, viewportHeight: 844, desktopPointer: true });
 
-  assert.equal(api.DESKTOP_WORKSPACE_MIN_WIDTH, 1280);
+  assert.equal(api.DESKTOP_WORKSPACE_MIN_WIDTH, 980);
   assert.equal(api.hasDesktopPointer(), true);
   assert.equal(api.isDesktopLayout(), true);
 
   context.window.innerWidth = 1279;
+  assert.equal(api.isDesktopLayout(), true);
+  context.window.innerWidth = 979;
   assert.equal(api.isDesktopLayout(), false);
 
   context.window.innerWidth = 1440;
@@ -12843,6 +12895,33 @@ test('responsive mobile chat clears desktop passive selection before foreground 
     '/api/sessions/session_responsive/status',
     '/api/sessions/session_responsive/timeline?limit=50',
   ]);
+});
+
+test('repeated resizes keep an open file preview in both layout modes', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1440, viewportHeight: 900, desktopPointer: true });
+  api.state.view = 'sessions';
+  api.state.sessionId = 'session_file';
+  api.state.currentSession = { id: 'session_file' };
+  api.state.desktopOverlay = 'file';
+  api.state.currentSessionFile = { id: 'file', kind: 'markdown', name: 'review.md' };
+  api.state.currentSessionFileContent = '# Review';
+  for (const width of [979, 768, 720, 1440, 1280, 979, 390]) {
+    context.window.innerWidth = width;
+    api.handleLayoutResize();
+    assert.equal(api.state.view, width >= 980 ? 'sessions' : 'file');
+    assert.equal(api.state.desktopOverlay, width >= 980 ? 'file' : null);
+    assert.equal(api.state.currentSessionFileContent, '# Review');
+    assert.equal(api.state.sessionId, 'session_file');
+  }
+  api.state.authSession = { principal: { isAdmin: true } };
+  api.state.currentSession.mode = 'observer';
+  api.state.admin.observedSession = api.state.currentSession;
+  for (const width of [1440, 768, 1280]) {
+    context.window.innerWidth = width;
+    api.handleLayoutResize();
+    assert.equal(api.state.view, 'file');
+    assert.equal(api.state.desktopOverlay, null);
+  }
 });
 
 test('mobile keyboard resize keeps the focused login input', async () => {
@@ -13427,6 +13506,7 @@ test('desktop session selection keeps the workspace view active', async () => {
     viewportWidth: 1280,
     desktopPointer: true,
     fetch: async (path) => {
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_2');
       return {
         ok: true,
@@ -13598,6 +13678,7 @@ test('narrow computer windows use the single-pane session flow', async () => {
     viewportWidth: 900,
     desktopPointer: true,
     fetch: async (path) => {
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_2');
       return {
         ok: true,
@@ -13661,13 +13742,13 @@ test('desktop composer is larger, shows Refresh and Send, and does not render th
     readFile(uiKitUrl, 'utf8'),
   ]);
 
-  assert.match(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*860px\);/su);
+  assert.match(styles, /@media \(min-width:\s*980px\)[\s\S]*\.desktop-chat-pane \.composer\s*\{[^}]*width:\s*min\(100%,\s*860px\);/su);
   assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*min-height:\s*96px;/su);
   assert.match(styles, /@media \(hover:\s*hover\) and \(pointer:\s*fine\)[\s\S]*\.compact-composer-row textarea\s*\{[^}]*max-height:\s*220px;/su);
   assert.match(styles, /\.message-card \.message-text,\s*\.message-card \.markdown-body\s*\{[^}]*font-weight:\s*400;/su);
   assert.match(styles, /\.compact-composer-row textarea\s*\{[^}]*font-weight:\s*400;/su);
   assert.match(app, /const maxHeight = hasDesktopPointer\(\) \? DESKTOP_PROMPT_TEXTAREA_MAX_HEIGHT : PROMPT_TEXTAREA_MAX_HEIGHT;/u);
-  assert.doesNotMatch(styles, /@media \(min-width:\s*1280px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
+  assert.doesNotMatch(styles, /@media \(min-width:\s*980px\)[\s\S]*\.desktop-chat-pane \.compact-send\s*\{[^}]*display:\s*none;/su);
   assert.match(uiKit, /context\.isDesktopLayout\(\) \? '' : `[\s\S]*id="composer-expand-button"/u);
   assert.match(uiKit, /id="composer-refresh-button"/u);
   assert.match(uiKit, /class="composer-action-buttons"/u);
@@ -13814,6 +13895,9 @@ test('single-pane desktop timeline wheel at the top expands older session histor
     desktopPointer: true,
   });
   const timeline = {
+    getAttribute: (name) => name === 'data-session-id' ? String(api.state.sessionId || '') : null,
+    getBoundingClientRect: () => ({ top: 0, bottom: 400, height: 400 }),
+    querySelectorAll: () => [],
     scrollTop: 0,
     scrollHeight: 1000,
     clientHeight: 400,
@@ -14164,7 +14248,7 @@ test('desktop session file links open in the right-pane overlay and close back t
           }),
         };
       }
-      if (String(url) === '/api/sessions/session_a/files/file_summary/content') {
+      if (String(url) === '/api/sessions/session_a/files/file_summary/content?preview=1') {
         return {
           ok: true,
           status: 200,
@@ -14305,6 +14389,17 @@ test('markdown session files wrap long text within the mobile viewport', async (
   assert.match(styles, /\.markdown-body p,\s*\.markdown-body li,\s*\.markdown-body blockquote,\s*\.markdown-body h1,\s*\.markdown-body h2,\s*\.markdown-body h3,\s*\.markdown-body td,\s*\.markdown-body th\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
   assert.match(styles, /\.markdown-body pre,\s*\.markdown-body code\s*\{[^}]*white-space:\s*pre-wrap;/su);
   assert.doesNotMatch(styles, /\.markdown-body\s*\{[^}]*white-space:\s*nowrap;/su);
+});
+
+test('document and chat Markdown caches keep their distinct scroll and code presentation', async () => {
+  const { api } = await loadAppHarness();
+  const text = '```bash\necho ready\n```';
+  const message = { kind: 'message', role: 'assistant', text };
+  assert.doesNotMatch(api.renderTimelineItem(message), /markdown-code|figcaption/u);
+  api.state.currentSessionFile = { id: 'file', kind: 'markdown', name: 'review.md' };
+  api.state.currentSessionFileContent = text;
+  assert.match(api.renderSessionFileViewer().innerHTML, /<figcaption>bash<\/figcaption><pre tabindex="0"/u);
+  assert.doesNotMatch(api.renderTimelineItem(message), /markdown-code|figcaption/u);
 });
 
 test('session file viewer renders markdown verification tables as real tables', async () => {
@@ -14638,7 +14733,7 @@ test('all tab does not show stale favorites while full sessions are loading', as
   assert.equal(JSON.stringify(api.state.sessions.map((session) => session.id)), JSON.stringify(['favorite_session', 'time_session']));
 });
 
-test('all tab rerenders in time order when session detail refresh finishes after returning to list', async () => {
+test('canceled session opening cannot reorder the list after returning to it', async () => {
   let resolveSessionDetail: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
@@ -14692,7 +14787,8 @@ test('all tab rerenders in time order when session detail refresh finishes after
   await flushMicrotasks();
 
   assert.equal(api.state.view, 'sessions');
-  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"'));
+  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"'));
+  assert.equal(api.state.sessionId, null);
 });
 
 test('all tab rerenders in time order when background session refresh finishes after returning to list', async () => {
@@ -15714,7 +15810,7 @@ test('PWA chat pull gestures expand timeline history while title pulls refresh t
   assert.match(pullRefresh, /startTarget/u);
   assert.match(pullRefresh, /getScrollContainer\(\{[\s\S]*target/su);
   assert.match(pullRefresh, /const target = startTarget/u);
-  assert.match(pullRefresh, /onRefresh\(\{[\s\S]*target,/su);
+  assert.match(pullRefresh, /onRefresh\(\{[\s\S]*target\s*[,}]/su);
   assert.match(app, /function handlePwaPullRefresh\(/u);
   assert.match(app, /function getActiveScrollContainer\(pull = \{\}\)/u);
   assert.match(app, /isTimelinePullTarget/u);
@@ -16145,6 +16241,7 @@ test('initial SSE replay replaces active-turn history instead of duplicating it'
 test('terminal session history is authoritative and rejects late started and final frames for the same turn', async () => {
   const { api } = await loadAppHarness({
     fetch: async (path) => {
+      if (/\/(?:status|timeline)(?:\?|$)/u.test(path)) return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
       assert.equal(path, '/api/sessions/session_terminal');
       return {
         ok: true,
@@ -16376,7 +16473,7 @@ test('foreground recovery keeps the latest chat message visible even when hidden
   assert.equal(restoredTimeline.scrollTop, restoredTimeline.scrollHeight);
 });
 
-test('desktop foreground recovery ignores stale historical viewport and keeps latest visible', async () => {
+test('desktop foreground recovery preserves the current historical reading position', async () => {
   const { api, context } = await loadAppHarness({
     viewportWidth: 1280,
     desktopPointer: true,
@@ -16440,8 +16537,8 @@ test('desktop foreground recovery ignores stale historical viewport and keeps la
   await context.recoverActiveTurnAfterForeground();
 
   const restoredTimeline = context.document.querySelector('#timeline');
-  assert.equal(api.state.timelineShouldFollowLatest, true);
-  assert.equal(restoredTimeline.scrollTop, restoredTimeline.scrollHeight);
+  assert.equal(api.state.timelineShouldFollowLatest, false);
+  assert.equal(restoredTimeline.scrollTop, 0);
 });
 
 test('PWA stream network failures keep the active turn recoverable when visibility stays visible', async () => {
@@ -16467,7 +16564,7 @@ test('PWA stream network failures keep the active turn recoverable when visibili
   assert.equal(api.state.turnId, 'turn_1');
   assert.equal(api.state.streamWasBackgrounded, true);
   assert.equal(api.state.status, 'Stream paused');
-  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Working · Reconnecting</span></div>');
+  assert.equal(api.renderComposerStatus(), '<div class="composer-status" data-tone="warn" role="status" aria-live="polite" aria-atomic="true"><span>Connection interrupted · Reconnecting</span></div>');
 });
 
 test('PWA stream ending without a terminal event keeps the active turn recoverable', async () => {
@@ -17707,7 +17804,7 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 }
 
 async function loadAppHarness(overrides = {}) {
-  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination] = await Promise.all([
+  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(uiCopyUrl, 'utf8'),
     readFile(uiKitUrl, 'utf8'),
@@ -17715,6 +17812,20 @@ async function loadAppHarness(overrides = {}) {
     readFile(markdownRendererUrl, 'utf8'),
     readFile(adminUiUrl, 'utf8'),
     readFile(sessionPaginationUrl, 'utf8'),
+    readFile(requestContextUrl, 'utf8'),
+    readFile(draftStoreUrl, 'utf8'),
+    readFile(localizationUrl, 'utf8'),
+    readFile(fileViewerUrl, 'utf8'),
+    readFile(webhookSettingsUrl, 'utf8'),
+    readFile(new URL('../public/session-rename.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/network-recovery.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/session-loader.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/session-reading.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/admin-editor.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/admin-data.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/attachment-upload.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/timeline-reconciliation.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/work-details-view.js', import.meta.url), 'utf8'),
   ]);
   const storage = overrides.storage instanceof Map
     ? overrides.storage
@@ -17862,7 +17973,8 @@ async function loadAppHarness(overrides = {}) {
 	    }
     if (String(html || '').includes('id="timeline"')) {
       const timelineHtml = String(html).match(/<main\b[^>]*class="timeline"[^>]*id="timeline"[^>]*>([\s\S]*?)<\/main>/u)?.[1] || '';
-      trackElement('#timeline', createTrackedElement('#timeline', {
+      const timelineTag = String(html).match(/<main\b[^>]*id="timeline"[^>]*>/u)?.[0] || '';
+      trackElement('#timeline', createElementFromHtml('#timeline', timelineTag, {
         innerHTML: timelineHtml,
         scrollTop: 0,
         scrollHeight: 1000,
@@ -18034,9 +18146,26 @@ async function loadAppHarness(overrides = {}) {
     clearTimeout: overrides.clearTimeout || clearTimeout,
     setInterval: overrides.setInterval || (() => 1),
     clearInterval: overrides.clearInterval || (() => {}),
-    fetch: overrides.fetch || (async () => ({ ok: true, status: 204 })),
+    fetch: async (path, options) => {
+      try {
+        const response = await (overrides.fetch || (async () => ({ ok: true, status: 204 })))(path, options);
+        if (/\/api\/sessions\/[^/]+\/(status|timeline)(?:\?|$)/u.test(path) && response?.status === 204) {
+          return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
+        }
+        if (response && !response.headers) response.headers = { get: () => null };
+        return response;
+      } catch (error) {
+        // Older focused fixtures intentionally implement only legacy full details.
+        // Model an unsupported route as HTTP 404, not a network/server failure.
+        if (/^unexpected fetch /iu.test(error.message) && /\/api\/sessions\/[^/]+\/(status|timeline)(?:\?|$)/u.test(path)) {
+          return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
+        }
+        throw error;
+      }
+    },
     TextDecoder,
     AbortController,
+    AbortSignal,
     FormData,
     TextEncoder,
     Blob,
@@ -18053,6 +18182,20 @@ ${attachmentUtils}
 ${markdownRenderer}
 ${adminUi}
 ${sessionPagination}
+${requestContext}
+${draftStore}
+${localization}
+${fileViewer}
+${workView}
+${webhookSettings}
+${sessionRename}
+${networkRecovery}
+${sessionLoader}
+${sessionReading}
+${adminEditor}
+${adminData}
+${attachmentUpload}
+${timelineReconciliation}
 ${app}
 globalThis.__codexWebTest = {
   state,
@@ -18243,3 +18386,29 @@ function failedSessionSubmission(overrides = {}) {
     ...overrides,
   };
 }
+
+test('the passive stream watchdog respects an already scheduled retry deadline', async () => {
+  const timers = new Map<number, { callback: Function; delay: number }>();
+  let nextTimer = 0;
+  let streamReads = 0;
+  const { api } = await loadAppHarness({
+    setTimeout: (callback: Function, delay: number) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; },
+    clearTimeout: (id: number) => timers.delete(id),
+    fetch: async (path: string) => {
+      assert.match(path, /\/api\/turns\/retry_turn\/events/u);
+      streamReads += 1;
+      return { ok: false, status: 503, json: async () => { throw new Error('HTML gateway response'); } };
+    },
+  });
+  Object.assign(api.state, { token: 'token', authSession: { id: 'auth' }, sessionId: 'retry_session', currentSession: { id: 'retry_session' }, view: 'chat', pendingTurn: true, turnId: 'retry_turn' });
+  await api.streamTurnEvents('retry_turn');
+  assert.equal(streamReads, 1);
+  const retries = [...timers.values()].filter((timer) => timer.delay < 12000);
+  assert.equal(retries.length, 1);
+  await api.recoverActiveTurnIfStreamUnhealthy({ reconcile: false });
+  assert.equal(streamReads, 1);
+  retries[0].callback();
+  await flushMicrotasks();
+  assert.equal(streamReads, 2);
+  assert.equal(api.state.pendingTurn, true);
+});

@@ -1,0 +1,168 @@
+[
+  {
+    "phase": "markdown-preview",
+    "timestamp": "2026-09-19T14:44:16.228Z",
+    "mode": "dist",
+    "buildId": "c8018136629dd59e1f7f",
+    "appBytes": 343608,
+    "appSha256": "d1c5276a1fb745a62bfb973b8b58b595067a5e1615cbc88987f728a49d4c23fd",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200,
+        "bytes": 525,
+        "sha256": "8b2313dc9ffe611ab7707580b2ade42f1b8b2b7c6030cd309b209f33b1b283e5"
+      },
+      {
+        "path": "/styles.css",
+        "status": 200,
+        "bytes": 103893,
+        "sha256": "6691e5af8da9527ff9d7333c56be3aff47372c0ca17da203e69c685aa4103e4f"
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200,
+        "bytes": 1863,
+        "sha256": "7d354d47a3763ae614d1dbaa798989cfc4fc4fdcc82e0b308d282a1236ffef21"
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200,
+        "bytes": 15287,
+        "sha256": "cdbf76ed86b80937e0b737261c08e44cd77c0e66b0cf0073fd479fb7b3b2bbd7"
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200,
+        "bytes": 14039,
+        "sha256": "9b8cc57839bd7e6e6856fec150f6aac45399bec027bd378551284bf6abfe1e4c"
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200,
+        "bytes": 3632,
+        "sha256": "d5f0f9e683167320ed72ee789fc17bc46e30ca685964214c3423df057f5d0a2f"
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200,
+        "bytes": 2351,
+        "sha256": "a6d979d059bc30fafd6d5f3d4c9302f41c93e4100fd7f812a19e8c3259b15086"
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200,
+        "bytes": 6222,
+        "sha256": "051d035af1d102af9b013a9d4b0e3355d5793dd2809b2a6472d8ceb56c9d64a0"
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200,
+        "bytes": 3851,
+        "sha256": "e462000d1fec209160c69810dc5b37b17d31b17845f9a4a32f753b4b0df76682"
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200,
+        "bytes": 6823,
+        "sha256": "b59b204222720982591bd32b5089be1425cae95376b83c949d6b2b8c51ec57df"
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200,
+        "bytes": 7738,
+        "sha256": "7343f251a984bbeb0967dec9281cb1b67ae068bae19735433c05eb5ec3079edd"
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200,
+        "bytes": 3110,
+        "sha256": "f8b83ea2126f2b3d50da0614a0e4a5f79b0ca7565f0809d148f2fdcf2045a22f"
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200,
+        "bytes": 2102,
+        "sha256": "fc8ad4d76fc2f80887bca55ef239fe2c3b42989b4b80369eeb9fd4f27aba485b"
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200,
+        "bytes": 335,
+        "sha256": "a5aaf0f21c7f01a5ffe05131cdf55f7766d03edc47200911960310fb6fadf75d"
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200,
+        "bytes": 3170,
+        "sha256": "087b8765b6842878d83be835c9daea82d7d23c2b8d551c5b061c38a65b7c7ebd"
+      },
+      {
+        "path": "/timeline-reconciliation.js",
+        "status": 200,
+        "bytes": 1493,
+        "sha256": "b83d76f20b06261a542d7b026085a0b735bfec723d0b20a29ef8b0d4beef7ab9"
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200,
+        "bytes": 2888,
+        "sha256": "64d26f3ff8efe7ce55d22bdf6883c4c69b05a06b8f41152dcbc83511735da0b2"
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200,
+        "bytes": 4371,
+        "sha256": "9a651d7e92cf3b85fbceb505b8ef8d4a8fa8efcb1d1df33d171152f0d2d16d9d"
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200,
+        "bytes": 3621,
+        "sha256": "5140fe73eae396434d624925a66e45e68a6514f3225acd11d079343f7f96d969"
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200,
+        "bytes": 1610,
+        "sha256": "d61aaccadefdb147590f8bce998a85c2216bc9656b79be5e68cd91997d92518b"
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200,
+        "bytes": 9311,
+        "sha256": "9cb8dd7d8ae843993f18f5928e37918ceb596b97aaf9e9e53d05101b96301576"
+      },
+      {
+        "path": "/app.js",
+        "status": 200,
+        "bytes": 343608,
+        "sha256": "d1c5276a1fb745a62bfb973b8b58b595067a5e1615cbc88987f728a49d4c23fd"
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  }
+]

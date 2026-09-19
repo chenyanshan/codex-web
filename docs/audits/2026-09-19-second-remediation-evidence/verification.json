@@ -1,0 +1,466 @@
+{
+  "recordedAt": "2026-09-19T14:11:56.131Z",
+  "baseCommit": "23fb2a9c8b7080715d9ba1d2f37ef0d5afbe809b",
+  "uncommittedChanges": true,
+  "requirementReport": "../2026-09-19-second-remediation-progress.md",
+  "coveragePathsRelativeTo": "packages/codex-web",
+  "requirementCoverage": {
+    "S1-S6": [
+      "test/session_reading.test.ts",
+      "test/session_timeline_page.test.ts",
+      "test/browser/session-reading.spec.js",
+      "test/browser/admin-navigation.spec.js"
+    ],
+    "S7": [
+      "test/browser/attachment-upload.spec.js"
+    ],
+    "C1-C5": [
+      "test/admin_state.test.ts",
+      "test/identity_admin_invariant.test.ts",
+      "test/server_admin_invariant.test.ts",
+      "test/browser/admin-correctness.spec.js"
+    ],
+    "C6-C8": [
+      "test/admin_session_page.test.ts",
+      "test/server_multi_user.test.ts",
+      "test/browser/admin-correctness.spec.js"
+    ],
+    "F1": [
+      "test/build_public.test.ts",
+      "test/launchd_scripts.test.ts"
+    ],
+    "F2-F3": [
+      "test/file_version_cache.test.ts",
+      "test/auth_store.test.ts",
+      "test/hybrid_auth_store.test.ts",
+      "test/report_store.test.ts"
+    ],
+    "F4-F6": [
+      "test/multipart_upload.test.ts",
+      "test/server_session_files.test.ts",
+      "test/report_store.test.ts",
+      "test/http_metrics.test.ts"
+    ],
+    "message-order-images-and-receipts": [
+      "test/attachment_history.test.ts",
+      "test/timeline_reconciliation.test.ts",
+      "test/server_session_submission.test.ts",
+      "test/browser/session-reading.spec.js"
+    ],
+    "resize-without-blank-frames": [
+      "test/browser/session-reading.spec.js"
+    ],
+    "admin-fixed-list-start-position-and-clean-observer": [
+      "test/browser/admin-navigation.spec.js",
+      "test/browser/admin-console.spec.js",
+      "test/browser/admin-visual.spec.js"
+    ],
+    "compact-header-stop-and-down-arrow": [
+      "test/browser/session-controls.spec.js",
+      "test/browser/workspace.spec.js"
+    ],
+    "earlier-search-removal-naming-and-weak-network": [
+      "test/frontend_budget.test.ts",
+      "test/session_rename_ui.test.ts",
+      "test/browser/session-rename.spec.js",
+      "test/network_recovery.test.ts",
+      "test/browser/weak-network.spec.js"
+    ]
+  },
+  "checks": [
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "nativePassed": 58,
+      "webPassed": 970,
+      "totalPassed": 1028,
+      "failed": 0,
+      "outputSha256": "36bd97ef07925827ec92f863d90bc78cf309e4c9b689018cb9cd13639ae5ba84"
+    },
+    {
+      "command": "npm run test:browser -- --workers=5",
+      "exitCode": 0,
+      "passed": 154,
+      "skipped": 291,
+      "failed": 0,
+      "combinations": 445,
+      "skipReason": "Project/device-specific scenarios; skips are not passes.",
+      "outputSha256": "21b430be4a8a92a9fc680a77bbc5d8c5f616b5855590a1605624436ec7140bb9"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "outputSha256": "6516d252b2693e49f9c3d76cc843ce5220517ac1aa0b73e671d163f7987404d6"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "outputSha256": "c29534b8d513bb453278ee4d47a1f3d1f835b0a6d4a1daf7b046befd7e31c11f"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0
+    },
+    {
+      "command": "bash scripts/service/install-codex-web-launchd-user.sh",
+      "includes": [
+        "npm run build",
+        "npm run test:built-public --workspace packages/codex-web"
+      ],
+      "result": "Installer reached final dist-mode output; detached worker confirmed running PID and exit 0. Installer tool handle expired during the service restart.",
+      "outputSha256": "8479e9a513c5e60f9f25a631f3ecf441e6d764f4fbdc9488cdb5c5b001047822",
+      "emittedAssets": 30,
+      "buildManifestValidatedAgainstCurrentSources": true,
+      "compiledBrowserScripts": 21,
+      "browserErrors": []
+    },
+    {
+      "command": "node docs/audits/2026-09-19-second-remediation-evidence/verify-delivery.mjs final-admin-ui",
+      "exitCode": 0,
+      "release": {
+        "phase": "final-admin-ui",
+        "timestamp": "2026-09-19T14:08:44.109Z",
+        "mode": "dist",
+        "buildId": "5fa5a3f77899c8cad919",
+        "appBytes": 343473,
+        "appSha256": "d6e5722d33382f4b0d7b36ff19e8cfdf3011391e9264968aef26086a9b370fd9",
+        "statuses": [
+          {
+            "path": "/theme-init.js",
+            "status": 200
+          },
+          {
+            "path": "/styles.css",
+            "status": 200
+          },
+          {
+            "path": "/pwa-pull-refresh.js",
+            "status": 200
+          },
+          {
+            "path": "/ui-copy.js",
+            "status": 200
+          },
+          {
+            "path": "/ui-kit.js",
+            "status": 200
+          },
+          {
+            "path": "/attachment-upload.js",
+            "status": 200
+          },
+          {
+            "path": "/attachment-utils.js",
+            "status": 200
+          },
+          {
+            "path": "/markdown-renderer.js",
+            "status": 200
+          },
+          {
+            "path": "/ui-localization.js",
+            "status": 200
+          },
+          {
+            "path": "/session-file-viewer.js",
+            "status": 200
+          },
+          {
+            "path": "/webhook-settings.js",
+            "status": 200
+          },
+          {
+            "path": "/admin-data.js",
+            "status": 200
+          },
+          {
+            "path": "/admin-editor.js",
+            "status": 200
+          },
+          {
+            "path": "/request-context.js",
+            "status": 200
+          },
+          {
+            "path": "/session-reading.js",
+            "status": 200
+          },
+          {
+            "path": "/timeline-reconciliation.js",
+            "status": 200
+          },
+          {
+            "path": "/session-loader.js",
+            "status": 200
+          },
+          {
+            "path": "/network-recovery.js",
+            "status": 200
+          },
+          {
+            "path": "/session-rename.js",
+            "status": 200
+          },
+          {
+            "path": "/draft-store.js",
+            "status": 200
+          },
+          {
+            "path": "/session-pagination.js",
+            "status": 200
+          },
+          {
+            "path": "/app.js",
+            "status": 200
+          },
+          {
+            "path": "/api/health",
+            "status": 401
+          },
+          {
+            "path": "/api/sessions",
+            "status": 401
+          },
+          {
+            "path": "/api/admin/sessions",
+            "status": 401
+          },
+          {
+            "path": "/api/metrics",
+            "status": 401
+          },
+          {
+            "path": "/api/reports",
+            "status": 401
+          },
+          {
+            "path": "/api/turns/synthetic-verification/events",
+            "status": 401
+          }
+        ]
+      }
+    }
+  ],
+  "isolatedLaunchdLifecycle": {
+    "previouslyVerifiedOnThisSource": true,
+    "result": {
+      "passed": true,
+      "records": [
+        {
+          "version": "source",
+          "pid": 27535,
+          "elapsedMs": 240
+        },
+        {
+          "version": "dist",
+          "pid": 27700,
+          "elapsedMs": 5665
+        },
+        {
+          "helperExitCode": 0
+        },
+        {
+          "version": "dist",
+          "pid": 28042,
+          "elapsedMs": 26521
+        },
+        {
+          "helperExitCode": 2
+        },
+        {
+          "version": "dist",
+          "pid": 28494,
+          "elapsedMs": 7897
+        },
+        {
+          "helperExitCode": 0
+        }
+      ]
+    },
+    "scope": "Delivery-mode switch, service-child reload, deliberately failed start with automatic rollback, ordinary restart."
+  },
+  "visual": {
+    "inspectedActualImages": [
+      "admin-beginning-desktop.png",
+      "admin-beginning-mobile-portrait.png",
+      "admin-observer-980.png",
+      "session-controls-desktop-1440.png",
+      "session-controls-desktop-980.png",
+      "session-controls-mobile-portrait-390.png",
+      "session-controls-mobile-compact-320.png"
+    ],
+    "browserErrors": [],
+    "minimumSampledTextContrast": 4.774874916984864,
+    "resize": {
+      "viewports": [
+        [
+          1270,
+          1270
+        ],
+        [
+          1937,
+          1262
+        ],
+        [
+          1937,
+          1938
+        ],
+        [
+          1937,
+          1262
+        ],
+        [
+          979,
+          900
+        ],
+        [
+          980,
+          900
+        ],
+        [
+          980,
+          981
+        ],
+        [
+          980,
+          979
+        ],
+        [
+          1440,
+          1600
+        ],
+        [
+          1937,
+          1262
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1937,
+          1262
+        ]
+      ],
+      "frames": {
+        "blank": [],
+        "samples": 30,
+        "running": false
+      },
+      "extraHistoryRequests": 0,
+      "browserErrors": []
+    }
+  },
+  "assets": {
+    "report": "asset-sizes.json",
+    "sourceAppBudgetBytes": 500000,
+    "criticalBuiltGzipBudgetBytes": 143360,
+    "sourceAppBytes": 499693,
+    "criticalBuiltGzipBytes": 140094
+  },
+  "limitations": [
+    "Chromium emulation; no physical iPhone Safari/PWA, system keyboard, or cellular handover validation.",
+    "Report pagination scans directories per page.",
+    "Upload target writes are not multi-file atomic.",
+    "Metrics and synthetic experiments are not production/mobile load measurements.",
+    "app.js/server.ts have not been fully split or framework-migrated.",
+    "Missing or expired legacy images cannot be safely content-deduplicated."
+  ],
+  "sourceHashes": {
+    "packages/codex-native-api/src/auth_state.ts": "056fecf1b9370b805e84a6d6db98be150413b9cf9c383a619d15d5747d58215c",
+    "packages/codex-native-api/src/cli.ts": "c914a62cb7e4ab8f4ea953de40a350a0089feb9aeed06cacaea58f390b32ce13",
+    "packages/codex-native-api/src/cli_options.ts": "da8724462ee5011b5fb10dc947897459aa22b3e7101c5e9ef7a137dcdb422f80",
+    "packages/codex-native-api/src/codex_app_client.ts": "57a4931158616d6215718db08237fb5efd69aa27c59b5519fa62157d4d47e84a",
+    "packages/codex-native-api/src/daemon_manager.ts": "7e3f3ed4e1b9a33a0395233f7a7c0958ba325da77033ff420658ee83be7f55f1",
+    "packages/codex-native-api/src/default_provider.ts": "4165b028c11991b68086d24841f4528911c6a47e6c19776a0348054c93d1de35",
+    "packages/codex-native-api/src/index.ts": "20838afbfefbeb2e25ee621e3d68d85cf8f5ef74e2ac9a318320440f87d55072",
+    "packages/codex-native-api/src/native_api_continuation_registry.ts": "20fc2a563db47f1d949742820db14ccdeb910ea4244c97d42019d6e09c3d8fbb",
+    "packages/codex-native-api/src/native_api_server.ts": "cdedbe2a3b3b95a1e77beeaa9245675522f40d5d2b8f1d3df90ca38733e86808",
+    "packages/codex-native-api/src/native_api_service.ts": "3229e8a63cf336396324f785b9e3bb57478d774fb482a0872fdb00ff056bf383",
+    "packages/codex-native-api/src/native_api_side_task_router.ts": "762e5826ef9bfdffaa361e9e4fdca3b59248ff22b272751298cd7977fa63add7",
+    "packages/codex-native-api/src/native_api_types.ts": "2a0deba0b61600031e566b3a6f849ed3f4e1a65e504172e16716b7aa4da1fc81",
+    "packages/codex-native-api/src/native_runtime.ts": "eba2543145b2ec55754ff80e5d6c12f316e4d56065101632ed1b24ad3445acec",
+    "packages/codex-native-api/src/provider.ts": "917589d14d0139f99581fbc6a52ac7fbbc062092ae343fdc5c5f583a2c80b8ff",
+    "packages/codex-native-api/src/sequenced_stderr.ts": "d8c0712fd216ba00a336bf5ea74499ba54512bc0a4bd1bcd07f8539cad0d5118",
+    "packages/codex-web/public/admin-data.js": "7f9e156392464fe9901aedd0a7a5ee4726be195bdc87f5827a8d643a907442f4",
+    "packages/codex-web/public/admin-editor.js": "4c47f845d01d693d331bcab2219fe01ee5c3701e48ebc2040c7da58ea8eca7fa",
+    "packages/codex-web/public/admin-ui.js": "43ad9331b88e43c36966ba00a5eb362f8d298e74e6f736b8d4e6bc723b008566",
+    "packages/codex-web/public/app.js": "a456d9c95a7f868af2971aed29cd859ea41bc3f07f4094b0af6ebba80a7209e2",
+    "packages/codex-web/public/apple-touch-icon.png": "af67d6ef23ecd416f16a86882f6bfbfddda2846baa2ef3e2a033d128506499f2",
+    "packages/codex-web/public/attachment-upload.js": "654209397ec14f7cfac64f36adc237a963766183fbe15920e831bc148f2f6fe2",
+    "packages/codex-web/public/attachment-utils.js": "355f25571bf79f625acc5eb519d5324f73236b1ee9e53ac65ee31b10f5d4502d",
+    "packages/codex-web/public/draft-store.js": "450b40aad5f1c71edd244a9dd971025755a8536de6ce7dc31059dca679802940",
+    "packages/codex-web/public/icon-192.png": "09a39ff6607ad256fa471e50b4b84c740bd476f52e4a8576cb2ba026b8c3eb50",
+    "packages/codex-web/public/icon-512.png": "82140b5804d12257ac3f65cee6632a0795d475e58961e8676da3fcdb07842883",
+    "packages/codex-web/public/icon.svg": "d626d8c19eebfda01dd297c91d4d05920625b4606c9c5b87870317f01f5fcdff",
+    "packages/codex-web/public/index.html": "aa66fad97d5eac6eff2551aadf994164df898380c4f1375566d8fb47d6c81bfe",
+    "packages/codex-web/public/manifest.webmanifest": "2fe087b675c21811461fe31588f68f4b7f47eb56d61df558b39fe7bc6c81cdf9",
+    "packages/codex-web/public/markdown-renderer.js": "c48f3fac9780070f9b1c53acafb0cec3e9b4be96728cebba746677bd3ab33490",
+    "packages/codex-web/public/network-recovery.js": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253",
+    "packages/codex-web/public/pwa-pull-refresh.js": "33f76cb8618053caad0cdf5d78314d1869774ee11d29ff5f96b86686fff91688",
+    "packages/codex-web/public/request-context.js": "c4ea60d1af381bd02c2a71b7ef2b735aef9ef81fb33342f44a3411b043c10e5d",
+    "packages/codex-web/public/service-worker.js": "3e9361854a52bfcf2fd56efe0103e944dcf6b6c54d0624b6f7e3191dd6a875c5",
+    "packages/codex-web/public/session-file-viewer.js": "31f3c17a8742afb9e57c9a72777c69fb19eef508827860003e73cd4098b26f90",
+    "packages/codex-web/public/session-loader.js": "631d07cc045ce7d190b9e5b6aba2036130188acb6260280825a40b744da673fa",
+    "packages/codex-web/public/session-pagination.js": "771c48cea9f32caeb8deab1e3dfe036529266be7b2dcef0265eeb4185511e418",
+    "packages/codex-web/public/session-reading.js": "9dc7bc936dffb5e399b25100245bdec40deccf6c510dee3ffc68bb79a03e944e",
+    "packages/codex-web/public/session-rename.js": "495ebf6b9c71753f37df37befad9afd84507ab38aeedd984d149b6a3ca81bd24",
+    "packages/codex-web/public/styles.css": "f9a3cf73a23b587da102ef77cde2021bc96c2f8617e5b5e7f1152fceff5df6d3",
+    "packages/codex-web/public/theme-init.js": "ce6837e780a448ee02251fffe66e61d88ca7a1c056ac105c520a08c5b2c84d12",
+    "packages/codex-web/public/timeline-reconciliation.js": "90b4e301738121cc9f52b5ea20ff87744e98323ec206a0c90c0455fa9d78557f",
+    "packages/codex-web/public/ui-copy.js": "7b397f86d1427574708a18346dea0d429ae2e18006e19a821da066eec5dbb9d4",
+    "packages/codex-web/public/ui-kit.js": "2b9df9fec8ed2c1f1de998548dbe6c60fca9fdad15d6300166045096b1f7fe2c",
+    "packages/codex-web/public/ui-localization.js": "de5f834fb0eb6d94e5867abf59a3e4c3b0be2404f536b2846f33ddd79ac97e18",
+    "packages/codex-web/public/webhook-settings.js": "a9f3c61c5d710360d5f7c9ed89f1af969cba9905736a3830dc3a39cb95c696aa",
+    "packages/codex-web/scripts/build-public.mjs": "526369016d0c11f817d2e13508fa8db5d47e68018397453dd129e95e4ecda5d4",
+    "packages/codex-web/scripts/smoke-built-public.mjs": "5ba379e5a2d20a9fdeef5ccfe4506402f6d5463e70a5640eb91d584afc66b2cd",
+    "packages/codex-web/src/access_control.ts": "fd6b3cacd47d5f7c26784a51ba53b7b6dd2dafb00477ebd88747101100d8b721",
+    "packages/codex-web/src/admin_session_page.ts": "087454a4199dda664fa8526bc2d0291b3287e09423cc403e99533a84944b78ea",
+    "packages/codex-web/src/aiops_webhook.ts": "d0481da51b92b3ac5ba49faf2093f248a5b0125101c97691507ead7dfed0b213",
+    "packages/codex-web/src/attachment_history.ts": "640f41e7d013ae167a8e488d5f46e3e567dd034cd012edae43c01eae1f07fe33",
+    "packages/codex-web/src/attachment_store.ts": "b76e6c5dbf0f75aa698c18b3b28855dadf1082b2305234b49ca85421e8511641",
+    "packages/codex-web/src/auth_store.ts": "208fac3af4aac72e132662976e8ab7fcae48cb44262a44ef9d004326c5a5d9b1",
+    "packages/codex-web/src/cli.ts": "b49e7b1cf39ac8cd5c89e0e0412df0946bb9140b573c9956a424419ab02ce552",
+    "packages/codex-web/src/config.ts": "826eabd8076299cd2b661c5d9bd11607f517b692f1d1d8f3962c226c37d8c7e0",
+    "packages/codex-web/src/event_bus.ts": "d6adb029df50f378571154064ae9acbbc21557a21dcacf03181cdb12bfd06349",
+    "packages/codex-web/src/event_memory.ts": "cd78f8baa1b33b799a298c102a8fb73aba4fa8e42bbde90939be51feab9d1afa",
+    "packages/codex-web/src/event_model.ts": "19669d34f2a7f949b6f0d18234c70ee9ffd0f6e7399ca77367290e93d7a22b32",
+    "packages/codex-web/src/file_lock.ts": "5d1285a176de9be28a294c8990893de289d1f1139f060e06151464c2044dc0c5",
+    "packages/codex-web/src/file_version_cache.ts": "fac37361ee71d90741bf5e09242599fc666910f7a0c645fb207f777e6c051788",
+    "packages/codex-web/src/http_metrics.ts": "e71380e6eccb4a2f86df8e45558ad1edd9c184ba05b5859eede43bcc474d344d",
+    "packages/codex-web/src/hybrid_auth_store.ts": "af920456bfaef6da6d414c905288cc471d0237b1ba0aff4b713fb740226cb950",
+    "packages/codex-web/src/identity_store.ts": "0c8e91173703cd4483abf01215d6e3e7460e9a1c126c5097cf922ea836e93217",
+    "packages/codex-web/src/index.ts": "99ce0510a79636c41bb3ba20739272f4cc158e86194e8e951632b2519300dcbd",
+    "packages/codex-web/src/multipart_upload.ts": "ec9bfec5a5722f5f26978ec37b5dc1758da26fe0f48b7ffa015efd37de076e1f",
+    "packages/codex-web/src/report_download.ts": "c9082fdf3d7126d4698e06088e52de3e7dc703971c5677d360a36659cff793d1",
+    "packages/codex-web/src/report_store.ts": "14f41505a0fb4e34fda05a01ff8baf2556e0c25729dc8ed2e7c6e6498e8ac73b",
+    "packages/codex-web/src/runtime.ts": "e9ff83c902a589d287cad5a6bcbbafa74009e2f041b3ab5ab7740326af5ce787",
+    "packages/codex-web/src/server.ts": "105ff8df24e08a95e90fb76f684601a7a62dfb18a0bcbff5369726ebcb76f484",
+    "packages/codex-web/src/session_directory.ts": "1976e6e5e09186d5fad2696493e46aa1a87a3b6e27e169f2c363808b6d052f2e",
+    "packages/codex-web/src/session_file_store.ts": "6074cb0199aecb2821bd4406645bf8cc22385f3618fc80d64fc52639019de352",
+    "packages/codex-web/src/session_list_page.ts": "d0261df529b72f0b9f6569a01184c4a7d503df8854c78f287b00bddf04a3bb66",
+    "packages/codex-web/src/session_name.ts": "080271058a34519943a036ba6cf4d0e6ef1c8c1c03f4b1100b943e9229f617a9",
+    "packages/codex-web/src/session_partition_store.ts": "eac7de66a72fc2ce3147fe9dfd61dc905b7cebd9aeada294f04ac6fd81ff4643",
+    "packages/codex-web/src/session_settings_store.ts": "2dd7bec41bd8d1873347fbda42c9473f46ea1438c2a67e910e14957da810e501",
+    "packages/codex-web/src/session_submission_store.ts": "27df58455cd0f254e881660829bcd59b51b392ed1737a8c844e4f0cbe9d1385e",
+    "packages/codex-web/src/session_timeline_page.ts": "3f3f254e8efac1ad6fab7ff0c9845a37f2b762a4f497058673d107d31817d59e",
+    "packages/codex-web/src/session_timeline_store.ts": "7a070321d712052526b992bdfbba6a6f60251350862d498764a62fe6bdb3cdff",
+    "packages/codex-web/src/static_asset_cache.ts": "b63fe21193bc9b8ac302583a9abce3abc592b5a990b6e47b66e2e6cf488153b4",
+    "packages/codex-web/src/storage_governance.ts": "56acf049b9bdbb27ae7790c1224c0862a7869accdf0508cb5f9fa13d47733710",
+    "packages/codex-web/src/task_runner.ts": "feffe8d349dcf037e7a37d0db4c5a0abf025b0c4bacbae2b81b0f1ef58e68cf5",
+    "packages/codex-web/src/task_scheduler.ts": "5728af250d7189210ff81d7150b9dd542a5db7d45a813022b53e3b3b2fc1d1bb",
+    "packages/codex-web/src/task_store.ts": "325c2a11893c0be90f9df3a95b659fe95ab8da53f1189e5998e49ca6ed62f76e",
+    "packages/codex-web/src/webhook_conversation_store.ts": "e9567543ac2535a7048754981bae158086de2c2c05e0e5c9624b2a4a680bf309",
+    "packages/codex-web/src/webhook_submission.ts": "a1ba784e92d9865b228a6a71c28a0618f20d5c54bd92d565387b5ef3e7831628",
+    "scripts/service/install-codex-web-launchd-user.sh": "303ccadff19877ea4900a78a1f0cdea7459a483cc4ff3dad35d166eda5e8d6f1",
+    "scripts/service/logs-codex-web-launchd-user.sh": "8f17e280a1bdd50c2ddbc400eac068785239db2e2d19ec09c3ad83cb3b75b0e4",
+    "scripts/service/restart-codex-web-launchd-user-detached.sh": "487174a6b10731ec6b614d2a59f5bda2409074a651ca217b86c8615465f3f98a",
+    "scripts/service/restart-codex-web-launchd-user.sh": "85abe897361b40fdfb7d6dc1af1ac43944cdc176ab245ae46409c77af67ea275",
+    "scripts/service/rotate-codex-web-logs.sh": "348a4943c4858d1975988b8456d2946a07257e414b7bd805079a83b2622b2fc2",
+    "scripts/service/run-codex-web-restart-job.sh": "967c55cecbc35a6ba19066a331f1d11ad4827c34e2a413bcf7041ab86a6392cb",
+    "scripts/service/status-codex-web-launchd-user.sh": "836da43db31ed0086c5b7e332fc3a87dfabd629c025986a78c02c45e9cdb322c",
+    "scripts/service/stop-codex-web-launchd-user.sh": "1bb551a17f9b6acbebc35715ef4ac140a4a3b3ad99300fa3d93ec255c4d499f1",
+    "scripts/service/uninstall-codex-web-launchd-user.sh": "37d54c749796500d4656f16fa8f3b794219cfd8ed0e2b26a4bba33221c841163",
+    "scripts/service/verify-launchd-lifecycle.mjs": "990c0144899db5ad28c6850e88cd73a68662990aacd217c0c41ed3f9ba448839"
+  }
+}

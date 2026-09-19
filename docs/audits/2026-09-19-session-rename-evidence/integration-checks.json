@@ -1,0 +1,19 @@
+{
+  "anonymousStatus": 401,
+  "invalidCases": 7,
+  "savedTitle": "中文名称 <安全> & 手动命名",
+  "immediateListAndStatusUpdated": true,
+  "sortTimestampPreserved": true,
+  "missingStatus": 404,
+  "upstreamFailurePreservesName": true,
+  "persistsAcrossRuntimeRecreation": true,
+  "fullHistoryReads": 0,
+  "modelTurns": 0,
+  "nativeRenameRequests": 3,
+  "multiUserOwnerSaved": true,
+  "appSessionIdPreserved": true,
+  "adminObserverDenied": true,
+  "readOnlyProjectCapabilityFalse": true,
+  "readOnlyProjectWriteDenied": true,
+  "archivedStatus": 409
+}

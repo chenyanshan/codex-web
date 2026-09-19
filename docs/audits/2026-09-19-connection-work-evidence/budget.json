@@ -1,0 +1,9 @@
+{
+  "appSourceBytes": 495968,
+  "criticalGzipBytes": 142452,
+  "criticalAssetCount": 22,
+  "limits": {
+    "appSourceBytes": 500000,
+    "criticalGzipBytes": 143360
+  }
+}

@@ -1,7 +1,4 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { withFileLockSync } from './file_lock.js';
+import { SessionPartitionStore } from './session_partition_store.js';
 
 export interface CodexWebTimelineMessage {
   id: string;
@@ -22,160 +19,59 @@ export interface CodexWebTimelineMessage {
 }
 
 export interface CodexWebSessionTimelineStore {
-  list(sessionId: string): CodexWebTimelineMessage[];
-  append(sessionId: string, entry: CodexWebTimelineMessage): void;
-  replace(sessionId: string, entries: CodexWebTimelineMessage[]): void;
-  delete(sessionId: string): void;
-}
-
-interface TimelineFile {
-  version: 1;
-  sessions: Record<string, CodexWebTimelineMessage[]>;
+  dispose?(): Promise<void>;
+  revision?(sessionId?: string): Promise<string>;
+  upsert?(sessionId: string, entry: CodexWebTimelineMessage): Promise<void>;
+  list(sessionId: string): CodexWebTimelineMessage[] | Promise<CodexWebTimelineMessage[]>;
+  append(sessionId: string, entry: CodexWebTimelineMessage): void | Promise<void>;
+  replace(sessionId: string, entries: CodexWebTimelineMessage[]): void | Promise<void>;
+  delete(sessionId: string): void | Promise<void>;
 }
 
 const DEFAULT_MAX_ENTRIES_PER_SESSION = 500;
 const DEFAULT_MAX_TIMELINE_BYTES = 16 * 1024 * 1024;
 
 export class FileSessionTimelineStore implements CodexWebSessionTimelineStore {
-  private readonly timelinePath: string;
-
-  private readonly maxEntriesPerSession: number;
-
-  private readonly maxBytes: number;
-
-  constructor({
-    timelinePath,
-    maxEntriesPerSession = DEFAULT_MAX_ENTRIES_PER_SESSION,
-    maxBytes = DEFAULT_MAX_TIMELINE_BYTES,
-  }: {
-    timelinePath: string;
-    maxEntriesPerSession?: number;
-    maxBytes?: number;
+  dispose(): Promise<void> { return this.store.dispose(); }
+  private readonly store: SessionPartitionStore<CodexWebTimelineMessage[]>;
+  constructor({ timelinePath, maxEntriesPerSession = DEFAULT_MAX_ENTRIES_PER_SESSION, maxBytes = DEFAULT_MAX_TIMELINE_BYTES }: {
+    timelinePath: string; maxEntriesPerSession?: number; maxBytes?: number;
   }) {
-    this.timelinePath = timelinePath;
-    this.maxEntriesPerSession = positiveInteger(maxEntriesPerSession, DEFAULT_MAX_ENTRIES_PER_SESSION);
-    this.maxBytes = positiveInteger(maxBytes, DEFAULT_MAX_TIMELINE_BYTES);
-  }
-
-  list(sessionId: string): CodexWebTimelineMessage[] {
-    return normalizeEntries(this.read().sessions[sessionId]);
-  }
-
-  append(sessionId: string, entry: CodexWebTimelineMessage): void {
-    withFileLockSync(`${this.timelinePath}.lock`, () => {
-      const file = this.read();
-      const current = normalizeEntries(file.sessions[sessionId]);
-      current.push(normalizeEntry(entry));
-      file.sessions[sessionId] = current;
-      this.write(compactTimelineFile(file, this.maxEntriesPerSession, this.maxBytes));
+    const maxEntries = positiveInteger(maxEntriesPerSession, DEFAULT_MAX_ENTRIES_PER_SESSION);
+    this.store = new SessionPartitionStore(timelinePath, (value, id) => {
+      const entries = normalizeEntries(value);
+      if (!Array.isArray(value) || entries.length !== value.length) throw new Error(`Invalid session timeline entry for ${id}`);
+      return entries;
+    }, positiveInteger(maxBytes, DEFAULT_MAX_TIMELINE_BYTES), (entries, budget) => {
+      const retained = entries.slice(-maxEntries);
+      // Binary search makes compaction O(n log n), instead of serializing all sessions per removed entry.
+      let low = 0; let high = retained.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (Buffer.byteLength(JSON.stringify(retained.slice(middle))) <= budget) high = middle;
+        else low = middle + 1;
+      }
+      return retained.slice(low);
     });
   }
-
-  replace(sessionId: string, entries: CodexWebTimelineMessage[]): void {
-    withFileLockSync(`${this.timelinePath}.lock`, () => {
-      const file = this.read();
-      file.sessions[sessionId] = normalizeEntries(entries);
-      this.write(compactTimelineFile(file, this.maxEntriesPerSession, this.maxBytes));
+  revision(sessionId?: string): Promise<string> { return this.store.revision(sessionId); }
+  async upsert(sessionId: string, entry: CodexWebTimelineMessage): Promise<void> {
+    await this.store.mutate(sessionId, (current) => {
+      const entries = current ?? [];
+      const index = entries.findIndex((item) => item.id === entry.id);
+      if (index >= 0) entries[index] = normalizeEntry(entry);
+      else entries.push(normalizeEntry(entry));
+      return entries;
     });
   }
-
-  delete(sessionId: string): void {
-    withFileLockSync(`${this.timelinePath}.lock`, () => {
-      const file = this.read();
-      if (!(sessionId in file.sessions)) {
-        return;
-      }
-      delete file.sessions[sessionId];
-      this.write(file);
-    });
+  async list(sessionId: string): Promise<CodexWebTimelineMessage[]> { return await this.store.get(sessionId) ?? []; }
+  async append(sessionId: string, entry: CodexWebTimelineMessage): Promise<void> {
+    await this.store.mutate(sessionId, (entries) => [...entries ?? [], normalizeEntry(entry)]);
   }
-
-  private read(): TimelineFile {
-    let raw: string;
-    try {
-      raw = fs.readFileSync(this.timelinePath, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return emptyFile();
-      }
-      throw error;
-    }
-
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.sessions)) {
-      throw new Error(`Invalid session timeline file: ${this.timelinePath}`);
-    }
-    const sessions: Record<string, CodexWebTimelineMessage[]> = {};
-    for (const [sessionId, entries] of Object.entries(parsed.sessions)) {
-      if (!Array.isArray(entries)) {
-        throw new Error(`Invalid session timeline entry list for ${sessionId}: ${this.timelinePath}`);
-      }
-      const normalized = normalizeEntries(entries);
-      if (normalized.length !== entries.length) {
-        throw new Error(`Invalid session timeline entry for ${sessionId}: ${this.timelinePath}`);
-      }
-      sessions[sessionId] = normalized;
-    }
-    return { version: 1, sessions };
+  async replace(sessionId: string, entries: CodexWebTimelineMessage[]): Promise<void> {
+    await this.store.mutate(sessionId, () => normalizeEntries(entries));
   }
-
-  private write(file: TimelineFile): void {
-    fs.mkdirSync(path.dirname(this.timelinePath), { recursive: true, mode: 0o700 });
-    const tmpPath = `${this.timelinePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    try {
-      fs.writeFileSync(tmpPath, serializeTimelineFile(file), { mode: 0o600 });
-      fs.renameSync(tmpPath, this.timelinePath);
-      try {
-        fs.chmodSync(this.timelinePath, 0o600);
-      } catch {
-        // The atomic state update succeeded; chmod is best-effort for non-POSIX filesystems.
-      }
-    } catch (error) {
-      try {
-        fs.rmSync(tmpPath, { force: true });
-      } catch {
-        // Preserve the original persistence error.
-      }
-      throw error;
-    }
-  }
-}
-
-function emptyFile(): TimelineFile {
-  return { version: 1, sessions: {} };
-}
-
-function compactTimelineFile(
-  file: TimelineFile,
-  maxEntriesPerSession: number,
-  maxBytes: number,
-): TimelineFile {
-  const compacted: TimelineFile = { version: 1, sessions: {} };
-  for (const [sessionId, entries] of Object.entries(file.sessions)) {
-    const retained = normalizeEntries(entries).slice(-maxEntriesPerSession);
-    if (retained.length > 0) {
-      compacted.sessions[sessionId] = retained;
-    }
-  }
-
-  while (Buffer.byteLength(serializeTimelineFile(compacted)) > maxBytes) {
-    const candidate = Object.entries(compacted.sessions)
-      .filter(([, entries]) => entries.length > 0)
-      .sort((left, right) => right[1].length - left[1].length || left[0].localeCompare(right[0]))[0];
-    if (!candidate) {
-      break;
-    }
-    const [sessionId, entries] = candidate;
-    entries.shift();
-    if (entries.length === 0) {
-      delete compacted.sessions[sessionId];
-    }
-  }
-  return compacted;
-}
-
-function serializeTimelineFile(file: TimelineFile): string {
-  return `${JSON.stringify(file, null, 2)}\n`;
+  async delete(sessionId: string): Promise<void> { await this.store.mutate(sessionId, () => null); }
 }
 
 function positiveInteger(value: unknown, fallback: number): number {

@@ -17,6 +17,9 @@ import type {
 const TASK_LOCK_STALE_MS = 24 * 60 * 60 * 1_000;
 
 export interface ScheduledTaskRuntimeLike {
+  eventBus?: { epoch: string };
+  lifecycleSignal?: AbortSignal;
+  interruptTurn?(turnId: string): Promise<void>;
   createSession(input: CreateSessionInput): Promise<CodexWebSession>;
   startTurn(sessionId: string, input: StartTurnInput): Promise<CodexWebStartTurnResult>;
   archiveSession(sessionId: string): Promise<boolean>;
@@ -38,6 +41,8 @@ export interface RunScheduledTaskInput {
   identityStore?: ScheduledTaskIdentityStoreLike | null;
   stateDir: string;
   now?: Date;
+  signal?: AbortSignal;
+  terminalTimeoutMs?: number;
 }
 
 export interface RunScheduledTaskResult {
@@ -53,8 +58,11 @@ export async function runScheduledTask({
   identityStore = null,
   stateDir,
   now = new Date(),
+  signal,
+  terminalTimeoutMs,
 }: RunScheduledTaskInput): Promise<RunScheduledTaskResult> {
   return withTaskLock(stateDir, task.id, async () => {
+    signal?.throwIfAborted();
     const resolvedIdentityStore = identityStore ?? null;
     const ownership = resolvedIdentityStore
       ? await resolveScheduledTaskOwnership(task, resolvedIdentityStore)
@@ -81,7 +89,15 @@ export async function runScheduledTask({
     });
     const turnId = turn.turnId ?? null;
     if (turnId) {
-      await waitForScheduledTurnTerminal(runtime, turnId);
+      try { await waitForScheduledTurnTerminal(runtime, turnId, { signal, timeoutMs: terminalTimeoutMs }); }
+      catch (error) {
+        if (runtime.interruptTurn) {
+          let timer: NodeJS.Timeout | undefined;
+          try { await Promise.race([runtime.interruptTurn(turnId).catch(() => {}), new Promise<void>(resolve => { timer = setTimeout(resolve, 1000); })]); }
+          finally { clearTimeout(timer); }
+        }
+        throw error;
+      }
     }
     const archived = task.archive.onCompletion
       ? await runtime.archiveSession(session.id)
@@ -106,9 +122,13 @@ export async function runScheduledTask({
 }
 
 export async function waitForScheduledTurnTerminal(
-  runtime: Pick<ScheduledTaskRuntimeLike, 'getTurnEvents' | 'subscribeToTurn'>,
+  runtime: Pick<ScheduledTaskRuntimeLike, 'getTurnEvents' | 'subscribeToTurn' | 'eventBus' | 'lifecycleSignal'>,
   turnId: string,
+  { signal, timeoutMs = 6 * 60 * 60 * 1000 }: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<CodexWebEvent> {
+  signal?.throwIfAborted();
+  runtime.lifecycleSignal?.throwIfAborted();
+  const epoch = runtime.eventBus?.epoch;
   const existing = findTerminalTurnEvent(runtime.getTurnEvents(turnId));
   if (existing) {
     return requireSuccessfulTerminalEvent(existing, turnId);
@@ -118,12 +138,24 @@ export async function waitForScheduledTurnTerminal(
     let unsubscribe: (() => void) | null = null;
     let unsubscribeWhenReady = false;
     let settled = false;
+    let deadline: NodeJS.Timeout | undefined;
+    let recovery: NodeJS.Timeout | undefined;
+    const runtimeStopped = () => fail(new Error(`Scheduled task runtime stopped while waiting for ${turnId}`));
+    const abort = () => fail(signal?.reason ?? new Error("Scheduled turn cancelled"));
     const cleanup = () => {
+      clearTimeout(deadline);
+      clearInterval(recovery);
+      signal?.removeEventListener("abort", abort);
+      runtime.lifecycleSignal?.removeEventListener("abort", runtimeStopped);
       if (unsubscribe) {
         unsubscribe();
       } else {
         unsubscribeWhenReady = true;
       }
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true; cleanup(); reject(error);
     };
     const settle = (event: CodexWebEvent) => {
       if (settled || !isTerminalTurnEvent(event)) {
@@ -138,6 +170,16 @@ export async function waitForScheduledTurnTerminal(
       }
     };
 
+    deadline = setTimeout(() => fail(new Error(`Scheduled task turn ${turnId} exceeded its terminal deadline`)), Math.max(1, timeoutMs));
+    signal?.addEventListener('abort', abort, { once: true });
+    runtime.lifecycleSignal?.addEventListener('abort', runtimeStopped, { once: true });
+    if (runtime.lifecycleSignal?.aborted) { runtimeStopped(); return; }
+    if (signal?.aborted) { abort(); return; }
+    recovery = setInterval(() => {
+      if (runtime.eventBus?.epoch !== epoch) { fail(new Error(`Scheduled task runtime restarted while waiting for ${turnId}`)); return; }
+      try { const event = findTerminalTurnEvent(runtime.getTurnEvents(turnId)); if (event) settle(event); }
+      catch (error) { fail(error); }
+    }, 250);
     try {
       unsubscribe = runtime.subscribeToTurn(turnId, ({ event }) => settle(event));
       if (unsubscribeWhenReady) {
@@ -148,8 +190,7 @@ export async function waitForScheduledTurnTerminal(
         settle(racedTerminal);
       }
     } catch (error) {
-      cleanup();
-      reject(error);
+      fail(error);
     }
   });
 }

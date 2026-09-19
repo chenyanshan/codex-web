@@ -9,8 +9,22 @@ const VERSIONED_STATIC_ASSET_PATHS = new Set([
   '/ui-copy.js',
   '/ui-kit.js',
   '/attachment-utils.js',
+  '/attachment-upload.js',
   '/markdown-renderer.js',
   '/admin-ui.js',
+  '/work-details-view.js',
+  '/ui-localization.js',
+  '/session-file-viewer.js',
+  '/webhook-settings.js',
+  '/request-context.js',
+  '/admin-editor.js',
+  '/admin-data.js',
+  '/draft-store.js',
+  '/session-rename.js',
+  '/network-recovery.js',
+  '/session-loader.js',
+  '/session-reading.js',
+  '/timeline-reconciliation.js',
   '/session-pagination.js',
   '/app.js',
   '/manifest.webmanifest',
@@ -29,41 +43,44 @@ const CRITICAL_STATIC_ASSETS = [
     '/ui-copy.js',
     '/ui-kit.js',
     '/attachment-utils.js',
+  '/attachment-upload.js',
     '/markdown-renderer.js',
-    '/admin-ui.js',
+    '/ui-localization.js',
+  '/session-file-viewer.js',
+  '/webhook-settings.js',
+  '/request-context.js',
+  '/admin-editor.js',
+  '/admin-data.js',
+    '/draft-store.js',
+  '/session-rename.js',
+  '/network-recovery.js',
+  '/session-loader.js',
+  '/session-reading.js',
+  '/timeline-reconciliation.js',
     '/session-pagination.js',
     '/app.js',
   ].map(versionedUrl),
 ];
+// Historical shells did not depend on the new typed state modules. Preserve
+// their own dependency contract while an updated build is only partly cached.
 const LEGACY_CRITICAL_STATIC_ASSETS = [
-  APP_SHELL_URL,
-  '/theme-init.js',
-  '/styles.css',
-  '/pwa-pull-refresh.js',
-  '/ui-copy.js',
-  '/ui-kit.js',
-  '/attachment-utils.js',
-  '/markdown-renderer.js',
-  '/admin-ui.js',
-  '/session-pagination.js',
-  '/app.js',
+  APP_SHELL_URL, '/theme-init.js', '/styles.css', '/pwa-pull-refresh.js',
+  '/ui-copy.js', '/ui-kit.js', '/attachment-utils.js', '/markdown-renderer.js',
+  '/admin-ui.js', '/session-pagination.js', '/app.js',
 ];
-
-const criticalAssetsForBuild = (buildId) => [
-  APP_SHELL_URL,
-  ...[
-    '/theme-init.js',
-    '/styles.css',
-    '/pwa-pull-refresh.js',
-    '/ui-copy.js',
-    '/ui-kit.js',
-    '/attachment-utils.js',
-    '/markdown-renderer.js',
-    '/admin-ui.js',
-    '/session-pagination.js',
-    '/app.js',
-  ].map((pathname) => `${pathname}?v=${encodeURIComponent(buildId)}`),
-];
+async function criticalAssetsForBuild(cacheName, buildId) {
+  if (buildId === BUILD_ID) return CRITICAL_STATIC_ASSETS;
+  const shell = await caches.match(APP_SHELL_URL, { cacheName });
+  if (shell) {
+    const html = await shell.clone().text();
+    const dependencies = [...html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)="([^"]+)"[^>]*>/giu)]
+      .map((match) => match[1])
+      .filter((url) => /^\/[^/].*\.(?:js|css)(?:\?|$)/u.test(url));
+    if (dependencies.length) return [APP_SHELL_URL, ...dependencies];
+  }
+  return LEGACY_CRITICAL_STATIC_ASSETS.map((pathname) => pathname === APP_SHELL_URL
+    ? pathname : `${pathname}?v=${encodeURIComponent(buildId)}`);
+}
 
 const buildIdFromCacheName = (cacheName) => cacheName.startsWith(STATIC_CACHE_PREFIX)
   ? cacheName.slice(STATIC_CACHE_PREFIX.length)
@@ -74,11 +91,12 @@ async function isBuildCacheComplete(cacheName, buildId) {
     return false;
   }
   const versionedMatches = await Promise.all(
-    criticalAssetsForBuild(buildId).map((asset) => caches.match(asset, { cacheName })),
+    (await criticalAssetsForBuild(cacheName, buildId)).map((asset) => caches.match(asset, { cacheName })),
   );
   if (versionedMatches.every(Boolean)) {
     return true;
   }
+  if (buildId === BUILD_ID) return false;
   const legacyMatches = await Promise.all(
     LEGACY_CRITICAL_STATIC_ASSETS.map((asset) => caches.match(asset, { cacheName })),
   );

@@ -946,7 +946,7 @@ test('runtime reads archived sessions from Codex archived jsonl when live thread
 
     const session = await runtime.readSession(threadId);
 
-    assert.equal(runtime.isSessionArchived(threadId), true);
+    assert.equal(await runtime.isSessionArchived(threadId), true);
     assert.equal(session?.id, threadId);
     assert.equal(session?.cwd, '/Users/alice/archived-project');
     assert.equal(session?.projectName, 'alice/archived-project');
@@ -957,7 +957,7 @@ test('runtime reads archived sessions from Codex archived jsonl when live thread
       'Archived answer',
     ]);
     fs.rmSync(archivedPath);
-    assert.equal(runtime.isSessionArchived(threadId), false);
+    assert.equal(await runtime.isSessionArchived(threadId), false);
   } finally {
     if (previousCodexHome === undefined) {
       delete process.env.CODEX_HOME;
@@ -2633,7 +2633,7 @@ test('goal command timeline stays anchored before auto-turn output when history 
     'Goal resumed: finish anchored work',
     'Goal execution output',
   ]);
-  assert.equal(timelineStore.list('thread_goal_anchor').every((item) => item.afterHistoryId === 'history_turn_anchor_1'), true);
+  assert.equal((await timelineStore.list('thread_goal_anchor')).every((item) => item.afterHistoryId === 'history_turn_anchor_1'), true);
 });
 
 test('runtime readSession exposes the current thread goal as session state', async () => {
@@ -3135,7 +3135,7 @@ test('runtime upserts backend-managed session timeline entries by id', async () 
     timelineStore: new FileSessionTimelineStore({ timelinePath }),
   });
 
-  const first = runtime.appendSessionTimelineEntry('thread_timeline', {
+  const first = (await runtime.appendSessionTimelineEntry('thread_timeline', {
     id: 'error_turn_1',
     kind: 'message',
     role: 'system',
@@ -3143,8 +3143,8 @@ test('runtime upserts backend-managed session timeline entries by id', async () 
     meta: 'failed',
     text: 'Load failed',
     severity: 'error',
-  });
-  const second = runtime.appendSessionTimelineEntry('thread_timeline', {
+  }));
+  const second = (await runtime.appendSessionTimelineEntry('thread_timeline', {
     id: 'error_turn_1',
     kind: 'message',
     role: 'system',
@@ -3152,7 +3152,7 @@ test('runtime upserts backend-managed session timeline entries by id', async () 
     meta: 'failed',
     text: 'Load failed again',
     severity: 'error',
-  });
+  }));
 
   const session = await runtime.readSession('thread_timeline');
 
@@ -3167,7 +3167,7 @@ test('runtime upserts backend-managed session timeline entries by id', async () 
 test('runtime readSession deduplicates backend failure timeline entries already present in native thread history', async () => {
   const timelinePath = `/tmp/codex-web-runtime-timeline-${process.pid}-${Date.now()}-dedupe.json`;
   const timelineStore = new FileSessionTimelineStore({ timelinePath });
-  timelineStore.append('thread_failed', {
+  (await timelineStore.append('thread_failed', {
     id: 'error_turn_403',
     kind: 'message',
     role: 'system',
@@ -3175,7 +3175,7 @@ test('runtime readSession deduplicates backend failure timeline entries already 
     meta: 'failed',
     text: 'unexpected status 403 Forbidden',
     severity: 'error',
-  });
+  }));
 
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
@@ -3224,14 +3224,14 @@ test('runtime readSession deduplicates backend failure timeline entries already 
 test('runtime archiveSession preserves backend-managed session timeline entries', async () => {
   const timelinePath = `/tmp/codex-web-runtime-timeline-${process.pid}-${Date.now()}-archive.json`;
   const timelineStore = new FileSessionTimelineStore({ timelinePath });
-  timelineStore.append('thread_archived', {
+  (await timelineStore.append('thread_archived', {
     id: 'command_goal_1',
     kind: 'message',
     role: 'system',
     label: '/goal',
     meta: 'show',
     text: 'Goal (active): ship slash goal support',
-  });
+  }));
 
   const client: CodexWebRuntimeClient = {
     listModels: async () => [],
@@ -3259,11 +3259,11 @@ test('runtime archiveSession preserves backend-managed session timeline entries'
     timelineStore,
   });
 
-  assert.deepEqual(timelineStore.list('thread_archived').map((item) => item.text), [
+  assert.deepEqual((await timelineStore.list('thread_archived')).map((item) => item.text), [
     'Goal (active): ship slash goal support',
   ]);
   assert.equal(await runtime.archiveSession('thread_archived'), true);
-  assert.deepEqual(timelineStore.list('thread_archived').map((item) => item.text), [
+  assert.deepEqual((await timelineStore.list('thread_archived')).map((item) => item.text), [
     'Goal (active): ship slash goal support',
   ]);
 });
@@ -4511,4 +4511,101 @@ test('runtime preserves structured active-turn-not-steerable errors from Codex',
       return true;
     },
   );
+});
+
+test('renaming persists natively and updates lightweight directory/status caches without history or sorting changes', async () => {
+  let thread = createThread();
+  let fail = false;
+  let reads = 0;
+  const client = createThreadListClient(async () => ({ items: [thread], nextCursor: null }));
+  client.readThread = async (_id, includeTurns) => { assert.equal(includeTurns, false); reads += 1; return { ...thread }; };
+  client.setThreadName = async (id, name) => { assert.equal(id, thread.threadId); if (fail) throw new Error('offline'); thread = { ...thread, title: name }; };
+  const runtime = new CodexWebRuntime({ client });
+  try {
+    const first = await runtime.listSessionDirectory({ complete: true });
+    await runtime.listSessions();
+    const renamed = await runtime.renameSession('thread_1', '  新名称  ');
+    assert.equal(reads, 1);
+    assert.equal(renamed?.title, '新名称');
+    assert.equal(renamed?.updatedAt, first.items[0].updatedAt);
+    const next = await runtime.listSessionDirectory({ complete: true });
+    assert.notEqual(first.items, next.items);
+    assert.equal(next.items[0].title, '新名称');
+    assert.equal((await runtime.listSessions())[0].title, '新名称');
+    assert.equal((await runtime.readSessionStatus('thread_1'))?.title, '新名称');
+    fail = true;
+    await assert.rejects(runtime.renameSession('thread_1', 'Failed name'), /offline/);
+    assert.equal((await runtime.listSessionDirectory()).items[0].title, '新名称');
+    assert.equal((await runtime.readSessionStatus('thread_1'))?.title, '新名称');
+  } finally { await runtime.stop(); }
+});
+
+test('rename fences delayed provider pages and metadata but lets later native names win', async () => {
+  let native = createThread();
+  let releasePage!: () => void;
+  let pageStarted!: () => void;
+  const started = new Promise<void>((resolve) => { pageStarted = resolve; });
+  const blocked = new Promise<void>((resolve) => { releasePage = resolve; });
+  const client = createThreadListClient(async ({ cursor }) => {
+    if (!cursor) return { items: [createThread('other')], nextCursor: 'later' };
+    const captured = { ...native };
+    pageStarted();
+    await blocked;
+    return { items: [captured], nextCursor: null };
+  });
+  client.readThread = async (_id, includeTurns) => { assert.equal(includeTurns, false); return { ...native }; };
+  client.setThreadName = async (_id, name) => { native = { ...native, title: name }; };
+  const runtime = new CodexWebRuntime({ client });
+  try {
+    await runtime.listSessionDirectory();
+    await started;
+    let releaseMetadata!: () => void;
+    const old = { ...native };
+    const metadataWait = new Promise<void>((resolve) => { releaseMetadata = resolve; });
+    let first = true;
+    client.readThread = async () => { if (first) { first = false; await metadataWait; return old; } return { ...native }; };
+    const status = runtime.readSessionStatus('thread_1');
+    await new Promise((resolve) => setImmediate(resolve));
+    await runtime.renameSession('thread_1', 'New native name');
+    releasePage(); releaseMetadata();
+    assert.equal((await status)?.title, 'New native name');
+    assert.equal((await runtime.listSessionDirectory({ complete: true })).items.find((item) => item.id === 'thread_1')?.title, 'New native name');
+    native = { ...native, title: 'Changed later in Codex' };
+    (runtime as any).threadSummaryCachedAt.set('thread_1', 0);
+    assert.equal((await runtime.readSessionStatus('thread_1'))?.title, 'Changed later in Codex');
+  } finally { releasePage(); await runtime.stop(); }
+});
+
+test('same-session renames serialize native writes and a failed rename cannot block its successor', async () => {
+  let thread = createThread();
+  let release!: () => void;
+  let started!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+  const block = new Promise<void>((resolve) => { release = resolve; });
+  const calls: string[] = [];
+  const client = createThreadListClient(async () => ({ items: [thread], nextCursor: null }));
+  client.readThread = async () => ({ ...thread });
+  client.setThreadName = async (_id, name) => {
+    calls.push(name);
+    if (name === 'Failure') throw new Error('failed');
+    thread = { ...thread, title: name };
+    if (name === 'First') { started(); await block; }
+  };
+  const runtime = new CodexWebRuntime({ client });
+  try {
+    const first = runtime.renameSession('thread_1', 'First');
+    await firstStarted;
+    const second = runtime.renameSession('thread_1', 'Second');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ['First']);
+    release(); await Promise.all([first, second]);
+    assert.equal(thread.title, 'Second');
+    assert.equal((await runtime.readSessionStatus('thread_1'))?.title, 'Second');
+    const failure = runtime.renameSession('thread_1', 'Failure');
+    const retry = runtime.renameSession('thread_1', 'Retry');
+    await assert.rejects(failure, /failed/);
+    await retry;
+    assert.equal((await runtime.readSessionStatus('thread_1'))?.title, 'Retry');
+    assert.equal((runtime as any).renameWrites.size, 0);
+  } finally { release(); await runtime.stop(); }
 });

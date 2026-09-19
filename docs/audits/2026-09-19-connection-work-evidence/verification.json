@@ -1,0 +1,44 @@
+{
+  "verifiedAt": "2026-09-19T16:16:03.235Z",
+  "checks": {
+    "unit": {
+      "nativePassed": 58,
+      "webPassed": 985
+    },
+    "browserFull": {
+      "passed": 166,
+      "skipped": 309
+    },
+    "browserWorkFinal": {
+      "passed": 7,
+      "skipped": 9
+    },
+    "deliveryFocusedUnit": {
+      "passed": 68
+    },
+    "typecheck": "passed",
+    "lint": "passed",
+    "diffCheck": "passed",
+    "productionBrowserSmoke": {
+      "scripts": 22,
+      "browserErrors": []
+    }
+  },
+  "budget": {
+    "appSourceBytes": 495968,
+    "criticalGzipBytes": 142452,
+    "criticalAssetCount": 22,
+    "limits": {
+      "appSourceBytes": 500000,
+      "criticalGzipBytes": 143360
+    }
+  },
+  "minimumWorkTextContrast": 5.349890955134842,
+  "deployment": {
+    "buildId": "de08d549a2a0e110e747",
+    "mode": "dist",
+    "verifiedRoutes": 29,
+    "privateRoutesUnauthenticatedStatus": 401,
+    "restartFinishedAt": "2026-09-19T15:26:10Z"
+  }
+}

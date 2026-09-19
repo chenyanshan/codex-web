@@ -49,6 +49,36 @@ export class ManagedStorageQuotaError extends Error {
   }
 }
 
+const backgroundMaintenance = new Map<string, { nextAt: number; pending: Promise<void> | null }>();
+const storageMetrics = { scans: 0, scannedFiles: 0, backgroundFailures: 0 };
+
+export async function drainManagedStateStorageMaintenance(config: Pick<ManagedStorageConfig, 'stateDir'>): Promise<void> {
+  const key = path.resolve(config.stateDir);
+  await backgroundMaintenance.get(key)?.pending;
+  backgroundMaintenance.delete(key);
+}
+
+export function getStorageGovernanceMetrics(): Readonly<typeof storageMetrics> { return { ...storageMetrics }; }
+
+/** Read routes only schedule housekeeping. Capacity-enforced writes still take the lock and scan afresh. */
+export function scheduleManagedStateStorageMaintenance(config: ManagedStorageConfig): void {
+  const key = path.resolve(config.stateDir);
+  const existing = backgroundMaintenance.get(key);
+  if (existing?.pending || (existing && existing.nextAt > Date.now())) return;
+  const state = { nextAt: Date.now() + 60_000, pending: null as Promise<void> | null };
+  backgroundMaintenance.set(key, state);
+  state.pending = new Promise<void>((resolve) => setImmediate(resolve))
+    .then(async () => { await maintainManagedStateStorage(config); })
+    .catch(() => { storageMetrics.backgroundFailures += 1; })
+    .finally(() => { state.pending = null; });
+  // Bound bookkeeping when test/dev servers use many transient state directories.
+  if (backgroundMaintenance.size > 128) {
+    for (const [candidate, value] of backgroundMaintenance) {
+      if (!value.pending && candidate !== key) { backgroundMaintenance.delete(candidate); break; }
+    }
+  }
+}
+
 export async function maintainManagedStateStorage(
   config: ManagedStorageConfig,
   { protectedPaths = [] }: { protectedPaths?: string[] } = {},
@@ -128,6 +158,7 @@ async function pruneManagedRoots({
   incomingBytes?: number;
   protectedPaths?: string[];
 }): Promise<StorageMaintenanceResult> {
+  storageMetrics.scans += 1;
   const now = Date.now();
   const protectedSet = new Set(protectedPaths.map((entry) => path.resolve(entry)));
   const files = (await Promise.all(roots.map((root) => scanManagedFiles(root, protectedSet)))).flat();
@@ -213,6 +244,7 @@ async function scanManagedFiles(root: ManagedRoot, protectedPaths: Set<string>):
       if (!stats?.isFile() || stats.isSymbolicLink()) {
         continue;
       }
+      storageMetrics.scannedFiles += 1;
       files.push({
         absolutePath,
         rootDir,

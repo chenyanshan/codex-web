@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -289,6 +290,75 @@ test('POST /api/sessions/:sessionId/attachments stores uploads in the session pr
     await fs.rm(stateDir, { recursive: true, force: true });
     await fs.rm(projectDir, { recursive: true, force: true });
   }
+});
+
+test('attachment IDs and legacy attachment details produce one snapshot per uploaded file', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-attachment-aliases-'));
+  const projectDir = path.join(stateDir, 'project');
+  await fs.mkdir(projectDir);
+  const inputs: any[] = [];
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      readSession: async () => ({ id: 'thread_1', cwd: projectDir, thread: { turns: [] } }),
+      startTurn: async (_id: string, input: any) => { inputs.push(input); return { turnId: `turn_${inputs.length}` }; },
+    } as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  try {
+    const form = new FormData();
+    form.append('files', new Blob(['first image'], { type: 'image/png' }), 'image.png');
+    form.append('files', new Blob(['different image'], { type: 'image/png' }), 'image.png');
+    const upload = await fetch(`${server.baseUrl}/api/sessions/thread_1/attachments`, {
+      method: 'POST', headers: { Authorization: 'Bearer cw_token' }, body: form,
+    });
+    assert.equal(upload.status, 201);
+    const { items } = await upload.json() as any;
+    for (const legacy of [true, false]) {
+      const response = await fetch(`${server.baseUrl}/api/sessions/thread_1/turns`, {
+        method: 'POST', headers: { Authorization: 'Bearer cw_token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Compare these images', submissionId: `attachment-alias-${legacy}`,
+          attachmentIds: items.map((item: any) => item.id), ...(legacy ? { attachments: items } : {}) }),
+      });
+      assert.equal(response.status, 202);
+      assert.equal(inputs.at(-1).attachments.length, 2, 'ID and path are aliases, while same-named different files remain distinct');
+      assert.deepEqual(await Promise.all(inputs.at(-1).attachments.map((item: any) => fs.readFile(item.localPath, 'utf8'))), ['first image', 'different image']);
+    }
+    assert.equal((await fs.readdir(path.join(stateDir, 'turn-attachments', 'local-admin', 'thread_1'))).length, 4);
+  } finally { await server.stop(); await fs.rm(stateDir, { recursive: true, force: true }); }
+});
+
+test('authenticated session detail and history pages repair old duplicate snapshot references', async t => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-history-duplicate-http-'));
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }));
+  const root = path.join(stateDir, 'turn-attachments', 'local-admin', 'thread_1');
+  await fs.mkdir(root, { recursive: true });
+  const paths = [0, 1].map(() => path.join(root, `${crypto.randomUUID()}-image.png`));
+  await Promise.all(paths.map(filePath => fs.writeFile(filePath, 'identical screenshot')));
+  const text = ['Inspect this image', '', 'Attachments:', ...paths.flatMap((filePath, i) => [
+    `${i + 1}. image`, `   path: ${filePath}`, '   filename: image.png', '   mime: image/png', '   attached_as: localImage',
+  ]), '', 'Use the local file paths above when you inspect these attachments.'].join('\n');
+  const timeline = [{ id: 'original', kind: 'message', role: 'user', text, meta: 'history' }];
+  const server = createCodexWebServer({ auth: createAcceptingAuth(), config: createConfig({ stateDir }), runtime: {
+    ...createRuntimeStub(), readSession: async () => ({ id: 'thread_1', timeline }),
+  } as any });
+  await server.start();
+  try {
+    for (const suffix of ['', '/timeline?limit=50']) {
+      assert.equal((await fetch(`${server.baseUrl}/api/sessions/thread_1${suffix}`)).status, 401);
+      const response = await fetch(`${server.baseUrl}/api/sessions/thread_1${suffix}`, { headers: { Authorization: 'Bearer cw_token' } });
+      assert.equal(response.status, 200);
+      const payload = await response.json() as any;
+      const messages = suffix ? payload.items : payload.session.timeline;
+      assert.equal(messages[0].id, 'original');
+      assert.equal(messages[0].text.match(/^   path:/gmu)?.length, 1);
+      assert.ok(messages[0].text.includes(paths[0]));
+    }
+    assert.equal(timeline[0]!.text, text, 'only the response projection changes');
+    assert.equal((await fs.readdir(root)).length, 2);
+  } finally { await server.stop(); }
 });
 
 test('POST /api/sessions/:sessionId/attachments rejects files that exceed the project upload quota', async () => {
@@ -816,9 +886,20 @@ test('static root is public', async () => {
     assert.match(html, new RegExp(`/ui-copy\\.js\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/attachment-utils\\.js\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/markdown-renderer\\.js\\?v=${buildId}`, 'u'));
-    assert.match(html, new RegExp(`/admin-ui\\.js\\?v=${buildId}`, 'u'));
     assert.match(html, new RegExp(`/session-pagination\\.js\\?v=${buildId}`, 'u'));
+    for (const match of html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)="(\/[^"?]+\.(?:js|css))(?:\?[^"]*)?"/giu)) {
+      const asset = await fetch(`${server.baseUrl}${match[1]}?v=${buildId}`);
+      assert.equal(asset.status, 200, `${match[1]} must be registered by the real server`);
+      await asset.arrayBuffer();
+    }
     assert.equal(scriptResponse.headers.get('cache-control'), 'no-cache');
+
+    const workViewResponse = await fetch(`${server.baseUrl}/work-details-view.js?v=${buildId}&attempt=2`);
+    assert.equal(workViewResponse.status, 200);
+    assert.match(workViewResponse.headers.get('content-type') ?? '', /^application\/javascript\b/iu);
+    assert.equal(workViewResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.match(await workViewResponse.text(), /CodexWebWorkView/u);
+    assert.doesNotMatch(html, /<script[^>]+src="\/work-details-view\.js/u, 'work details stay outside the startup dependency graph');
 
     const versionedScriptResponse = await fetch(`${server.baseUrl}/app.js?v=${buildId}`, {
       headers: { 'Accept-Encoding': 'br' },
@@ -866,7 +947,7 @@ test('static root is public', async () => {
     const versionResponse = await fetch(`${server.baseUrl}/version.json`);
     assert.equal(versionResponse.status, 200);
     assert.equal(versionResponse.headers.get('cache-control'), 'no-cache');
-    assert.deepEqual(await versionResponse.json(), {});
+    assert.deepEqual(await versionResponse.json(), { buildId });
     const versionEtag = versionResponse.headers.get('etag');
     assert.ok(versionEtag);
     const unchangedVersionResponse = await fetch(`${server.baseUrl}/version.json`, {
@@ -2081,6 +2162,19 @@ test('GET /api/reports/:id/content returns report content', async (t) => {
     assert.equal(payload.report.id, reportId);
     assert.equal(payload.report.kind, 'html');
     assert.equal(payload.content, '<h1>Audit</h1>\n');
+    const large = '完整报告\n'.repeat(100000);
+    await fs.writeFile(reportPath, large);
+    const previewResponse = await fetch(`${server.baseUrl}/api/reports/${encodeURIComponent(reportId)}/content`, { headers: { Authorization: 'Bearer cw_token' } });
+    const preview = await previewResponse.json();
+    assert.equal(preview.previewTruncated, true);
+    assert.ok(Buffer.byteLength(preview.content) <= 512 * 1024);
+    assert.equal(preview.totalBytes, Buffer.byteLength(large));
+    const downloadUrl = `${server.baseUrl}/api/reports/${encodeURIComponent(reportId)}/download`;
+    assert.equal((await fetch(downloadUrl)).status, 401);
+    const download = await fetch(downloadUrl, { headers: { Authorization: 'Bearer cw_token' } });
+    assert.equal(download.status, 200);
+    assert.match(download.headers.get('content-disposition')!, /^attachment/u);
+    assert.equal(await download.text(), large);
   } finally {
     await server.stop();
   }
@@ -2335,6 +2429,16 @@ test('GET /api/sessions/:id/timeline pages backward from the latest entries', as
     assert.deepEqual(olderPayload.items.map((item: any) => item.id), ['one']);
     assert.equal(olderPayload.nextBefore, null);
     assert.equal('turnSnapshot' in olderPayload, false);
+    const anchored = await fetch(`${server.baseUrl}/api/sessions/thread_timeline/timeline?limit=1&anchor=assistant_turn_timeline_final`, { headers: { Authorization: 'Bearer cw_token' } });
+    const anchorPage = await anchored.json() as any;
+    assert.deepEqual(anchorPage.items.map((item: any) => item.id), ['two']);
+    assert.equal(anchorPage.hasNewer, true); assert.equal(anchorPage.anchorFound, true);
+    assert.equal('turnSnapshot' in anchorPage, false);
+    const newer = await fetch(`${server.baseUrl}/api/sessions/thread_timeline/timeline?limit=1&after=${anchorPage.nextAfter}`, { headers: { Authorization: 'Bearer cw_token' } });
+    const newerPage = await newer.json() as any;
+    assert.deepEqual(newerPage.items.map((item: any) => item.id), ['three']);
+    assert.equal(newerPage.hasNewer, false);
+
   } finally {
     await server.stop();
   }
@@ -2751,4 +2855,94 @@ test('SSE route rejects query token without bearer auth', async () => {
   } finally {
     await server.stop();
   }
+});
+
+test('device APIs revoke only affected private streams and expose no token hashes', async (t) => {
+  const { AuthStore } = await import('../src/auth_store.js');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-devices-'));
+  const auth = new AuthStore({ authPath: path.join(dir, 'auth.json') });
+  await auth.setPassword('password-one');
+  const first = await auth.login({ password: 'password-one', deviceName: 'Phone' });
+  const second = await auth.login({ password: 'password-one', deviceName: 'Desktop' });
+  const bus = new CodexWebEventBus({ epoch: 'devices' });
+  let listeners = 0;
+  const server = createCodexWebServer({ auth, config: createConfig({ stateDir: dir }), runtime: {
+    ...createRuntimeStub(), eventBus: bus, getTurnEvents: (id: string) => bus.list(id),
+    subscribeToTurn: (id: string, listener: any) => {
+      listeners++; const unsubscribe = bus.subscribe(id, listener);
+      return () => { listeners--; unsubscribe(); };
+    },
+  } as any });
+  await server.start();
+  t.after(async () => { await server.stop(); await fs.rm(dir, { recursive: true, force: true }); });
+  const streamA = await fetch(`${server.baseUrl}/api/turns/turn_1/events`, { headers: { Authorization: `Bearer ${first.token}` } });
+  const streamB = await fetch(`${server.baseUrl}/api/turns/turn_1/events`, { headers: { Authorization: `Bearer ${second.token}` } });
+  const a = streamA.body!.getReader(); const b = streamB.body!.getReader();
+  await a.read(); await b.read();
+  assert.equal(listeners, 2);
+  const headers = { Authorization: `Bearer ${first.token}` };
+  const listed = await (await fetch(`${server.baseUrl}/api/auth/sessions`, { headers })).json();
+  assert.equal(listed.sessions.length, 2);
+  assert.equal(listed.sessions.filter((session: any) => session.current).length, 1);
+  assert.equal(JSON.stringify(listed).includes('tokenHash'), false);
+  const revoke = await fetch(`${server.baseUrl}/api/auth/sessions/${second.session.id}`, { method: 'DELETE', headers });
+  assert.equal(revoke.status, 200); await revoke.arrayBuffer();
+  assert.equal(listeners, 1);
+  assert.equal((await b.read()).done, true);
+  const logout = await fetch(`${server.baseUrl}/api/auth/logout`, { method: 'POST', headers });
+  assert.equal(logout.status, 200); await logout.arrayBuffer();
+  assert.equal(listeners, 0);
+  assert.equal((await a.read()).done, true);
+});
+
+test('server stop bounds drain of an incomplete HTTP request', async () => {
+  const { connect } = await import('node:net');
+  const server = createCodexWebServer({ auth: createAcceptingAuth(), runtime: createRuntimeStub() as any, config: createConfig() });
+  await server.start();
+  const url = new URL(server.baseUrl);
+  const socket = connect(Number(url.port), url.hostname);
+  await new Promise<void>(resolve => socket.once('connect', resolve));
+  socket.write('POST /api/auth/login HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100000\r\n\r\n{');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const started = Date.now();
+  await server.stop();
+  assert.ok(Date.now() - started < 1600);
+  socket.destroy();
+});
+
+test('session rename authenticates, validates names and returns only the successful lightweight summary', async () => {
+  const calls: unknown[] = [];
+  const runtime = {
+    ...createRuntimeStub(),
+    isSessionArchived: async (id: string) => id === 'archived',
+    renameSession: async (id: string, name: string) => {
+      calls.push([id, name]);
+      if (id === 'missing') return null;
+      if (id === 'offline') throw new Error('provider unreachable');
+      return { id, title: name, activeTurnId: 'running', updatedAt: 7, settings: {}, thread: { turns: [] }, timeline: [] };
+    },
+  };
+  const server = createCodexWebServer({ auth: createAcceptingAuth(), runtime: runtime as any, config: createConfig() });
+  await server.start();
+  const rename = (id: string, name: unknown, token = 'cw_token') => fetch(`${server.baseUrl}/api/sessions/${id}/name`, {
+    method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+  });
+  try {
+    assert.equal((await rename('thread_1', 'Name', '')).status, 401);
+    for (const name of [null, 4, '', '  ', 'x'.repeat(121), 'line\nbreak', '\tname', 'name\u007f', 'name\u2028line']) {
+      assert.equal((await rename('thread_1', name)).status, 400);
+    }
+    assert.equal((await rename('archived', 'Name')).status, 409);
+    assert.equal(calls.length, 0);
+    const saved = await rename('thread_1', ` ${'名'.repeat(120)} `);
+    assert.equal(saved.status, 200);
+    const { session } = await saved.json();
+    assert.equal(session.title, '名'.repeat(120));
+    assert.equal(session.activeTurnId, 'running');
+    assert.equal(session.updatedAt, 7);
+    assert.equal(session.thread, undefined);
+    assert.equal(session.timeline, undefined);
+    assert.equal((await rename('missing', 'Name')).status, 404);
+    assert.equal((await rename('offline', 'Name')).status, 502);
+  } finally { await server.stop(); }
 });

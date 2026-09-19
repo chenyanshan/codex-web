@@ -17,16 +17,22 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-public.mjs",
     "serve": "node --conditions=development --import tsx src/cli.ts serve",
     "pretypecheck": "npm run build --workspace @codex-mobile-web-app/codex-native-api",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --conditions=development --import tsx --test test/*.test.ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.frontend.json",
+    "test": "node --conditions=development --import tsx --test test/*.test.ts",
+    "test:built-public": "node scripts/smoke-built-public.mjs"
   },
   "dependencies": {
-    "@codex-mobile-web-app/codex-native-api": "0.1.0"
+    "@codex-mobile-web-app/codex-native-api": "0.1.0",
+    "busboy": "^1.6.0"
   },
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "esbuild": "0.28.1"
   }
 }

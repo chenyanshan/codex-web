@@ -1,5 +1,9 @@
+import { FileVersionCache } from './file_version_cache.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+
+export const REPORT_PREVIEW_BYTES = 512 * 1024;
 
 export type CodexWebReportKind = 'markdown' | 'html';
 
@@ -18,6 +22,8 @@ export interface CodexWebReport {
 export interface CodexWebReportContent {
   report: CodexWebReport;
   content: string;
+  previewTruncated: boolean;
+  totalBytes: number;
 }
 
 interface ReportIndexFile {
@@ -33,6 +39,11 @@ interface ReportIndexEntry {
   updatedAt?: string;
 }
 
+type ReportCursor = Pick<CodexWebReport, 'favorite' | 'updatedAt' | 'id'>;
+const compareReports = (left: ReportCursor, right: ReportCursor) => Number(right.favorite) - Number(left.favorite)
+  || right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
+const indexCaches = new Map<string, FileVersionCache<ReportIndexFile>>();
+
 const REPORT_EXTENSIONS = new Map<string, CodexWebReportKind>([
   ['.md', 'markdown'],
   ['.markdown', 'markdown'],
@@ -43,11 +54,9 @@ const REPORT_EXTENSIONS = new Map<string, CodexWebReportKind>([
 export class FileReportStore {
   private readonly reportsDir: string;
 
-  private readonly indexPath: string;
-
   private readonly beforeAccess: (() => Promise<void>) | null;
 
-  private indexCache: ReportIndexFile | null = null;
+  private readonly indexCache: FileVersionCache<ReportIndexFile>;
 
   constructor({
     reportsDir,
@@ -59,20 +68,47 @@ export class FileReportStore {
     beforeAccess?: (() => Promise<void>) | null;
   }) {
     this.reportsDir = path.resolve(reportsDir);
-    this.indexPath = indexPath;
+    const cacheKey = path.resolve(indexPath);
+    this.indexCache = indexCaches.get(cacheKey) ?? new FileVersionCache(indexPath, raw => {
+      const parsed = JSON.parse(raw) as Partial<ReportIndexFile>;
+      return { version: 1, reports: isRecord(parsed.reports) ? parsed.reports as Record<string, ReportIndexEntry> : {} };
+    }, () => ({ version: 1, reports: {} }));
+    indexCaches.delete(cacheKey); indexCaches.set(cacheKey, this.indexCache);
+    if (indexCaches.size > 32) indexCaches.delete(indexCaches.keys().next().value!);
     this.beforeAccess = beforeAccess;
   }
 
   async listReports(): Promise<CodexWebReport[]> {
+    return (await this.listPage()).items;
+  }
+
+  /** Scan lazily and retain at most limit + 1 records, including permission filtering. */
+  async listPage({ limit = 50, cursor = '', scope = '', visible = () => true }: {
+    limit?: number; cursor?: string; scope?: string; visible?: (report: CodexWebReport) => boolean;
+  } = {}): Promise<{ items: CodexWebReport[]; nextCursor: string | null; hasMore: boolean }> {
     await this.beforeAccess?.();
-    const entries = await this.scanDirectory(this.reportsDir);
-    entries.sort((left, right) => {
-      if (left.favorite !== right.favorite) {
-        return left.favorite ? -1 : 1;
-      }
-      return right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
-    });
-    return entries;
+    limit = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.floor(limit))) : 50;
+    let after: ReportCursor | null = null;
+    if (cursor) {
+      try {
+        if (cursor.length > 8192) throw new Error();
+        const value = JSON.parse(Buffer.from(cursor, 'base64url').toString());
+        if (value.v !== 1 || value.scope !== scope || typeof value.id !== 'string' || typeof value.updatedAt !== 'string' || typeof value.favorite !== 'boolean') throw new Error();
+        after = value;
+      } catch { throw Object.assign(new Error('Invalid report cursor.'), { statusCode: 400, code: 'invalid_cursor' }); }
+    }
+    const entries: CodexWebReport[] = [];
+    const index = await this.readIndex();
+    for await (const report of this.scanDirectory(this.reportsDir, index)) {
+      if (!visible(report) || (after && compareReports(report, after) <= 0)) continue;
+      let low = 0, high = entries.length;
+      while (low < high) { const middle = (low + high) >>> 1; if (compareReports(entries[middle]!, report) < 0) low = middle + 1; else high = middle; }
+      entries.splice(low, 0, report);
+      if (entries.length > limit + 1) entries.pop();
+    }
+    const hasMore = entries.length > limit, items = entries.slice(0, limit), last = items.at(-1);
+    const nextCursor = hasMore && last ? Buffer.from(JSON.stringify({ v: 1, scope, favorite: last.favorite, updatedAt: last.updatedAt, id: last.id })).toString('base64url') : null;
+    return { items, nextCursor, hasMore };
   }
 
   async readReport(reportId: string): Promise<CodexWebReport | null> {
@@ -96,15 +132,31 @@ export class FileReportStore {
   }
 
   async readContent(reportId: string): Promise<CodexWebReportContent | null> {
+    const opened = await this.openContent(reportId);
+    if (!opened) return null;
+    const { report, handle } = opened;
+    try {
+      const buffer = Buffer.alloc(Math.min(REPORT_PREVIEW_BYTES, report.sizeBytes));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const previewTruncated = report.sizeBytes > bytesRead;
+      const decoder = new StringDecoder('utf8');
+      const content = decoder.write(buffer.subarray(0, bytesRead)) + (previewTruncated ? '' : decoder.end());
+      return { report, content, previewTruncated, totalBytes: report.sizeBytes };
+    } finally { await handle.close(); }
+  }
+
+  async openContent(reportId: string) {
     await this.beforeAccess?.();
     const report = await this.readReportWithoutMaintenance(reportId);
-    if (!report) {
-      return null;
-    }
-    return {
-      report,
-      content: await fs.readFile(report.path, 'utf8'),
-    };
+    if (!report) return null;
+    const realPath = await fs.realpath(report.path);
+    await this.assertInsideReportsRoot(realPath);
+    const handle = await fs.open(realPath, 'r');
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile()) { await handle.close(); return null; }
+      return { report: { ...report, sizeBytes: stat.size }, handle };
+    } catch (error) { await handle.close(); throw error; }
   }
 
   async resolveReport(inputPath: string): Promise<CodexWebReport | null> {
@@ -116,22 +168,21 @@ export class FileReportStore {
     return this.readReportWithoutMaintenance(id);
   }
 
-  private async scanDirectory(directory: string): Promise<CodexWebReport[]> {
-    let entries: Array<import('node:fs').Dirent>;
+  private async *scanDirectory(directory: string, index: ReportIndexFile): AsyncGenerator<CodexWebReport> {
+    let entries: import('node:fs').Dir;
     try {
-      entries = await fs.readdir(directory, { withFileTypes: true });
+      entries = await fs.opendir(directory);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return [];
+        return;
       }
       throw error;
     }
 
-    const reports: CodexWebReport[] = [];
-    for (const entry of entries) {
+    for await (const entry of entries) {
       const absolutePath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
-        reports.push(...await this.scanDirectory(absolutePath));
+        yield* this.scanDirectory(absolutePath, index);
         continue;
       }
       if (!entry.isFile() && !entry.isSymbolicLink()) {
@@ -146,22 +197,22 @@ export class FileReportStore {
           continue;
         }
         const id = await this.reportIdFromPath(absolutePath);
-        reports.push(await this.toReport(id, absolutePath, stat));
+        yield await this.toReport(id, absolutePath, stat, index);
       } catch (error) {
-        if (!isPathEscapeError(error)) {
+        if (!isPathEscapeError(error) && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
           throw error;
         }
       }
     }
-    return reports;
   }
 
   private async toReport(
     id: string,
     absolutePath: string,
     stat: import('node:fs').Stats,
+    snapshot?: ReportIndexFile,
   ): Promise<CodexWebReport> {
-    const index = await this.readIndex();
+    const index = snapshot ?? await this.readIndex();
     const indexed = index.reports[id] ?? {};
     const parts = id.split('/');
     const fallbackTitle = path.basename(id, path.extname(id));
@@ -206,22 +257,7 @@ export class FileReportStore {
   }
 
   private async readIndex(): Promise<ReportIndexFile> {
-    if (this.indexCache) {
-      return this.indexCache;
-    }
-    try {
-      const parsed = JSON.parse(await fs.readFile(this.indexPath, 'utf8')) as Partial<ReportIndexFile>;
-      this.indexCache = {
-        version: 1,
-        reports: isRecord(parsed.reports) ? parsed.reports as Record<string, ReportIndexEntry> : {},
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
-      this.indexCache = { version: 1, reports: {} };
-    }
-    return this.indexCache;
+    return (await this.indexCache.read()).value;
   }
 }
 

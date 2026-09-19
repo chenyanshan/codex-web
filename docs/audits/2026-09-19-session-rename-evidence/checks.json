@@ -1,0 +1,156 @@
+[
+  {
+    "name": "desktop",
+    "width": 1440,
+    "height": 900,
+    "cancelNoWrite": true,
+    "escapeNoWrite": true,
+    "whitespaceNoWrite": true,
+    "savePreventsDuplicate": true,
+    "cannotDismissPendingSave": true,
+    "failedInputRetained": true,
+    "retrySaved": true,
+    "draftPreserved": true,
+    "reloadAndListUpdated": true,
+    "literalTitleEscaped": true,
+    "controls": {
+      "session-name-input": {
+        "width": 330,
+        "height": 44,
+        "fontSize": "16px"
+      },
+      "save-session-name": {
+        "width": 160,
+        "height": 36,
+        "fontSize": "12px"
+      },
+      "cancel-session-name": {
+        "width": 160,
+        "height": 36,
+        "fontSize": "12px"
+      }
+    },
+    "geometry": {
+      "width": 1440,
+      "scrollWidth": 1440
+    },
+    "errors": [],
+    "failedAssets": []
+  },
+  {
+    "name": "phone",
+    "width": 390,
+    "height": 844,
+    "touch": true,
+    "cancelNoWrite": true,
+    "escapeNoWrite": true,
+    "whitespaceNoWrite": true,
+    "savePreventsDuplicate": true,
+    "cannotDismissPendingSave": true,
+    "failedInputRetained": true,
+    "retrySaved": true,
+    "draftPreserved": true,
+    "reloadAndListUpdated": true,
+    "literalTitleEscaped": true,
+    "controls": {
+      "session-name-input": {
+        "width": 330,
+        "height": 44,
+        "fontSize": "16px"
+      },
+      "save-session-name": {
+        "width": 160,
+        "height": 44,
+        "fontSize": "12px"
+      },
+      "cancel-session-name": {
+        "width": 160,
+        "height": 44,
+        "fontSize": "12px"
+      }
+    },
+    "geometry": {
+      "width": 390,
+      "scrollWidth": 390
+    },
+    "errors": [],
+    "failedAssets": []
+  },
+  {
+    "name": "intermediate",
+    "width": 980,
+    "height": 900,
+    "cancelNoWrite": true,
+    "escapeNoWrite": true,
+    "whitespaceNoWrite": true,
+    "savePreventsDuplicate": true,
+    "cannotDismissPendingSave": true,
+    "failedInputRetained": true,
+    "retrySaved": true,
+    "draftPreserved": true,
+    "reloadAndListUpdated": true,
+    "literalTitleEscaped": true,
+    "controls": {
+      "session-name-input": {
+        "width": 330,
+        "height": 44,
+        "fontSize": "16px"
+      },
+      "save-session-name": {
+        "width": 160,
+        "height": 36,
+        "fontSize": "12px"
+      },
+      "cancel-session-name": {
+        "width": 160,
+        "height": 36,
+        "fontSize": "12px"
+      }
+    },
+    "geometry": {
+      "width": 980,
+      "scrollWidth": 980
+    },
+    "errors": [],
+    "failedAssets": []
+  },
+  {
+    "name": "compact",
+    "width": 320,
+    "height": 568,
+    "touch": true,
+    "cancelNoWrite": true,
+    "escapeNoWrite": true,
+    "whitespaceNoWrite": true,
+    "savePreventsDuplicate": true,
+    "cannotDismissPendingSave": true,
+    "failedInputRetained": true,
+    "retrySaved": true,
+    "draftPreserved": true,
+    "reloadAndListUpdated": true,
+    "literalTitleEscaped": true,
+    "controls": {
+      "session-name-input": {
+        "width": 266,
+        "height": 44,
+        "fontSize": "16px"
+      },
+      "save-session-name": {
+        "width": 128,
+        "height": 44,
+        "fontSize": "12px"
+      },
+      "cancel-session-name": {
+        "width": 128,
+        "height": 44,
+        "fontSize": "12px"
+      }
+    },
+    "geometry": {
+      "width": 320,
+      "scrollWidth": 320
+    },
+    "errors": [],
+    "failedAssets": []
+  }
+]

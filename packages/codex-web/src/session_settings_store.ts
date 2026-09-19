@@ -1,8 +1,5 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
+import { SessionPartitionStore } from './session_partition_store.js';
 import type { ProviderTurnSessionSettings } from '@codex-mobile-web-app/codex-native-api';
-import { withFileLockSync } from './file_lock.js';
 
 export type CodexWebStoredSessionSettings = ProviderTurnSessionSettings & {
   favorite?: boolean;
@@ -10,107 +7,31 @@ export type CodexWebStoredSessionSettings = ProviderTurnSessionSettings & {
 };
 
 export interface CodexWebSessionSettingsStore {
-  get(sessionId: string): CodexWebStoredSessionSettings | null;
-  list?(): Array<[string, CodexWebStoredSessionSettings]>;
-  set(sessionId: string, settings: CodexWebStoredSessionSettings): void;
-  delete(sessionId: string): void;
-}
-
-interface SessionSettingsFile {
-  version: 1;
-  sessions: Record<string, CodexWebStoredSessionSettings>;
+  dispose?(): Promise<void>;
+  revision?(): Promise<string>;
+  get(sessionId: string): CodexWebStoredSessionSettings | null | Promise<CodexWebStoredSessionSettings | null>;
+  list?(): Array<[string, CodexWebStoredSessionSettings]> | Promise<Array<[string, CodexWebStoredSessionSettings]>>;
+  set(sessionId: string, settings: CodexWebStoredSessionSettings): void | Promise<void>;
+  delete(sessionId: string): void | Promise<void>;
 }
 
 export class FileSessionSettingsStore implements CodexWebSessionSettingsStore {
-  private readonly settingsPath: string;
-
+  dispose(): Promise<void> { return this.store.dispose(); }
+  private readonly store: SessionPartitionStore<CodexWebStoredSessionSettings>;
   constructor({ settingsPath }: { settingsPath: string }) {
-    this.settingsPath = settingsPath;
-  }
-
-  get(sessionId: string): CodexWebStoredSessionSettings | null {
-    return normalizeSettings(sessionId, this.read().sessions[sessionId]);
-  }
-
-  list(): Array<[string, CodexWebStoredSessionSettings]> {
-    return Object.entries(this.read().sessions)
-      .map(([sessionId, settings]) => [sessionId, normalizeSettings(sessionId, settings)] as const)
-      .filter((entry): entry is [string, CodexWebStoredSessionSettings] => Boolean(entry[1]));
-  }
-
-  set(sessionId: string, settings: CodexWebStoredSessionSettings): void {
-    const normalized = normalizeSettings(sessionId, settings);
-    if (!normalized) {
-      throw new TypeError(`Invalid session settings for ${sessionId}`);
-    }
-    withFileLockSync(`${this.settingsPath}.lock`, () => {
-      const file = this.read();
-      file.sessions[sessionId] = normalized;
-      this.write(file);
+    this.store = new SessionPartitionStore(settingsPath, (value, id) => {
+      const settings = normalizeSettings(id, value as CodexWebStoredSessionSettings);
+      if (!settings) throw new Error(`Invalid session settings entry for ${id}: ${settingsPath}`);
+      return settings;
     });
   }
-
-  delete(sessionId: string): void {
-    withFileLockSync(`${this.settingsPath}.lock`, () => {
-      const file = this.read();
-      if (!(sessionId in file.sessions)) {
-        return;
-      }
-      delete file.sessions[sessionId];
-      this.write(file);
-    });
+  revision(): Promise<string> { return this.store.revision(); }
+  get(sessionId: string): Promise<CodexWebStoredSessionSettings | null> { return this.store.get(sessionId); }
+  list(): Promise<Array<[string, CodexWebStoredSessionSettings]>> { return this.store.list(); }
+  async set(sessionId: string, settings: CodexWebStoredSessionSettings): Promise<void> {
+    await this.store.mutate(sessionId, () => settings);
   }
-
-  private read(): SessionSettingsFile {
-    let raw: string;
-    try {
-      raw = fs.readFileSync(this.settingsPath, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return emptyFile();
-      }
-      throw error;
-    }
-
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.sessions)) {
-      throw new Error(`Invalid session settings file: ${this.settingsPath}`);
-    }
-    const sessions: Record<string, CodexWebStoredSessionSettings> = {};
-    for (const [sessionId, settings] of Object.entries(parsed.sessions)) {
-      const normalized = normalizeSettings(sessionId, settings as CodexWebStoredSessionSettings);
-      if (!normalized) {
-        throw new Error(`Invalid session settings entry for ${sessionId}: ${this.settingsPath}`);
-      }
-      sessions[sessionId] = normalized;
-    }
-    return { version: 1, sessions };
-  }
-
-  private write(file: SessionSettingsFile): void {
-    fs.mkdirSync(path.dirname(this.settingsPath), { recursive: true, mode: 0o700 });
-    const tmpPath = `${this.settingsPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    try {
-      fs.writeFileSync(tmpPath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-      fs.renameSync(tmpPath, this.settingsPath);
-      try {
-        fs.chmodSync(this.settingsPath, 0o600);
-      } catch {
-        // The atomic state update succeeded; chmod is best-effort for non-POSIX filesystems.
-      }
-    } catch (error) {
-      try {
-        fs.rmSync(tmpPath, { force: true });
-      } catch {
-        // Preserve the original persistence error.
-      }
-      throw error;
-    }
-  }
-}
-
-function emptyFile(): SessionSettingsFile {
-  return { version: 1, sessions: {} };
+  async delete(sessionId: string): Promise<void> { await this.store.mutate(sessionId, () => null); }
 }
 
 function normalizeSettings(

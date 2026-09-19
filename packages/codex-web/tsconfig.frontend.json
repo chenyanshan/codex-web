@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "types": []
+  },
+  "include": ["public/request-context.js", "public/draft-store.js", "public/session-reading.js", "public/admin-editor.js", "public/admin-data.js", "public/attachment-upload.js", "public/timeline-reconciliation.js"]
+}

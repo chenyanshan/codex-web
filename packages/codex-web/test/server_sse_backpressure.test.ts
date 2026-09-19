@@ -183,3 +183,26 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
   throw new Error('Timed out waiting for SSE output');
 }
+
+test('SSE authorization deadline closes idle streams and prevents expired live delivery', async () => {
+  const bus = new CodexWebEventBus({ epoch: 'expiry' });
+  const response = new FakeSseResponse();
+  const request = Object.assign(new EventEmitter(), { socket: { destroy() {} } });
+  let listeners = 0;
+  const runtime = {
+    eventBus: bus,
+    getTurnEvents: (id: string) => bus.list(id),
+    subscribeToTurn: (id: string, listener: any) => {
+      listeners++;
+      const unsubscribe = bus.subscribe(id, listener);
+      return () => { listeners--; unsubscribe(); };
+    },
+  };
+  await streamTurnEvents({ request: request as any, response: response as any, runtime: runtime as any,
+    turnId: 'turn_expiry', authorizationDeadline: Date.now() + 30, registerSseCloser: () => () => {} });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(response.writableEnded, true);
+  assert.equal(listeners, 0);
+  bus.append('turn_expiry', { id: 'late', type: 'assistant.delta', turnId: 'turn_expiry', text: 'must not leak', phase: 'final_answer' } as any);
+  assert.equal(response.chunks.join('').includes('must not leak'), false);
+});

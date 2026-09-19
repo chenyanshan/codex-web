@@ -553,6 +553,10 @@ export class CodexAppClient extends EventEmitter {
     }
   }
 
+  async setThreadName(threadId: string, name: string): Promise<void> {
+    await this.request('thread/name/set', { threadId, name }, { timeoutMs: 10_000 });
+  }
+
   async archiveThread(threadId: string): Promise<void> {
     await this.request('thread/archive', { threadId }, { timeoutMs: 30_000 });
   }

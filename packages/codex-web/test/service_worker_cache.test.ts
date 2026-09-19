@@ -51,7 +51,9 @@ test('service worker independently precaches only critical shell assets', async 
   assert.ok(precached.includes(`/ui-copy.js?v=${buildId}`));
   assert.ok(precached.includes(`/attachment-utils.js?v=${buildId}`));
   assert.ok(precached.includes(`/markdown-renderer.js?v=${buildId}`));
-  assert.ok(precached.includes(`/admin-ui.js?v=${buildId}`));
+  assert.ok(!precached.includes(`/admin-ui.js?v=${buildId}`));
+  assert.ok(precached.includes(`/request-context.js?v=${buildId}`));
+  assert.ok(precached.includes(`/draft-store.js?v=${buildId}`));
   assert.ok(precached.includes(`/session-pagination.js?v=${buildId}`));
   assert.ok(!precached.includes('/manifest.webmanifest'));
   assert.ok(!precached.includes(`/icon-192.png?v=${buildId}`));

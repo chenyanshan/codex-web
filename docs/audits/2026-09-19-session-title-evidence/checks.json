@@ -1,0 +1,88 @@
+[
+  {
+    "name": "desktop",
+    "width": 1440,
+    "height": 900,
+    "listGeometry": {
+      "width": 1440,
+      "scrollWidth": 1440
+    },
+    "chatGeometry": {
+      "width": 1440,
+      "scrollWidth": 1440
+    },
+    "nativeTitlePreferred": true,
+    "whitespaceTitleFallback": true,
+    "literalTitleEscaped": true,
+    "refreshUpdatesTitle": true,
+    "draftPreserved": true,
+    "longTitleNoOverflow": true,
+    "errors": [],
+    "badAssets": []
+  },
+  {
+    "name": "phone",
+    "width": 390,
+    "height": 844,
+    "touch": true,
+    "listGeometry": {
+      "width": 390,
+      "scrollWidth": 390
+    },
+    "chatGeometry": {
+      "width": 390,
+      "scrollWidth": 390
+    },
+    "nativeTitlePreferred": true,
+    "whitespaceTitleFallback": true,
+    "literalTitleEscaped": true,
+    "refreshUpdatesTitle": true,
+    "draftPreserved": true,
+    "longTitleNoOverflow": true,
+    "errors": [],
+    "badAssets": []
+  },
+  {
+    "name": "intermediate",
+    "width": 980,
+    "height": 900,
+    "listGeometry": {
+      "width": 980,
+      "scrollWidth": 980
+    },
+    "chatGeometry": {
+      "width": 980,
+      "scrollWidth": 980
+    },
+    "nativeTitlePreferred": true,
+    "whitespaceTitleFallback": true,
+    "literalTitleEscaped": true,
+    "refreshUpdatesTitle": true,
+    "draftPreserved": true,
+    "longTitleNoOverflow": true,
+    "errors": [],
+    "badAssets": []
+  },
+  {
+    "name": "compact",
+    "width": 320,
+    "height": 568,
+    "touch": true,
+    "listGeometry": {
+      "width": 320,
+      "scrollWidth": 320
+    },
+    "chatGeometry": {
+      "width": 320,
+      "scrollWidth": 320
+    },
+    "nativeTitlePreferred": true,
+    "whitespaceTitleFallback": true,
+    "literalTitleEscaped": true,
+    "refreshUpdatesTitle": true,
+    "draftPreserved": true,
+    "longTitleNoOverflow": true,
+    "errors": [],
+    "badAssets": []
+  }
+]

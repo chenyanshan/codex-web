@@ -1,3 +1,4 @@
+import { readIdentitySnapshot } from './identity_store.js';
 import crypto from 'node:crypto';
 import type { AuthStore, PasswordHashRecord, PublicAuthSession } from './auth_store.js';
 import { localAdminPrincipal, type CodexWebPrincipal } from './access_control.js';
@@ -6,6 +7,7 @@ import type { CodexWebUserSession, FileIdentityStore } from './identity_store.js
 const DIGEST = 'sha256';
 
 interface LegacyAuthLike {
+  diagnostics?(): Record<string, unknown>;
   isConfigured(): Promise<boolean>;
   login(args: {
     password: string;
@@ -14,15 +16,19 @@ interface LegacyAuthLike {
   verifyToken(token: string | null | undefined): Promise<PublicAuthSession | null>;
   logout(token: string | null | undefined): Promise<void>;
   setPassword?(password: string): Promise<void>;
+  listSessions?(token: string): Promise<PublicAuthSession[]>;
+  revokeSession?(token: string, id: string): Promise<void>;
+  revokeOtherSessions?(token: string): Promise<void>;
   readPasswordHash?(): Promise<PasswordHashRecord | null>;
 }
 
 interface IdentityStoreLike {
   readState(): ReturnType<FileIdentityStore['readState']>;
+  readSnapshot?(): ReturnType<FileIdentityStore['readSnapshot']>;
   setMultiUserEnabled?(enabled: boolean): ReturnType<FileIdentityStore['setMultiUserEnabled']>;
   ensureBootstrapAdminFromPasswordHash?(input: PasswordHashRecord): ReturnType<FileIdentityStore['ensureBootstrapAdminFromPasswordHash']>;
   verifyUserPassword(username: string, password: string): Promise<string | null>;
-  addUserSession?(session: CodexWebUserSession): Promise<CodexWebUserSession>;
+  addUserSession?(session: CodexWebUserSession, expectedPasswordHash?: string): Promise<CodexWebUserSession>;
   touchUserSession?(sessionId: string, lastSeenAt: string): Promise<void>;
   deleteUserSession?(sessionId: string): Promise<void>;
 }
@@ -54,8 +60,10 @@ export class HybridAuthStore {
     this.identityStore = identityStore;
   }
 
+  diagnostics(): Record<string, unknown> { return this.legacyAuth.diagnostics?.() ?? {}; }
+
   async isConfigured(): Promise<boolean> {
-    const state = await this.identityStore.readState();
+    const state = await readIdentitySnapshot(this.identityStore);
     if (state.settings.multiUserEnabled) {
       return state.users.some((user) => user.enabled !== false && Boolean(user.passwordHash && user.passwordSalt));
     }
@@ -74,7 +82,7 @@ export class HybridAuthStore {
       throw new Error('Identity store does not support multi-user settings');
     }
     if (enabled) {
-      const state = await this.identityStore.readState();
+      const state = await readIdentitySnapshot(this.identityStore);
       const hasAdmin = state.users.some((user) => user.enabled !== false
         && user.roleIds.some((roleId) => state.roles.some((role) => role.id === roleId && role.isAdmin === true))
         && Boolean(user.passwordHash && user.passwordSalt));
@@ -101,7 +109,7 @@ export class HybridAuthStore {
     password: string;
     deviceName?: string | null;
   }): Promise<{ token: string; session: PublicAuthSession; configuredNow: boolean }> {
-    const state = await this.identityStore.readState();
+    const state = await readIdentitySnapshot(this.identityStore);
     if (!state.settings.multiUserEnabled) {
       const login = await this.legacyAuth.login({ password, deviceName });
       return {
@@ -141,8 +149,8 @@ export class HybridAuthStore {
       lastSeenAt: now,
       userId: user.id,
     };
-    this.sessions.set(session.id, session);
-    await this.identityStore.addUserSession?.(session);
+    await this.identityStore.addUserSession?.(session, user.passwordHash);
+    if (!this.identityStore.addUserSession) this.sessions.set(session.id, session);
     return {
       token,
       session: toPublicSession(session, principal),
@@ -155,20 +163,20 @@ export class HybridAuthStore {
     if (!normalized) {
       return null;
     }
-    const state = await this.identityStore.readState();
+    const state = await readIdentitySnapshot(this.identityStore);
     if (!state.settings.multiUserEnabled) {
       const session = await this.legacyAuth.verifyToken(normalized);
       return session ? { ...session, principal: localAdminPrincipal() } : null;
     }
     const tokenHash = hashToken(normalized);
     const persistedSessions = [
-      ...this.sessions.values(),
-      ...state.userSessions.filter((session) => !this.sessions.has(session.id)),
+      ...(this.identityStore.addUserSession ? state.userSessions : this.sessions.values()),
     ];
     for (const session of persistedSessions) {
       if (!safeEqual(session.tokenHash, tokenHash)) {
         continue;
       }
+      if (Date.parse(session.createdAt) + 90 * 86400_000 <= Date.now()) return null;
       const user = state.users.find((item) => item.id === session.userId && item.enabled !== false);
       if (!user) {
         this.sessions.delete(session.id);
@@ -179,8 +187,10 @@ export class HybridAuthStore {
         ...session,
         lastSeenAt: new Date().toISOString(),
       };
-      this.sessions.set(session.id, updated);
-      await this.identityStore.touchUserSession?.(session.id, updated.lastSeenAt);
+      if (!this.identityStore.addUserSession) this.sessions.set(session.id, updated);
+      if (Date.now() - Date.parse(session.lastSeenAt) >= 30_000) {
+        await this.identityStore.touchUserSession?.(session.id, updated.lastSeenAt);
+      }
       return toPublicSession(updated, {
         userId: user.id,
         username: user.username,
@@ -200,6 +210,34 @@ export class HybridAuthStore {
     };
   }
 
+  async listSessions(token: string): Promise<PublicAuthSession[]> {
+    const current = await this.verifyToken(token);
+    if (!current) return [];
+    if (current.principal?.mode !== 'multi') return this.legacyAuth.listSessions?.(token) ?? [];
+    const state = await readIdentitySnapshot(this.identityStore);
+    return state.userSessions.filter((session) => session.userId === current.principal?.userId
+      && Date.parse(session.createdAt) + 90 * 86400_000 > Date.now())
+      .map((session) => ({ ...toPublicSession(session, current.principal!), expiresAt: new Date(Date.parse(session.createdAt) + 90 * 86400_000).toISOString() }));
+  }
+
+  async revokeSession(token: string, id: string): Promise<void> {
+    const current = await this.verifyToken(token);
+    if (!current) return;
+    if (current.principal?.mode !== 'multi') return this.legacyAuth.revokeSession?.(token, id);
+    if (!(await this.listSessions(token)).some((session) => session.id === id)) return;
+    this.sessions.delete(id);
+    await this.identityStore.deleteUserSession?.(id);
+  }
+
+  async revokeOtherSessions(token: string): Promise<void> {
+    const current = await this.verifyToken(token);
+    if (!current) return;
+    if (current.principal?.mode !== 'multi') return this.legacyAuth.revokeOtherSessions?.(token);
+    for (const session of await this.listSessions(token)) {
+      if (session.id !== current.id) await this.revokeSession(token, session.id);
+    }
+  }
+
   async logout(token: string | null | undefined): Promise<void> {
     const normalized = typeof token === 'string' ? token.trim() : '';
     if (!normalized) {
@@ -213,7 +251,7 @@ export class HybridAuthStore {
         return;
       }
     }
-    const state = await this.identityStore.readState();
+    const state = await readIdentitySnapshot(this.identityStore);
     const persisted = state.userSessions.find((session) => safeEqual(session.tokenHash, tokenHash));
     if (persisted) {
       await this.identityStore.deleteUserSession?.(persisted.id);

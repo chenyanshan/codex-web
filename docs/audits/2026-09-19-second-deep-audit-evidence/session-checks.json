@@ -1,0 +1,257 @@
+{
+  "measuredAt": "2026-09-19T05:16:55.686Z",
+  "environment": "Isolated Chromium; PWA cases emulate navigator.standalone, not physical iOS",
+  "cases": [
+    {
+      "name": "steady_stream_while_reading",
+      "before": {
+        "top": 250,
+        "max": 1039,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -160.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "after": {
+        "top": 250,
+        "max": 2364,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -160.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 5
+      },
+      "desktop": false,
+      "pwa": false,
+      "pageErrors": []
+    },
+    {
+      "name": "upload_result_after_session_navigation",
+      "result": {
+        "currentSession": "session_browser_idle",
+        "status": "Upload failed",
+        "error": "synthetic_old_session_upload_failure",
+        "attachments": 0
+      },
+      "desktop": false,
+      "pwa": false,
+      "pageErrors": []
+    },
+    {
+      "name": "late_initial_status_overrides_reading_position",
+      "before": {
+        "top": 250,
+        "max": 1073,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -125.5625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "after": {
+        "top": 1039,
+        "max": 1039,
+        "firstVisibleId": "assistant_scroll_turn_3_final",
+        "firstVisibleOffset": -156.125,
+        "follow": true,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "desktop": false,
+      "pwa": true,
+      "pageErrors": []
+    },
+    {
+      "name": "phone_history_pull_browser",
+      "before": {
+        "top": 0,
+        "max": 1039,
+        "firstVisibleId": "scroll_message_4",
+        "firstVisibleOffset": 18,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "after": {
+        "top": 0,
+        "max": 1039,
+        "firstVisibleId": "scroll_message_4",
+        "firstVisibleOffset": 18,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "visibleHistoryButtons": 0,
+      "desktop": false,
+      "pwa": false,
+      "pageErrors": []
+    },
+    {
+      "name": "phone_history_pull_pwa",
+      "before": {
+        "top": 0,
+        "max": 1039,
+        "firstVisibleId": "scroll_message_4",
+        "firstVisibleOffset": 18,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "after": {
+        "top": 793,
+        "max": 1832,
+        "firstVisibleId": "assistant_scroll_turn_1_final",
+        "firstVisibleOffset": -703.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 6
+      },
+      "visibleHistoryButtons": 0,
+      "desktop": false,
+      "pwa": true,
+      "pageErrors": []
+    },
+    {
+      "name": "desktop_foreground_while_reading",
+      "before": {
+        "top": 250,
+        "max": 444,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -146.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "after": {
+        "top": 444,
+        "max": 444,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -340.40625,
+        "follow": true,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "desktop": true,
+      "pwa": false,
+      "pageErrors": []
+    },
+    {
+      "name": "readonly_resize_while_reading",
+      "before": {
+        "top": 550,
+        "max": 7385,
+        "firstVisibleId": "assistant_scroll_turn_0_final",
+        "firstVisibleOffset": -460.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 20,
+        "displayed": 20
+      },
+      "after": {
+        "top": 0,
+        "max": 7449,
+        "firstVisibleId": "scroll_message_0",
+        "firstVisibleOffset": 18,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 20,
+        "displayed": 20
+      },
+      "viewportHeightBefore": 844,
+      "viewportHeightAfter": 780,
+      "desktop": false,
+      "pwa": true,
+      "pageErrors": []
+    },
+    {
+      "name": "pwa_title_refresh_failure_feedback",
+      "requests": [
+        "/api/sessions/session_browser_history/status",
+        "/api/sessions/session_browser_history/timeline?limit=50"
+      ],
+      "feedback": {
+        "status": "Ready",
+        "error": "",
+        "historyError": "",
+        "statusError": "",
+        "visibleError": "",
+        "indicatorVisible": false
+      },
+      "desktop": false,
+      "pwa": true,
+      "pageErrors": []
+    },
+    {
+      "name": "pwa_timeline_pull_at_oldest",
+      "additionalRequests": [],
+      "indicatorText": "Pull to refresh",
+      "desktop": false,
+      "pwa": true,
+      "pageErrors": []
+    },
+    {
+      "name": "scroll_during_slow_refresh",
+      "userPositionWhileWaiting": {
+        "top": 700,
+        "max": 1039,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -610.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "afterResponse": {
+        "top": 250,
+        "max": 1039,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -160.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "desktop": false,
+      "pwa": true,
+      "pageErrors": []
+    },
+    {
+      "name": "reload_reading_position",
+      "before": {
+        "top": 300,
+        "max": 1039,
+        "firstVisibleId": "assistant_scroll_turn_2_final",
+        "firstVisibleOffset": -210.40625,
+        "follow": false,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "after": {
+        "top": 1039,
+        "max": 1039,
+        "firstVisibleId": "assistant_scroll_turn_3_final",
+        "firstVisibleOffset": -156.125,
+        "follow": true,
+        "windowEnd": null,
+        "historyLength": 8,
+        "displayed": 4
+      },
+      "desktop": false,
+      "pwa": true,
+      "pageErrors": []
+    }
+  ],
+  "completedAt": "2026-09-19T05:17:14.764Z"
+}

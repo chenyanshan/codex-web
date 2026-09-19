@@ -1,0 +1,167 @@
+[
+  {
+    "theme": "fresh-light",
+    "contrast": [
+      {
+        "selector": ".work-event-kind",
+        "ratio": 7.09002454406596
+      },
+      {
+        "selector": ".work-event-title",
+        "ratio": 14.67911847763172
+      },
+      {
+        "selector": ".work-event-status[data-tone=\"running\"]",
+        "ratio": 5.349890955134842
+      },
+      {
+        "selector": ".work-progress-count",
+        "ratio": 7.09002454406596
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"added\"] code",
+        "ratio": 12.405772338613382
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"removed\"] code",
+        "ratio": 12.047712353886231
+      },
+      {
+        "selector": ".work-line-number",
+        "ratio": 5.990417481032839
+      }
+    ]
+  },
+  {
+    "theme": "retro",
+    "contrast": [
+      {
+        "selector": ".work-event-kind",
+        "ratio": 6.710083567038532
+      },
+      {
+        "selector": ".work-event-title",
+        "ratio": 8.862392129950917
+      },
+      {
+        "selector": ".work-event-status[data-tone=\"running\"]",
+        "ratio": 5.7662657420602335
+      },
+      {
+        "selector": ".work-progress-count",
+        "ratio": 6.710083567038532
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"added\"] code",
+        "ratio": 7.490628699294335
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"removed\"] code",
+        "ratio": 7.408328255889349
+      },
+      {
+        "selector": ".work-line-number",
+        "ratio": 5.859598529929489
+      }
+    ]
+  },
+  {
+    "theme": "terminal",
+    "contrast": [
+      {
+        "selector": ".work-event-kind",
+        "ratio": 8.649896808421687
+      },
+      {
+        "selector": ".work-event-title",
+        "ratio": 12.34899199504068
+      },
+      {
+        "selector": ".work-event-status[data-tone=\"running\"]",
+        "ratio": 8.85762333785628
+      },
+      {
+        "selector": ".work-progress-count",
+        "ratio": 8.649896808421687
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"added\"] code",
+        "ratio": 9.752791562593707
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"removed\"] code",
+        "ratio": 10.334147510970316
+      },
+      {
+        "selector": ".work-line-number",
+        "ratio": 6.184378405030579
+      }
+    ]
+  },
+  {
+    "theme": "dark-gold",
+    "contrast": [
+      {
+        "selector": ".work-event-kind",
+        "ratio": 8.34353508402333
+      },
+      {
+        "selector": ".work-event-title",
+        "ratio": 12.818389663382185
+      },
+      {
+        "selector": ".work-event-status[data-tone=\"running\"]",
+        "ratio": 10.579040102736458
+      },
+      {
+        "selector": ".work-progress-count",
+        "ratio": 8.34353508402333
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"added\"] code",
+        "ratio": 9.701030953517211
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"removed\"] code",
+        "ratio": 10.037963340374352
+      },
+      {
+        "selector": ".work-line-number",
+        "ratio": 9.609917668293399
+      }
+    ]
+  },
+  {
+    "theme": "oled-black",
+    "contrast": [
+      {
+        "selector": ".work-event-kind",
+        "ratio": 9.367543271835558
+      },
+      {
+        "selector": ".work-event-title",
+        "ratio": 16.613677244887317
+      },
+      {
+        "selector": ".work-event-status[data-tone=\"running\"]",
+        "ratio": 11.877413463104983
+      },
+      {
+        "selector": ".work-progress-count",
+        "ratio": 9.367543271835558
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"added\"] code",
+        "ratio": 12.895902122004536
+      },
+      {
+        "selector": ".work-diff-line[data-change=\"removed\"] code",
+        "ratio": 13.306204319902946
+      },
+      {
+        "selector": ".work-line-number",
+        "ratio": 10.77249341507161
+      }
+    ]
+  }
+]

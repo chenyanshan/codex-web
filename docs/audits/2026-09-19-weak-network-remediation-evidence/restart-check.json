@@ -1,0 +1,34 @@
+{
+  "checkedAt": "2026-09-19T04:58:55.888Z",
+  "label": "com.chenyanshan.codex-web",
+  "previousPid": 97903,
+  "pid": 4266,
+  "state": "running",
+  "previousBuildId": "36e07a0a6454d38f1f38",
+  "buildId": "aff5f81501d4d8edb820",
+  "homeStatus": 200,
+  "assets": {
+    "app.js": {
+      "status": 200,
+      "matchesSource": true,
+      "sha256": "db8dcd30a74302378e7b8d97747a605996a4c76894b52ce91b04e57340380d49"
+    },
+    "session-rename.js": {
+      "status": 200,
+      "matchesSource": true,
+      "sha256": "495ebf6b9c71753f37df37befad9afd84507ab38aeedd984d149b6a3ca81bd24"
+    },
+    "network-recovery.js": {
+      "status": 200,
+      "matchesSource": true,
+      "sha256": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253"
+    },
+    "session-loader.js": {
+      "status": 200,
+      "matchesSource": true,
+      "sha256": "db774079eb38e2cb34184aab2776807489421e3beb7bc6f78166cf22348b83be"
+    }
+  },
+  "unauthenticatedListStatus": 401,
+  "unauthenticatedRenameStatus": 401
+}

@@ -1,5 +1,8 @@
+import { normalizeSessionName } from './session_name.js';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
+import { SessionDirectory } from './session_directory.js';
+import { cacheSessionListSnapshot } from './session_list_page.js';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   CodexAppClient,
@@ -84,9 +87,12 @@ export interface CodexWebSession {
   goal?: ProviderThreadGoal | null;
   activeTurnId: string | null;
   activityState: CodexWebSessionActivityState;
+  lastBusinessActivityAt?: number | null;
+  turnStartedAt?: number | null;
   settings: CodexWebStoredSessionSettings;
   thread: ProviderThreadSummary;
   timeline: CodexWebTimelineMessage[];
+  historyUnavailable?: boolean;
 }
 
 export interface CodexWebTurnSnapshot {
@@ -103,7 +109,7 @@ export interface CodexWebTurnSnapshotItem extends ProviderThreadTurnItem {
   }>;
 }
 
-export type CodexWebSessionActivityState = 'running' | 'waiting_approval' | null;
+export type CodexWebSessionActivityState = 'running' | 'waiting_approval' | 'failed' | 'stale' | null;
 
 export interface CodexWebRuntimeClient {
   stop?(): Promise<void> | void;
@@ -166,6 +172,7 @@ export interface CodexWebRuntimeClient {
     timeoutMs?: number;
   }): Promise<{ goal: ProviderThreadGoal | null; turn: ProviderTurnResult }>;
   clearThreadGoal?(threadId: string): Promise<boolean>;
+  setThreadName?(threadId: string, name: string): Promise<void>;
   archiveThread?(threadId: string): Promise<void>;
   unarchiveThread?(threadId: string): Promise<void>;
   writeConfigValue(args: {
@@ -309,15 +316,56 @@ interface ThreadSubscriptionLease {
 }
 
 export class CodexWebRuntime {
+  private readonly lifecycleController = new AbortController();
+
+  get lifecycleSignal(): AbortSignal { return this.lifecycleController.signal; }
+
   readonly client: CodexWebRuntimeClient;
 
   readonly eventBus: CodexWebEventBus;
+
+  private activityRevision = 0;
+  private nameRevision = 0;
+  private readonly renameWrites = new Map<string, Promise<CodexWebSession | null>>();
+  private readonly nameChanges = new Map<string, { revision: number; name: string }>();
+
+  private readonly directorySessions = new WeakMap<ProviderThreadSummary[], {
+    revision: string; items: CodexWebSession[];
+  }>();
+
+  private readonly threadScans = new Map<boolean, Promise<ProviderThreadSummary[]>>();
+
+  private readonly directory = new SessionDirectory((args) => this.listProviderThreads(args));
+
+  private readonly cacheMetrics = { historyBuilds: 0, historyHits: 0 };
+
+  diagnostics(): Record<string, unknown> {
+    return { directory: this.directory.diagnostics(), history: { ...this.cacheMetrics, retainedSessions: this.timelineProjections.size } };
+  }
+
+  private readonly timelineProjections = new Map<string, { version: string; session: CodexWebSession; bytes: number }>();
+
+  private readonly timelineWrites = new Map<string, Promise<CodexWebTimelineMessage | null>>();
+
+  private readonly unavailableHistory = new Set<string>();
+
+  private readonly fallbackLookups = new Map<string, Promise<ProviderThreadSummary | null>>();
+
+  private readonly historyRevisions = new Map<string, number>();
+
+  private readonly timelineReads = new Map<string, Promise<CodexWebSession | null>>();
+
+  private readonly businessActivity = new Map<string, { at: number; failed: boolean; startedAt?: number }>();
 
   private readonly defaultCwd: string;
 
   private readonly settingsStore: CodexWebSessionSettingsStore | null;
 
   private readonly timelineStore: CodexWebSessionTimelineStore | null;
+
+  private settingsRevision: string | null = null;
+
+  private settingsRefresh: Promise<void> | null = null;
 
   private readonly sessionSettings = new Map<string, CodexWebStoredSessionSettings>();
 
@@ -429,6 +477,15 @@ export class CodexWebRuntime {
   }
 
   async stop(): Promise<void> {
+    this.lifecycleController.abort(new Error('Codex Web runtime stopped'));
+    this.directory.stop();
+    this.timelineProjections.clear();
+    this.timelineReads.clear();
+    this.businessActivity.clear();
+    this.historyRevisions.clear();
+    this.unavailableHistory.clear();
+    await Promise.allSettled([...this.timelineWrites.values()]);
+    await Promise.all([this.timelineStore?.dispose?.(), this.settingsStore?.dispose?.()]);
     this.stopping = true;
     for (const lease of this.threadSubscriptionLeases.values()) {
       if (lease.timer) {
@@ -458,14 +515,67 @@ export class CodexWebRuntime {
   }
 
   async listSessions(options: ListSessionsOptions = {}): Promise<CodexWebSession[]> {
-    this.primeSessionSettingsCache();
+    await this.primeSessionSettingsCache();
     if (options.favorite === true) {
       return this.listFavoriteSessions();
     }
     const threads = await this.readCompleteThreadList(options.archived === true);
-    return threads
+    return Promise.all(threads
       .filter((thread) => typeof thread.threadId === 'string' && thread.threadId)
-      .map((thread) => this.toSessionSummary(thread));
+      .map((thread) => this.toSessionSummary(thread)));
+  }
+
+  async listSessionDirectory(options: ListSessionsOptions & { complete?: boolean } = {}): Promise<{ items: CodexWebSession[]; complete: boolean }> {
+    await this.primeSessionSettingsCache();
+    if (options.favorite) return { items: await this.listFavoriteSessions(), complete: true };
+    const result = await this.directory.read(options.archived === true, options.complete === true);
+    const revision = `${this.settingsRevision}:${this.activityRevision}:${Math.floor(Date.now() / 10_000)}`;
+    const cached = this.directorySessions.get(result.threads);
+    if (cached?.revision === revision) return { items: cached.items, complete: result.complete };
+    const threads = new Map(result.threads.map((thread) => [thread.threadId, thread]));
+    // Locally observed attention is independent of the paginated provider directory.
+    if (!options.archived) for (const [id, thread] of this.threadSummaries) {
+      if (this.activeTurnByThread.has(id) || this.businessActivity.get(id)?.failed) threads.set(id, thread);
+    }
+    const items = await Promise.all([...threads.values()].map((thread) => this.toSessionSummary(thread)));
+    cacheSessionListSnapshot(items);
+    this.directorySessions.set(result.threads, { revision, items });
+    return { items, complete: result.complete };
+  }
+
+  async readSessionMetadata(sessionId: string): Promise<CodexWebSession | null> {
+    return this.readSessionStatus(sessionId, { archived: true });
+  }
+
+  /** The provider has no history paging. Reuse a projection until metadata or business events change. */
+  async readSessionTimeline(sessionId: string): Promise<CodexWebSession | null> {
+    const existing = this.timelineReads.get(sessionId);
+    if (existing) return existing;
+    const read = (async () => {
+      const metadata = await this.readSessionMetadata(sessionId);
+      if (!metadata) return null;
+      const localRevision = await this.timelineStore?.revision?.(sessionId) ?? '';
+      const version = `${metadata.updatedAt}:${this.historyRevisions.get(sessionId) ?? 0}:${localRevision}`;
+      const cached = this.timelineProjections.get(sessionId);
+      if (cached?.version === version) {
+        this.cacheMetrics.historyHits += 1;
+        return { ...metadata, thread: cached.session.thread, timeline: cached.session.timeline };
+      }
+      this.cacheMetrics.historyBuilds += 1;
+      const session = await this.readSession(sessionId);
+      if (session?.historyUnavailable) throw Object.assign(new Error('This Codex provider cannot read this session history yet.'), { code: 'history_unavailable' });
+      if (session) {
+        this.timelineProjections.delete(sessionId);
+        const bytes = Buffer.byteLength(JSON.stringify({ thread: session.thread, timeline: session.timeline }));
+        if (bytes <= 64 * 1024 * 1024) this.timelineProjections.set(sessionId, { version, session, bytes });
+        while (this.timelineProjections.size > 32 || [...this.timelineProjections.values()].reduce((sum, item) => sum + item.bytes, 0) > 64 * 1024 * 1024) {
+          this.timelineProjections.delete(this.timelineProjections.keys().next().value!);
+        }
+      }
+      return session;
+    })().finally(() => this.timelineReads.delete(sessionId));
+    this.timelineReads.set(sessionId, read);
+    return read;
   }
 
   private async readCompleteThreadList(archived: boolean): Promise<ProviderThreadSummary[]> {
@@ -478,8 +588,10 @@ export class CodexWebRuntime {
     if (existingRefresh) {
       return existingRefresh;
     }
+    const revision = this.nameRevision;
     const refresh = this.scanCompleteThreadList(archived)
-      .then((threads) => {
+      .then((items) => {
+        const threads = items.map((thread) => this.applyThreadName(thread, revision));
         this.threadListSnapshots.set(key, { threads, cachedAt: Date.now() });
         return threads;
       })
@@ -499,14 +611,22 @@ export class CodexWebRuntime {
     return refresh;
   }
 
-  private async scanCompleteThreadList(archived: boolean): Promise<ProviderThreadSummary[]> {
+  private scanCompleteThreadList(archived: boolean): Promise<ProviderThreadSummary[]> {
+    const pending = this.threadScans.get(archived);
+    if (pending) return pending;
+    const scan = this.scanThreadPages(archived).finally(() => this.threadScans.delete(archived));
+    this.threadScans.set(archived, scan);
+    return scan;
+  }
+
+  private async scanThreadPages(archived: boolean): Promise<ProviderThreadSummary[]> {
     const threads: ProviderThreadSummary[] = [];
     const threadIds = new Set<string>();
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
     let pageCount = 0;
     do {
-      const result = await this.client.listThreads({
+      const result = await this.listProviderThreads({
         limit: THREAD_LIST_PAGE_SIZE,
         cursor,
         archived,
@@ -536,6 +656,7 @@ export class CodexWebRuntime {
   }
 
   private invalidateThreadListSnapshots(): void {
+    this.directory.invalidate();
     for (const snapshot of this.threadListSnapshots.values()) {
       snapshot.cachedAt = 0;
     }
@@ -547,9 +668,9 @@ export class CodexWebRuntime {
       return [];
     }
     const threads = await Promise.all(favoriteIds.map((threadId) => this.readFavoriteThreadSummary(threadId)));
-    const sessions = threads
+    const sessions = await Promise.all(threads
       .filter((thread): thread is ProviderThreadSummary => Boolean(thread?.threadId))
-      .map((thread) => this.toSessionSummary(thread));
+      .map((thread) => this.toSessionSummary(thread)));
     return sessions.sort((left, right) => (left.favoriteOrder ?? Number.MAX_SAFE_INTEGER) - (right.favoriteOrder ?? Number.MAX_SAFE_INTEGER)
       || (right.lastInputAt ?? 0) - (left.lastInputAt ?? 0));
   }
@@ -560,7 +681,7 @@ export class CodexWebRuntime {
 
   private async readTurnFreeThreadSummary(threadId: string): Promise<ProviderThreadSummary | null> {
     try {
-      const thread = await this.client.readThread(threadId, false);
+      const thread = await this.readProviderThread(threadId, false);
       if (thread) {
         return thread;
       }
@@ -581,7 +702,7 @@ export class CodexWebRuntime {
       throw error;
     }
     try {
-      return await this.client.readThread(threadId, false);
+      return await this.readProviderThread(threadId, false);
     } catch (error) {
       if (isUnavailableThreadError(error)) {
         return null;
@@ -591,7 +712,7 @@ export class CodexWebRuntime {
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<CodexWebSession> {
-    const initialSettings = this.mergeSettings(null, input.settings);
+    const initialSettings = await this.mergeSettings(null, input.settings);
     const started = await this.client.startThread({
       cwd: input.cwd ?? this.defaultCwd,
       title: input.title ?? null,
@@ -607,12 +728,12 @@ export class CodexWebRuntime {
       this.invalidateThreadListSnapshots();
       const thread = await this.requireThread(started.threadId);
       const effectiveSettings = mergeEffectiveModelSettings(initialSettings, started);
-      this.persistSessionSettings(started.threadId, {
+      await this.persistSessionSettings(started.threadId, {
         ...effectiveSettings,
         bridgeSessionId: started.threadId,
         updatedAt: Date.now(),
       });
-      return this.toSession(thread);
+      return await this.toSession(thread);
     } finally {
       this.scheduleThreadSubscriptionRelease(started.threadId);
     }
@@ -621,24 +742,24 @@ export class CodexWebRuntime {
   async readSession(sessionId: string): Promise<CodexWebSession | null> {
     const thread = await this.readThreadSummary(sessionId);
     if (!thread) {
-      const archivedThread = this.readArchivedThreadSummary(sessionId);
-      return archivedThread ? this.toSession(archivedThread) : null;
+      const archivedThread = await this.readArchivedThreadSummary(sessionId);
+      return archivedThread ? await this.toSession(archivedThread) : null;
     }
     this.replayPendingApprovals(sessionId);
-    const session = this.toSession(thread);
+    const session = await this.toSession(thread);
     this.observeRecoveredTurn(session);
     return this.withThreadGoal(session);
   }
 
   async readTurnSnapshot(sessionId: string, turnId: string): Promise<CodexWebTurnSnapshot | null> {
-    const thread = await this.client.readThread(sessionId, true);
+    const thread = await this.readProviderThread(sessionId, true);
     const turn = thread?.turns?.find((item) => item.id === turnId);
     if (!turn) {
       return readRolloutTurnSnapshot(thread?.path, turnId);
     }
     const items = (Array.isArray(turn.items) ? turn.items : []).map(normalizeTurnSnapshotItem);
     if (!items.some(turnSnapshotItemHasFinalOutputText)) {
-      const rolloutFinal = readRolloutTurnSnapshot(thread?.path, turnId)?.items.at(-1);
+      const rolloutFinal = (await readRolloutTurnSnapshot(thread?.path, turnId))?.items.at(-1);
       if (rolloutFinal) {
         items.push(rolloutFinal);
       }
@@ -651,15 +772,15 @@ export class CodexWebRuntime {
     };
   }
 
-  isSessionArchived(sessionId: string): boolean {
-    return this.readArchivedThreadSummary(sessionId) !== null;
+  async isSessionArchived(sessionId: string): Promise<boolean> {
+    return (await this.readArchivedThreadSummary(sessionId)) !== null;
   }
 
   async readSessionStatus(
     sessionId: string,
     options: ReadSessionStatusOptions = {},
   ): Promise<CodexWebSession | null> {
-    this.primeSessionSettingsCache();
+    await this.primeSessionSettingsCache();
     const cachedThread = this.threadSummaries.get(sessionId) ?? null;
     const cachedAt = this.threadSummaryCachedAt.get(sessionId) ?? 0;
     let thread = cachedThread && Date.now() - cachedAt <= SESSION_STATUS_SUMMARY_CACHE_MS
@@ -669,7 +790,7 @@ export class CodexWebRuntime {
       thread = await this.readTurnFreeThreadSummary(sessionId);
     }
     if (!thread && options.archived === true) {
-      thread = this.readArchivedThreadSummary(sessionId);
+      thread = await this.readArchivedThreadSummary(sessionId);
     }
     if (!thread) {
       this.threadSummaries.delete(sessionId);
@@ -677,7 +798,61 @@ export class CodexWebRuntime {
       return null;
     }
     this.replayPendingApprovals(sessionId);
-    return this.toSessionSummary(thread);
+    return await this.toSessionSummary(thread);
+  }
+
+  renameSession(sessionId: string, name: string): Promise<CodexWebSession | null> {
+    const previous = this.renameWrites.get(sessionId);
+    const write = (previous ? previous.catch(() => null) : Promise.resolve()).then(() => this.renameSessionNow(sessionId, name))
+      .finally(() => { if (this.renameWrites.get(sessionId) === write) this.renameWrites.delete(sessionId); });
+    this.renameWrites.set(sessionId, write);
+    return write;
+  }
+
+  private async renameSessionNow(sessionId: string, name: string): Promise<CodexWebSession | null> {
+    const normalizedName = normalizeSessionName(name);
+    if (!normalizedName) throw new Error('Invalid session name');
+    name = normalizedName;
+    const thread = await this.readProviderThread(sessionId, false);
+    if (!thread) return null;
+    if (!this.client.setThreadName) throw new Error('Thread naming is not supported by this Codex runtime');
+    // Resolve settings before the write: success never depends on a second provider read.
+    const session = await this.toSessionSummary(thread);
+    try { await this.client.setThreadName(sessionId, name); } catch (error) {
+      if (isUnavailableThreadError(error)) return null;
+      throw error;
+    }
+    this.nameChanges.set(sessionId, { revision: ++this.nameRevision, name });
+    while (this.nameChanges.size > MAX_TURN_THREAD_MAPPINGS) this.nameChanges.delete(this.nameChanges.keys().next().value!);
+    this.activityRevision += 1;
+    this.directory.updateName(sessionId, name);
+    for (const snapshot of this.threadListSnapshots.values()) {
+      snapshot.threads = snapshot.threads.map((item) => item.threadId === sessionId ? { ...item, title: name } : item);
+    }
+    this.rememberThreadSummary({ ...thread, title: name });
+    return { ...session, title: name, thread: { ...session.thread, title: name } };
+  }
+
+  private applyThreadName(thread: ProviderThreadSummary, revision: number): ProviderThreadSummary {
+    const change = this.nameChanges.get(thread.threadId);
+    return change && change.revision > revision ? { ...thread, title: change.name } : thread;
+  }
+
+  private async readProviderThread(threadId: string, includeTurns: boolean): Promise<ProviderThreadSummary | null> {
+    const revision = this.nameRevision;
+    try {
+      const thread = await this.client.readThread(threadId, includeTurns);
+      return thread ? this.applyThreadName(thread, revision) : null;
+    } catch (error) {
+      if (isUnavailableThreadError(error)) return null;
+      throw error;
+    }
+  }
+
+  private async listProviderThreads(args: Parameters<CodexWebRuntimeClient['listThreads']>[0]): Promise<ProviderThreadListResult> {
+    const revision = this.nameRevision;
+    const page = await this.client.listThreads(args);
+    return { ...page, items: page.items.map((thread) => this.applyThreadName(thread, revision)) };
   }
 
   async updateSessionSettings(
@@ -688,16 +863,16 @@ export class CodexWebRuntime {
     if (!thread) {
       return null;
     }
-    const nextSettings = this.mergeSettings(sessionId, patch);
-    this.persistSessionSettings(sessionId, nextSettings);
-    return this.toSession(thread);
+    const nextSettings = await this.mergeSettings(sessionId, patch);
+    await this.persistSessionSettings(sessionId, nextSettings);
+    return await this.toSession(thread);
   }
 
   async archiveSession(sessionId: string): Promise<boolean> {
     if (typeof this.client.archiveThread !== 'function') {
       throw new Error('Thread archive is not supported by this Codex runtime');
     }
-    const current = this.getStoredSessionSettings(sessionId);
+    const current = await this.getStoredSessionSettings(sessionId);
     let thread: ProviderThreadSummary | null = null;
     try {
       thread = await this.readThreadSummary(sessionId);
@@ -714,7 +889,7 @@ export class CodexWebRuntime {
     } else if (!current?.favorite) {
       return false;
     } else {
-      this.deleteLocalSessionState(sessionId, { deleteTimeline: true });
+      await this.deleteLocalSessionState(sessionId, { deleteTimeline: true });
     }
     return true;
   }
@@ -728,10 +903,10 @@ export class CodexWebRuntime {
     return this.readSession(sessionId);
   }
 
-  appendSessionTimelineEntry(
+  async appendSessionTimelineEntry(
     sessionId: string,
     input: AppendSessionTimelineEntryInput,
-  ): CodexWebTimelineMessage | null {
+  ): Promise<CodexWebTimelineMessage | null> {
     const entry = normalizeSessionTimelineEntry(sessionId, input);
     if (!entry) {
       return null;
@@ -739,10 +914,20 @@ export class CodexWebRuntime {
     if (!this.timelineStore) {
       return publicSessionTimelineEntry(entry);
     }
-    const existing = this.timelineStore.list(sessionId);
-    const next = upsertSessionTimelineEntry(existing, entry);
-    this.timelineStore.replace(sessionId, next);
-    return publicSessionTimelineEntry(entry);
+    const previous = this.timelineWrites.get(sessionId);
+    const write = (async () => {
+      await previous;
+      if (this.timelineStore!.upsert) await this.timelineStore!.upsert(sessionId, entry);
+      else {
+        const existing = await this.timelineStore!.list(sessionId);
+        const next = upsertSessionTimelineEntry(existing, entry);
+        await this.timelineStore!.replace(sessionId, next);
+      }
+      this.timelineProjections.delete(sessionId);
+      return publicSessionTimelineEntry(entry);
+    })().finally(() => { if (this.timelineWrites.get(sessionId) === write) this.timelineWrites.delete(sessionId); });
+    this.timelineWrites.set(sessionId, write);
+    return write;
   }
 
   async updateSessionFavorite(
@@ -750,7 +935,7 @@ export class CodexWebRuntime {
     favorite: boolean,
     favoriteOrder?: number | null,
   ): Promise<CodexWebSession | null> {
-    const current = this.getStoredSessionSettings(sessionId);
+    const current = await this.getStoredSessionSettings(sessionId);
     if (favorite && current?.favorite === true && favoriteOrder !== undefined) {
       const settings = {
         ...current,
@@ -758,7 +943,7 @@ export class CodexWebRuntime {
         favoriteOrder: favoriteOrder ?? current.favoriteOrder ?? this.nextFavoriteOrder(),
         updatedAt: Date.now(),
       };
-      this.persistSessionSettings(sessionId, settings);
+      await this.persistSessionSettings(sessionId, settings);
       return this.toStoredFavoriteSession(sessionId, settings);
     }
     if (!favorite && current?.favorite === true) {
@@ -768,7 +953,7 @@ export class CodexWebRuntime {
         favoriteOrder: null,
         updatedAt: Date.now(),
       };
-      this.persistSessionSettings(sessionId, settings);
+      await this.persistSessionSettings(sessionId, settings);
       let thread: ProviderThreadSummary | null = null;
       try {
         thread = await this.readThreadSummary(sessionId);
@@ -777,21 +962,21 @@ export class CodexWebRuntime {
           throw error;
         }
       }
-      return thread ? this.toSession(thread) : null;
+      return thread ? await this.toSession(thread) : null;
     }
     const thread = await this.readThreadSummary(sessionId);
     if (!thread) {
       return null;
     }
-    const existing = this.getSessionSettings(sessionId);
+    const existing = await this.getSessionSettings(sessionId);
     const settings = {
       ...existing,
       favorite,
       favoriteOrder: favorite ? favoriteOrder ?? existing.favoriteOrder ?? this.nextFavoriteOrder() : null,
       updatedAt: Date.now(),
     };
-    this.persistSessionSettings(sessionId, settings);
-    return this.toSession(thread);
+    await this.persistSessionSettings(sessionId, settings);
+    return await this.toSession(thread);
   }
 
   async reloadRuntime(): Promise<{ mcpServersReloaded: boolean }> {
@@ -812,7 +997,7 @@ export class CodexWebRuntime {
     if (helpCommand) {
       await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
       const result = createHelpCommandResult();
-      this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
+      await this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
       return {
         ...result,
         session: await this.readSession(sessionId),
@@ -831,7 +1016,7 @@ export class CodexWebRuntime {
         return this.startGoalCommandTurn(session, input.text, goalCommand);
       }
       const result = await this.handleGoalCommand(sessionId, goalCommand);
-      this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
+      await this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
       return {
         ...result,
         session: await this.readSession(sessionId),
@@ -841,10 +1026,10 @@ export class CodexWebRuntime {
     if (conflictingTurnId) {
       throw createTurnConflictError(sessionId, conflictingTurnId);
     }
-    let settings = this.mergeSettings(sessionId, input.settings);
-    this.persistSessionSettings(sessionId, settings);
+    let settings = await this.mergeSettings(sessionId, input.settings);
+    await this.persistSessionSettings(sessionId, settings);
     await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv, input.developerInstructions);
-    settings = this.getSessionSettings(sessionId);
+    settings = await this.getSessionSettings(sessionId);
     this.logDebug('turn_start_requested', {
       sessionId,
       textLength: input.text.length,
@@ -975,7 +1160,7 @@ export class CodexWebRuntime {
         this.cleanupFinishedTurn(startedTurnId);
       }
       return result;
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
       if (!startedTurnId) {
         rejectStarted?.(error);
         this.scheduleThreadSubscriptionRelease(sessionId);
@@ -998,7 +1183,7 @@ export class CodexWebRuntime {
         events: [summarizeRuntimeEvent(event)],
       });
       this.append(turnId, event);
-      this.appendFailedTurnTimeline(
+      await this.appendFailedTurnTimeline(
         sessionId,
         turnId,
         failureMessage,
@@ -1054,7 +1239,7 @@ export class CodexWebRuntime {
               ? `${action === 'resume' ? 'Goal resumed' : 'Goal set'}: ${goal.objective}`
               : action === 'resume' ? 'Goal resumed.' : 'Goal set.',
           });
-          this.appendCommandTimeline(
+          await this.appendCommandTimeline(
             session.id,
             inputText,
             commandResult.command,
@@ -1206,6 +1391,8 @@ export class CodexWebRuntime {
       this.rememberTurnThread(expectedTurnId, threadId);
       this.rememberActiveTurn(threadId, expectedTurnId);
       this.markThreadSummaryActive(threadId);
+      this.historyRevisions.set(threadId, (this.historyRevisions.get(threadId) ?? 0) + 1);
+      this.timelineProjections.delete(threadId);
       this.logDebug('turn_steered', {
         sessionId: threadId,
         turnId: expectedTurnId,
@@ -1434,6 +1621,25 @@ export class CodexWebRuntime {
         event: summarizeRuntimeEvent(event),
       });
     }
+    const businessThreadId = this.turnToThread.get(turnId);
+    if (businessThreadId) {
+      const previousActivity = this.businessActivity.get(businessThreadId);
+      if (event.type.startsWith('turn.') || event.type.startsWith('approval.') || (previousActivity && Date.now() - previousActivity.at > 120_000)) this.activityRevision += 1;
+      this.businessActivity.set(businessThreadId, {
+        at: Date.now(),
+        failed: event.type === 'turn.failed' || (!['turn.started', 'turn.completed'].includes(event.type) && previousActivity?.failed === true),
+        startedAt: event.type === 'turn.started' ? Date.now() : previousActivity?.startedAt,
+      });
+      if (event.type === 'turn.started' || event.type === 'turn.completed' || event.type === 'turn.failed') {
+        this.historyRevisions.set(businessThreadId, (this.historyRevisions.get(businessThreadId) ?? 0) + 1);
+        this.timelineProjections.delete(businessThreadId);
+      }
+      while (this.businessActivity.size > 10_000) {
+        const oldest = this.businessActivity.keys().next().value!;
+        this.businessActivity.delete(oldest);
+        this.historyRevisions.delete(oldest);
+      }
+    }
     this.eventBus.append(turnId, event);
     if (event.type === 'turn.completed' || event.type === 'turn.failed') {
       this.terminalTurns.add(turnId);
@@ -1471,8 +1677,9 @@ export class CodexWebRuntime {
 
   private async readThreadSummary(threadId: string): Promise<ProviderThreadSummary | null> {
     try {
-      const thread = await this.client.readThread(threadId, true);
+      const thread = await this.readProviderThread(threadId, true);
       if (thread) {
+        this.unavailableHistory.delete(threadId);
         return thread;
       }
       return this.resumeAndReadThread(threadId);
@@ -1483,8 +1690,10 @@ export class CodexWebRuntime {
       if (!isIncludeTurnsRetryableError(error)) {
         throw error;
       }
+      this.unavailableHistory.add(threadId);
+      while (this.unavailableHistory.size > 1_000) this.unavailableHistory.delete(this.unavailableHistory.values().next().value!);
       try {
-        const thread = await this.client.readThread(threadId, false);
+        const thread = await this.readProviderThread(threadId, false);
         if (thread) {
           return thread;
         }
@@ -1497,9 +1706,27 @@ export class CodexWebRuntime {
     }
   }
 
-  private async findThreadSummaryInList(threadId: string): Promise<ProviderThreadSummary | null> {
-    const result = await this.client.listThreads({ limit: 100, archived: false });
-    return result.items.find((thread) => thread.threadId === threadId) ?? null;
+  private findThreadSummaryInList(threadId: string): Promise<ProviderThreadSummary | null> {
+    const existing = this.fallbackLookups.get(threadId);
+    if (existing) return existing;
+    const lookup = this.lookupThreadSummaryInList(threadId).finally(() => this.fallbackLookups.delete(threadId));
+    this.fallbackLookups.set(threadId, lookup);
+    return lookup;
+  }
+
+  private async lookupThreadSummaryInList(threadId: string): Promise<ProviderThreadSummary | null> {
+    for (const archived of [false, true]) {
+      const key = archived ? 'archived' : 'active';
+      const cached = this.threadListSnapshots.get(key);
+      const found = cached?.threads.find((thread) => thread.threadId === threadId);
+      if (found && Date.now() - cached!.cachedAt <= THREAD_LIST_SNAPSHOT_CACHE_MS) return found;
+      // Do not use stale-on-error list semantics here: a failed lookup is not deletion.
+      const threads = await this.scanCompleteThreadList(archived);
+      this.threadListSnapshots.set(key, { threads, cachedAt: Date.now() });
+      const thread = threads.find((item) => item.threadId === threadId);
+      if (thread) return thread;
+    }
+    return null;
   }
 
   private async resumeAndReadThread(threadId: string): Promise<ProviderThreadSummary | null> {
@@ -1513,8 +1740,10 @@ export class CodexWebRuntime {
         return null;
       }
       if (isListTurnsUnsupportedError(error)) {
+        this.unavailableHistory.add(threadId);
+      while (this.unavailableHistory.size > 1_000) this.unavailableHistory.delete(this.unavailableHistory.values().next().value!);
         try {
-          return await this.client.readThread(threadId, false);
+          return await this.readProviderThread(threadId, false);
         } catch (fallbackError) {
           if (!isListTurnsUnsupportedError(fallbackError)) {
             throw fallbackError;
@@ -1525,8 +1754,9 @@ export class CodexWebRuntime {
       throw error;
     }
     try {
-      const thread = await this.client.readThread(threadId, true);
+      const thread = await this.readProviderThread(threadId, true);
       if (thread) {
+        this.unavailableHistory.delete(threadId);
         return thread;
       }
     } catch (error) {
@@ -1538,7 +1768,7 @@ export class CodexWebRuntime {
       }
     }
     try {
-      return await this.client.readThread(threadId, false);
+      return await this.readProviderThread(threadId, false);
     } catch (error) {
       if (!isListTurnsUnsupportedError(error)) {
         throw error;
@@ -1547,11 +1777,11 @@ export class CodexWebRuntime {
     }
   }
 
-  private readArchivedThreadSummary(threadId: string): ProviderThreadSummary | null {
+  private async readArchivedThreadSummary(threadId: string): Promise<ProviderThreadSummary | null> {
     const archivedDir = path.join(resolveCodexHome(), 'archived_sessions');
     let fileNames: string[] = [];
     try {
-      fileNames = fs.readdirSync(archivedDir)
+      fileNames = (await fs.readdir(archivedDir))
         .filter((name) => name.endsWith('.jsonl'));
     } catch {
       return null;
@@ -1561,7 +1791,7 @@ export class CodexWebRuntime {
       ...fileNames.filter((name) => !name.includes(threadId)),
     ];
     for (const fileName of prioritized) {
-      const thread = readArchivedThreadFromFile(path.join(archivedDir, fileName), threadId);
+      const thread = await readArchivedThreadFromFile(path.join(archivedDir, fileName), threadId);
       if (thread) {
         return thread;
       }
@@ -1595,7 +1825,7 @@ export class CodexWebRuntime {
     if (typeof this.client.resumeThread !== 'function') {
       return;
     }
-    const settings = this.getSessionSettings(threadId);
+    const settings = await this.getSessionSettings(threadId);
     const permissions = resolveResumePermissions(settings);
     let resumed: unknown;
     for (let attempt = 0; ; attempt += 1) {
@@ -1631,14 +1861,18 @@ export class CodexWebRuntime {
     this.scheduleThreadSubscriptionRelease(threadId);
     const effectiveSettings = mergeEffectiveModelSettings(settings, resumed);
     if (effectiveSettings !== settings) {
-      this.persistSessionSettings(threadId, effectiveSettings);
+      await this.persistSessionSettings(threadId, effectiveSettings);
     }
   }
 
-  private toSession(thread: ProviderThreadSummary): CodexWebSession {
+  private async toSession(thread: ProviderThreadSummary): Promise<CodexWebSession> {
+    const nameRevision = this.nameRevision;
+    await this.timelineWrites.get(thread.threadId);
     this.rememberThreadSummary(thread);
     this.rememberThreadTurns(thread);
-    const current = this.getSessionSettings(thread.threadId);
+    const current = await this.getSessionSettings(thread.threadId);
+    thread = this.applyThreadName(thread, nameRevision);
+    this.rememberThreadSummary(thread);
     const updatedAt = thread.updatedAt ?? null;
     const inputSummary = summarizeSessionInputs(thread);
     const activeTurnId = this.activeTurnIdForThread(thread.threadId, thread);
@@ -1656,21 +1890,28 @@ export class CodexWebRuntime {
       favoriteOrder: current.favoriteOrder ?? null,
       goal: null,
       activeTurnId,
+      lastBusinessActivityAt: this.businessActivity.get(thread.threadId)?.at ?? null,
+      turnStartedAt: this.businessActivity.get(thread.threadId)?.startedAt ?? null,
       activityState: sessionActivityState(
         thread,
         activeTurnId,
         Boolean(this.pendingApprovalTurnIdForThread(thread.threadId)),
+        this.businessActivity.get(thread.threadId),
       ),
       settings: current,
       thread,
-      timeline: composeSessionTimeline(thread, this.timelineStore?.list(thread.threadId) ?? []),
+      historyUnavailable: this.unavailableHistory.has(thread.threadId),
+      timeline: composeSessionTimeline(thread, (await this.timelineStore?.list(thread.threadId)) ?? []),
     };
   }
 
-  private toSessionSummary(thread: ProviderThreadSummary): CodexWebSession {
+  private async toSessionSummary(thread: ProviderThreadSummary): Promise<CodexWebSession> {
+    const nameRevision = this.nameRevision;
     this.rememberThreadSummary(thread);
     this.rememberThreadTurns(thread);
-    const current = this.getSessionSettings(thread.threadId);
+    const current = await this.getSessionSettings(thread.threadId);
+    thread = this.applyThreadName(thread, nameRevision);
+    this.rememberThreadSummary(thread);
     const updatedAt = thread.updatedAt ?? null;
     const inputSummary = summarizeSessionInputs(thread);
     const activeTurnId = this.activeTurnIdForThread(thread.threadId, thread);
@@ -1687,10 +1928,13 @@ export class CodexWebRuntime {
       favorite: current.favorite === true,
       favoriteOrder: current.favoriteOrder ?? null,
       activeTurnId,
+      lastBusinessActivityAt: this.businessActivity.get(thread.threadId)?.at ?? null,
+      turnStartedAt: this.businessActivity.get(thread.threadId)?.startedAt ?? null,
       activityState: sessionActivityState(
         thread,
         activeTurnId,
         Boolean(this.pendingApprovalTurnIdForThread(thread.threadId)),
+        this.businessActivity.get(thread.threadId),
       ),
       settings: current,
       thread: { ...thread, turns: [] },
@@ -1745,10 +1989,10 @@ export class CodexWebRuntime {
     this.threadSummaryCachedAt.set(threadId, Date.now());
   }
 
-  private toStoredFavoriteSession(
+  private async toStoredFavoriteSession(
     sessionId: string,
     settings: CodexWebStoredSessionSettings,
-  ): CodexWebSession {
+  ): Promise<CodexWebSession> {
     const updatedAt = settings.updatedAt ?? null;
     const thread: ProviderThreadSummary = {
       threadId: sessionId,
@@ -1774,7 +2018,7 @@ export class CodexWebRuntime {
       activityState: null,
       settings,
       thread,
-      timeline: this.timelineStore?.list(sessionId) ?? [],
+      timeline: (await this.timelineStore?.list(sessionId)) ?? [],
     };
   }
 
@@ -2028,12 +2272,12 @@ export class CodexWebRuntime {
     };
   }
 
-  private mergeSettings(
+  private async mergeSettings(
     sessionId: string | null,
     patch: Partial<ProviderTurnSessionSettings> | UpdateSessionSettingsInput | undefined,
-  ): CodexWebStoredSessionSettings {
+  ): Promise<CodexWebStoredSessionSettings> {
     const current = sessionId
-      ? this.getSessionSettings(sessionId)
+      ? await this.getSessionSettings(sessionId)
       : createDefaultSettings('pending');
     const metadataSource = patch?.metadata && typeof patch.metadata === 'object'
       ? patch.metadata
@@ -2052,12 +2296,12 @@ export class CodexWebRuntime {
     };
   }
 
-  private getSessionSettings(sessionId: string): CodexWebStoredSessionSettings {
+  private async getSessionSettings(sessionId: string): Promise<CodexWebStoredSessionSettings> {
     const cached = this.sessionSettings.get(sessionId);
     if (cached) {
       return cached;
     }
-    const stored = this.settingsStore?.get(sessionId);
+    const stored = await this.settingsStore?.get(sessionId);
     const migratedStored = migrateLegacyModelDefaults(stored);
     const settings = migratedStored
       ? {
@@ -2074,46 +2318,53 @@ export class CodexWebRuntime {
     return settings;
   }
 
-  private primeSessionSettingsCache(): void {
-    if (typeof this.settingsStore?.list !== 'function') {
-      return;
-    }
-    for (const [sessionId, stored] of this.settingsStore.list()) {
-      const migratedStored = migrateLegacyModelDefaults(stored);
-      if (!migratedStored) {
-        continue;
+  private async primeSessionSettingsCache(): Promise<void> {
+    if (this.settingsRefresh) return this.settingsRefresh;
+    if (typeof this.settingsStore?.list !== 'function') return;
+    const refresh = (async () => {
+      const revision = await this.settingsStore?.revision?.();
+      if (revision && revision === this.settingsRevision) return;
+      const storedEntries = await this.settingsStore!.list!();
+      // Only revision-aware stores promise a complete authoritative snapshot.
+      if (revision) this.sessionSettings.clear();
+      for (const [sessionId, stored] of storedEntries) {
+        const migratedStored = migrateLegacyModelDefaults(stored);
+        if (!migratedStored) continue;
+        this.sessionSettings.set(sessionId, {
+          ...createDefaultSettings(sessionId), ...migratedStored,
+          bridgeSessionId: sessionId, metadata: migratedStored.metadata ?? {},
+        });
       }
-      this.sessionSettings.set(sessionId, {
-        ...createDefaultSettings(sessionId),
-        ...migratedStored,
-        bridgeSessionId: sessionId,
-        metadata: migratedStored.metadata ?? {},
-      });
-    }
+      this.settingsRevision = revision ?? null;
+    })().finally(() => { if (this.settingsRefresh === refresh) this.settingsRefresh = null; });
+    this.settingsRefresh = refresh;
+    return refresh;
   }
 
-  private getStoredSessionSettings(sessionId: string): CodexWebStoredSessionSettings | null {
-    return this.sessionSettings.get(sessionId) ?? this.settingsStore?.get(sessionId) ?? null;
+  private async getStoredSessionSettings(sessionId: string): Promise<CodexWebStoredSessionSettings | null> {
+    return this.sessionSettings.get(sessionId) ?? await this.settingsStore?.get(sessionId) ?? null;
   }
 
-  private persistSessionSettings(sessionId: string, settings: CodexWebStoredSessionSettings): void {
+  private async persistSessionSettings(sessionId: string, settings: CodexWebStoredSessionSettings): Promise<void> {
     const normalized = {
       ...settings,
       bridgeSessionId: sessionId,
       metadata: settings.metadata ?? {},
     };
     this.sessionSettings.set(sessionId, normalized);
-    this.settingsStore?.set(sessionId, normalized);
+    await this.settingsStore?.set(sessionId, normalized);
+    this.settingsRevision = null;
+    this.activityRevision += 1;
   }
 
-  private deleteLocalSessionState(
+  private async deleteLocalSessionState(
     sessionId: string,
     options: { deleteTimeline: boolean } = { deleteTimeline: false },
-  ): void {
+  ): Promise<void> {
     this.sessionSettings.delete(sessionId);
-    this.settingsStore?.delete(sessionId);
+    await this.settingsStore?.delete(sessionId);
     if (options.deleteTimeline) {
-      this.timelineStore?.delete(sessionId);
+      await this.timelineStore?.delete(sessionId);
     }
   }
 
@@ -2145,16 +2396,16 @@ export class CodexWebRuntime {
     return approvalIds;
   }
 
-  private appendCommandTimeline(
+  private async appendCommandTimeline(
     sessionId: string,
     inputText: string,
     command: CodexWebCommandResult['command'],
     history: CodexWebTimelineMessage[],
-  ): void {
+  ): Promise<void> {
     const baseId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const afterHistoryIndex = history.length;
     const afterHistoryId = history.at(-1)?.id;
-    this.appendSessionTimelineEntry(sessionId, {
+    await this.appendSessionTimelineEntry(sessionId, {
       id: `local_user_${baseId}`,
       role: 'user',
       label: 'You',
@@ -2163,7 +2414,7 @@ export class CodexWebRuntime {
       afterHistoryIndex,
       afterHistoryId,
     });
-    this.appendSessionTimelineEntry(sessionId, {
+    await this.appendSessionTimelineEntry(sessionId, {
       id: `command_${command.name}_${baseId}`,
       role: 'system',
       label: `/${command.name}`,
@@ -2174,11 +2425,11 @@ export class CodexWebRuntime {
     });
   }
 
-  private appendFailedTurnTimeline(sessionId: string, turnId: string, message: string, afterHistoryIndex: number): void {
+  private async appendFailedTurnTimeline(sessionId: string, turnId: string, message: string, afterHistoryIndex: number): Promise<void> {
     if (!message.trim()) {
       return;
     }
-    this.appendSessionTimelineEntry(sessionId, {
+    await this.appendSessionTimelineEntry(sessionId, {
       id: `error_${turnId}`,
       role: 'system',
       label: 'Error',
@@ -2724,6 +2975,7 @@ function sessionActivityState(
   thread: ProviderThreadSummary,
   activeTurnId: string | null,
   hasPendingApproval: boolean,
+  activity?: { at: number; failed: boolean },
 ): CodexWebSessionActivityState {
   const activeFlags = Array.isArray(thread.runtimeStatus?.activeFlags)
     ? thread.runtimeStatus.activeFlags.map((flag) => normalizeTurnStatus(flag))
@@ -2732,8 +2984,9 @@ function sessionActivityState(
     return 'waiting_approval';
   }
   if (activeTurnId || normalizeTurnStatus(threadRuntimeStatusType(thread)) === 'active') {
-    return 'running';
+    return activity && Date.now() - activity.at > 120_000 ? 'stale' : 'running';
   }
+  if (activity?.failed || normalizeTurnStatus(thread.turns?.at(-1)?.status) === 'failed') return 'failed';
   return null;
 }
 
@@ -3237,10 +3490,10 @@ function turnSnapshotItemHasFinalOutputText(item: CodexWebTurnSnapshotItem): boo
     && item.content.some((part) => part.type === 'output_text' && Boolean(part.text.trim()));
 }
 
-function readRolloutTurnSnapshot(
+async function readRolloutTurnSnapshot(
   rolloutPath: string | null | undefined,
   turnId: string,
-): CodexWebTurnSnapshot | null {
+): Promise<CodexWebTurnSnapshot | null> {
   const normalizedPath = normalizeString(rolloutPath);
   const normalizedTurnId = normalizeString(turnId);
   if (!normalizedPath || !normalizedTurnId) {
@@ -3248,7 +3501,7 @@ function readRolloutTurnSnapshot(
   }
   let lines: string[];
   try {
-    lines = fs.readFileSync(normalizedPath, 'utf8').split('\n');
+    lines = (await fs.readFile(normalizedPath, 'utf8')).split('\n');
   } catch {
     return null;
   }
@@ -3357,10 +3610,10 @@ function normalizeTurnSnapshotOutputTextContent(value: unknown): Array<{
   });
 }
 
-function readArchivedThreadFromFile(filePath: string, threadId: string): ProviderThreadSummary | null {
+async function readArchivedThreadFromFile(filePath: string, threadId: string): Promise<ProviderThreadSummary | null> {
   let lines: string[] = [];
   try {
-    lines = fs.readFileSync(filePath, 'utf8').split('\n');
+    lines = (await fs.readFile(filePath, 'utf8')).split('\n');
   } catch {
     return null;
   }

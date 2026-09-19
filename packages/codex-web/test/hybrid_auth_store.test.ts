@@ -109,3 +109,19 @@ test('hybrid auth rejects disabled multi-user accounts', async () => {
     /Invalid username or password/u,
   );
 });
+
+test('persisted revocation and password rotation invalidate tokens held by another hybrid instance', async () => {
+  const { authPath, identityPath } = await tempPaths();
+  const identityStore = new FileIdentityStore({ identityPath });
+  await identityStore.setMultiUserEnabled(true);
+  await identityStore.upsertUserWithPassword({ id: 'alice', username: 'alice', password: 'password-one' });
+  const first = new HybridAuthStore({ legacyAuth: new AuthStore({ authPath }), identityStore });
+  const second = new HybridAuthStore({ legacyAuth: new AuthStore({ authPath }), identityStore: new FileIdentityStore({ identityPath }) });
+  const login = await first.login({ username: 'alice', password: 'password-one' });
+  assert.ok(await first.verifyToken(login.token));
+  await second.logout(login.token);
+  assert.equal(await first.verifyToken(login.token), null);
+  const next = await first.login({ username: 'alice', password: 'password-one' });
+  await identityStore.upsertUserWithPassword({ id: 'alice', username: 'alice', password: 'password-two' });
+  assert.equal(await first.verifyToken(next.token), null);
+});

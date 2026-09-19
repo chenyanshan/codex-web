@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -1071,7 +1072,9 @@ test('recovery recognizes an accepted steer by its client message id', async () 
       headers: { Authorization: 'Bearer token' },
     });
     assert.equal(response.status, 200);
-    assert.equal((await response.json() as any).turnId, 'turn_active');
+    const payload = await response.json() as any;
+    assert.equal(payload.turnId, 'turn_active');
+    assert.equal(payload.submission.clientMessageId, crypto.createHash('sha256').update(submissionId).digest('hex').slice(0, 24));
     assert.deepEqual(runtime.calls, { create: 0, start: 0 });
   } finally {
     await server.stop();

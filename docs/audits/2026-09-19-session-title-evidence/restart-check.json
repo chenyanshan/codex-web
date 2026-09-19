@@ -1,0 +1,12 @@
+{
+  "label": "com.chenyanshan.codex-web",
+  "state": "running",
+  "previousPid": 52403,
+  "pid": 56699,
+  "buildId": "c8f19e0986122fd3d08b",
+  "homepageStatus": 200,
+  "servedAppMatchesSource": true,
+  "nativeTitlePriority": true,
+  "removedControlsAbsent": true,
+  "unauthenticatedApiStatus": 401
+}

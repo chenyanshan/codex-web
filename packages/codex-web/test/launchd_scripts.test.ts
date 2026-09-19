@@ -44,14 +44,90 @@ test('launchd detached restart schedules a one-shot helper before killing the se
   const script = await readScript('scripts/service/restart-codex-web-launchd-user-detached.sh');
 
   assert.match(script, /HELPER_LABEL="\$\{LABEL\}\.restart"/u);
-  assert.match(script, /StartInterval/u);
+  assert.doesNotMatch(script, /StartInterval/u);
   assert.match(script, /launchctl bootstrap "\$\{LAUNCHD_DOMAIN\}" "\$\{HELPER_PLIST_PATH\}"/u);
-  assert.match(script, /launchctl kickstart -k "\$\{LAUNCHD_DOMAIN\}\/\$\{HELPER_LABEL\}"/u);
-  assert.match(script, /launchctl kickstart -k %s/u);
-  assert.match(script, /shell_escape "\$\{LAUNCHD_TARGET\}"/u);
+  assert.doesNotMatch(script, /launchctl kickstart -k/u);
+  assert.match(script, /run-codex-web-restart-job\.sh/u);
+  assert.match(script, /<string>\/bin\/bash<\/string>/u);
+  assert.match(script, /restart already in progress/u);
   assert.match(script, /echo "scheduled detached restart:/u);
   assert.doesNotMatch(script, /RESTART_SCRIPT/u);
   assert.doesNotMatch(script, /scripts\/service\/restart-codex-web-launchd-user\.sh/u);
+});
+
+async function restartHarness(t: test.TestContext, desired: string) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'codex-web-restart-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const bin = path.join(directory, 'bin');
+  await mkdir(bin);
+  const statePath = path.join(directory, 'state.json');
+  const plistPath = path.join(directory, 'service.plist');
+  const backupPath = path.join(directory, 'backup.plist');
+  const helperPath = path.join(directory, 'helper.plist');
+  await writeFile(plistPath, desired);
+  await writeFile(backupPath, 'old');
+  await writeFile(helperPath, 'one-shot');
+  await writeFile(statePath, JSON.stringify({ phase: 'running', version: 'old', pid: 100, nextPid: 101, attempts: 0, transitions: 0, commands: [] }));
+  const fakeLaunchctl = `#!${process.execPath}
+const fs = require('node:fs');
+const file = process.env.CODEX_RESTART_TEST_STATE;
+const state = JSON.parse(fs.readFileSync(file));
+const args = process.argv.slice(2), command = args[0];
+state.commands.push(args); let code = 0;
+if (command === 'bootout') { state.phase = 'unloading'; state.transitions = 4; }
+if (command === 'bootstrap') {
+  state.attempts++;
+  if (state.attempts < 3) code = 37;
+  else { state.version = fs.readFileSync(args[2], 'utf8'); state.phase = state.version === 'broken' ? 'crashed' : 'running'; state.pid = state.nextPid++; }
+}
+if (command === 'kickstart' && state.phase !== 'running') code = 37;
+if (command === 'print') {
+  if (state.phase === 'unloading' && state.transitions-- <= 0) state.phase = 'absent';
+  if (state.phase === 'absent') code = 113;
+  else if (state.phase !== 'crashed') console.log(' state = running\\n pid = ' + state.pid);
+  else console.log(' state = waiting');
+}
+fs.writeFileSync(file, JSON.stringify(state)); process.exit(code);
+`;
+  await writeFile(path.join(bin, 'launchctl'), fakeLaunchctl, { mode: 0o700 });
+  await writeFile(path.join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  await writeFile(path.join(bin, 'plutil'), `#!${process.execPath}\nconst fs = require('node:fs'); process.exit(fs.readFileSync(process.argv[3], 'utf8') === 'invalid' ? 1 : 0);\n`, { mode: 0o700 });
+  return {
+    statePath, plistPath, helperPath,
+    run: () => execFileAsync('/bin/bash', [path.join(repoRoot, 'scripts/service/run-codex-web-restart-job.sh'), 'gui/501', 'test-service', plistPath, 'reload', backupPath, helperPath], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CODEX_RESTART_TEST_STATE: statePath },
+    }),
+  };
+}
+
+test('detached worker survives lingering old jobs and transient bootstrap failures', async (t) => {
+  const fixture = await restartHarness(t, 'new');
+  const result = await fixture.run();
+  const state = JSON.parse(await readFile(fixture.statePath, 'utf8'));
+  assert.equal(state.version, 'new');
+  assert.equal(state.phase, 'running');
+  assert.equal(state.attempts, 3);
+  assert.match(result.stdout, /running: gui\/501\/test-service pid=101/u);
+  assert.equal(state.commands.filter((args: string[]) => args[0] === 'bootout').length, 1);
+  assert.equal(state.commands.some((args: string[]) => args.includes('-k')), false);
+  await assert.rejects(stat(fixture.helperPath), { code: 'ENOENT' });
+});
+
+test('detached worker restores the previous plist when replacement cannot stay running', async (t) => {
+  const fixture = await restartHarness(t, 'broken');
+  await assert.rejects(fixture.run(), { code: 2 });
+  const state = JSON.parse(await readFile(fixture.statePath, 'utf8'));
+  assert.equal(state.phase, 'running');
+  assert.equal(state.version, 'old');
+  assert.equal(await readFile(fixture.plistPath, 'utf8'), 'old');
+});
+
+test('invalid replacement never unloads the running service', async (t) => {
+  const fixture = await restartHarness(t, 'invalid');
+  await assert.rejects(fixture.run(), { code: 1 });
+  const state = JSON.parse(await readFile(fixture.statePath, 'utf8'));
+  assert.deepEqual(state.commands, []);
+  assert.equal(state.phase, 'running');
 });
 
 test('launchd install does not unload a running Codex Web service', async () => {
@@ -67,7 +143,12 @@ test('launchd install runs the Codex Web server directly under node', async () =
   const script = await readScript('scripts/service/install-codex-web-launchd-user.sh');
 
   assert.match(script, /NODE_BIN="\$\(command -v node\)"/u);
-  assert.match(script, /--conditions=development --import tsx packages\/codex-web\/src\/cli\.ts serve/u);
+  assert.match(script, /SERVICE_MODE="\$\{CODEX_WEB_SERVICE_MODE:-dist\}"/u);
+  assert.match(script, /packages\/codex-web\/dist\/cli\.js/u);
+  assert.match(script, /--conditions=development --import tsx packages\/codex-web\/src\/cli\.ts/u);
+  assert.match(script, /npm run build && npm run test:built-public/u);
+  assert.match(script, /--reload-plist/u);
+  assert.match(script, /service-backups/u);
   assert.doesNotMatch(script, /npm run serve --workspace packages\/codex-web/u);
 });
 

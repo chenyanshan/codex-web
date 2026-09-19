@@ -1,0 +1,303 @@
+{
+  "generatedAt": "2026-09-19T14:11:56.096Z",
+  "definition": "index.html plus each unique directly referenced local JS/CSS, gzip level 6 per asset. Emitted assets retain the build placeholder; lazy admin assets are excluded.",
+  "gzipLevel": 6,
+  "source": {
+    "directJsCssCount": 22,
+    "criticalAssetCountIncludingHtml": 23,
+    "gzipBytes": 171295,
+    "appBytes": 499693,
+    "assets": [
+      {
+        "name": "index.html",
+        "bytes": 2633,
+        "gzipBytes": 722,
+        "sha256": "aa66fad97d5eac6eff2551aadf994164df898380c4f1375566d8fb47d6c81bfe"
+      },
+      {
+        "name": "theme-init.js",
+        "bytes": 999,
+        "gzipBytes": 459,
+        "sha256": "ce6837e780a448ee02251fffe66e61d88ca7a1c056ac105c520a08c5b2c84d12"
+      },
+      {
+        "name": "styles.css",
+        "bytes": 121599,
+        "gzipBytes": 18843,
+        "sha256": "f9a3cf73a23b587da102ef77cde2021bc96c2f8617e5b5e7f1152fceff5df6d3"
+      },
+      {
+        "name": "pwa-pull-refresh.js",
+        "bytes": 4125,
+        "gzipBytes": 1189,
+        "sha256": "33f76cb8618053caad0cdf5d78314d1869774ee11d29ff5f96b86686fff91688"
+      },
+      {
+        "name": "ui-copy.js",
+        "bytes": 18748,
+        "gzipBytes": 6426,
+        "sha256": "7b397f86d1427574708a18346dea0d429ae2e18006e19a821da066eec5dbb9d4"
+      },
+      {
+        "name": "ui-kit.js",
+        "bytes": 18872,
+        "gzipBytes": 4937,
+        "sha256": "2b9df9fec8ed2c1f1de998548dbe6c60fca9fdad15d6300166045096b1f7fe2c"
+      },
+      {
+        "name": "attachment-upload.js",
+        "bytes": 7745,
+        "gzipBytes": 2416,
+        "sha256": "654209397ec14f7cfac64f36adc237a963766183fbe15920e831bc148f2f6fe2"
+      },
+      {
+        "name": "attachment-utils.js",
+        "bytes": 4987,
+        "gzipBytes": 1449,
+        "sha256": "355f25571bf79f625acc5eb519d5324f73236b1ee9e53ac65ee31b10f5d4502d"
+      },
+      {
+        "name": "markdown-renderer.js",
+        "bytes": 10753,
+        "gzipBytes": 3076,
+        "sha256": "c48f3fac9780070f9b1c53acafb0cec3e9b4be96728cebba746677bd3ab33490"
+      },
+      {
+        "name": "ui-localization.js",
+        "bytes": 7416,
+        "gzipBytes": 2580,
+        "sha256": "de5f834fb0eb6d94e5867abf59a3e4c3b0be2404f536b2846f33ddd79ac97e18"
+      },
+      {
+        "name": "session-file-viewer.js",
+        "bytes": 10221,
+        "gzipBytes": 2876,
+        "sha256": "31f3c17a8742afb9e57c9a72777c69fb19eef508827860003e73cd4098b26f90"
+      },
+      {
+        "name": "webhook-settings.js",
+        "bytes": 12091,
+        "gzipBytes": 2762,
+        "sha256": "a9f3c61c5d710360d5f7c9ed89f1af969cba9905736a3830dc3a39cb95c696aa"
+      },
+      {
+        "name": "admin-data.js",
+        "bytes": 6801,
+        "gzipBytes": 2085,
+        "sha256": "7f9e156392464fe9901aedd0a7a5ee4726be195bdc87f5827a8d643a907442f4"
+      },
+      {
+        "name": "admin-editor.js",
+        "bytes": 4970,
+        "gzipBytes": 1462,
+        "sha256": "4c47f845d01d693d331bcab2219fe01ee5c3701e48ebc2040c7da58ea8eca7fa"
+      },
+      {
+        "name": "request-context.js",
+        "bytes": 838,
+        "gzipBytes": 383,
+        "sha256": "c4ea60d1af381bd02c2a71b7ef2b735aef9ef81fb33342f44a3411b043c10e5d"
+      },
+      {
+        "name": "session-reading.js",
+        "bytes": 6971,
+        "gzipBytes": 2087,
+        "sha256": "9dc7bc936dffb5e399b25100245bdec40deccf6c510dee3ffc68bb79a03e944e"
+      },
+      {
+        "name": "timeline-reconciliation.js",
+        "bytes": 4320,
+        "gzipBytes": 1394,
+        "sha256": "90b4e301738121cc9f52b5ea20ff87744e98323ec206a0c90c0455fa9d78557f"
+      },
+      {
+        "name": "session-loader.js",
+        "bytes": 6186,
+        "gzipBytes": 1942,
+        "sha256": "631d07cc045ce7d190b9e5b6aba2036130188acb6260280825a40b744da673fa"
+      },
+      {
+        "name": "network-recovery.js",
+        "bytes": 8432,
+        "gzipBytes": 2508,
+        "sha256": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253"
+      },
+      {
+        "name": "session-rename.js",
+        "bytes": 5609,
+        "gzipBytes": 2006,
+        "sha256": "495ebf6b9c71753f37df37befad9afd84507ab38aeedd984d149b6a3ca81bd24"
+      },
+      {
+        "name": "draft-store.js",
+        "bytes": 3240,
+        "gzipBytes": 1217,
+        "sha256": "450b40aad5f1c71edd244a9dd971025755a8536de6ce7dc31059dca679802940"
+      },
+      {
+        "name": "session-pagination.js",
+        "bytes": 20460,
+        "gzipBytes": 4469,
+        "sha256": "771c48cea9f32caeb8deab1e3dfe036529266be7b2dcef0265eeb4185511e418"
+      },
+      {
+        "name": "app.js",
+        "bytes": 499693,
+        "gzipBytes": 104007,
+        "sha256": "a456d9c95a7f868af2971aed29cd859ea41bc3f07f4094b0af6ebba80a7209e2"
+      }
+    ]
+  },
+  "dist": {
+    "directJsCssCount": 22,
+    "criticalAssetCountIncludingHtml": 23,
+    "gzipBytes": 140094,
+    "appBytes": 343475,
+    "assets": [
+      {
+        "name": "index.html",
+        "bytes": 2633,
+        "gzipBytes": 722,
+        "sha256": "aa66fad97d5eac6eff2551aadf994164df898380c4f1375566d8fb47d6c81bfe"
+      },
+      {
+        "name": "theme-init.js",
+        "bytes": 525,
+        "gzipBytes": 335,
+        "sha256": "8b2313dc9ffe611ab7707580b2ade42f1b8b2b7c6030cd309b209f33b1b283e5"
+      },
+      {
+        "name": "styles.css",
+        "bytes": 101382,
+        "gzipBytes": 17554,
+        "sha256": "9f2a8240d89196f01da2de9425853cb49b7943abec604467e49fbb59552e11f0"
+      },
+      {
+        "name": "pwa-pull-refresh.js",
+        "bytes": 1863,
+        "gzipBytes": 844,
+        "sha256": "7d354d47a3763ae614d1dbaa798989cfc4fc4fdcc82e0b308d282a1236ffef21"
+      },
+      {
+        "name": "ui-copy.js",
+        "bytes": 15287,
+        "gzipBytes": 6180,
+        "sha256": "cdbf76ed86b80937e0b737261c08e44cd77c0e66b0cf0073fd479fb7b3b2bbd7"
+      },
+      {
+        "name": "ui-kit.js",
+        "bytes": 14039,
+        "gzipBytes": 4354,
+        "sha256": "9b8cc57839bd7e6e6856fec150f6aac45399bec027bd378551284bf6abfe1e4c"
+      },
+      {
+        "name": "attachment-upload.js",
+        "bytes": 3632,
+        "gzipBytes": 1647,
+        "sha256": "d5f0f9e683167320ed72ee789fc17bc46e30ca685964214c3423df057f5d0a2f"
+      },
+      {
+        "name": "attachment-utils.js",
+        "bytes": 2351,
+        "gzipBytes": 1064,
+        "sha256": "a6d979d059bc30fafd6d5f3d4c9302f41c93e4100fd7f812a19e8c3259b15086"
+      },
+      {
+        "name": "markdown-renderer.js",
+        "bytes": 4632,
+        "gzipBytes": 2258,
+        "sha256": "aa82c1d1049ed62cbcd643ffbcfd71f71ec41b237e9a258036dc0587e9ee1a3d"
+      },
+      {
+        "name": "ui-localization.js",
+        "bytes": 3851,
+        "gzipBytes": 1910,
+        "sha256": "e462000d1fec209160c69810dc5b37b17d31b17845f9a4a32f753b4b0df76682"
+      },
+      {
+        "name": "session-file-viewer.js",
+        "bytes": 6820,
+        "gzipBytes": 2471,
+        "sha256": "01eb5caa39750bc58a3524509f08f04234e8ec44a88b8006e24f575e60bdfa87"
+      },
+      {
+        "name": "webhook-settings.js",
+        "bytes": 7738,
+        "gzipBytes": 2355,
+        "sha256": "7343f251a984bbeb0967dec9281cb1b67ae068bae19735433c05eb5ec3079edd"
+      },
+      {
+        "name": "admin-data.js",
+        "bytes": 3110,
+        "gzipBytes": 1431,
+        "sha256": "f8b83ea2126f2b3d50da0614a0e4a5f79b0ca7565f0809d148f2fdcf2045a22f"
+      },
+      {
+        "name": "admin-editor.js",
+        "bytes": 2102,
+        "gzipBytes": 1017,
+        "sha256": "fc8ad4d76fc2f80887bca55ef239fe2c3b42989b4b80369eeb9fd4f27aba485b"
+      },
+      {
+        "name": "request-context.js",
+        "bytes": 335,
+        "gzipBytes": 239,
+        "sha256": "a5aaf0f21c7f01a5ffe05131cdf55f7766d03edc47200911960310fb6fadf75d"
+      },
+      {
+        "name": "session-reading.js",
+        "bytes": 3170,
+        "gzipBytes": 1336,
+        "sha256": "087b8765b6842878d83be835c9daea82d7d23c2b8d551c5b061c38a65b7c7ebd"
+      },
+      {
+        "name": "timeline-reconciliation.js",
+        "bytes": 1493,
+        "gzipBytes": 661,
+        "sha256": "b83d76f20b06261a542d7b026085a0b735bfec723d0b20a29ef8b0d4beef7ab9"
+      },
+      {
+        "name": "session-loader.js",
+        "bytes": 2888,
+        "gzipBytes": 1478,
+        "sha256": "64d26f3ff8efe7ce55d22bdf6883c4c69b05a06b8f41152dcbc83511735da0b2"
+      },
+      {
+        "name": "network-recovery.js",
+        "bytes": 4371,
+        "gzipBytes": 2063,
+        "sha256": "9a651d7e92cf3b85fbceb505b8ef8d4a8fa8efcb1d1df33d171152f0d2d16d9d"
+      },
+      {
+        "name": "session-rename.js",
+        "bytes": 3621,
+        "gzipBytes": 1689,
+        "sha256": "5140fe73eae396434d624925a66e45e68a6514f3225acd11d079343f7f96d969"
+      },
+      {
+        "name": "draft-store.js",
+        "bytes": 1610,
+        "gzipBytes": 795,
+        "sha256": "d61aaccadefdb147590f8bce998a85c2216bc9656b79be5e68cd91997d92518b"
+      },
+      {
+        "name": "session-pagination.js",
+        "bytes": 9311,
+        "gzipBytes": 3428,
+        "sha256": "9cb8dd7d8ae843993f18f5928e37918ceb596b97aaf9e9e53d05101b96301576"
+      },
+      {
+        "name": "app.js",
+        "bytes": 343475,
+        "gzipBytes": 84263,
+        "sha256": "2678e29e4baa9556249d46d18279d67bb2f719774f18750427af5334505f2f48"
+      }
+    ]
+  },
+  "served": {
+    "buildId": "5fa5a3f77899c8cad919",
+    "appBytes": 343473,
+    "appSha256": "d6e5722d33382f4b0d7b36ff19e8cfdf3011391e9264968aef26086a9b370fd9",
+    "differenceFromEmitted": "The server substitutes __CODEX_WEB_BUILD_ID__ with the current build ID."
+  }
+}

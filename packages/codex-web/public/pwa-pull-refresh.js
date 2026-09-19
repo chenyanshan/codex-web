@@ -6,6 +6,7 @@
     const root = options?.root || document.body;
     const onRefresh = options?.onRefresh;
     const getScrollContainer = options?.getScrollContainer;
+    const getLabels = options?.getLabels;
     const threshold = Number(options?.threshold) > 0 ? Number(options.threshold) : DEFAULT_THRESHOLD;
     if (!root || typeof onRefresh !== 'function') {
       return () => {};
@@ -21,6 +22,7 @@
     let distance = 0;
     let pulling = false;
     let refreshing = false;
+    let labels = { pull: 'Pull to refresh', ready: 'Release to refresh', loading: 'Refreshing' };
 
     function currentScrollContainer(target = null) {
       if (typeof getScrollContainer === 'function') {
@@ -43,7 +45,7 @@
       indicator.classList.toggle('is-visible', nextDistance > 8 || refreshing);
       indicator.classList.toggle('is-ready', ready);
       indicator.classList.toggle('is-refreshing', refreshing);
-      indicator.textContent = refreshing ? 'Refreshing' : ready ? 'Release to refresh' : 'Pull to refresh';
+      indicator.textContent = refreshing ? labels.loading : ready ? labels.ready : labels.pull;
       indicator.style.transform = `translate(-50%, ${Math.round(-48 + Math.min(nextDistance, MAX_PULL) * 0.7)}px)`;
     }
 
@@ -63,6 +65,7 @@
       }
       startY = event.touches[0].clientY;
       startTarget = target;
+      labels = getLabels?.({ target }) || labels;
       distance = 0;
       pulling = true;
     }
@@ -95,9 +98,9 @@
       }
       refreshing = true;
       setIndicator(threshold, true);
-      Promise.resolve(onRefresh({
-        target,
-      })).finally(() => {
+      Promise.resolve().then(() => onRefresh({ target })).catch(() => {
+        // The refresh owner renders its durable error and retry action.
+      }).finally(() => {
         refreshing = false;
         resetIndicator();
       });

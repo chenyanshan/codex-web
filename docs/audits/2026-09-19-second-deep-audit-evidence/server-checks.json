@@ -1,0 +1,81 @@
+{
+  "measuredAt": "2026-09-19T05:23:27.102Z",
+  "environment": "Real HTTP server/auth/stores; temporary synthetic state; stub Codex runtime; no real users or tasks",
+  "cases": [
+    {
+      "name": "last_admin_can_disable_self",
+      "beforeStatus": 200,
+      "mutationStatus": 200,
+      "subsequentAdminRequestStatus": 503,
+      "enabledAdminsRemaining": 0
+    },
+    {
+      "name": "admin_list_ignores_page_size",
+      "status": 200,
+      "requestedLimit": 30,
+      "returned": 1000,
+      "hasCursor": false,
+      "responseBytes": 358681,
+      "durationMs": 14.209834,
+      "upstreamListCalls": [
+        {},
+        {}
+      ],
+      "firstItemHasTitle": false,
+      "firstItemSummary": "Initial prompt audit_app_0"
+    },
+    {
+      "name": "admin_all_filter_contract",
+      "frontendAllSelectionOmitsStateQuery": true,
+      "defaultCount": 999,
+      "explicitAllCount": 1000,
+      "archivedInDefault": false,
+      "archivedInExplicitAll": true
+    },
+    {
+      "name": "identity_document_scale",
+      "samplesPerSize": 10,
+      "observations": [
+        {
+          "sessions": 1000,
+          "fileBytes": 272019,
+          "readStateMedianMs": 0.9580419999999776,
+          "readStateMaxMs": 1.2213749999999948
+        },
+        {
+          "sessions": 10000,
+          "fileBytes": 2729019,
+          "readStateMedianMs": 9.197667000000024,
+          "readStateMaxMs": 10.137166000000008
+        }
+      ]
+    },
+    {
+      "name": "report_index_external_update",
+      "initialTitle": "Old report title",
+      "titleAfterExternalUpdate": "Old report title",
+      "newStoreTitle": "Updated report title"
+    },
+    {
+      "name": "startup_assets_public",
+      "scope": "HTML and its direct JS/CSS dependencies, gzip level 6, excluding icons/dynamic admin module",
+      "files": 18,
+      "bytes": 744122,
+      "gzipBytes": 157131
+    },
+    {
+      "name": "startup_assets_dist_public",
+      "scope": "HTML and its direct JS/CSS dependencies, gzip level 6, excluding icons/dynamic admin module",
+      "files": 18,
+      "bytes": 512454,
+      "gzipBytes": 129790
+    }
+  ],
+  "sourceSha256": {
+    "identity_store.ts": "b95d9b35ab1c280790da250a16803cb7f18ed7c23a44f9ef964ed109c56dcf46",
+    "server.ts": "07b846d78bf4f5686fec0e5dd458bdaa89d9554f549eeef72327692876a5b856",
+    "report_store.ts": "cccc823228bff34330c19edbc0ac6eab8221e0d9c8e666bb4a03d78a9131ede3",
+    "http_metrics.ts": "2a733d7d4b759d874ba272586638b0d9ee53bdc3904214153ef8755726417bc9"
+  },
+  "completedAt": "2026-09-19T05:23:27.382Z"
+}

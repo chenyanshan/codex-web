@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 ROTATION_SCRIPT="${SCRIPT_DIR}/rotate-codex-web-logs.sh"
 NODE_BIN="$(command -v node)"
+SERVICE_MODE="${CODEX_WEB_SERVICE_MODE:-dist}"
 CONFIG_DIR="${HOME}/.config/codex-web"
 ENV_FILE="${CONFIG_DIR}/service.env"
 STATE_DIR="${HOME}/.codex-web"
@@ -21,6 +22,7 @@ ROTATION_PLIST_PATH="${PLIST_DIR}/${ROTATION_LABEL}.plist"
 LAUNCHD_DOMAIN="gui/${UID}"
 LAUNCHD_TARGET="${LAUNCHD_DOMAIN}/${LABEL}"
 ROTATION_TARGET="${LAUNCHD_DOMAIN}/${ROTATION_LABEL}"
+BACKUP_PATH=''
 
 shell_escape() {
   printf '%q' "$1"
@@ -76,13 +78,18 @@ EOF
 }
 
 write_plist() {
-  local command
+  local command entry
+  case "${SERVICE_MODE}" in
+    dist) entry='packages/codex-web/dist/cli.js' ;;
+    source) entry='--conditions=development --import tsx packages/codex-web/src/cli.ts' ;;
+    *) echo 'CODEX_WEB_SERVICE_MODE must be dist or source' >&2; return 1 ;;
+  esac
   command=$(
-    printf 'set -euo pipefail; mkdir -p %s; set -a; source %s; set +a; cd %s; exec %s --conditions=development --import tsx packages/codex-web/src/cli.ts serve' \
+    printf 'set -euo pipefail; mkdir -p %s; set -a; source %s; set +a; cd %s; exec %s %s serve' \
       "$(shell_escape "${LOG_DIR}")" \
       "$(shell_escape "${ENV_FILE}")" \
       "$(shell_escape "${REPO_ROOT}")" \
-      "$(shell_escape "${NODE_BIN}")"
+      "$(shell_escape "${NODE_BIN}")" "${entry}"
   )
 
   mkdir -p "${PLIST_DIR}"
@@ -150,12 +157,24 @@ write_rotation_plist() {
 EOF
 }
 
+if [[ "${SERVICE_MODE}" == dist ]]; then
+  (cd "${REPO_ROOT}" && npm run build && npm run test:built-public --workspace packages/codex-web)
+elif [[ "${SERVICE_MODE}" != source ]]; then
+  echo 'CODEX_WEB_SERVICE_MODE must be dist or source' >&2
+  exit 1
+fi
+
 mkdir -p "${LOG_DIR}"
 touch "${STDOUT_LOG}" "${STDERR_LOG}" "${ROTATION_LOG}"
 chmod 700 "${STATE_DIR}" "${LOG_DIR}" 2>/dev/null || true
 chmod 600 "${STDOUT_LOG}" "${STDERR_LOG}" "${ROTATION_LOG}"
 
 write_default_env_file_if_missing
+if [[ -f "${PLIST_PATH}" ]]; then
+  mkdir -p "${STATE_DIR}/service-backups"
+  BACKUP_PATH="${STATE_DIR}/service-backups/${LABEL}.$(date +%Y%m%dT%H%M%S).$$.plist"
+  cp -p "${PLIST_PATH}" "${BACKUP_PATH}"
+fi
 write_plist
 write_rotation_plist
 
@@ -163,12 +182,14 @@ write_rotation_plist
 # Codex turn running under the service itself; unloading that job kills the
 # caller before it can bootstrap the replacement.
 if launchctl print "${LAUNCHD_TARGET}" >/dev/null 2>&1; then
-  echo "launch agent already loaded: ${LAUNCHD_TARGET}"
+  # Loaded jobs retain their original arguments. Reload via an independent
+  # helper so a Codex turn inside the old service cannot kill its own installer.
+  /bin/bash "${SCRIPT_DIR}/restart-codex-web-launchd-user-detached.sh" --reload-plist --rollback-plist "${BACKUP_PATH}"
 else
   launchctl bootstrap "${LAUNCHD_DOMAIN}" "${PLIST_PATH}"
+  launchctl enable "${LAUNCHD_TARGET}" >/dev/null 2>&1 || true
+  launchctl kickstart -k "${LAUNCHD_TARGET}" >/dev/null 2>&1 || true
 fi
-launchctl enable "${LAUNCHD_TARGET}" >/dev/null 2>&1 || true
-launchctl kickstart -k "${LAUNCHD_TARGET}" >/dev/null 2>&1 || true
 
 if launchctl print "${ROTATION_TARGET}" >/dev/null 2>&1; then
   echo "log rotation agent already loaded: ${ROTATION_TARGET}"
@@ -183,3 +204,4 @@ echo "installed log rotation agent: ${ROTATION_PLIST_PATH}"
 echo "config file: ${ENV_FILE}"
 echo "logs: ${LOG_DIR}"
 echo "status label: ${LAUNCHD_TARGET}"
+echo "service mode: ${SERVICE_MODE}"

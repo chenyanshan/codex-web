@@ -4,6 +4,7 @@ const UI = globalThis.CodexWebUi || {
   segmentedControl: () => '',
 };
 const SESSION_PAGINATION_API = globalThis.CodexWebSessionPagination;
+const { adminSessionsPath, normalizeAdminSessionState, projectGrantsFromProjectIds } = globalThis.CodexWebAdminData;
 const {
   fileNameFromPath,
   formatAttachmentSize,
@@ -90,7 +91,7 @@ const TIMELINE_PERSIST_DEBOUNCE_MS = 750;
 const FIRST_TURN_RECOVERY_DELAY_MS = 10_000;
 const LOCAL_TURN_SYNC_GRACE_MS = 10_000;
 const SESSION_DETAIL_CACHE_FRESH_MS = 3 * 60_000;
-const DESKTOP_WORKSPACE_MIN_WIDTH = 1280;
+const DESKTOP_WORKSPACE_MIN_WIDTH = 980;
 const EDGE_SWIPE_START_PX = 24;
 const EDGE_SWIPE_TRIGGER_PX = 72;
 const EDGE_SWIPE_MAX_VERTICAL_PX = 48;
@@ -151,6 +152,13 @@ const state = {
     filterState: 'all',
     editingProjectId: '',
     editingRoleId: '',
+    editingUserId: '',
+    editorKind: '',
+    notice: '',
+    sessionsNextCursor: null,
+    sessionsHasMore: false,
+    sessionsPage: 0,
+    observedSessionError: '',
     observedSession: null,
     observedSessionLoading: false,
   },
@@ -247,6 +255,49 @@ const state = {
   workDetailsPolicyPendingSessionId: '',
 };
 
+const { translateUi, t, translateText, localizeUiHtml, localizeUiHtmlOutsideProtectedHtml, restoreProtectedUiContentBlocks, protectUiContentBlocks, findProtectedUiContentRanges, isProtectedUiContentTag, hasHtmlClass, hasHtmlAttribute, localizeElement, localizeFragment, unescapeBasicHtml, decodeHtmlCodePoint } = globalThis.CodexWebLocalization.createRenderer({
+  state,
+  UI_TRANSLATIONS,
+  normalizeLanguage,
+  DEFAULT_LANGUAGE,
+  escapeAttribute,
+  escapeHtml
+});
+
+const { renderDesktopSessionFileOverlay, renderSessionFileViewer, renderSessionFileViewerContent, renderSessionFileViewerBody, renderSessionFileDocument, sandboxedSessionFileHtml, normalizeSessionFile, sessionFilePlaceholder, normalizeSessionFileKind, sessionFileKindFromPath, sessionFileMetadata, isSafeSessionFileContentUrl, sessionFileProtocolError, sessionFileErrorCode, sessionFileErrorMessage, decodeSessionFilePath, createTextFileBlob, createSessionFileObjectUrl, revokeSessionFileObjectUrl } = globalThis.CodexWebFileViewer.createRenderer({
+  localizeFragment,
+  localizeElement,
+  state,
+  fileNameFromPath,
+  t,
+  sessionActivityState,
+  renderBackButtonIcon,
+  escapeAttribute,
+  escapeHtml,
+  renderDownloadButtonIcon,
+  formatAttachmentSize,
+  renderMarkdown,
+  SESSION_FILE_HTML_CSP
+});
+
+const { renderWebhookSettingsSection, renderWebhookDialogs, renderWebhookRotateConfirmDialog, normalizeWebhookEndpointPath, normalizeWebhookKeyHint, webhookKeyHintDisplay, webhookEndpointUrl, applyWebhookSettingsPayload, webhookResponseKey, webhookErrorMessage, handleWebhookRequestError, refreshWebhookSettings, setWebhookEnabled, requestWebhookKeyRotation, cancelWebhookKeyRotation, rotateWebhookKey, copyWebhookEndpoint, copyWebhookKey } = globalThis.CodexWebWebhookSettings.createRenderer({
+  state,
+  t,
+  escapeHtml,
+  translateText,
+  escapeAttribute,
+  createWebhookSettingsState,
+  handleApiError,
+  isShareContext,
+  getAuthRequestGeneration: () => authRequestGeneration,
+  render,
+  apiFetch,
+  isAuthRequestCurrent,
+  rememberFocusReturn,
+  requestFocusRestore,
+  copyTextToClipboard
+});
+
 const SESSION_PAGINATION = SESSION_PAGINATION_API.createController({
   state,
   apiFetch,
@@ -285,13 +336,56 @@ const COMPOSER_UI = UI.createComposerRenderer({
   requestFocusRestore,
 });
 
-const ADMIN_UI = globalThis.CodexWebAdminUi.createRenderer({
+const UPLOADS = globalThis.CodexWebAttachmentUpload.createController({
+  current: () => ({ owner: currentDraftOwnerKey(), key: currentPromptDraftKey(), generation: authRequestGeneration, token: state.token,
+    path: state.sessionId ? `/api/sessions/${encodeURIComponent(state.sessionId)}/attachments` : `/api/session-submission-attachments?${isMultiUserMode() ? `projectId=${encodeURIComponent(currentNewProjectId())}` : `cwd=${encodeURIComponent(state.cwd.trim())}`}` }),
+  attachments: () => state.composerAttachments,
+  normalize: normalizeUploadedAttachment,
+  changed: (scope, items, progressOnly) => {
+    const visible = currentPromptDraftKey() === scope.key;
+    if (visible) state.composerAttachments = items;
+    if (progressOnly) {
+      if (visible) for (const attachment of items.filter(item => item.status === 'uploading')) {
+        const node = document.querySelector(`[data-attachment-id="${attachment.id}"] .attachment-status`);
+        if (node) node.textContent = `${t('Uploading')} ${attachment.progress || 0}%`;
+      }
+      return;
+    }
+    const saved = promptDraftStore.read(scope.owner)[scope.key];
+    promptDraftStore.write(scope.owner, scope.key, { prompt: visible ? state.prompt : saved?.prompt || '', attachments: items, updatedAt: Date.now() });
+    if (!visible) return;
+    const failed = items.find(item => item.status === 'failed');
+    state.error = failed?.error || '';
+    if (!state.pendingTurn) { state.status = items.some(item => item.status === 'uploading') ? 'Uploading attachment' : failed ? 'Upload failed' : 'Attachment uploaded'; state.statusTone = failed ? 'danger' : 'success'; }
+    renderChatAtLatestIfFollowing(() => {});
+  },
+});
+
+const ADMIN_EDITORS = globalThis.CodexWebAdminEditor.createStore();
+const ADMIN_DATA = globalThis.CodexWebAdminData.createStore({
+  request: apiFetch,
+  onError: error => { if ([401, 403].includes(error?.status)) handleApiError(error); },
+});
+const { load: loadAdminResource, refresh: refreshAdminConsole } = globalThis.CodexWebAdminData.createFacade({
+  state, store: ADMIN_DATA, currentPage: currentAdminPage, isAdmin: isAdminPrincipal,
+  generation: () => authRequestGeneration, isCurrent: isAuthRequestCurrent,
+  sessionsPath: adminSessionsPath, normalizeItems: normalizeAdminItems, render,
+});
+const { saveAdminRecord, updateAdminSettings } = globalThis.CodexWebAdminEditor.createWriter({
+  state, ADMIN_EDITORS, isAdminPrincipal, getGeneration: () => authRequestGeneration,
+  isAuthRequestCurrent, apiFetch, loadAdminResource, handleApiError, render, t,
+});
+const adminUiDependencies = {
+  resources: ADMIN_DATA,
+  sessionDisplayTitle,
+  editors: ADMIN_EDITORS,
   getState: () => state,
   document,
   t,
   escapeHtml,
   escapeAttribute,
   localizeElement,
+  localizeFragment,
   renderPageNav,
   renderAdminSettingsSection,
   currentAdminPage,
@@ -311,7 +405,9 @@ const ADMIN_UI = globalThis.CodexWebAdminUi.createRenderer({
   shorten,
   isDesktopLayout,
   renderChatContent,
-});
+};
+let ADMIN_UI = globalThis.CodexWebAdminUi?.createRenderer(adminUiDependencies) || null;
+let adminUiLoadPromise = null;
 
 const app = document.querySelector('#app');
 let composerResizeObserver = null;
@@ -348,6 +444,23 @@ let sessionTimelinePageRequest = null;
 let renderEventController = null;
 let timelineEventController = null;
 let authRequestGeneration = 0;
+let sessionNavigationGeneration = 0;
+const adminObservedRequests = globalThis.CodexWebRequestContext.createRequestContext();
+const sessionOpenRequests = globalThis.CodexWebRequestContext.createRequestContext();
+const promptDraftStore = globalThis.CodexWebDrafts.createStore(localStorage);
+const SESSION_READING = globalThis.CodexWebSessionReading.createController({
+  getSessionId: () => state.sessionId || '', getOwner: currentDraftOwnerKey,
+  getTimeline: () => {
+    const timeline = document.querySelector('#timeline');
+    return timeline?.getAttribute('data-session-id') === String(state.sessionId || '') ? timeline : null;
+  },
+  getFollowing: () => state.timelineShouldFollowLatest,
+  setFollowing: (following) => { state.timelineShouldFollowLatest = following; syncReadingControls(); },
+  isLatestWindow: () => state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer !== true,
+  storage: localStorage,
+});
+function cancelSessionOpen() { sessionNavigationGeneration++; SESSION_READING.flush(); sessionOpenRequests.cancel(); adminObservedRequests.cancel(); state.admin.observedSessionLoading = false; SESSION_RENAME.invalidate(); state.sessionHistoryPending = false; state.sessionStatusPending = false; }
+
 let lastViewportWidth = typeof window?.innerWidth === 'number' ? window.innerWidth : 0;
 let lastViewportHeight = typeof window?.innerHeight === 'number' ? window.innerHeight : 0;
 let activeFocusScopeKey = '';
@@ -357,6 +470,56 @@ let submissionDrainPromise = null;
 let submissionRetryTimer = null;
 const submissionRequestControllers = new Map();
 
+let retainedTimeline = null;
+let lastTimelineFingerprint = '';
+const TIMELINE_DOM_WINDOW = 80;
+const markdownResultCache = new Map();
+let promptDraftPersistTimer = null;
+
+const SESSION_RENAME = globalThis.CodexWebSessionRename.createController({
+  state, t, escapeHtml, escapeAttribute, render, listen: listenRendered, apiFetch,
+  isReadOnly: isReadOnlySession, isShare: isShareContext, rememberFocus: rememberFocusReturn, restoreFocus: requestFocusRestore,
+  applyName: (id, title) => {
+    const update = (session) => session?.id === id ? { ...session, title } : session;
+    state.currentSession = update(state.currentSession);
+    state.sessions = state.sessions.map(update);
+    for (const scope of Object.keys(state.sessionsByScope)) state.sessionsByScope[scope] = state.sessionsByScope[scope].map(update);
+    persistSessionsCache();
+  },
+});
+
+const loadSessionOpenData = globalThis.CodexWebSessionLoader.createLoader({
+  state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, dedupeTimelineProjectionEntries,
+});
+
+const CONNECTION = globalThis.CodexWebNetworkRecovery.createConnectionState({
+  state, owner: () => `${authRequestGeneration}:${state.token}`, request: apiFetch,
+  changed: () => { syncComposerStatusDisplay(); syncComposerErrorDisplay(); },
+  canCheck: () => state.token && state.authSession && !isShareContext() && document.visibilityState !== 'hidden',
+  recover: async () => {
+    const sessionId = state.sessionId;
+    if (!sessionId) return true;
+    const session = await refreshCurrentSessionStatus();
+    return state.sessionId === sessionId && session?.id === sessionId;
+  },
+});
+const API_CLIENT = globalThis.CodexWebNetworkRecovery.createApiClient({ state, rename: SESSION_RENAME, connection: CONNECTION });
+const buildApiError = globalThis.CodexWebNetworkRecovery.buildApiError;
+
+const AUTH_RECOVERY = globalThis.CodexWebNetworkRecovery.createAuthRecovery({
+  state, apiFetch, getGeneration: () => authRequestGeneration, isAuthRequestCurrent, render, isCachedAuthPrincipalPending,
+  currentSubmissionOwnerKey, replayActiveTurnAfterPrincipalConfirmation, resolvePendingWorkDetailsPolicy,
+  refreshProjectsList, refreshSessionsList, applyGlobalSettingsPayload, initializeDefaultThreadSettingsFromCodex,
+  restoreWorkspaceStateFromCache, applySessionSettings, syncRuntimeStatusFromSession, restoreTurnEventCursor,
+  applyDefaultSettings, connectActiveTurnStream, reconcileCurrentSessionInBackground, drainSubmissionOutbox,
+  handleApiError, wasWorkspaceRestored: () => workspaceRestoredFromCache, t, escapeHtml,
+});
+
+let workView = null;
+let workViewError = '';
+let workViewLoadPromise = null;
+let workViewLoadAttempts = 0;
+let cachedSettingsDrawer = null;
 bootstrap();
 applyTheme(state.theme, { persist: false });
 UI.applySessionLayout(state, state.sessionLayout, { persist: false });
@@ -368,16 +531,19 @@ setupPwaPullToRefresh();
 setupEdgeSwipeBackNavigation();
 setupAppVersionRefresh();
 setupStreamRecoveryWatchdog();
+setInterval(refreshRuntimeFeedback, 1000);
 document.addEventListener('visibilitychange', onVisibilityChange);
 document.addEventListener('click', handleSessionSettingsOutsideClick);
 document.addEventListener('click', COMPOSER_UI.handleSettingsOutsideClick);
 document.addEventListener('keydown', handleFocusScopeKeydown);
 window.addEventListener('resize', handleWindowResize);
+window.addEventListener('pagehide', () => { SESSION_READING.remember(); SESSION_READING.flush(); });
 window.addEventListener('pageshow', onPageResume);
 window.addEventListener('focus', onPageResume);
 window.addEventListener('online', onNetworkOnline);
 window.addEventListener('storage', onSubmissionStorageChange);
 window.addEventListener('pagehide', flushScheduledTimelineSave);
+window.addEventListener('pagehide', () => savePromptDraftForCurrentSession());
 
 function bootstrap() {
   if (isShareRoute()) {
@@ -460,12 +626,12 @@ async function loadSharedSessionFromLocationOnce() {
     applySessionSettings(session);
     restoreTimelineForSession(session, { fullHistory: true });
     syncRuntimeStatusFromSession(session);
-    state.timelineShouldFollowLatest = false;
+    state.timelineShouldFollowLatest = true;
     state.status = 'Ready';
     state.statusTone = 'success';
     state.error = '';
     render();
-    scrollTimelineToTop();
+    scrollTimelineToBottom();
     return session;
   } catch (error) {
     state.currentSession = null;
@@ -478,85 +644,7 @@ async function loadSharedSessionFromLocationOnce() {
   }
 }
 
-async function restoreAuth() {
-  const requestGeneration = authRequestGeneration;
-  try {
-    state.status = 'Restoring session';
-    render();
-    const authRequest = apiFetch('/api/auth/me');
-    const settingsRequest = preloadApiRequest('/api/settings');
-    const modelsRequest = preloadApiRequest('/api/models');
-    const projectsRequest = preloadApiRequest('/api/projects');
-    const sessionsRequest = preloadApiRequest('/api/sessions');
-    const { session } = await authRequest;
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    const principalWasPending = isCachedAuthPrincipalPending();
-    state.authSession = session;
-    if (principalWasPending) {
-      replayActiveTurnAfterPrincipalConfirmation();
-    }
-    resolvePendingWorkDetailsPolicy();
-    state.status = 'Syncing sessions';
-    state.statusTone = 'warn';
-    render();
-    const [settingsPayload, modelsPayload] = await Promise.all([
-      refreshGlobalSettings({ renderAfter: false, request: settingsRequest }).catch(() => null),
-      modelsRequest.catch(() => ({ items: [], defaults: null })),
-      refreshProjectsList({ renderAfter: false, request: projectsRequest }).catch(() => []),
-      refreshSessionsList({ renderAfter: false, scope: 'all', request: sessionsRequest }).catch(() => null),
-    ]);
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    state.authSession = session;
-    applyGlobalSettingsPayload(settingsPayload, { renderAfter: false });
-    state.models = Array.isArray(modelsPayload.items) ? modelsPayload.items : [];
-    initializeDefaultThreadSettingsFromCodex(modelsPayload.defaults);
-    if (!state.sessionId) {
-      restoreWorkspaceStateFromCache();
-    }
-    if (state.sessionId && state.currentSession) {
-      applySessionSettings(state.currentSession);
-      const runtimeStatus = syncRuntimeStatusFromSession(state.currentSession, { source: 'stale' });
-      if (runtimeStatus.activeTurnId) {
-        restoreTurnEventCursor(state.sessionId, runtimeStatus.activeTurnId);
-      }
-    } else {
-      applyDefaultSettings();
-    }
-    if (!state.pendingTurn) {
-      state.status = 'Ready';
-      state.statusTone = 'success';
-    }
-    state.error = '';
-    render();
-    if (state.sessionId && workspaceRestoredFromCache) {
-      connectActiveTurnStream({ forceReconnect: true });
-      void reconcileCurrentSessionInBackground();
-    }
-    void drainSubmissionOutbox({ force: true });
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    if (error?.status === 401 || error?.status === 403) {
-      handleApiError(error, { auth: true });
-      return;
-    }
-    state.status = 'Offline';
-    state.statusTone = 'warn';
-    state.error = error?.payload?.message || error?.message || 'Could not reconnect';
-    render();
-  }
-}
-
-function preloadApiRequest(path) {
-  const request = apiFetch(path);
-  void request.catch(() => {});
-  return request;
-}
+function restoreAuth(options) { return AUTH_RECOVERY.restore(options); }
 
 function createCachedAuthSession() {
   return {
@@ -573,6 +661,7 @@ function readWorkspaceState() {
     return {
       view: parsed?.view === 'chat' && sessionId ? 'chat' : 'sessions',
       sessionId,
+      draft: parsed?.draft && parsed?.owner === currentDraftOwnerKey() ? parsed.draft : null,
     };
   } catch (_error) {
     localStorage.removeItem(WORKSPACE_STATE_KEY);
@@ -582,6 +671,13 @@ function readWorkspaceState() {
 
 function restoreWorkspaceStateFromCache() {
   const saved = readWorkspaceState();
+  if (saved.draft && typeof saved.draft.cwd === 'string' && !isShareRoute()) {
+    state.cwd = saved.draft.cwd; state.newProjectId = saved.draft.projectId || '';
+    state.sessionId = null; state.currentSession = null; state.draftSessionActive = true;
+    state.view = isDesktopLayout() ? 'sessions' : 'chat';
+    restorePromptDraftForSession(currentPromptDraftKey());
+    return true;
+  }
   if (saved.view !== 'chat' || !saved.sessionId || isShareRoute()) {
     return false;
   }
@@ -597,7 +693,7 @@ function restoreWorkspaceStateFromCache() {
   state.draftSessionActive = false;
   restorePromptDraftForSession(session.id);
   applySessionSettings(session);
-  restoreTimelineForSession(session, readOnlyTimelineRestoreOptions(session));
+  restoreTimelineForSession(session, { ...readOnlyTimelineRestoreOptions(session), latest: true });
   const runtimeStatus = syncRuntimeStatusFromSession(session, { source: 'stale' });
   if (runtimeStatus.activeTurnId) {
     restoreTurnEventCursor(session.id, runtimeStatus.activeTurnId);
@@ -623,6 +719,8 @@ function persistWorkspaceState({ view = state.view, sessionId = state.sessionId 
       view: canRestoreChat ? 'chat' : 'sessions',
       sessionId: canRestoreChat ? normalizedSessionId : '',
       savedAt: Date.now(),
+      owner: currentDraftOwnerKey(),
+      draft: state.draftSessionActive ? { cwd: state.cwd, projectId: state.newProjectId } : null,
     }));
   } catch (error) {
     console.warn('[codex-web] workspace state persist failed', error);
@@ -634,6 +732,11 @@ function clearWorkspaceState() {
 }
 
 function setLoggedOut(message = '') {
+  clearTimeout(promptDraftPersistTimer); promptDraftPersistTimer = null;
+  state.draftSettingsEdited = {};
+  cancelSessionOpen();
+  SESSION_READING.clear();
+  UPLOADS.clear();
   authRequestGeneration += 1;
   workspaceRestoredFromCache = false;
   passiveDesktopSessionId = '';
@@ -702,6 +805,7 @@ function setLoggedOut(message = '') {
     publicSharesEnabled: false,
     loaded: false,
   };
+  state.authDevices = null;
   state.sortMode = 'time';
   state.sessionsScope = 'all';
   state.archiveConfirmSessionId = null;
@@ -737,14 +841,21 @@ function isAuthRequestCurrent(requestGeneration) {
   return requestGeneration === authRequestGeneration;
 }
 
+function timelineFingerprint() {
+  return JSON.stringify([state.sessionId, state.language, state.sessionHistoryError, state.sessionStatusError, state.sessionHistoryPending, state.sessionStatusPending, Boolean(sessionTimelinePageRequest), state.sessionHistoryStartIndex, state.currentSession?.timelineComplete, state.currentSession?.canViewWorkDetails, state.currentSession?.readOnly, state.sessionLayout, [...state.submissionOutbox.values()].map(({id, status, attempts, retryable}) => [id, status, attempts, retryable]), state.timelineWindowEnd, visibleTimelineItems()]);
+}
 function render() {
-  const shouldRestoreLatestTimeline = state.timelineShouldFollowLatest;
+  const oldTimeline = document.querySelector('#timeline');
+  const fingerprint = timelineFingerprint();
+  retainedTimeline = oldTimeline?.nodeType === 1 && fingerprint === lastTimelineFingerprint ? oldTimeline : null;
+  const viewport = SESSION_READING.isCurrent(nextTimelineRestoreSnapshot) ? nextTimelineRestoreSnapshot : captureTimelineViewport();
   const promptRestoreSnapshot = capturePromptRestoreState();
+  const workReading = globalThis.CodexWebWorkView?.captureDialog(document);
   beginRenderEventBindings();
   detachTimelineScrollTracking();
   clearManagedInert();
-  app.innerHTML = '';
   if (state.setupRequired) {
+    app.innerHTML = '';
     app.appendChild(renderSetup());
     bindGlobalEvents();
     bindTimelineActionEvents();
@@ -752,28 +863,40 @@ function render() {
     return;
   }
   if (!state.authSession) {
+    cachedSettingsDrawer = null;
+    app.innerHTML = '';
     app.appendChild(renderLogin());
     bindGlobalEvents();
     bindTimelineActionEvents();
     resetComposerOffset();
     return;
   }
-  app.appendChild(renderMain());
+  const nextMain = renderMain();
+  const nextDrawer = nextMain.querySelector?.('.settings-drawer');
+  const liveDrawer = app.querySelector?.('.settings-drawer');
+  if (liveDrawer && !nextDrawer) { liveDrawer.remove(); cachedSettingsDrawer = liveDrawer; }
+  if (nextDrawer && cachedSettingsDrawer) {
+    reconcileWorkspaceNode(cachedSettingsDrawer, nextDrawer);
+    nextDrawer.replaceWith(cachedSettingsDrawer);
+    cachedSettingsDrawer = null;
+  }
+  if (app.firstElementChild) reconcileWorkspaceNode(app.firstElementChild, nextMain);
+  else app.appendChild(nextMain);
+
+  // A layout change may replace an ancestor of the retained timeline.
+  const nextTimeline = document.querySelector('#timeline');
+  if (retainedTimeline && nextTimeline && nextTimeline !== retainedTimeline) nextTimeline.replaceChildren(...retainedTimeline.childNodes);
+  retainedTimeline = null;
+  lastTimelineFingerprint = fingerprint;
   bindGlobalEvents();
   bindTimelineActionEvents();
   syncFocusScope();
+  globalThis.CodexWebWorkView?.restoreDialog(document, workReading);
   const timeline = document.querySelector('#timeline');
   if (timeline) {
     syncComposerOffset();
-    const shouldStartAtEarliest = shouldOpenTimelineAtEarliest();
-    attachTimelineScrollTracking({ updateInitial: !shouldRestoreLatestTimeline && !shouldStartAtEarliest });
-    if (shouldStartAtEarliest) {
-      scrollTimelineToTop();
-      return;
-    }
-    if (shouldRestoreLatestTimeline) {
-      scrollTimelineToBottom();
-    }
+    attachTimelineScrollTracking({ updateInitial: false });
+    restoreTimelineViewport(viewport);
   } else {
     resetComposerOffset();
   }
@@ -781,6 +904,44 @@ function render() {
     restoreSessionListScroll();
   }
   schedulePromptRestore(promptRestoreSnapshot);
+}
+
+function reconcileWorkspaceNode(current, next) {
+  if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName || current.id !== next.id
+    || current.getAttribute?.('data-reconcile-key') !== next.getAttribute?.('data-reconcile-key')) {
+    current.replaceWith(next);
+    return;
+  }
+  if (current.nodeType === 3) { if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue; return; }
+  if (current.nodeType !== 1) return;
+  if (current.id === 'timeline' && retainedTimeline === current) return;
+  for (const attribute of [...current.attributes]) if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
+  for (const attribute of next.attributes) if (current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
+  if (current.id === 'prompt-input') {
+    if (current.value !== state.prompt) current.value = state.prompt;
+    return;
+  }
+  const selectedValue = next.nodeName === 'SELECT' ? next.value : null;
+  const desired = [...next.childNodes];
+  for (let index = 0; index < desired.length; index += 1) {
+    const target = desired[index];
+    let existing = current.childNodes[index];
+    if (target.id && existing?.id !== target.id) {
+      const keyed = [...current.children].find((child) => child.id === target.id);
+      if (keyed) { current.insertBefore(keyed, existing || null); existing = keyed; }
+    }
+    if (existing) reconcileWorkspaceNode(existing, target);
+    else current.appendChild(target);
+  }
+  if (current.nodeName === 'SELECT') current.value = selectedValue;
+  if (current.nodeName === 'INPUT') {
+    if (['checkbox', 'radio'].includes(current.type)) current.checked = next.checked;
+    else if (current.readOnly) current.value = next.value;
+  }
+  while (current.childNodes.length > desired.length) {
+    const removed = current.lastChild;
+    removed.remove();
+  }
 }
 
 function rememberFocusReturn(element = document.activeElement) {
@@ -807,6 +968,7 @@ function requestFocusRestore() {
 }
 
 function activeFocusScope() {
+  if (SESSION_RENAME.isOpen()) return { key: 'session-rename', element: document.querySelector('[data-focus-scope="session-rename"]') };
   if (state.webhookRotateConfirmOpen) {
     return { key: 'webhook-rotate', element: document.querySelector('[data-focus-scope="webhook-rotate"]') };
   }
@@ -980,6 +1142,7 @@ function handleFocusScopeKeydown(event) {
 }
 
 function closeFocusScope(kind = '') {
+  if ((!kind || kind === 'session-rename') && SESSION_RENAME.isOpen()) { SESSION_RENAME.close(); return true; }
   if ((!kind || kind === 'webhook-rotate') && state.webhookRotateConfirmOpen) {
     cancelWebhookKeyRotation();
     return true;
@@ -1036,38 +1199,72 @@ function closeShareDialog() {
 
 function resetSessionHistoryWindow() {
   cancelSessionTimelinePageLoad();
+  state.timelineWindowEnd = null;
   state.sessionHistoryItems = [];
   state.sessionHistoryStartIndex = 0;
   state.timelineShouldFollowLatest = true;
 }
 
 function currentPromptDraftKey() {
-  return state.sessionId || (state.draftSessionActive ? `draft:${state.cwd || 'default'}` : '');
+  return state.sessionId || (state.draftSessionActive ? `draft:${state.newProjectId || state.cwd || 'default'}` : '');
 }
 
+function currentDraftOwnerKey() {
+  if (state.authSession?.principal) return currentSubmissionOwnerKey();
+  try {
+    const saved = JSON.parse(localStorage.getItem('codexWebDraftOwner') || 'null');
+    return saved?.token === state.token ? saved.owner : '';
+  } catch { return ''; }
+}
+function draftStorageKey() {
+  const owner = currentDraftOwnerKey();
+  return owner ? `codexWebPromptDrafts:${owner}` : '';
+}
+function readDurablePromptDrafts() {
+  return promptDraftStore.read(currentDraftOwnerKey());
+}
+
+function persistPromptDrafts() {
+  clearTimeout(promptDraftPersistTimer);
+  promptDraftPersistTimer = null;
+  const storageKey = draftStorageKey();
+  if (!storageKey) return;
+  const key = currentPromptDraftKey();
+  if (!key) return;
+  const attachments = (state.composerAttachments || []).filter((item) => item.status === 'ready' && item.uploaded?.localPath);
+  const saved = promptDraftStore.write(currentDraftOwnerKey(), key, {
+    prompt: state.prompt || '', attachments, updatedAt: Date.now(),
+  });
+  const changed = state.draftStorageFailed !== !saved;
+  state.draftStorageFailed = !saved;
+  if (state.draftSessionActive) persistWorkspaceState();
+  if (changed) syncComposerStatusDisplay();
+}
 function savePromptDraftForCurrentSession() {
   const key = currentPromptDraftKey();
-  if (!key) {
-    return;
-  }
+  if (!key) return;
   const prompt = String(state.prompt || '');
-  if (prompt) {
-    state.promptDrafts.set(key, prompt);
-  } else {
-    state.promptDrafts.delete(key);
-  }
+  if (prompt) state.promptDrafts.set(key, prompt);
+  else state.promptDrafts.delete(key);
+  // Flush the departing draft synchronously; ordinary typing is debounced below.
+  persistPromptDrafts();
 }
-
+function schedulePromptDraftSave() {
+  clearTimeout(promptDraftPersistTimer);
+  promptDraftPersistTimer = setTimeout(savePromptDraftForCurrentSession, 300);
+}
 function restorePromptDraftForSession(sessionId) {
-  state.prompt = state.promptDrafts.get(sessionId) || '';
+  const draft = readDurablePromptDrafts()[sessionId];
+  state.prompt = state.promptDrafts.get(sessionId) ?? draft?.prompt ?? '';
+  state.composerAttachments = UPLOADS.restore(currentDraftOwnerKey(), sessionId, Array.isArray(draft?.attachments) ? draft.attachments : []);
 }
-
 function clearPromptDraftForCurrentSession() {
   const key = currentPromptDraftKey();
-  if (key) {
-    state.promptDrafts.delete(key);
-  }
+  UPLOADS.clearDraft(currentDraftOwnerKey(), key);
+  if (key) state.promptDrafts.delete(key);
   state.prompt = '';
+  clearTimeout(promptDraftPersistTimer);
+  promptDraftStore.write(currentDraftOwnerKey(), key, null);
   resetComposerExpansionState();
 }
 
@@ -1080,7 +1277,7 @@ function migrateDraftPromptToSession(sessionId) {
   if (!sessionId) {
     return;
   }
-  const draftKey = `draft:${state.cwd || 'default'}`;
+  const draftKey = `draft:${state.newProjectId || state.cwd || 'default'}`;
   if (state.promptDrafts.has(draftKey) && !state.promptDrafts.has(sessionId)) {
     state.promptDrafts.set(sessionId, state.promptDrafts.get(draftKey) || '');
   }
@@ -1194,7 +1391,7 @@ function removeQueuedMessage(sessionId, messageId) {
 function renderSetup() {
   const shell = document.createElement('div');
   shell.className = 'shell';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     <div class="center-screen">
       <section class="panel stack">
         <div>
@@ -1204,14 +1401,14 @@ function renderSetup() {
         <pre class="command">codex-web auth set-password</pre>
       </section>
     </div>
-  `;
+  `);
   return localizeElement(shell);
 }
 
 function renderLogin() {
   const shell = document.createElement('div');
   shell.className = 'shell';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     <div class="center-screen">
       <form class="panel stack" id="login-form">
         <div>
@@ -1232,7 +1429,7 @@ function renderLogin() {
         </div>
       </form>
     </div>
-  `;
+  `);
   return localizeElement(shell);
 }
 
@@ -1277,17 +1474,18 @@ function renderSharedSessionPage() {
   const loading = state.status === 'Loading session' && !state.currentSession;
   const errorText = state.error || state.loginError || '';
   const fileOpen = state.currentSession && state.view === 'file';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     <div class="shared-session-page${fileOpen ? ' shared-file-page' : ''}">
       ${fileOpen ? renderSessionFileViewerContent() : state.currentSession ? `
-        <main class="timeline shared-session-timeline" id="timeline" data-i18n-skip>${renderTimeline()}</main>
+        <main class="timeline shared-session-timeline" id="timeline" data-session-id="${escapeAttribute(state.sessionId || '')}" data-i18n-skip>${renderTimeline()}</main>
+          ${UI.renderJumpLatest(state.timelineShouldFollowLatest, t('Back to latest'))}
       ` : `
         <main class="shared-session-empty">
           <div class="empty-state">${escapeHtml(loading ? t('Loading session') : translateText(errorText || 'Shared session not found'))}</div>
         </main>
       `}
     </div>
-  `;
+  `);
   return localizeElement(shell);
 }
 
@@ -1295,7 +1493,7 @@ function renderDesktopWorkspace() {
   ensureDesktopActiveSession();
   const shell = document.createElement('div');
   shell.className = 'shell desktop-shell';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     <div class="desktop-workspace${state.desktopSidebarExpanded ? ' sidebar-expanded' : ''}">
       ${renderDesktopProjectRail()}
       ${renderDesktopSessionPane()}
@@ -1305,9 +1503,9 @@ function renderDesktopWorkspace() {
         ${state.desktopOverlay === 'file' ? renderDesktopSessionFileOverlay() : ''}
       </div>
     </div>
-    ${renderArchiveConfirmModal()}
+    ${renderArchiveConfirmModal()}${SESSION_RENAME.render()}
     ${renderWebhookDialogs()}
-  `;
+  `);
   return localizeElement(shell);
 }
 
@@ -1378,7 +1576,8 @@ function ensureDesktopActiveSession() {
   state.cwd = firstSession.cwd || '';
   passiveDesktopSessionId = firstSession.id;
   applySessionSettings(firstSession);
-  restoreTimelineForSession(firstSession);
+  restoreTimelineForSession(firstSession, { latest: true });
+  setTimelineOpenPositionForSession(firstSession);
   syncRuntimeStatusFromSession(firstSession, { source: 'stale' });
 }
 
@@ -1410,12 +1609,14 @@ function handleWindowResize() {
   if (isMobileKeyboardResize(previousWidth, previousHeight, nextWidth, nextHeight)) {
     return;
   }
+  const viewport = { ...captureTimelineViewport(), shouldFollowLatest: state.timelineShouldFollowLatest && state.currentSession?.timelineHasNewer !== true };
   handleLayoutResize();
-  render();
+  renderSessionFileWithScrollPreserved(() => {});
+  restoreTimelineViewport(viewport);
 }
 
 function isMobileKeyboardResize(previousWidth, previousHeight, nextWidth, nextHeight) {
-  if (isDesktopLayout() || previousWidth <= 0 || previousHeight <= 0) {
+  if (hasDesktopPointer() || isDesktopLayout() || previousWidth <= 0 || previousHeight <= 0) {
     return false;
   }
   if (previousWidth !== nextWidth || previousHeight === nextHeight) {
@@ -1432,6 +1633,12 @@ function isTextEntryElement(element) {
 }
 
 function handleLayoutResize() {
+  if (state.admin.observedSession && state.chatReturnView === 'admin' && ['chat', 'admin'].includes(state.view)) {
+    state.view = isDesktopLayout() ? 'admin' : 'chat';
+    return;
+  }
+  if (['admin', 'settings'].includes(state.view)) return;
+  if (state.view === 'file' && (!isDesktopLayout() || isAdminObservedSession())) return;
   if (isDesktopLayout()) {
     state.mobileSidebarOpen = false;
     if (state.view === 'file') {
@@ -1458,14 +1665,14 @@ function handleLayoutResize() {
 function renderSessionList() {
   const shell = document.createElement('div');
   shell.className = 'shell';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     ${renderMobileProjectDrawer()}
     <div class="screen page-screen">
       ${renderSessionListHeader()}
       <main class="session-list" aria-busy="${String(isCurrentSessionScopeLoading())}" data-i18n-skip>${renderSessionCards()}</main>
     </div>
-    ${renderArchiveConfirmModal()}
-  `;
+    ${renderArchiveConfirmModal()}${SESSION_RENAME.render()}
+  `);
   return localizeElement(shell);
 }
 
@@ -1512,101 +1719,10 @@ function renderSessionSortToggle({ mobile = false } = {}) {
   });
 }
 
-function renderDesktopSessionFileOverlay() {
-  return localizeFragment(`
-    <section class="desktop-overlay desktop-session-file-overlay" role="dialog" aria-modal="true" aria-label="File preview" data-focus-scope="session-file">
-      <div class="desktop-overlay-card desktop-session-file-card">
-        ${renderSessionFileViewerContent()}
-      </div>
-    </section>
-  `);
-}
-
-function renderSessionFileViewer() {
-  const shell = document.createElement('div');
-  shell.className = 'shell';
-  shell.innerHTML = `
-    <div class="screen page-screen session-file-screen">
-      ${renderSessionFileViewerContent()}
-    </div>
-  `;
-  return localizeElement(shell);
-}
-
-function renderSessionFileViewerContent(file = state.currentSessionFile) {
-  const title = file?.name || fileNameFromPath(state.currentSessionFilePath) || t('File');
-  const canDownload = Boolean(state.currentSessionFileObjectUrl && file);
-  const activityState = sessionActivityState(state.currentSession);
-  const activityLabel = activityState === 'waiting_approval'
-    ? 'Needs approval'
-    : activityState === 'running'
-      ? 'Working'
-      : '';
-  return `
-    <header class="topbar page-topbar session-file-topbar">
-      <div class="page-nav">
-        <button class="ghost page-back-button" type="button" id="close-session-file-button" aria-label="Back" data-initial-focus>${renderBackButtonIcon()}</button>
-        <div class="session-file-title-stack">
-          <div class="page-title" data-i18n-skip title="${escapeAttribute(title)}">${escapeHtml(title)}</div>
-          ${activityLabel ? `<span class="session-file-activity" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityLabel))}</span>` : ''}
-        </div>
-        ${canDownload
-          ? `<a class="ghost page-nav-action session-file-download" id="session-file-download" href="${escapeAttribute(state.currentSessionFileObjectUrl)}" download="${escapeAttribute(title)}" aria-label="Download" title="Download">${renderDownloadButtonIcon()}</a>`
-          : `<button class="ghost page-nav-action session-file-download" type="button" aria-label="Download" title="Download" disabled>${renderDownloadButtonIcon()}</button>`}
-      </div>
-    </header>
-    <main class="session-file-viewer">${renderSessionFileViewerBody(file)}</main>
-  `;
-}
-
-function renderSessionFileViewerBody(file = state.currentSessionFile) {
-  if (state.currentSessionFileLoading) {
-    return localizeFragment('<div class="empty-state session-file-loading">Loading file...</div>');
-  }
-  if (state.currentSessionFileError) {
-    return `
-      <div class="session-file-error" role="alert">
-        <strong>${escapeHtml(t(sessionFileErrorMessage(state.currentSessionFileError)))}</strong>
-        <button class="ghost compact-button" type="button" id="retry-session-file-button">${escapeHtml(t('Retry'))}</button>
-      </div>
-    `;
-  }
-  if (!file) {
-    return `<div class="empty-state">${escapeHtml(t('File not loaded.'))}</div>`;
-  }
-  return renderSessionFileDocument(file);
-}
-
-function renderSessionFileDocument(file) {
-  if (file.kind === 'html') {
-    return `<iframe class="session-file-frame session-file-html" title="${escapeAttribute(file.name || t('File'))}" sandbox="" referrerpolicy="no-referrer" srcdoc="${escapeAttribute(sandboxedSessionFileHtml(state.currentSessionFileContent || ''))}"></iframe>`;
-  }
-  if (file.kind === 'pdf' && state.currentSessionFileObjectUrl) {
-    return `<iframe class="session-file-frame session-file-pdf" title="${escapeAttribute(file.name || t('File'))}" src="${escapeAttribute(state.currentSessionFileObjectUrl)}"></iframe>`;
-  }
-  if (file.kind === 'image' && state.currentSessionFileObjectUrl) {
-    return `<div class="session-file-image-stage"><img class="session-file-image" src="${escapeAttribute(state.currentSessionFileObjectUrl)}" alt="${escapeAttribute(file.name || t('File'))}"></div>`;
-  }
-  if (file.kind === 'file') {
-    return `
-      <div class="session-file-generic">
-        <strong data-i18n-skip>${escapeHtml(file.name || t('File'))}</strong>
-        <span class="meta" data-i18n-skip>${escapeHtml(sessionFileMetadata(file))}</span>
-        ${state.currentSessionFileObjectUrl ? `<a class="primary compact-button" href="${escapeAttribute(state.currentSessionFileObjectUrl)}" download="${escapeAttribute(file.name || 'download')}">${escapeHtml(t('Download'))}</a>` : ''}
-      </div>
-    `;
-  }
-  return `<div class="session-file-document markdown-body" data-i18n-skip>${renderMarkdown(state.currentSessionFileContent || '')}</div>`;
-}
-
-function sandboxedSessionFileHtml(content) {
-  return `<meta http-equiv="Content-Security-Policy" content="${SESSION_FILE_HTML_CSP}">${String(content || '')}`;
-}
-
 function renderAppSettings() {
   const shell = document.createElement('div');
   shell.className = 'shell';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     <div class="screen page-screen">
       ${renderPageNav('Settings')}
       <main class="app-settings-page">
@@ -1614,7 +1730,7 @@ function renderAppSettings() {
       </main>
     </div>
     ${renderWebhookDialogs()}
-  `;
+  `);
   return localizeElement(shell);
 }
 
@@ -1642,6 +1758,9 @@ function renderAppSettingsSections() {
         ${renderRuntimeSettingsSection()}
         <section class="settings-section">
           <div class="settings-section-title">Account</div>
+          <button class="ghost full-width-button" id="load-auth-devices" type="button">${escapeHtml(t('Signed-in devices'))}</button>
+          ${state.authDevicesError ? `<p role="alert">${escapeHtml(state.authDevicesError)}</p>` : ''}
+          ${Array.isArray(state.authDevices) ? `<ul class="auth-devices">${state.authDevices.map((device) => `<li><span>${escapeHtml(device.deviceName || t('Device'))}${device.current ? ` · ${escapeHtml(t('This device'))}` : ''}<small>${escapeHtml(formatShortDateTime(device.lastSeenAt))}</small></span>${!device.current ? `<button class="danger" type="button" data-revoke-device="${escapeAttribute(device.id)}">${escapeHtml(t('Sign out'))}</button>` : ''}</li>`).join('')}</ul><button class="ghost full-width-button" id="revoke-other-devices" type="button">${escapeHtml(t('Sign out other devices'))}</button>` : ''}
           <button class="danger compact-button full-width-button" type="button" id="settings-logout-button">Log out</button>
         </section>
   `;
@@ -1657,78 +1776,6 @@ function renderDefaultThreadSettingsSection() {
           <div class="settings-section-title">New sessions on this device</div>
           ${renderThreadSettingsControls({ defaults: true })}
         </section>
-  `;
-}
-
-function renderWebhookSettingsSection() {
-  const webhook = state.webhook;
-  const busy = webhook.loading || webhook.saving;
-  const endpoint = webhookEndpointUrl();
-  const keyValue = webhook.key || (webhook.hasKey
-    ? webhookKeyHintDisplay(webhook.keyHint)
-    : t('Webhook key is not available.'));
-  return `
-        <section class="settings-section webhook-settings-section" aria-busy="${String(busy)}">
-          <div class="settings-section-title">Webhook</div>
-          <label class="settings-action-row webhook-toggle-row">
-            <span class="webhook-toggle-copy">
-              <strong>Enable webhook</strong>
-              ${!webhook.loaded && webhook.loading ? '<span class="meta">Loading webhook settings...</span>' : ''}
-            </span>
-            <input id="webhook-enabled-toggle" type="checkbox"${webhook.enabled ? ' checked' : ''}${!webhook.loaded || busy ? ' disabled' : ''}>
-          </label>
-          ${webhook.error ? `<div class="meta webhook-settings-error" role="alert">${escapeHtml(translateText(webhook.error))}</div>` : ''}
-          ${webhook.loaded && !webhook.enabled ? '<div class="meta">Webhook is disabled.</div>' : ''}
-          ${webhook.loaded && webhook.enabled ? `
-            <div class="webhook-settings-details">
-              <div class="settings-field webhook-settings-field">
-                <label class="settings-field-label" for="webhook-endpoint-input">Webhook endpoint</label>
-                <div class="webhook-value-row">
-                  <input id="webhook-endpoint-input" class="webhook-value-input" type="text" readonly spellcheck="false" value="${escapeAttribute(endpoint)}" data-i18n-skip>
-                  <button class="ghost compact-button" type="button" id="webhook-copy-endpoint-button"${!endpoint || busy ? ' disabled' : ''}>${webhook.endpointCopied ? 'Copied' : 'Copy'}</button>
-                </div>
-                ${webhook.endpointCopied ? '<span class="meta" role="status">Webhook endpoint copied.</span>' : ''}
-              </div>
-              <div class="settings-field webhook-settings-field">
-                <label class="settings-field-label" for="webhook-key-input">Webhook key</label>
-                <div class="webhook-value-row">
-                  <input id="webhook-key-input" class="webhook-value-input webhook-secret-input" type="text" readonly autocomplete="off" spellcheck="false" value="${escapeAttribute(keyValue)}" data-i18n-skip>
-                  <div class="webhook-key-actions">
-                    <button class="ghost compact-button" type="button" id="webhook-copy-key-button"${!webhook.key || busy ? ' disabled' : ''}>${webhook.keyCopied ? 'Copied' : 'Copy key'}</button>
-                    <button class="ghost compact-button" type="button" id="webhook-rotate-key-button"${busy ? ' disabled' : ''}>Regenerate key</button>
-                  </div>
-                </div>
-                ${webhook.keyCopied ? '<span class="meta" role="status">Webhook key copied.</span>' : ''}
-                ${webhook.hasKey && !webhook.key ? '<span class="meta">Regenerate this legacy key once to make it copyable.</span>' : ''}
-              </div>
-            </div>
-          ` : ''}
-        </section>
-  `;
-}
-
-function renderWebhookDialogs() {
-  return renderWebhookRotateConfirmDialog();
-}
-
-function renderWebhookRotateConfirmDialog() {
-  if (!state.webhookRotateConfirmOpen) {
-    return '';
-  }
-  const saving = state.webhook.saving;
-  return `
-      <div class="modal-backdrop webhook-modal-backdrop" data-modal-dismiss="webhook-rotate">
-        <section class="confirm-dialog webhook-dialog" role="dialog" aria-modal="true" aria-labelledby="webhook-rotate-title" data-focus-scope="webhook-rotate">
-          <div>
-            <h2 id="webhook-rotate-title">Regenerate webhook key?</h2>
-            <p class="meta">The current key will stop working immediately.</p>
-          </div>
-          <div class="actions">
-            <button class="ghost compact-button" type="button" id="webhook-rotate-cancel-button"${saving ? ' disabled' : ''} data-initial-focus>Cancel</button>
-            <button class="danger compact-button" type="button" id="webhook-rotate-confirm-button"${saving ? ' disabled' : ''}>Regenerate</button>
-          </div>
-        </section>
-      </div>
   `;
 }
 
@@ -1773,10 +1820,12 @@ function renderAdminSettingsSection({ title = 'System', showLoadingNote = false 
           <div class="settings-section-title">${escapeHtml(title)}</div>
           <label class="settings-action-row admin-toggle-row">
             <span class="meta">Multi-user mode</span>
-            <input id="admin-multi-user-toggle" type="checkbox"${state.admin.settings?.multiUserEnabled === true ? ' checked' : ''}${adminSettingsLoaded ? '' : ' disabled'}>
+            <input id="admin-multi-user-toggle" type="checkbox"${state.admin.settings?.multiUserEnabled === true ? ' checked' : ''}${adminSettingsLoaded && !state.admin.settingsSaving ? '' : ' disabled'}>
           </label>
           ${adminSettingsLoaded ? `<div class="admin-mode-label"><span class="status-dot"></span>${escapeHtml(t(state.admin.settings?.multiUserEnabled === true ? 'Trusted team mode' : 'Single-user mode'))}</div>` : ''}
           ${showLoadingNote && !adminSettingsLoaded ? '<div class="meta">Loading admin settings...</div>' : ''}
+          ${state.admin.settingsSaving ? `<div class="meta" role="status">${escapeHtml(t('Saving...'))}</div>` : ''}
+          ${state.admin.settingsError ? `<div class="admin-editor-error" role="alert" data-i18n-skip>${escapeHtml(state.admin.settingsError)}</div>` : ''}
         </section>
   `;
 }
@@ -1804,12 +1853,12 @@ function renderSidebarButtonIcon() {
 function renderNewSession() {
   const shell = document.createElement('div');
   shell.className = 'shell';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     ${renderMobileProjectDrawer()}
     <div class="screen page-screen">
       ${renderNewSessionContent()}
     </div>
-  `;
+  `);
   return localizeElement(shell);
 }
 
@@ -1902,12 +1951,12 @@ function renderNewSessionPathPicker() {
 function renderChat() {
   const shell = document.createElement('div');
   shell.className = 'shell';
-  shell.innerHTML = `
+  shell.innerHTML = localizeFragment(`
     <div class="screen">
       ${renderChatContent()}
     </div>
-    ${renderArchiveConfirmModal()}
-  `;
+    ${renderArchiveConfirmModal()}${SESSION_RENAME.render()}
+  `);
   return localizeElement(shell);
 }
 
@@ -1920,8 +1969,9 @@ function renderChatContent({ desktop = false } = {}) {
         <div class="chat-nav">
           ${desktop ? '<div class="chat-nav-spacer" aria-hidden="true"></div>' : `<button class="ghost chat-back-button" type="button" id="back-to-list-button" aria-label="Sessions">${renderBackButtonIcon()}</button>`}
           <div class="chat-title-stack">
-            <div class="project-title" data-i18n-skip>${escapeHtml(projectNameForSession(state.currentSession, state.cwd))}</div>
+            <div class="project-title" title="${escapeAttribute(sessionDisplayTitle(state.currentSession))}" data-i18n-skip>${escapeHtml(sessionDisplayTitle(state.currentSession))}</div><div class="chat-context-row"><div class="chat-project-context" data-i18n-skip>${escapeHtml(projectNameForSession(state.currentSession, state.cwd))}</div>
             ${renderGoalStatus()}
+            ${renderRuntimeFeedback()}</div>
           </div>
           ${renderChatHeaderActions({ readOnly })}
         </div>
@@ -1929,7 +1979,8 @@ function renderChatContent({ desktop = false } = {}) {
       ${emptyDraft
         ? renderNewSessionEmptyState(composerClassName, { desktop })
         : `
-          <main class="timeline" id="timeline" data-i18n-skip>${renderTimeline()}</main>
+          <main class="timeline" id="timeline" data-session-id="${escapeAttribute(state.sessionId || '')}" data-observer="${isAdminObservedSession()}" data-i18n-skip>${renderTimeline()}</main>
+          ${UI.renderJumpLatest(state.timelineShouldFollowLatest, t('Back to latest'))}
           ${readOnly ? renderReadOnlyComposerNotice(state.currentSession) : renderComposer(composerClassName, { desktop })}
         `}
       ${renderShareDialog()}
@@ -1979,6 +2030,7 @@ function renderChatHeaderActions({ readOnly }) {
   }
   return `
           <div class="chat-header-actions">
+            ${!readOnly && state.pendingTurn && state.turnId ? `<button class="ghost icon-button chat-stop-button" id="visible-stop-button" type="button" aria-label="${escapeAttribute(t('Stop'))}" title="${escapeAttribute(t('Stop'))}">${UI.icon('stop', { className: 'button-icon' })}</button>` : ''}
             ${canOpenSettings ? `<button class="ghost icon-button settings-toggle-button" type="button" id="settings-toggle" aria-label="Session menu" title="Session menu" aria-expanded="${String(state.settingsOpen)}">${renderMoreButtonIcon()}</button>` : ''}
           </div>
   `;
@@ -2064,13 +2116,13 @@ function renderComposer(composerClassName, { desktop = false, centered = false }
   const centeredClassName = centered ? ' is-centered' : '';
   return `
       <div class="composer-wrap ${composerClassName}${centeredClassName}">
-        ${state.composerExpanded || centered ? '' : renderComposerStatus()}
-        ${renderQueuedMessages()}
+        <div style="display:contents">${state.composerExpanded || centered ? '' : renderComposerStatus()}</div>
+        <div style="display:contents">${renderQueuedMessages()}</div>
         <form class="composer bg-shared ring-theme ${composerClassName}${centeredClassName}" id="composer-form">
-          ${state.settingsOpen && !state.composerExpanded ? renderSettingsDrawer() : ''}
-          ${COMPOSER_UI.renderSettingsPopover()}
-          ${state.error && !state.composerExpanded ? `<div class="composer-error" role="alert">${escapeHtml(shorten(state.error, 96))}</div>` : ''}
-          ${renderAttachmentTray()}
+          <div id="session-settings-slot" style="display:contents">${state.settingsOpen && !state.composerExpanded ? renderSettingsDrawer() : ''}</div>
+          <div style="display:contents">${COMPOSER_UI.renderSettingsPopover()}</div>
+          <div style="display:contents">${state.error && !state.composerExpanded ? `<div class="composer-error" role="alert">${escapeHtml(shorten(state.error, 96))}</div>` : ''}</div>
+          <div style="display:contents">${renderAttachmentTray()}</div>
           <input class="visually-hidden" id="attachment-input" type="file" multiple aria-label="Upload files">
           <div class="compact-composer-row">
             ${desktopComposer ? '' : COMPOSER_UI.renderLeadingControls()}
@@ -2127,6 +2179,7 @@ async function sendNextQueuedMessage(sessionId = state.sessionId) {
 }
 
 function renderReadOnlyComposerNotice(session) {
+  if (isAdminObservedSession(session)) return '';
   const mode = session?.mode === 'share' ? 'Shared link' : 'Observer mode';
   return `
       <div class="composer-wrap read-only-composer-wrap">
@@ -2136,6 +2189,29 @@ function renderReadOnlyComposerNotice(session) {
         </div>
       </div>
   `;
+}
+
+function renderRuntimeFeedback() {
+  if (!state.sessionId) return '';
+  const activity = state.currentSession?.lastBusinessActivityAt;
+  const startedAt = state.currentSession?.turnStartedAt;
+  const connection = navigator.onLine === false ? 'Offline' : state.pendingTurn
+    ? state.streamConnection === 'connected' ? 'Connected' : state.streamConnection === 'connecting' ? 'Connecting' : 'Reconnecting'
+    : 'Turn finished';
+  const elapsed = startedAt && state.pendingTurn ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : null;
+  const since = activity ? Math.max(0, Math.floor((Date.now() - activity) / 1000)) : null;
+  return `<div class="runtime-feedback" role="status">${escapeHtml(CONNECTION.label(t) || t(connection))}${elapsed != null ? ` · ${escapeHtml(t('Elapsed'))} ${formatElapsedDuration(elapsed)}` : ''}${since != null ? ` · ${escapeHtml(t('Last work activity'))} ${formatElapsedDuration(since)}` : ''}</div>`;
+}
+function formatElapsedDuration(seconds) {
+  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+}
+function refreshRuntimeFeedback() {
+  if (document.visibilityState === 'hidden') return;
+  const feedback = document.querySelector('.runtime-feedback');
+  if (feedback) {
+    const next = htmlToElement(renderRuntimeFeedback());
+    if (feedback.textContent !== next?.textContent) feedback.replaceWith(next);
+  }
 }
 
 function renderGoalStatus() {
@@ -2236,7 +2312,8 @@ function renderAttachmentChip(attachment) {
                 <span class="attachment-name" data-i18n-skip>${escapeHtml(fileName)}</span>
                 <span class="attachment-meta">${escapeHtml(sizeLabel)}</span>
               </button>
-              <span class="attachment-status">${escapeHtml(t(statusLabel))}</span>
+              <span class="attachment-status"${attachment.error ? ` title="${escapeAttribute(attachment.error)}"` : ''}>${escapeHtml(t(statusLabel))}${status === 'uploading' ? ` ${attachment.progress || 0}%` : ''}</span>
+              ${status === 'failed' ? `<button class="ghost attachment-retry" type="button" data-attachment-retry-id="${escapeAttribute(attachment.id)}">${escapeHtml(t('Retry'))}</button>` : ''}
               <button class="ghost attachment-remove" type="button" data-attachment-remove-id="${escapeAttribute(attachment.id || '')}" aria-label="${escapeAttribute(t('Remove {fileName}', { fileName }))}">${UI.icon('x', { className: 'button-icon' })}</button>
             </div>
   `;
@@ -2327,7 +2404,7 @@ function renderSessionCards() {
               <span class="session-title" data-i18n-skip>${escapeHtml(sessionDisplayTitle(session))}</span>
               ${deliveryState === 'failed' && deliveryFailureVisible
                 ? `<span class="session-attention-state" data-state="${escapeAttribute(deliveryState)}">${escapeHtml(t(submissionDeliveryLabel(deliveryState)))}</span>`
-                : activityState ? `<span class="session-attention-state" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityState === 'waiting_approval' ? 'Needs approval' : 'Active'))}</span>` : ''}
+                : activityState ? `<span class="session-attention-state" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityState === 'waiting_approval' ? 'Needs approval' : activityState === 'failed' ? 'Failed' : activityState === 'stale' ? 'No recent activity' : 'Active'))}</span>` : ''}
             </span>
             ${latestPreview ? `<span class="session-preview" data-i18n-skip>${escapeHtml(latestPreview)}</span>` : ''}
           </span>
@@ -2383,21 +2460,17 @@ function renderSessionsError({ compact = false } = {}) {
 }
 
 function sessionDisplayTitle(session) {
-  return normalizeSessionCardText(session?.firstUserInput)
-    || normalizeSessionCardText(session?.title)
+  return normalizeSessionCardText(session?.title)
+    || normalizeSessionCardText(session?.firstUserInput)
     || normalizeSessionCardText(session?.preview)
     || t('New Session');
 }
 
 function sessionLatestPreview(session) {
-  const latest = normalizeSessionCardText(session?.lastUserInput);
-  if (!latest) {
-    return '';
-  }
-  const identity = normalizeSessionCardText(session?.firstUserInput)
-    || normalizeSessionCardText(session?.title)
+  const latest = normalizeSessionCardText(session?.lastUserInput)
+    || normalizeSessionCardText(session?.firstUserInput)
     || normalizeSessionCardText(session?.preview);
-  return latest === identity ? '' : latest;
+  return latest === sessionDisplayTitle(session) ? '' : latest;
 }
 
 function normalizeSessionCardText(value) {
@@ -2476,7 +2549,7 @@ function setSessionSummaryActivity(sessionId, activityState, activeTurnId = '') 
 }
 
 function sessionActivityStateFromSummary(session) {
-  if (session?.activityState === 'waiting_approval' || session?.activityState === 'running') {
+  if (['running', 'waiting_approval', 'failed', 'stale'].includes(session?.activityState)) {
     return session.activityState;
   }
   return String(session?.activeTurnId || '').trim() ? 'running' : null;
@@ -2598,7 +2671,7 @@ function renderThreadSettingsControls({ defaults = false, modelOnly = false, beh
           </span>
         </label>
   `;
-  const modelControls = defaults ? defaultModelControls : sessionModelControls;
+  const modelControls = (defaults ? defaultModelControls : sessionModelControls) + AUTH_RECOVERY.modelFeedback();
   const modeAttribute = defaults ? 'data-default-mode' : 'data-mode';
   const permissionAttribute = defaults ? 'data-default-permission-preset' : 'data-permission-preset';
   const behaviorControls = `
@@ -2650,12 +2723,15 @@ function renderStopTurnSettingsControl() {
 }
 
 function renderSessionManagementControl() {
-  if (!state.sessionId || state.draftSessionActive || isReadOnlySession(state.currentSession)) {
+  if (!state.sessionId || state.draftSessionActive) {
     return '';
   }
+  if (isReadOnlySession(state.currentSession)) return '<div class="settings-action-row"><strong>Session</strong><button class="ghost compact-button" type="button" id="refresh-session-button">Refresh</button></div>';
   return `
       <div class="settings-action-row">
         <strong>Session</strong>
+        <button class="ghost compact-button" type="button" id="refresh-session-button">Refresh</button>
+        ${SESSION_RENAME.canOpen() ? '<button class="ghost compact-button" type="button" id="rename-session-button">Rename</button>' : ''}
         <button class="ghost compact-button" type="button" data-session-archive-request-id="${escapeAttribute(state.sessionId)}"${state.pendingTurn ? ' disabled' : ''}>Archive</button>
       </div>
   `;
@@ -2676,14 +2752,20 @@ function renderShareSettingsControl() {
 }
 
 function renderTimeline() {
+  if (retainedTimeline) return '';
   const visibleItems = visibleTimelineItems();
+  const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status">${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}<button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : state.sessionHistoryPending || state.sessionStatusPending ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
   if (!visibleItems.length) {
-    return `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`;
+    return historyNotice || `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`;
   }
-  return visibleItems.map((item) => renderTimelineItem(item)).join('');
+  const allItems = allDisplayTimelineItems();
+  const end = Math.min(allItems.length, state.timelineWindowEnd ?? allItems.length);
+  const earlier = hasMoreSessionHistory() ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="-1"${sessionTimelinePageRequest ? ' disabled aria-busy="true"' : ''}>${escapeHtml(t(sessionTimelinePageRequest ? 'Loading history…' : 'Show earlier messages'))}</button>` : state.sessionHistoryPending ? '' : `<div class="timeline-history-end meta">${escapeHtml(t('Beginning of conversation'))}</div>`;
+  const newer = end < allItems.length || state.currentSession?.timelineHasNewer === true ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="1">${escapeHtml(t('Show newer messages'))}</button>` : '';
+  return historyNotice + earlier + visibleItems.map((item) => renderTimelineItem(item)).join('') + newer;
 }
 
-function visibleTimelineItems() {
+function allDisplayTimelineItems() {
   return state.timeline.filter((item) => {
     if (item?.kind === 'work') {
       return false;
@@ -2705,8 +2787,33 @@ function visibleTimelineItems() {
   });
 }
 
+function visibleTimelineItems() {
+  const items = allDisplayTimelineItems();
+  const end = Math.min(items.length, state.timelineWindowEnd ?? items.length);
+  return items.slice(Math.max(0, end - TIMELINE_DOM_WINDOW), end);
+}
+function moveTimelineWindow(direction) {
+  if (direction > 0 && state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer) return loadOlderSessionTimelinePage('after');
+  const items = allDisplayTimelineItems();
+  const end = Math.min(items.length, state.timelineWindowEnd ?? items.length);
+  const timelineBefore = document.querySelector('#timeline');
+  const candidates = [...(timelineBefore?.querySelectorAll('[data-timeline-id]') || [])];
+  const anchor = direction < 0 ? candidates[0] : candidates[candidates.length - 1];
+  const anchorId = anchor?.getAttribute('data-timeline-id');
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  state.timelineWindowEnd = direction < 0 ? Math.max(TIMELINE_DOM_WINDOW, end - 60) : Math.min(items.length, end + 60);
+  if (state.timelineWindowEnd >= items.length) state.timelineWindowEnd = null;
+  state.timelineShouldFollowLatest = false;
+  render();
+  const timeline = document.querySelector('#timeline');
+  if (timeline) {
+    const restored = [...timeline.querySelectorAll('[data-timeline-id]')].find((node) => node.getAttribute('data-timeline-id') === anchorId);
+    if (restored && anchorTop != null) timeline.scrollTop += restored.getBoundingClientRect().top - anchorTop;
+  }
+}
+
 function renderComposerStatus() {
-  const label = localizedComposerStatusLabel();
+  const label = state.draftStorageFailed ? t('Draft could not be saved on this device.') : localizedComposerStatusLabel();
   const canOpenWork = canViewCurrentWorkDetails() && Boolean(currentWorkDetailsItem());
   const content = canOpenWork
     ? `<button class="composer-status-action" type="button" id="open-work-details-button" aria-haspopup="dialog" aria-expanded="${String(state.workDetailsOpen)}" aria-label="${escapeAttribute(`${label}. ${t('Work details')}`)}"><span>${escapeHtml(label)}</span><span class="composer-status-disclosure" aria-hidden="true">&#8250;</span></button>`
@@ -2757,10 +2864,11 @@ function composerStatusLabel() {
 }
 
 function localizedComposerStatusLabel() {
-  return composerStatusLabel().split('|').map((part) => t(part)).join(' · ');
+  return CONNECTION.label(t) || composerStatusLabel().split('|').map((part) => t(part)).join(' · ');
 }
 
 function composerStatusTone() {
+  if (CONNECTION.label()) return 'warn';
   if (state.submissionSending) {
     return 'warn';
   }
@@ -2823,7 +2931,7 @@ function renderTimelineItem(item) {
       ${renderSummary(item.summary)}
       <div class="approval-actions">
           <button type="button" class="primary" data-approval-action="accept" data-approval-id="${escapeAttribute(item.approvalId)}" ${item.resolved ? 'disabled' : ''}>${escapeHtml(t('Accept'))}</button>
-          <button type="button" class="ghost" data-approval-action="accept-for-session" data-approval-id="${escapeAttribute(item.approvalId)}" ${item.resolved ? 'disabled' : ''}>${escapeHtml(t('Session'))}</button>
+          <button type="button" class="ghost" data-approval-action="accept-for-session" data-approval-id="${escapeAttribute(item.approvalId)}" ${item.resolved ? 'disabled' : ''}>${escapeHtml(t('Allow for this session'))}</button>
           <button type="button" class="danger" data-approval-action="deny" data-approval-id="${escapeAttribute(item.approvalId)}" ${item.resolved ? 'disabled' : ''}>${escapeHtml(t('Deny'))}</button>
       </div>
     </article>
@@ -2912,32 +3020,12 @@ function renderMessageAttachment(attachment) {
   `;
 }
 
-function renderWorkItem(item, { visibleEventLimit = Infinity, visibleEndIndex = Infinity } = {}) {
-  const summary = summarizeWorkItem(item);
-  const allDetails = workDetailsForItem(item);
-  const endIndex = Math.min(allDetails.length, Math.max(0, visibleEndIndex));
-  const startIndex = Math.max(0, endIndex - Math.max(1, visibleEventLimit));
-  const details = allDetails.slice(startIndex, endIndex);
-  const earlierCount = startIndex;
-  const newerCount = allDetails.length - endIndex;
-  const status = workTurnStatus(item);
-  return `
-    <section class="work-turn" data-work-turn-id="${escapeAttribute(item.turnId || '')}">
-      ${newerCount ? `<div class="work-new-activity"><button type="button" class="ghost compact-button" data-work-show-latest>${escapeHtml(t(newerCount === 1 ? '{count} new activity' : '{count} new activities', { count: newerCount }))}</button></div>` : ''}
-      <header class="work-turn-header">
-        <div class="work-turn-copy">
-          <p class="work-counts">${escapeHtml(formatWorkCounts(summary))}</p>
-        </div>
-        ${status ? `<span class="work-turn-status" data-tone="running">${escapeHtml(status)}</span>` : ''}
-      </header>
-      ${details.length ? `
-        <div class="work-events">
-          ${earlierCount ? `<div class="work-history-control"><button type="button" class="ghost compact-button" data-work-show-earlier>${escapeHtml(t('Show {count} earlier', { count: Math.min(WORK_DETAILS_EVENT_PAGE_SIZE, earlierCount) }))}</button><span>${escapeHtml(t('{count} hidden', { count: earlierCount }))}</span></div>` : ''}
-          ${details.map(renderWorkDetail).join('')}
-        </div>
-      ` : '<p class="meta">No tool activity yet.</p>'}
-    </section>
-  `;
+function getWorkView() {
+  return workView ||= globalThis.CodexWebWorkView?.createRenderer({ t, escapeHtml, escapeAttribute, shorten, summarizeWorkItem, workDetailsForItem, workTurnStatus, formatWorkCounts, WORK_DETAILS_EVENT_PAGE_SIZE, formatWorkEventStatus, workKindLabel, normalizeWorkFileChanges, primitiveWorkText, formatWorkFileAction, formatWorkChangeStats, formatWorkTextValue, hasSummaryValue, MAX_TIMELINE_SUMMARY_TEXT });
+}
+
+function renderWorkItem(...args) {
+  return getWorkView()?.renderWorkItem(...args) || '<p class="meta" role="status">' + escapeHtml(t(workViewError || 'Loading work details…')) + '</p>';
 }
 
 function summarizeWorkItem(item) {
@@ -2961,6 +3049,7 @@ function summarizeWorkItem(item) {
 }
 
 function workTurnStatus(item) {
+  if (state.pendingTurn && item?.turnId === state.turnId) return t('In progress');
   const status = String(item?.status || '').trim().toLowerCase();
   return !status || status === 'started' || status === 'running' || status === 'pending'
     ? t('In progress')
@@ -3055,30 +3144,15 @@ function workDetailTitle(batch, kind, fileChanges) {
     || 'Tool activity';
 }
 
-function renderWorkDetail(detail) {
-  const body = renderWorkDetailBody(detail);
-  const eventStatus = formatWorkEventStatus(detail);
-  return `
-    <details class="work-detail" data-work-kind="${escapeAttribute(detail.kind)}" data-work-event-id="${escapeAttribute(detail.id || '')}">
-      <summary>
-        <span class="work-detail-chevron" aria-hidden="true"></span>
-        <span class="work-event-kind">${escapeHtml(workKindLabel(detail.kind))}</span>
-        <span class="work-event-title" data-i18n-skip>${escapeHtml(detail.title)}</span>
-        ${eventStatus.label ? `<span class="work-event-status" data-tone="${escapeAttribute(eventStatus.tone)}" data-i18n-skip>${escapeHtml(eventStatus.label)}</span>` : ''}
-      </summary>
-      <div class="work-detail-body">
-        ${body || '<p class="meta">No additional details.</p>'}
-      </div>
-    </details>
-  `;
-}
-
 function formatWorkEventStatus(detail) {
   const exitCode = finiteWorkNumber(detail?.summary?.exitCode);
   if (exitCode !== null && exitCode !== 0) {
     return { label: t('Exit {code}', { code: exitCode }), tone: 'failed' };
   }
   const status = String(detail?.status || '').trim().toLowerCase();
+  if (detail?.kind === 'approval' && ['accept', 'accept-for-session', 'deny', 'cancel'].includes(status)) {
+    return { label: t(status === 'deny' || status === 'cancel' ? 'Declined' : 'Accepted'), tone: 'done' };
+  }
   if (status === 'failed' || status === 'error' || hasSummaryValue(detail?.summary?.error)) {
     return { label: t('Failed'), tone: 'failed' };
   }
@@ -3092,67 +3166,6 @@ function formatWorkEventStatus(detail) {
     return { label: t('Done'), tone: 'done' };
   }
   return { label: startCase(status), tone: 'done' };
-}
-
-function renderWorkDetailBody(detail) {
-  const summary = detail.summary || {};
-  const files = renderWorkFileChanges(detail.fileChanges || []);
-  const diff = renderWorkTextBlock('Diff', summary.diff || summary.patch);
-  const rows = renderWorkSummaryRows(summary);
-  const output = renderWorkTextBlock('Output', summary.output ?? summary.stdout ?? summary.stderr);
-  return [files, diff, rows, output].filter(Boolean).join('');
-}
-
-function renderWorkSummaryRows(summary) {
-  const excludedKeys = [
-    'fileChanges', 'file_changes', 'changes', 'files',
-    'output', 'stdout', 'stderr', 'diff', 'patch', 'raw',
-    'command', 'title', 'name', 'status', 'exitCode',
-    'path', 'file', 'target', 'source',
-  ];
-  const entries = Object.entries(summary || {})
-    .filter(([key, value]) => !excludedKeys.includes(key) && hasSummaryValue(value));
-  if (!entries.length) {
-    return '';
-  }
-  return `<div class="work-summary">${entries.map(([key, value]) => `
-    <div class="work-row"><strong>${escapeHtml(startCase(key))}</strong><span data-i18n-skip>${escapeHtml(shorten(formatSummaryValue(value), 800))}</span></div>
-  `).join('')}</div>`;
-}
-
-function renderWorkFileChanges(changes) {
-  const normalizedChanges = normalizeWorkFileChanges(changes);
-  if (!normalizedChanges.length) {
-    return '';
-  }
-  return `<div class="work-files">
-    <strong class="work-section-label">${escapeHtml(t('Files changed'))}</strong>
-    <div class="work-file-list">${normalizedChanges.map((change) => {
-    const path = primitiveWorkText(change?.path);
-    const action = formatWorkFileAction(change?.action || change?.type || change?.status);
-    const stats = formatWorkChangeStats(change);
-    return `
-      <div class="work-file-change">
-        <span class="work-file-path" data-i18n-skip>${escapeHtml(path)}</span>
-        ${action ? `<span class="work-file-action" data-i18n-skip>${escapeHtml(action)}</span>` : ''}
-        ${stats ? `<span class="work-file-stats">${escapeHtml(stats)}</span>` : ''}
-      </div>
-    `;
-  }).join('')}</div>
-  </div>`;
-}
-
-function renderWorkTextBlock(label, value) {
-  const text = formatWorkTextValue(value);
-  if (!text) {
-    return '';
-  }
-  return `
-    <div class="work-text-block">
-      <strong class="work-section-label">${escapeHtml(t(label))}</strong>
-      <pre class="work-output">${escapeHtml(shorten(text, MAX_TIMELINE_SUMMARY_TEXT))}</pre>
-    </div>
-  `;
 }
 
 function formatWorkTextValue(value, seen = new Set()) {
@@ -3548,7 +3561,9 @@ function resolvePendingWorkDetailsPolicy() {
   }
   state.workDetailsPolicyPendingSessionId = '';
   if (canViewCurrentWorkDetails()) {
+    const snapshot = captureTimelineViewport();
     restoreTimelineForSession(state.currentSession, readOnlyTimelineRestoreOptions(state.currentSession));
+    setTimelineOpenPositionForSession(state.currentSession, snapshot);
     return;
   }
   enforceCurrentWorkDetailsAccess();
@@ -3833,7 +3848,7 @@ function safeWorkTitleForKind(kind) {
   return 'Using tool';
 }
 
-function openWorkDetails(trigger = document.activeElement, turnId = '') {
+async function openWorkDetails(trigger = document.activeElement, turnId = '') {
   const item = turnId ? workDetailsItemForTurn(turnId) : currentWorkDetailsItem();
   if (!canViewCurrentWorkDetails() || !item) {
     return;
@@ -3841,7 +3856,19 @@ function openWorkDetails(trigger = document.activeElement, turnId = '') {
   rememberFocusReturn(trigger);
   resetWorkDetailsWindow(item);
   state.workDetailsOpen = true;
+  workViewError = '';
   render();
+  if (!getWorkView()) {
+    const sessionId = state.sessionId;
+    try {
+      workViewLoadPromise ||= import(`/work-details-view.js?v=${encodeURIComponent(APP_BUILD_ID)}&attempt=${++workViewLoadAttempts}`).catch(error => { workViewLoadPromise = null; throw error; });
+      await workViewLoadPromise;
+    } catch {
+      workViewError = 'Could not load work details. Close and try again.';
+    }
+    if (!state.workDetailsOpen || state.sessionId !== sessionId || !canViewCurrentWorkDetails()) return;
+    render();
+  }
   requestAnimationFrame(() => {
     const list = document.querySelector('.work-details-list');
     if (list) {
@@ -3913,6 +3940,7 @@ function normalizeWorkFileChanges(value, fallbackPath = '', depth = 0) {
       ...(action ? { action } : {}),
       ...(additions !== null ? { additions } : {}),
       ...(deletions !== null ? { deletions } : {}),
+      ...(typeof (value.diff ?? value.patch) === 'string' ? { diff: value.diff ?? value.patch } : {}),
     }];
   }
   for (const key of ['fileChanges', 'file_changes', 'changes', 'files']) {
@@ -4140,6 +4168,8 @@ function listenWithSignal(target, type, listener, options, signal) {
 }
 
 function bindGlobalEvents() {
+  SESSION_RENAME.bind();
+  for (const button of document.querySelectorAll('[data-retry-models]')) listenRendered(button, 'click', () => { void AUTH_RECOVERY.loadModels(); });
   const loginForm = document.querySelector('#login-form');
   if (loginForm) {
     listenRendered(loginForm, 'submit', onLoginSubmit);
@@ -4205,6 +4235,8 @@ function bindGlobalEvents() {
     });
   }
 
+  const visibleStopButton = document.querySelector('#visible-stop-button');
+  if (visibleStopButton) listenRendered(visibleStopButton, 'click', onStopTurn);
   const stopButton = document.querySelector('#stop-button');
   if (stopButton) {
     listenRendered(stopButton, 'click', onStopTurn);
@@ -4254,6 +4286,8 @@ function bindGlobalEvents() {
       removeComposerAttachment(button.getAttribute('data-attachment-remove-id') || '');
     });
   }
+
+  for (const button of document.querySelectorAll('[data-attachment-retry-id]')) listenRendered(button, 'click', () => { void UPLOADS.retry(button.dataset.attachmentRetryId); });
 
   const mobileSidebarToggleButton = document.querySelector('#mobile-sidebar-toggle-button');
   if (mobileSidebarToggleButton) {
@@ -4480,55 +4514,101 @@ function bindGlobalEvents() {
     });
   }
 
+  for (const form of document.querySelectorAll('form[data-admin-editor]')) {
+    const update = (event) => {
+      const input = event.target;
+      if (!input?.name) return;
+      const value = input.name === 'projectIds'
+        ? [...form.querySelectorAll('[name="projectIds"]:checked')].map(control => control.value)
+        : input.type === 'checkbox' ? input.checked : input.value;
+      ADMIN_EDITORS.edit(form.dataset.adminEditor, form.dataset.entityId || '', input.name, value);
+    };
+    listenRendered(form, 'input', update); listenRendered(form, 'change', update);
+  }
+
+  for (const button of document.querySelectorAll('[data-admin-add]')) listenRendered(button, 'click', () => {
+    const kind = button.dataset.adminAdd;
+    state.admin[`editing${kind[0].toUpperCase()}${kind.slice(1)}Id`] = '';
+    state.admin.editorKind = kind; state.admin.notice = '';
+    render(); document.querySelector(`#admin-${kind}-form input`)?.focus();
+  });
+  for (const button of document.querySelectorAll('[data-admin-retry]')) listenRendered(button, 'click', () => { void loadAdminResource(button.dataset.adminRetry, { force: true }); });
+  for (const button of document.querySelectorAll('[data-admin-session-page]')) listenRendered(button, 'click', () => {
+    const page = Number(button.dataset.adminSessionPage);
+    if (page * 30 >= state.admin.sessions.length && state.admin.sessionsHasMore) void refreshAdminSessions({ cursor: state.admin.sessionsNextCursor });
+    else { state.admin.sessionsPage = Math.max(0, page); render(); }
+    document.querySelector('.admin-content')?.scrollTo?.({ top: 0 });
+  });
+  const adminPageSelect = document.querySelector('#admin-page-select');
+  if (adminPageSelect) listenRendered(adminPageSelect, 'change', () => {
+    cancelSessionOpen(); state.admin.page = normalizeAdminPage(adminPageSelect.value);
+    state.admin.editorKind = ''; state.admin.editingProjectId = ''; state.admin.editingRoleId = ''; state.admin.editingUserId = ''; state.admin.notice = '';
+    render(); void refreshAdminConsole({ force: false });
+  });
   for (const button of document.querySelectorAll('button[data-admin-page]')) {
     listenRendered(button, 'click', () => {
+      cancelSessionOpen();
       state.admin.page = normalizeAdminPage(button.getAttribute('data-admin-page') || '');
+      state.admin.editorKind = ''; state.admin.editingProjectId = ''; state.admin.editingRoleId = ''; state.admin.editingUserId = ''; state.admin.notice = '';
       render();
+      void refreshAdminConsole({ force: false });
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-edit-project]')) {
     listenRendered(button, 'click', () => {
       state.admin.editingProjectId = button.getAttribute('data-admin-edit-project') || '';
+      state.admin.editorKind = 'project'; state.admin.notice = '';
       render();
+      document.querySelector('#admin-project-form input')?.focus();
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-edit-role]')) {
     listenRendered(button, 'click', () => {
       state.admin.editingRoleId = button.getAttribute('data-admin-edit-role') || '';
+      state.admin.editorKind = 'role'; state.admin.notice = '';
       render();
+      document.querySelector('#admin-role-form input')?.focus();
     });
   }
 
   for (const button of document.querySelectorAll('[data-admin-edit-user]')) {
     listenRendered(button, 'click', () => {
       state.admin.editingUserId = button.getAttribute('data-admin-edit-user') || '';
+      state.admin.editorKind = 'user'; state.admin.notice = '';
       render();
+      document.querySelector('#admin-user-form input')?.focus();
     });
   }
 
   const adminProjectEditCancel = document.querySelector('#admin-project-edit-cancel');
   if (adminProjectEditCancel) {
     listenRendered(adminProjectEditCancel, 'click', () => {
-      state.admin.editingProjectId = '';
+      ADMIN_EDITORS.discard('project', state.admin.editingProjectId || '');
+      state.admin.editingProjectId = ''; state.admin.editorKind = '';
       render();
+      document.querySelector('[data-admin-add="project"]')?.focus();
     });
   }
 
   const adminRoleEditCancel = document.querySelector('#admin-role-edit-cancel');
   if (adminRoleEditCancel) {
     listenRendered(adminRoleEditCancel, 'click', () => {
-      state.admin.editingRoleId = '';
+      ADMIN_EDITORS.discard('role', state.admin.editingRoleId || '');
+      state.admin.editingRoleId = ''; state.admin.editorKind = '';
       render();
+      document.querySelector('[data-admin-add="role"]')?.focus();
     });
   }
 
   const adminUserEditCancel = document.querySelector('#admin-user-edit-cancel');
   if (adminUserEditCancel) {
     listenRendered(adminUserEditCancel, 'click', () => {
-      state.admin.editingUserId = '';
+      ADMIN_EDITORS.discard('user', state.admin.editingUserId || '');
+      state.admin.editingUserId = ''; state.admin.editorKind = '';
       render();
+      document.querySelector('[data-admin-add="user"]')?.focus();
     });
   }
 
@@ -4587,6 +4667,57 @@ function bindGlobalEvents() {
     });
   }
 
+  for (const control of document.querySelectorAll('[data-timeline-window]')) listenRendered(control, 'click', () => Number(control.dataset.timelineWindow) < 0 ? showMoreSessionHistory() : moveTimelineWindow(1));
+  const latestButton = document.querySelector('#timeline-jump-latest');
+  if (latestButton) listenRendered(latestButton, 'click', jumpToLatestTimeline);
+  const devicesButton = document.querySelector('#load-auth-devices');
+  const loadDevices = async () => {
+    const generation = authRequestGeneration;
+    try {
+      const payload = await apiFetch('/api/auth/sessions');
+      if (!isAuthRequestCurrent(generation)) return;
+      state.authDevices = payload.sessions; state.authDevicesError = '';
+    } catch (error) { if (!isAuthRequestCurrent(generation)) return; state.authDevicesError = error.message; }
+    render();
+  };
+  if (devicesButton) listenRendered(devicesButton, 'click', loadDevices);
+  for (const button of document.querySelectorAll('[data-revoke-device], #revoke-other-devices')) {
+    listenRendered(button, 'click', async () => {
+      button.disabled = true;
+      try {
+        const id = button.getAttribute('data-revoke-device');
+        await apiFetch(id ? `/api/auth/sessions/${encodeURIComponent(id)}` : '/api/auth/sessions/revoke-others', { method: id ? 'DELETE' : 'POST' });
+        await loadDevices();
+      } catch (error) { state.authDevicesError = error.message; render(); }
+      finally { button.disabled = false; }
+    });
+  }
+  const fullDownload = document.querySelector('#download-full-session-file');
+  if (fullDownload) listenRendered(fullDownload, 'click', async () => {
+    const file = state.currentSessionFile;
+    fullDownload.disabled = true;
+    try {
+      if (file.downloadUrl && isShareContext()) {
+        const anchor = document.createElement('a');
+        anchor.href = file.downloadUrl; anchor.download = file.name; anchor.click();
+        return;
+      }
+      const response = await fetchSessionFileContent(file.contentUrl);
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = file.name; anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) { state.currentSessionFileError = error.message; render(); }
+    finally { fullDownload.disabled = false; }
+  });
+  const retryHistory = document.querySelector('#retry-session-history');
+  const refreshSession = document.querySelector('#refresh-session-button');
+  const refreshSystem = document.querySelector('#admin-system-refresh');
+  if (refreshSystem) listenRendered(refreshSystem, 'click', () => { void refreshAdminConsole(); });
+  if (refreshSession) listenRendered(refreshSession, 'click', () => { state.settingsOpen = false; void handleComposerRefresh(); });
+  if (retryHistory) listenRendered(retryHistory, 'click', () => {
+    void handleComposerRefresh();
+  });
   const promptInput = document.querySelector('#prompt-input');
   if (promptInput) {
     listenRendered(promptInput, 'touchstart', syncPromptFocusLayout, { passive: true });
@@ -4597,7 +4728,7 @@ function bindGlobalEvents() {
     });
     listenRendered(promptInput, 'input', (event) => {
       state.prompt = event.target.value;
-      savePromptDraftForCurrentSession();
+      schedulePromptDraftSave();
       syncPromptInputLayout(event.target);
     });
     updateComposerExpansionState(promptInput);
@@ -4636,6 +4767,7 @@ function bindGlobalEvents() {
   const modelSelect = document.querySelector('#model-select');
   if (modelSelect) {
     listenRendered(modelSelect, 'change', (event) => {
+      if (!state.sessionId) state.draftSettingsEdited = { ...state.draftSettingsEdited, model: true, reasoningEffort: true };
       state.model = event.target.value;
       state.reasoningEffort = state.model
         ? reasoningEffortForModel(state.model, state.reasoningEffort)
@@ -4648,6 +4780,7 @@ function bindGlobalEvents() {
   const reasoningSelect = document.querySelector('#reasoning-select');
   if (reasoningSelect) {
     listenRendered(reasoningSelect, 'change', (event) => {
+      if (!state.sessionId) state.draftSettingsEdited = { ...state.draftSettingsEdited, reasoningEffort: true };
       state.reasoningEffort = event.target.value;
       void updateSessionSettings();
     });
@@ -4655,6 +4788,7 @@ function bindGlobalEvents() {
 
   for (const button of document.querySelectorAll('[data-mode]')) {
     listenRendered(button, 'click', () => {
+      if (!state.sessionId) state.draftSettingsEdited = { ...state.draftSettingsEdited, collaborationMode: true };
       state.collaborationMode = button.getAttribute('data-mode') || 'default';
       void updateSessionSettings();
       render();
@@ -4663,6 +4797,7 @@ function bindGlobalEvents() {
 
   for (const button of document.querySelectorAll('[data-permission-preset]')) {
     listenRendered(button, 'click', () => {
+      if (!state.sessionId) state.draftSettingsEdited = { ...state.draftSettingsEdited, permissionPreset: true, approvalPolicy: true, sandboxMode: true };
       applyPermissionPreset(button.getAttribute('data-permission-preset') || 'default');
       void updateSessionSettings();
       render();
@@ -4777,7 +4912,7 @@ function bindSessionCardEvents(root = document) {
     const button = event.target?.closest?.([
       '#retry-sessions-button',
       '#load-more-sessions-button',
-      '[data-session-id]',
+      'button[data-session-id]',
       '[data-session-favorite-id]',
       '[data-session-archive-request-id]',
       '[data-session-unarchive-id]',
@@ -4851,6 +4986,9 @@ function syncComposerOffset() {
     }
     const applyComposerOffset = () => {
       const height = Math.ceil(composerWrap.getBoundingClientRect().height);
+      document.documentElement.style.setProperty('--composer-height', `${height}px`);
+      const headerHeight = document.querySelector('.chat-topbar')?.getBoundingClientRect?.().height || 80;
+      document.documentElement.style.setProperty('--chat-header-height', `${headerHeight}px`);
       const offset = Math.max(220, height + 16);
       document.documentElement.style.setProperty('--composer-offset', `${offset}px`);
     };
@@ -5061,27 +5199,13 @@ function syncWorkDetailsDialogContent() {
   }
   const scrollTop = list.scrollTop;
   const anchor = captureWorkDetailsAnchor(list);
-  const activeElement = document.activeElement;
-  const focusedDetail = activeElement?.closest?.('.work-detail');
-  const focusedEventId = focusedDetail?.getAttribute('data-work-event-id') || '';
-  const shouldRestoreSummaryFocus = activeElement?.tagName === 'SUMMARY';
-  const openEvents = new Set([...list.querySelectorAll('.work-detail[open]')]
-    .map((item) => item.getAttribute('data-work-event-id') || '')
-    .filter(Boolean));
+  const reading = globalThis.CodexWebWorkView?.captureReadingState(list) || [];
   list.innerHTML = renderWorkItem(item, currentWorkDetailsWindow(item));
-  for (const detail of list.querySelectorAll('.work-detail')) {
-    detail.open = openEvents.has(detail.getAttribute('data-work-event-id') || '');
-  }
+  globalThis.CodexWebWorkView?.restoreReadingState(list, reading);
   if (state.workDetailsFollowLatest) {
     list.scrollTop = list.scrollHeight;
   } else if (!restoreWorkDetailsAnchor(list, anchor)) {
     list.scrollTop = Math.min(scrollTop, Math.max(0, list.scrollHeight - list.clientHeight));
-  }
-  if (focusedEventId && shouldRestoreSummaryFocus) {
-    const summary = [...list.querySelectorAll('.work-detail')]
-      .find((detail) => detail.getAttribute('data-work-event-id') === focusedEventId)
-      ?.querySelector('summary');
-    summary?.focus?.({ preventScroll: true });
   }
 }
 
@@ -5195,6 +5319,10 @@ function scheduleChatDynamicUiRefresh(entryId = '') {
 }
 
 function syncComposerStatusDisplay() {
+  const runtimeFeedback = document.querySelector('.runtime-feedback');
+  if (runtimeFeedback) runtimeFeedback.outerHTML = renderRuntimeFeedback();
+  const stop = document.querySelector('#visible-stop-button');
+  if (stop) stop.hidden = !state.pendingTurn || !state.turnId;
   const composerWrap = document.querySelector('.composer-wrap');
   if (!composerWrap) {
     return;
@@ -5306,128 +5434,22 @@ async function handleComposerAttachmentFiles(files) {
     renderChatAtLatestIfFollowing(() => {});
     return false;
   }
+  if (normalizedFiles.length + state.composerAttachments.length > 20) {
+    state.error = 'You can attach up to 20 files.';
+    state.status = 'Upload failed'; state.statusTone = 'warn';
+    renderChatAtLatestIfFollowing(() => {});
+    return false;
+  }
   await uploadComposerAttachments(normalizedFiles);
   return true;
 }
 
 async function uploadComposerAttachments(files) {
-  const pendingAttachments = files.map(createPendingComposerAttachment);
-  state.composerAttachments.push(...pendingAttachments);
-  state.error = '';
-  state.status = 'Uploading attachment';
-  state.statusTone = 'warn';
-  renderChatAtLatestIfFollowing(() => {});
-
-  try {
-    const payload = state.sessionId
-      ? await uploadSessionAttachments(state.sessionId, files)
-      : await uploadSubmissionAttachments(files);
-    const uploadedItems = Array.isArray(payload?.items) ? payload.items : [];
-    pendingAttachments.forEach((attachment, index) => {
-      const uploaded = uploadedItems[index];
-      if (!uploaded?.localPath) {
-        updateComposerAttachment(attachment.id, {
-          status: 'failed',
-          error: 'Upload response did not include a readable file path.',
-        });
-        return;
-      }
-      updateComposerAttachment(attachment.id, {
-        status: 'ready',
-        uploaded: normalizeUploadedAttachment(uploaded, attachment),
-      });
-    });
-    if (hasFailedComposerAttachments()) {
-      state.status = 'Upload failed';
-      state.statusTone = 'danger';
-      state.error = 'Upload response did not include a readable file path.';
-    } else {
-      state.status = 'Attachment uploaded';
-      state.statusTone = 'success';
-      state.error = '';
-    }
-  } catch (error) {
-    const message = error?.payload?.message || error?.message || 'Upload failed';
-    for (const attachment of pendingAttachments) {
-      updateComposerAttachment(attachment.id, {
-        status: 'failed',
-        error: message,
-      });
-    }
-    state.status = 'Upload failed';
-    state.statusTone = 'danger';
-    state.error = message;
-  }
-  renderChatAtLatestIfFollowing(() => {});
+  if (!state.sessionId && isMultiUserMode() && !currentNewProjectId()) throw new Error('No projects are available for this account.');
+  return UPLOADS.add(files);
 }
 
-function createPendingComposerAttachment(file) {
-  return {
-    id: `local_att_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-    status: 'uploading',
-    fileName: String(file?.name || 'upload'),
-    sizeBytes: Number.isFinite(file?.size) ? Number(file.size) : 0,
-    mimeType: String(file?.type || ''),
-  };
-}
-
-function updateComposerAttachment(attachmentId, patch) {
-  const index = state.composerAttachments.findIndex((attachment) => attachment.id === attachmentId);
-  if (index < 0) {
-    return false;
-  }
-  state.composerAttachments[index] = {
-    ...state.composerAttachments[index],
-    ...patch,
-  };
-  return true;
-}
-
-function removeComposerAttachment(attachmentId) {
-  const next = state.composerAttachments.filter((attachment) => attachment.id !== attachmentId);
-  if (next.length === state.composerAttachments.length) {
-    return;
-  }
-  state.composerAttachments = next;
-  if (!hasFailedComposerAttachments() && state.error === 'Remove failed uploads before sending.') {
-    state.error = '';
-  }
-  renderChatAtLatestIfFollowing(() => {});
-}
-
-async function uploadSessionAttachments(sessionId, files) {
-  return uploadAttachments(`/api/sessions/${encodeURIComponent(sessionId)}/attachments`, files);
-}
-
-async function uploadSubmissionAttachments(files) {
-  const projectId = currentNewProjectId();
-  if (isMultiUserMode() && !projectId) {
-    throw new Error('No projects are available for this account.');
-  }
-  const query = isMultiUserMode()
-    ? `projectId=${encodeURIComponent(projectId)}`
-    : `cwd=${encodeURIComponent(state.cwd.trim())}`;
-  return uploadAttachments(`/api/session-submission-attachments?${query}`, files);
-}
-
-async function uploadAttachments(path, files) {
-  const formData = new FormData();
-  for (const file of files) {
-    formData.append('files', file, file?.name || 'upload');
-  }
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
-    },
-    body: formData,
-  });
-  if (!response.ok) {
-    throw await buildApiError(response);
-  }
-  return response.json();
-}
+function removeComposerAttachment(attachmentId) { UPLOADS.remove(attachmentId); }
 
 function normalizeUploadedAttachment(uploaded, fallback) {
   return {
@@ -5514,56 +5536,17 @@ function restoreSessionListScroll() {
 }
 
 function captureTimelineViewport() {
-  const timeline = document.querySelector('#timeline');
-  const promptRestoreSnapshot = capturePromptRestoreState();
-  if (!timeline) {
-    return {
-      bottomOffset: 0,
-      shouldFollowLatest: state.timelineShouldFollowLatest,
-      hadPromptFocus: promptRestoreSnapshot?.hadFocus === true,
-      promptSelectionStart: promptRestoreSnapshot?.selectionStart ?? null,
-      promptSelectionEnd: promptRestoreSnapshot?.selectionEnd ?? null,
-      promptSelectionDirection: promptRestoreSnapshot?.selectionDirection || 'none',
-    };
-  }
-  const bottomOffset = Math.max(0, timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop);
-  const shouldFollowLatest = bottomOffset <= TIMELINE_FOLLOW_LATEST_TOLERANCE_PX;
-  state.timelineShouldFollowLatest = shouldFollowLatest;
-  return {
-    bottomOffset,
-    shouldFollowLatest,
-    hadPromptFocus: promptRestoreSnapshot?.hadFocus === true,
-    promptSelectionStart: promptRestoreSnapshot?.selectionStart ?? null,
-    promptSelectionEnd: promptRestoreSnapshot?.selectionEnd ?? null,
-    promptSelectionDirection: promptRestoreSnapshot?.selectionDirection || 'none',
-  };
+  const prompt = capturePromptRestoreState();
+  return { ...SESSION_READING.capture(), hadPromptFocus: prompt?.hadFocus === true,
+    promptSelectionStart: prompt?.selectionStart ?? null, promptSelectionEnd: prompt?.selectionEnd ?? null,
+    promptSelectionDirection: prompt?.selectionDirection || 'none' };
 }
 
 function restoreTimelineViewport(snapshot) {
-  if (!snapshot) {
-    return;
-  }
-  const apply = () => {
-    const timeline = document.querySelector('#timeline');
-    if (!timeline) {
-      return;
-    }
-    if (snapshot.shouldFollowLatest) {
-      timeline.scrollTop = timeline.scrollHeight;
-    } else {
-      timeline.scrollTop = Math.max(0, timeline.scrollHeight - timeline.clientHeight - Number(snapshot.bottomOffset || 0));
-    }
-    state.timelineShouldFollowLatest = snapshot.shouldFollowLatest !== false;
-    rememberCurrentTimelineViewport();
-    restorePromptRestoreState({
-      hadFocus: snapshot.hadPromptFocus === true,
-      selectionStart: snapshot.promptSelectionStart,
-      selectionEnd: snapshot.promptSelectionEnd,
-      selectionDirection: snapshot.promptSelectionDirection,
-    });
-  };
-  apply();
-  requestAnimationFrame(apply);
+  if (!snapshot || !SESSION_READING.restore(snapshot)) return;
+  restorePromptRestoreState({ hadFocus: snapshot.hadPromptFocus === true,
+    selectionStart: snapshot.promptSelectionStart, selectionEnd: snapshot.promptSelectionEnd,
+    selectionDirection: snapshot.promptSelectionDirection });
 }
 
 function renderChatWithTimelineRestored(callback) {
@@ -5575,15 +5558,7 @@ function renderChatWithTimelineRestored(callback) {
 }
 
 function latestTimelineViewportSnapshot() {
-  const promptRestoreSnapshot = capturePromptRestoreState();
-  return {
-    bottomOffset: 0,
-    shouldFollowLatest: true,
-    hadPromptFocus: promptRestoreSnapshot?.hadFocus === true,
-    promptSelectionStart: promptRestoreSnapshot?.selectionStart ?? null,
-    promptSelectionEnd: promptRestoreSnapshot?.selectionEnd ?? null,
-    promptSelectionDirection: promptRestoreSnapshot?.selectionDirection || 'none',
-  };
+  return { ...captureTimelineViewport(), bottomOffset: 0, shouldFollowLatest: true };
 }
 
 function renderChatAtLatest(callback) {
@@ -5636,57 +5611,25 @@ function renderSessionFileWithScrollPreserved(callback) {
 }
 
 function withTimelineScrollPreserved(callback) {
-  const timeline = document.querySelector('#timeline');
-  const previousScrollTop = timeline?.scrollTop ?? null;
-  const previousScrollHeight = timeline?.scrollHeight ?? null;
+  const snapshot = captureTimelineViewport();
   callback();
-  requestAnimationFrame(() => {
-    const nextTimeline = document.querySelector('#timeline');
-    if (!nextTimeline || previousScrollTop === null || previousScrollHeight === null) {
-      return;
-    }
-    const heightDelta = nextTimeline.scrollHeight - previousScrollHeight;
-    nextTimeline.scrollTop = Math.max(0, previousScrollTop + heightDelta);
-  });
+  restoreTimelineViewport(snapshot);
 }
 
 function withTimelineBottomOffsetPreserved(callback) {
-  const timeline = document.querySelector('#timeline');
-  const previousScrollHeight = timeline?.scrollHeight ?? null;
-  const previousClientHeight = timeline?.clientHeight ?? null;
-  const previousScrollTop = timeline?.scrollTop ?? null;
-  const previousBottomOffset = previousScrollHeight !== null && previousClientHeight !== null && previousScrollTop !== null
-    ? Math.max(0, previousScrollHeight - previousClientHeight - previousScrollTop)
-    : null;
-  callback();
-  if (previousBottomOffset === null) {
-    return;
-  }
-  scheduleTimelineViewportRestore(previousBottomOffset);
+  withTimelineScrollPreserved(callback);
 }
 
-function scheduleTimelineViewportRestore(bottomOffset) {
-  requestAnimationFrame(() => {
-    const timeline = document.querySelector('#timeline');
-    if (!timeline) {
-      return;
-    }
-    timeline.scrollTop = Math.max(0, timeline.scrollHeight - timeline.clientHeight - Number(bottomOffset || 0));
-  });
+function scheduleTimelineViewportRestore(snapshot) {
+  requestAnimationFrame(() => restoreTimelineViewport(snapshot));
 }
 
 function protectPromptFocusScroll() {
-  const timeline = document.querySelector('#timeline');
-  if (!timeline) {
-    return;
-  }
-  const bottomOffset = Math.max(0, timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop);
-  scheduleTimelineViewportRestore(bottomOffset);
-  if (promptFocusRestoreTimer) {
-    clearTimeout(promptFocusRestoreTimer);
-  }
+  const snapshot = captureTimelineViewport();
+  scheduleTimelineViewportRestore(snapshot);
+  if (promptFocusRestoreTimer) clearTimeout(promptFocusRestoreTimer);
   promptFocusRestoreTimer = setTimeout(() => {
-    scheduleTimelineViewportRestore(bottomOffset);
+    scheduleTimelineViewportRestore(snapshot);
     promptFocusRestoreTimer = null;
   }, 160);
 }
@@ -5745,6 +5688,7 @@ function capturePromptRestoreState() {
   const selectionEnd = Number.isFinite(promptInput.selectionEnd) ? Number(promptInput.selectionEnd) : null;
   return {
     hadFocus,
+    node: promptInput, value: promptInput.value,
     selectionStart,
     selectionEnd,
     selectionDirection: typeof promptInput.selectionDirection === 'string' ? promptInput.selectionDirection : 'none',
@@ -5757,6 +5701,9 @@ function schedulePromptRestore(snapshot) {
   if (!snapshot?.hadFocus) {
     return;
   }
+  // Retained controls already preserve their selection. A delayed restore would
+  // overwrite typing or a selection the user made since this render.
+  if (document.querySelector('#prompt-input') === snapshot.node) return;
   requestAnimationFrame(() => {
     if (run !== promptRestoreRun) {
       return;
@@ -5770,7 +5717,7 @@ function restorePromptRestoreState(snapshot) {
     return;
   }
   const promptInput = document.querySelector('#prompt-input');
-  if (!promptInput) {
+  if (!promptInput || promptInput.value !== snapshot.value) {
     return;
   }
   promptInput.focus?.();
@@ -5799,6 +5746,7 @@ function attachTimelineScrollTracking({ updateInitial = true } = {}) {
   detachTimelineScrollTracking();
   timeline.addEventListener('scroll', updateTimelineFollowState, { passive: true });
   timeline.addEventListener('wheel', handleTimelineWheel, { passive: false });
+  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timeline.addEventListener(type, SESSION_READING.input, { passive: true });
   timelineScrollTrackingElement = timeline;
   if (updateInitial) {
     updateTimelineFollowState();
@@ -5811,6 +5759,7 @@ function detachTimelineScrollTracking() {
   }
   timelineScrollTrackingElement.removeEventListener('scroll', updateTimelineFollowState);
   timelineScrollTrackingElement.removeEventListener('wheel', handleTimelineWheel);
+  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timelineScrollTrackingElement.removeEventListener(type, SESSION_READING.input);
   timelineScrollTrackingElement = null;
 }
 
@@ -5834,8 +5783,8 @@ function updateTimelineFollowState() {
   if (!timeline) {
     return;
   }
-  const bottomOffset = Math.max(0, timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop);
-  state.timelineShouldFollowLatest = bottomOffset <= TIMELINE_FOLLOW_LATEST_TOLERANCE_PX;
+  SESSION_READING.scrolled();
+  syncReadingControls();
   rememberCurrentTimelineViewport();
 }
 
@@ -5885,18 +5834,36 @@ async function onLoginSubmit(event) {
 }
 
 async function onLogout() {
+  const owner = currentDraftOwnerKey();
+  const revocation = apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   try {
-    await apiFetch('/api/auth/logout', { method: 'POST' });
-  } catch (_error) {
-  }
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(SESSIONS_CACHE_KEY);
-  localStorage.removeItem(TIMELINE_CACHE_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(SESSIONS_CACHE_KEY);
+    localStorage.removeItem(TIMELINE_CACHE_KEY);
+  } catch (_error) {}
   state.token = '';
   setLoggedOut();
+  promptDraftStore.clear(owner);
+  await revocation;
 }
 
 function showSessionList() {
+  if (state.view === 'admin') {
+    const sessionId = state.admin.returnSessionId;
+    state.admin.returnSessionId = '';
+    state.admin.observedSession = null;
+    state.admin.observedSessionLoading = false;
+    state.chatReturnView = 'sessions';
+    if (sessionId && state.sessions.some(session => session.id === sessionId)) {
+      void selectSession(sessionId);
+      return;
+    }
+    state.sessionId = null;
+    state.currentSession = null;
+    resetTurnState();
+    resetSessionHistoryWindow();
+  }
+  cancelSessionOpen();
   savePromptDraftForCurrentSession();
   saveCurrentTimeline();
   stopStream();
@@ -5957,6 +5924,7 @@ function showSessionList() {
 }
 
 function openAppSettingsPage() {
+  cancelSessionOpen();
   savePromptDraftForCurrentSession();
   saveCurrentTimeline();
   state.archiveConfirmSessionId = null;
@@ -5998,10 +5966,25 @@ function openAppSettingsPage() {
 }
 
 async function openAdminConsole() {
+  cancelSessionOpen();
+  const navigation = sessionNavigationGeneration, generation = authRequestGeneration;
   if (!isAdminPrincipal()) {
     return;
   }
+  if (!ADMIN_UI) {
+    try {
+      adminUiLoadPromise ||= import(`/admin-ui.js?v=${encodeURIComponent(APP_BUILD_ID)}`).catch((error) => { adminUiLoadPromise = null; throw error; });
+      await adminUiLoadPromise;
+      ADMIN_UI = globalThis.CodexWebAdminUi.createRenderer(adminUiDependencies);
+      if (navigation !== sessionNavigationGeneration || !isAuthRequestCurrent(generation)) return;
+    } catch (error) { handleApiError(error); return; }
+  }
+  savePromptDraftForCurrentSession();
   saveCurrentTimeline();
+  state.admin.returnSessionId = isAdminObservedSession() ? '' : state.sessionId;
+  state.admin.observedSession = null;
+  state.admin.observedSessionLoading = false;
+  state.chatReturnView = 'sessions';
   stopStream();
   cancelSessionFileLoad();
   clearSessionFileState();
@@ -6018,6 +6001,8 @@ async function openAdminConsole() {
 }
 
 function openNewSessionPage() {
+  state.draftSettingsEdited = {};
+  cancelSessionOpen();
   savePromptDraftForCurrentSession();
   saveCurrentTimeline();
   if (!state.projectsLoaded) {
@@ -6060,6 +6045,7 @@ function openNewSessionPage() {
 }
 
 function onNewSessionSubmit(event) {
+  state.draftSettingsEdited = {};
   event.preventDefault();
   savePromptDraftForCurrentSession();
   const form = new FormData(event.currentTarget);
@@ -6093,6 +6079,7 @@ function onNewSessionSubmit(event) {
   state.settingsOpen = false;
   state.newSessionSettingsOpen = false;
   resetTurnState();
+  restorePromptDraftForSession(currentPromptDraftKey());
   state.status = 'Ready';
   state.statusTone = 'success';
   state.error = '';
@@ -6100,7 +6087,19 @@ function onNewSessionSubmit(event) {
 }
 
 async function selectSession(sessionId) {
+  cancelSessionOpen();
+  state.draftSettingsEdited = {};
+  SESSION_RENAME.invalidate();
+  const navigation = sessionOpenRequests.start();
   const requestGeneration = authRequestGeneration;
+  const controller = navigation.controller;
+  const isCurrent = () => isAuthRequestCurrent(requestGeneration)
+    && navigation.isCurrent() && state.sessionId === sessionId
+    && !controller.signal.aborted;
+  state.sessionHistoryError = '';
+  state.sessionStatusError = '';
+  state.sessionHistoryPending = true;
+  state.sessionStatusPending = true;
   const localSubmission = pendingSubmissionSessionSummaries()
     .find((session) => session.id === sessionId);
   if (localSubmission) {
@@ -6129,10 +6128,13 @@ async function selectSession(sessionId) {
   state.cwd = nextSession.cwd || '';
   restorePromptDraftForSession(nextSession.id);
   applySessionSettings(nextSession);
-  restoreTimelineForSession(nextSession, readOnlyTimelineRestoreOptions(nextSession));
+  restoreTimelineForSession(nextSession, { ...readOnlyTimelineRestoreOptions(nextSession), latest: true });
+  SESSION_READING.input();
+  setTimelineOpenPositionForSession(nextSession);
+  const openingReading = latestTimelineViewportSnapshot();
   const cachedTimeline = state.timelineCache.get(nextSession.id);
-  const hasCachedTimeline = Boolean(cachedTimeline?.timeline?.length);
-  const useFreshDetailCache = canUseFreshSessionDetailCache(nextSession, cachedTimeline);
+  const hasCachedTimeline = state.timeline.length > 0;
+  const useFreshDetailCache = hasCachedTimeline && canUseFreshSessionDetailCache(nextSession, cachedTimeline);
   const restoredRuntimeStatus = syncRuntimeStatusFromSession(nextSession, { source: 'stale' });
   state.view = isDesktopLayout() ? 'sessions' : 'chat';
   state.chatReturnView = 'sessions';
@@ -6142,7 +6144,6 @@ async function selectSession(sessionId) {
   state.composerExpanded = false;
   state.settingsOpen = false;
   state.newSessionSettingsOpen = false;
-  state.composerAttachments = [];
   state.error = '';
   state.status = restoredRuntimeStatus.changed && restoredRuntimeStatus.activeTurnId
     ? 'Turn running'
@@ -6161,159 +6162,74 @@ async function selectSession(sessionId) {
     connectActiveTurnStream({ forceReconnect: true });
   }
   if (useFreshDetailCache) {
+    state.sessionHistoryPending = false; state.sessionStatusPending = false;
+    render();
     return;
   }
-  let detailSession = null;
-  let openPayload = null;
-  try {
-    openPayload = await loadSessionOpenData(nextSession);
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
+  let historyApplied = false;
+  let executionSignature = '';
+  let progressApplied = false;
+  const applyProgress = async (payload) => {
+    if (!isCurrent() || !payload?.session) return;
+    progressApplied = true;
+    const hasHistory = !payload.compact || payload.hasTimelineData;
+    const hasStatus = !payload.compact || payload.hasStatusData;
+    const viewport = captureTimelineViewport();
+    upsertSession(payload.session);
+    const session = state.currentSession;
+    state.cwd = session.cwd || '';
+    applySessionSettings(session);
+    const firstHistory = hasHistory && !historyApplied;
+    if (firstHistory) {
+      if (isReadOnlySession(session)) restoreTimelineForSession(session, { fullHistory: true });
+      else hydrateCurrentTimelineFromSession(session);
+      historyApplied = true;
+      saveCurrentTimeline(); markTimelineCacheValidated(session);
     }
-    detailSession = openPayload.session;
-    upsertSession(detailSession);
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    if (handleMissingSession(error, '')) {
-      return;
-    }
-    if (error?.status === 401 || error?.status === 403) {
-      handleApiError(error);
-      return;
-    }
-    if (hasCachedTimeline && state.sessionId === sessionId) {
-      state.error = '';
-      state.status = 'Ready';
-      state.statusTone = 'warn';
-      render();
-      return;
-    }
-    handleApiError(error);
-    return;
-  }
-  if (state.sessionId !== sessionId) {
-    renderSessionListAfterBackgroundUpdate();
-    return;
-  }
-  const refreshedSession = state.currentSession?.id === sessionId ? state.currentSession : nextSession;
-  state.currentSession = refreshedSession;
-  state.cwd = refreshedSession.cwd || '';
-  restorePromptDraftForSession(refreshedSession.id);
-  applySessionSettings(refreshedSession);
-  if (isReadOnlySession(refreshedSession)) {
-    restoreTimelineForSession(refreshedSession, { fullHistory: true });
-  } else {
-    hydrateCurrentTimelineFromSession(refreshedSession);
-  }
-  saveCurrentTimeline();
-  if (!openPayload?.compact || openPayload.timelineSource === 'network') {
-    markTimelineCacheValidated(detailSession || refreshedSession);
-  }
-  const refreshedRuntimeStatus = syncRuntimeStatusFromSession(refreshedSession);
-  if (refreshedRuntimeStatus.activeTurnId && state.turnId) {
-    restoreTurnEventCursor(refreshedSession.id, state.turnId, { onlyIfUnset: true });
-    await applySessionTurnSnapshot(openPayload?.turnSnapshot, state.turnId);
-  }
-  state.error = '';
-  state.view = isDesktopLayout() ? 'sessions' : 'chat';
-  state.chatReturnView = 'sessions';
-  if (!refreshedRuntimeStatus.changed) {
-    state.status = 'Ready';
-    state.statusTone = 'success';
-  }
-  setTimelineOpenPositionForSession(refreshedSession);
-  render();
-  scrollTimelineToOpenPositionForSession(refreshedSession);
-  if (refreshedRuntimeStatus.activeTurnId && state.turnId) {
-    connectActiveTurnStream();
-  }
-}
-
-async function loadSessionOpenData(sessionSummary, { signal = null } = {}) {
-  const sessionId = String(sessionSummary?.id || '').trim();
-  if (!sessionId) {
-    throw new Error('Session id is required.');
-  }
-  const encodedSessionId = encodeURIComponent(sessionId);
-  const requestController = new AbortController();
-  const abortFromCaller = () => requestController.abort();
-  if (signal?.aborted) {
-    requestController.abort();
-  } else {
-    signal?.addEventListener?.('abort', abortFromCaller, { once: true });
-  }
-  const requestCompactData = async (path, options = {}) => {
-    try {
-      return {
-        ok: true,
-        payload: await apiFetch(path, { ...options, signal: requestController.signal }),
-      };
-    } catch (error) {
-      if (isFatalSessionOpenError(error)) {
-        requestController.abort();
-        throw error;
+    let runtimeChanged = false;
+    const nextExecution = JSON.stringify([session.activeTurnId, session.activityState, session.lastBusinessActivityAt, session.thread?.turns]);
+    if ((hasStatus || payload.hasTimelineData) && nextExecution !== executionSignature) {
+      executionSignature = nextExecution;
+      const runtimeStatus = syncRuntimeStatusFromSession(session, { source: hasStatus ? 'detail' : 'stale' });
+      runtimeChanged = runtimeStatus.changed;
+      if (runtimeStatus.activeTurnId && state.turnId) {
+        restoreTurnEventCursor(sessionId, state.turnId, { onlyIfUnset: true });
+        await applySessionTurnSnapshot(payload.turnSnapshot, state.turnId);
+        if (isCurrent()) connectActiveTurnStream();
       }
-      return { ok: false, error };
+    }
+    if (!isCurrent()) return;
+    state.sessionHistoryPending = payload.historyPending === true;
+    state.sessionStatusPending = payload.statusPending === true;
+    state.sessionHistoryError = payload.historyError || '';
+    state.sessionStatusError = payload.statusError || '';
+    state.error = '';
+    if (!runtimeChanged && !state.pendingTurn && state.statusTone !== 'danger') {
+      state.status = payload.statusPending || payload.historyPending ? 'Refreshing' : 'Ready';
+      state.statusTone = payload.statusPending || payload.historyPending || payload.historyError || payload.statusError ? 'warn' : 'success';
+    }
+    if (firstHistory && SESSION_READING.isCurrent(openingReading)) {
+      setTimelineOpenPositionForSession(session, openingReading); render(); scrollTimelineToOpenPositionForSession(session, openingReading);
+    } else {
+      nextTimelineRestoreSnapshot = viewport;
+      renderChatWithTimelineRestored(() => {});
+      nextTimelineRestoreSnapshot = null;
     }
   };
-  let statusResult;
-  let timelineResult;
   try {
-    [statusResult, timelineResult] = await Promise.all([
-      requestCompactData(`/api/sessions/${encodedSessionId}/status`),
-      requestCompactData(`/api/sessions/${encodedSessionId}/timeline?limit=50`, {
-        headers: { 'X-Codex-Include-Turn-Snapshot': 'false' },
-      }),
-    ]);
-  } finally {
-    signal?.removeEventListener?.('abort', abortFromCaller);
-  }
-  const statusPayload = statusResult.ok ? statusResult.payload : null;
-  const timelinePayload = timelineResult.ok ? timelineResult.payload : null;
-  const statusSession = statusPayload?.session && typeof statusPayload.session === 'object'
-    ? statusPayload.session
-    : null;
-  const timelineSession = timelinePayload?.session && typeof timelinePayload.session === 'object'
-    ? timelinePayload.session
-    : null;
-  const hasRemoteTimeline = Array.isArray(timelinePayload?.items);
-  const cached = state.timelineCache.get(sessionId);
-  const cachedTimeline = Array.isArray(cached?.history) && cached.history.length
-    ? cached.history
-    : Array.isArray(cached?.timeline) && cached.timeline.length
-      ? cached.timeline
-      : null;
-  if (statusSession || timelineSession || hasRemoteTimeline) {
-    const canJoinCachedTimeline = hasRemoteTimeline
-      && timelinePayload.hasMore === true
-      && cachedTimeline
-      && timelinesHaveStableOverlap(cachedTimeline, timelinePayload.items);
-    const timeline = hasRemoteTimeline
-      ? canJoinCachedTimeline
-        ? dedupeTimelineProjectionEntries([...cachedTimeline, ...timelinePayload.items])
-        : timelinePayload.items
-      : cachedTimeline;
-    return {
-      session: {
-        ...sessionSummary,
-        ...(statusSession || {}),
-        ...(timelineSession || {}),
-        ...(timeline ? {
-          timeline: timeline.map((item) => ({ ...item })),
-          timelineComplete: hasRemoteTimeline
-            ? timelinePayload.hasMore !== true
-            : cached?.historyComplete === true,
-          timelineNextBefore: hasRemoteTimeline ? timelinePayload.nextBefore ?? null : null,
-        } : {}),
-      },
-      turnSnapshot: timelinePayload?.turnSnapshot || statusPayload?.turnSnapshot || null,
-      compact: true,
-      timelineSource: hasRemoteTimeline ? 'network' : cachedTimeline ? 'cache' : 'none',
-    };
-  }
-  return apiFetch(`/api/sessions/${encodedSessionId}`, { signal });
+    await loadSessionOpenData(nextSession, { signal: controller.signal, onProgress: applyProgress });
+  } catch (error) {
+    if (!isCurrent()) return;
+    if (handleMissingSession(error, '', sessionId)) return;
+    if ([401, 403].includes(error?.status)) { handleApiError(error); return; }
+    if (!progressApplied) {
+      state.sessionHistoryError = hasCachedTimeline ? 'History could not be synchronized. Cached messages are shown.' : 'History could not be loaded. Retry to recover your messages.';
+      state.sessionStatusError = 'Execution status could not be refreshed.';
+    }
+    state.sessionHistoryPending = false; state.sessionStatusPending = false;
+    state.status = state.pendingTurn ? 'Turn running' : 'Refresh failed';
+    state.statusTone = 'warn'; render();
+  } finally { if (isCurrent()) navigation.finish(); }
 }
 
 function timelinesHaveStableOverlap(first, second) {
@@ -6385,6 +6301,7 @@ function submissionTimelineItem(entry) {
     meta: 'pending',
     text: entry.text,
     submissionId: entry.id,
+    historyAnchorId: state.sessionHistoryItems.filter(item => item.meta !== 'pending').at(-1)?.id || '@start',
     ...(entry.attachments.length ? { attachments: entry.attachments } : {}),
   };
 }
@@ -6761,6 +6678,7 @@ function normalizeSubmissionResponse(payload, fallback) {
     status: failed ? 'failed' : legacyAccepted ? 'submitted' : rawStatus,
     sessionId,
     turnId,
+    clientMessageId: String(submission?.clientMessageId || ''),
     session: payload?.session || result?.session || null,
     commandResult,
     error: String(submission?.error?.message || '').trim(),
@@ -6829,11 +6747,12 @@ function completeDeliveredSubmission(entry, normalized, payload) {
   const timelineEntry = state.timeline.find((item) => item?.submissionId === entry.id);
   if (timelineEntry) {
     timelineEntry.deliveryLabel = 'Server received';
+    if (normalized.clientMessageId) timelineEntry.clientMessageId = normalized.clientMessageId;
     if (normalized.turnId) {
       timelineEntry.turnId = normalized.turnId;
     }
   }
-  markCachedSubmissionDelivered(entry, sessionId);
+  markCachedSubmissionDelivered(entry, sessionId, normalized.turnId, normalized.clientMessageId);
   removeSubmissionOutboxEntry(entry.id);
   if (entry.queuedMessageId && sessionId) {
     removeQueuedMessage(sessionId, entry.queuedMessageId);
@@ -6875,7 +6794,7 @@ function completeDeliveredSubmission(entry, normalized, payload) {
   return payload;
 }
 
-function markCachedSubmissionDelivered(entry, sessionId) {
+function markCachedSubmissionDelivered(entry, sessionId, turnId, clientMessageId) {
   if (!sessionId || state.sessionId === sessionId) {
     return;
   }
@@ -6885,7 +6804,7 @@ function markCachedSubmissionDelivered(entry, sessionId) {
   }
   const mark = (items) => (Array.isArray(items) ? items : []).map((item) => (
     item?.submissionId === entry.id
-      ? { ...item, deliveryLabel: 'Server received' }
+      ? { ...item, deliveryLabel: 'Server received', ...(turnId ? { turnId } : {}), ...(clientMessageId ? { clientMessageId } : {}) }
       : item
   ));
   state.timelineCache.set(sessionId, {
@@ -7560,6 +7479,7 @@ async function streamTurnEvents(turnId, options = {}) {
   state.streamIncludesWorkDetails = !shouldRestrictCurrentTurnEvents();
   activeStreamTurnId = turnId;
   const activeStreamController = controller;
+  const connectionTicket = CONNECTION.ticket();
   state.lastTurnEventAt = Date.now();
   state.streamWasBackgrounded = false;
   let handshakeTimedOut = false;
@@ -7586,6 +7506,8 @@ async function streamTurnEvents(turnId, options = {}) {
     const eventsPath = observedSessionId
       ? `/api/admin/sessions/${encodeURIComponent(observedSessionId)}/turns/${encodeURIComponent(turnId)}/events`
       : `/api/turns/${encodeURIComponent(turnId)}/events`;
+    state.streamConnection = 'connecting';
+    refreshRuntimeFeedback();
     const responsePromise = fetch(`${eventsPath}${query ? `?${query}` : ''}`, {
       headers: {
         Authorization: `Bearer ${state.token}`,
@@ -7606,6 +7528,7 @@ async function streamTurnEvents(turnId, options = {}) {
       throw await buildApiError(response);
     }
 
+    if (state.streamAbortController === controller) { CONNECTION.succeeded('stream', connectionTicket); state.streamConnection = 'connected'; refreshRuntimeFeedback(); }
     const responseEpoch = streamResponseHeader(response, 'X-Codex-Event-Epoch');
     const responseReset = parseStreamResetValue(streamResponseHeader(response, 'X-Codex-Event-Reset'));
     const epochChanged = Boolean(
@@ -7679,6 +7602,7 @@ async function streamTurnEvents(turnId, options = {}) {
       return;
     }
     if (isRecoverableBackgroundStreamError(turnId, error)) {
+      CONNECTION.failed('stream', error, connectionTicket);
       markStreamPaused();
       void revalidateWorkDetailsPolicyAfterStreamClose();
       scheduleStreamReconnect();
@@ -7692,6 +7616,7 @@ async function streamTurnEvents(turnId, options = {}) {
   } finally {
     clearNetworkTimer(handshakeTimer);
     if (state.streamAbortController === controller) {
+      state.streamConnection = 'reconnecting';
       state.streamAbortController = null;
       state.streamIncludesWorkDetails = false;
       activeStreamTurnId = '';
@@ -8150,12 +8075,16 @@ async function reconcileQueuedCompletion(turnId) {
 }
 
 function isRecoverableBackgroundStreamError(turnId, error) {
-  return state.pendingTurn
+  return ![401, 403].includes(error?.status)
+    && (!error?.status || isRetryableStreamError(error))
+    && state.pendingTurn
     && state.turnId === turnId
     && (state.streamWasBackgrounded || document.visibilityState === 'hidden' || isRetryableStreamError(error));
 }
 
 function markStreamPaused() {
+  state.streamConnection = 'reconnecting';
+  refreshRuntimeFeedback();
   state.streamWasBackgrounded = true;
   state.status = 'Stream paused';
   state.statusTone = 'warn';
@@ -8252,6 +8181,10 @@ function applyTurnEvent(event, assistantEntry) {
   if (event.turnId) {
     state.latestTurnId = event.turnId;
   }
+  if (state.currentSession && /^(turn\.|assistant\.|batch\.|approval\.)/.test(event.type)) {
+    state.currentSession.lastBusinessActivityAt = Number(event.timestamp) || Date.now();
+    if (event.type === 'turn.started') state.currentSession.turnStartedAt = Number(event.timestamp) || Date.now();
+  }
   let sessionActivityChanged = false;
   switch (event.type) {
     case 'turn.started':
@@ -8265,9 +8198,11 @@ function applyTurnEvent(event, assistantEntry) {
       sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'running', event.turnId);
       break;
     case 'assistant.delta':
+      if (state.currentSession?.timelineHasNewer) break;
       assistantEntry = upsertAssistantProjection(event, { final: false });
       break;
     case 'assistant.final':
+      if (state.currentSession?.timelineHasNewer) break;
       assistantEntry = upsertAssistantProjection(event, { final: true });
       break;
     case 'batch.started':
@@ -8641,11 +8576,12 @@ function resetTurnState() {
   state.workDetailsPolicyPendingSessionId = '';
 }
 
-function handleMissingSession(error, promptToRestore) {
+function handleMissingSession(error, promptToRestore, failedSessionId = state.sessionId) {
   if (!isMissingSessionError(error)) {
     return false;
   }
-  const missingSessionId = state.sessionId;
+  const missingSessionId = failedSessionId;
+  if (missingSessionId !== state.sessionId) return true;
   if (missingSessionId) {
     state.sessions = state.sessions.filter((session) => session.id !== missingSessionId);
   }
@@ -8754,97 +8690,76 @@ function hasRecoveredFirstTurn(session, promptText) {
 }
 
 async function refreshCurrentSessionMetadata({
-  hydrateTimeline = false,
-  viewportSnapshot = null,
-  signal = null,
-  forceDetail = false,
+  hydrateTimeline = false, viewportSnapshot = null, signal = null, forceDetail = false, latest = false,
 } = {}) {
-  if (!state.sessionId || isShareContext()) {
-    return null;
-  }
-  if (isAdminObservedSession()) {
-    return refreshAdminObservedSessionMetadata({ viewportSnapshot, signal });
-  }
-  if (!hydrateTimeline && !forceDetail) {
-    return refreshCurrentSessionStatus({ viewportSnapshot, signal });
-  }
+  if (!state.sessionId || isShareContext()) return null;
+  if (isAdminObservedSession()) return refreshAdminObservedSessionMetadata({ viewportSnapshot, signal });
+  if (!hydrateTimeline && !forceDetail) return refreshCurrentSessionStatus({ viewportSnapshot, signal });
   const sessionId = state.sessionId;
   const requestGeneration = authRequestGeneration;
-  const snapshot = viewportSnapshot || (isDesktopWorkspaceView() ? latestTimelineViewportSnapshot() : captureTimelineViewport());
+  const navigation = sessionNavigationGeneration;
+  const isCurrent = () => isAuthRequestCurrent(requestGeneration) && navigation === sessionNavigationGeneration && state.sessionId === sessionId;
+  const currentViewport = captureTimelineViewport();
+  const startedViewport = viewportSnapshot || currentViewport;
   try {
     const payload = forceDetail
       ? await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { signal })
-      : await loadSessionOpenData(state.currentSession || { id: sessionId }, { signal });
-    if (!isAuthRequestCurrent(requestGeneration)) {
+      : await loadSessionOpenData(state.currentSession || { id: sessionId }, { signal, latest, anchors: !latest && !startedViewport.shouldFollowLatest ? startedViewport.anchors : [] });
+    if (!isAuthRequestCurrent(requestGeneration) || !payload?.session) return null;
+    if (!isCurrent()) {
+      if (state.sessionId !== sessionId) { upsertSession(payload.session); renderSessionListAfterBackgroundUpdate(); return payload.session; }
       return null;
     }
-    if (payload?.session) {
-      upsertSession(payload.session);
-      const session = state.currentSession?.id === sessionId
-        ? state.currentSession
-        : state.sessions.find((item) => item.id === sessionId) || null;
-      if (state.sessionId === sessionId) {
-        state.currentSession = payload.compact && session
-          ? { ...session, ...payload.session }
-          : session;
-        if (payload.compact && state.currentSession) {
-          delete state.currentSession.thread;
-        }
-        const currentSession = state.currentSession;
-        state.cwd = session?.cwd || state.cwd;
-        if (hydrateTimeline && currentSession) {
-          hydrateCurrentTimelineFromSession(currentSession, { forceAuthoritative: forceDetail });
-          const runtimeStatus = syncRuntimeStatusFromSession(currentSession);
-          if (runtimeStatus.activeTurnId && state.turnId) {
-            restoreTurnEventCursor(sessionId, state.turnId, { onlyIfUnset: true });
-            await applySessionTurnSnapshot(payload.turnSnapshot, state.turnId);
-          }
-        }
-        if (!state.pendingTurn) {
-          restoreStaleQueuedMessagesForSession(sessionId);
-        }
+    // A latest-page response replaces the loaded history window. User input
+    // while it was in flight cancels that replacement, not only its final scroll.
+    if (latest && !SESSION_READING.isCurrent(startedViewport)) return null;
+    const snapshot = SESSION_READING.isCurrent(startedViewport) ? startedViewport : captureTimelineViewport();
+    if (!latest && payload.hasTimelineData && !snapshot.shouldFollowLatest) {
+      const incoming = normalizeSessionTimeline(payload.session.timeline);
+      const overlap = timelinesHaveStableOverlap(state.sessionHistoryItems, incoming);
+      if (overlap && state.currentSession?.timelineHasNewer !== true && payload.session.timelineHasNewer !== true) payload.session.timeline = dedupeTimelineProjectionEntries([...state.sessionHistoryItems.filter(item => item.meta !== 'pending'), ...incoming]);
+      else if (!snapshot.anchors.some(anchor => incoming.some(item => item.id === anchor.id)) && snapshot.anchors.length) {
+        Object.assign(payload.session, { timeline: state.sessionHistoryItems, timelineComplete: state.currentSession.timelineComplete, timelineNextBefore: state.currentSession.timelineNextBefore, timelineNextAfter: state.currentSession.timelineNextAfter, timelineHasNewer: state.currentSession.timelineHasNewer });
       }
-      if (state.sessionId === sessionId) {
-        nextTimelineRestoreSnapshot = snapshot;
-      }
-      if (state.sessionId === sessionId) {
-        renderChatWithTimelineRestored(() => {});
-        if (hydrateTimeline && state.view === 'chat') {
-          scrollTimelineToBottomIfFollowingLatest();
-        }
-        nextTimelineRestoreSnapshot = null;
-        if (hydrateTimeline && !state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) {
-          void sendNextQueuedMessage(sessionId);
-        }
-      } else {
-        renderSessionListAfterBackgroundUpdate();
-      }
-      return state.sessionId === sessionId ? state.currentSession : session;
     }
+    upsertSession(payload.session);
+    if (payload.compact && state.currentSession) delete state.currentSession.thread;
+    const session = state.currentSession;
+    state.cwd = session?.cwd || state.cwd;
+    state.sessionHistoryError = payload.historyError || '';
+    state.sessionStatusError = payload.statusError || '';
+    state.sessionHistoryPending = false; state.sessionStatusPending = false;
+    state.sessionRefreshOutcome = state.sessionHistoryError || state.sessionStatusError ? 'partial' : 'success';
+    if (hydrateTimeline && session) {
+      if (!payload.compact || payload.hasTimelineData) {
+        hydrateCurrentTimelineFromSession(session, { forceAuthoritative: forceDetail });
+        if (!latest) setTimelineOpenPositionForSession(session, snapshot);
+      }
+      const runtimeStatus = syncRuntimeStatusFromSession(session);
+      if (runtimeStatus.activeTurnId && state.turnId) {
+        restoreTurnEventCursor(sessionId, state.turnId, { onlyIfUnset: true });
+        await applySessionTurnSnapshot(payload.turnSnapshot, state.turnId);
+      }
+    }
+    if (!isCurrent()) return null;
+    if (!state.pendingTurn) restoreStaleQueuedMessagesForSession(sessionId);
+    nextTimelineRestoreSnapshot = snapshot;
+    renderChatWithTimelineRestored(() => {});
+    if (hydrateTimeline && !state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) void sendNextQueuedMessage(sessionId);
+    return session;
   } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    if (isMissingSessionError(error)) {
-      if (state.sessionId === sessionId) {
-        handleMissingSession(error, '');
-      } else {
-        removeSession(sessionId);
-        if (state.view === 'sessions') {
-          render();
-        }
-      }
-      return null;
-    }
-    if (error?.status === 401 || error?.status === 403) {
-      handleApiError(error);
-      return null;
-    }
-    if (error?.name !== 'AbortError') {
-      console.warn('[codex-web] session refresh failed', error);
-    }
+    if (!isCurrent()) return null;
+    if (isMissingSessionError(error)) { handleMissingSession(error, ''); return null; }
+    if ([401, 403].includes(error?.status)) { handleApiError(error); return null; }
+    if (error?.name === 'AbortError' && signal?.aborted) return null;
+    state.sessionRefreshOutcome = 'failed';
+    state.sessionHistoryPending = false; state.sessionStatusPending = false;
+    state.sessionHistoryError = 'History could not be synchronized. Cached messages are shown.';
+    state.sessionStatusError = 'Execution status could not be refreshed.';
+    if (!state.pendingTurn) { state.status = 'Refresh failed'; state.statusTone = 'warn'; }
+    renderChatWithTimelineRestored(() => {});
+    return null;
   }
-  return null;
 }
 
 function isAdminObservedSession(session = state.currentSession) {
@@ -8860,10 +8775,12 @@ async function refreshAdminObservedSessionMetadata({ viewportSnapshot = null, si
     return null;
   }
   const requestGeneration = authRequestGeneration;
-  const snapshot = viewportSnapshot || captureTimelineViewport();
+  const navigation = sessionNavigationGeneration;
+  const owns = () => isAuthRequestCurrent(requestGeneration) && navigation === sessionNavigationGeneration && state.sessionId === sessionId;
+  const startedViewport = viewportSnapshot || captureTimelineViewport();
   try {
     const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, { signal });
-    if (!isAuthRequestCurrent(requestGeneration) || !payload?.session) {
+    if (!owns() || !payload?.session) {
       return null;
     }
     const session = {
@@ -8874,6 +8791,8 @@ async function refreshAdminObservedSessionMetadata({ viewportSnapshot = null, si
     if (state.sessionId !== sessionId || state.admin.observedSession?.id !== sessionId) {
       return session;
     }
+    const snapshot = SESSION_READING.isCurrent(startedViewport) ? startedViewport : captureTimelineViewport();
+    state.sessionHistoryError = ''; state.sessionStatusError = '';
     state.admin.observedSession = session;
     state.currentSession = session;
     state.cwd = session.cwd || '';
@@ -8888,7 +8807,7 @@ async function refreshAdminObservedSessionMetadata({ viewportSnapshot = null, si
     nextTimelineRestoreSnapshot = null;
     return session;
   } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
+    if (!owns()) {
       return null;
     }
     if (error?.status === 401 || error?.status === 403) {
@@ -8902,7 +8821,8 @@ async function refreshAdminObservedSessionMetadata({ viewportSnapshot = null, si
       return null;
     }
     if (error?.name !== 'AbortError') {
-      console.warn('[codex-web] observed session refresh failed', error);
+      state.sessionHistoryError = error?.message || 'Request failed';
+      state.sessionStatusError = state.sessionHistoryError;
     }
     return null;
   }
@@ -8914,10 +8834,12 @@ async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = n
   }
   const sessionId = state.sessionId;
   const requestGeneration = authRequestGeneration;
+  const navigation = sessionNavigationGeneration;
   let payload = null;
   try {
     payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/status`, { signal });
   } catch (error) {
+    if (!isAuthRequestCurrent(requestGeneration) || navigation !== sessionNavigationGeneration) return null;
     if (error?.status === 404 && error?.payload?.error !== 'session_not_found') {
       return refreshCurrentSessionMetadata({ hydrateTimeline: true, viewportSnapshot, signal });
     }
@@ -8940,7 +8862,7 @@ async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = n
     console.warn('[codex-web] session status refresh failed', error);
     return null;
   }
-  if (!isAuthRequestCurrent(requestGeneration) || !payload?.session) {
+  if (!isAuthRequestCurrent(requestGeneration) || !payload?.session || (navigation !== sessionNavigationGeneration && state.sessionId === sessionId)) {
     return null;
   }
   upsertSession(payload.session);
@@ -8960,7 +8882,7 @@ async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = n
   if (runtimeStatus.activeTurnId && state.turnId) {
     restoreTurnEventCursor(sessionId, state.turnId, { onlyIfUnset: true });
   }
-  nextTimelineRestoreSnapshot = viewportSnapshot;
+  nextTimelineRestoreSnapshot = SESSION_READING.isCurrent(viewportSnapshot) ? viewportSnapshot : captureTimelineViewport();
   renderChatWithTimelineRestored(() => {});
   nextTimelineRestoreSnapshot = null;
   if (!state.pendingTurn && pendingQueuedMessagesForSession(sessionId).length > 0) {
@@ -8991,262 +8913,6 @@ function createWebhookSettingsState() {
     keyCopied: false,
     error: '',
   };
-}
-
-function normalizeWebhookEndpointPath(value) {
-  const normalized = String(value || '').trim();
-  if (!normalized.startsWith('/') || normalized.startsWith('//')) {
-    return '';
-  }
-  try {
-    const parsed = new URL(normalized, 'http://codex-web.local');
-    return `${parsed.pathname}${parsed.search}`;
-  } catch (_error) {
-    return '';
-  }
-}
-
-function normalizeWebhookKeyHint(value) {
-  return typeof value === 'string' ? value.trim().slice(-6) : '';
-}
-
-function webhookKeyHintDisplay(value) {
-  const hint = normalizeWebhookKeyHint(value);
-  return hint ? `cwwh_...${hint}` : 'cwwh_...******';
-}
-
-function webhookEndpointUrl() {
-  const endpointPath = normalizeWebhookEndpointPath(state.webhook.endpointPath);
-  const origin = String(window.location?.origin || '').trim().replace(/\/+$/u, '');
-  if (!endpointPath || !origin) {
-    return '';
-  }
-  try {
-    const endpoint = new URL(endpointPath, `${origin}/`);
-    const expectedOrigin = new URL(`${origin}/`).origin;
-    return endpoint.origin === expectedOrigin ? endpoint.toString() : '';
-  } catch (_error) {
-    return '';
-  }
-}
-
-function applyWebhookSettingsPayload(payload) {
-  const webhook = payload?.webhook && typeof payload.webhook === 'object'
-    ? payload.webhook
-    : {};
-  state.webhook = {
-    ...createWebhookSettingsState(),
-    enabled: webhook.enabled === true,
-    hasKey: webhook.hasKey === true,
-    key: webhookResponseKey(payload),
-    keyHint: normalizeWebhookKeyHint(webhook.keyHint),
-    endpointPath: normalizeWebhookEndpointPath(webhook.endpointPath),
-    loaded: true,
-  };
-  return state.webhook;
-}
-
-function webhookResponseKey(payload) {
-  return typeof payload?.key === 'string' ? payload.key.trim().slice(0, 1000) : '';
-}
-
-function webhookErrorMessage(error, fallback) {
-  return String(error?.payload?.message || error?.message || fallback || 'Could not update webhook settings.');
-}
-
-function handleWebhookRequestError(error, fallback, previous = state.webhook) {
-  if (error?.status === 401) {
-    handleApiError(error);
-    return;
-  }
-  state.webhook = {
-    ...previous,
-    loading: false,
-    saving: false,
-    endpointCopied: false,
-    keyCopied: false,
-    error: webhookErrorMessage(error, fallback),
-  };
-}
-
-async function refreshWebhookSettings({ renderAfter = true } = {}) {
-  if (!state.authSession || isShareContext() || state.webhook.loading) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  state.webhook = {
-    ...state.webhook,
-    loading: true,
-    endpointCopied: false,
-    keyCopied: false,
-    error: '',
-  };
-  if (renderAfter) {
-    render();
-  }
-  try {
-    const payload = await apiFetch('/api/webhook');
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    return applyWebhookSettingsPayload(payload);
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleWebhookRequestError(error, 'Could not load webhook settings.');
-    return null;
-  } finally {
-    if (isAuthRequestCurrent(requestGeneration)) {
-      state.webhook.loading = false;
-      if (renderAfter) {
-        render();
-      }
-    }
-  }
-}
-
-async function setWebhookEnabled(enabled) {
-  if (
-    !state.authSession
-    || isShareContext()
-    || !state.webhook.loaded
-    || state.webhook.loading
-    || state.webhook.saving
-  ) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  const previous = { ...state.webhook };
-  state.webhook = {
-    ...state.webhook,
-    saving: true,
-    endpointCopied: false,
-    keyCopied: false,
-    error: '',
-  };
-  render();
-  try {
-    const payload = await apiFetch('/api/webhook', {
-      method: 'PATCH',
-      body: { enabled: enabled === true },
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    return applyWebhookSettingsPayload(payload);
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleWebhookRequestError(error, 'Could not update webhook settings.', previous);
-    return null;
-  } finally {
-    if (isAuthRequestCurrent(requestGeneration)) {
-      state.webhook.saving = false;
-      render();
-    }
-  }
-}
-
-function requestWebhookKeyRotation(focusTarget = document.activeElement) {
-  if (!state.webhook.loaded || !state.webhook.enabled || state.webhook.loading || state.webhook.saving) {
-    return false;
-  }
-  rememberFocusReturn(focusTarget);
-  state.webhookRotateConfirmOpen = true;
-  state.webhook.error = '';
-  render();
-  return true;
-}
-
-function cancelWebhookKeyRotation() {
-  if (!state.webhookRotateConfirmOpen || state.webhook.saving) {
-    return false;
-  }
-  requestFocusRestore();
-  state.webhookRotateConfirmOpen = false;
-  render();
-  return true;
-}
-
-async function rotateWebhookKey() {
-  if (
-    !state.authSession
-    || isShareContext()
-    || !state.webhookRotateConfirmOpen
-    || !state.webhook.enabled
-    || state.webhook.loading
-    || state.webhook.saving
-  ) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  const previous = { ...state.webhook };
-  state.webhook = {
-    ...state.webhook,
-    saving: true,
-    endpointCopied: false,
-    keyCopied: false,
-    error: '',
-  };
-  render();
-  try {
-    const payload = await apiFetch('/api/webhook/rotate', { method: 'POST' });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    const webhook = applyWebhookSettingsPayload(payload);
-    state.webhookRotateConfirmOpen = false;
-    if (!webhook.key) {
-      requestFocusRestore();
-      state.webhook.error = 'Webhook key is not available.';
-    }
-    return webhook;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.webhookRotateConfirmOpen = false;
-    requestFocusRestore();
-    handleWebhookRequestError(error, 'Could not regenerate webhook key.', previous);
-    return null;
-  } finally {
-    if (isAuthRequestCurrent(requestGeneration)) {
-      state.webhook.saving = false;
-      render();
-    }
-  }
-}
-
-async function copyWebhookEndpoint() {
-  const endpoint = webhookEndpointUrl();
-  if (!endpoint || state.webhook.loading || state.webhook.saving) {
-    return false;
-  }
-  const copied = await copyTextToClipboard(endpoint, '#webhook-endpoint-input');
-  state.webhook.endpointCopied = copied;
-  state.webhook.error = copied ? '' : 'Could not copy webhook endpoint.';
-  render();
-  return copied;
-}
-
-async function copyWebhookKey() {
-  const key = state.webhook.key || '';
-  if (!key) {
-    return false;
-  }
-  const copied = await copyTextToClipboard(key, '#webhook-key-input');
-  if (state.webhook.key !== key) {
-    return copied;
-  }
-  state.webhook = {
-    ...state.webhook,
-    keyCopied: copied,
-    error: copied ? '' : 'Could not copy webhook key.',
-  };
-  render();
-  return copied;
 }
 
 async function refreshGlobalSettings({ renderAfter = true, request = null } = {}) {
@@ -9379,141 +9045,20 @@ async function toggleProjectFavorite(projectId) {
   }
 }
 
-async function refreshAdminConsole({ renderAfter = true } = {}) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  state.admin.loading = true;
-  if (renderAfter) {
-    render();
-  }
-  try {
-    const [settingsPayload, projectsPayload, usersPayload, rolesPayload, sessionsPayload] = await Promise.all([
-      apiFetch('/api/admin/settings'),
-      apiFetch('/api/admin/projects'),
-      apiFetch('/api/admin/users'),
-      apiFetch('/api/admin/roles'),
-      apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId, state.admin.filterState)),
-    ]);
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.admin.settings = settingsPayload?.settings || null;
-    state.admin.projects = normalizeAdminItems(projectsPayload);
-    state.admin.users = normalizeAdminItems(usersPayload);
-    state.admin.roles = normalizeAdminItems(rolesPayload);
-    state.admin.sessions = normalizeAdminItems(sessionsPayload);
-    state.admin.loaded = true;
-    state.error = '';
-    return state.admin;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  } finally {
-    if (isAuthRequestCurrent(requestGeneration)) {
-      state.admin.loading = false;
-      if (renderAfter) {
-        render();
-      }
-    }
-  }
-}
-
 async function refreshAdminSettings({ renderAfter = true } = {}) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  try {
-    const payload = await apiFetch('/api/admin/settings');
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.admin.settings = payload?.settings || null;
-    state.error = '';
-    return state.admin.settings;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  } finally {
-    if (renderAfter && isAuthRequestCurrent(requestGeneration)) {
-      render();
-    }
-  }
+  await loadAdminResource('settings', { force: true, renderAfter });
+  return state.admin.settings;
 }
 
 async function refreshAdminSessions({
-  userId = state.admin.filterUserId,
-  projectId = state.admin.filterProjectId,
-  state: sessionState = state.admin.filterState,
-  renderAfter = true,
+  userId = state.admin.filterUserId, projectId = state.admin.filterProjectId,
+  state: sessionState = state.admin.filterState, renderAfter = true, cursor = '',
 } = {}) {
-  if (!isAdminPrincipal()) {
-    return [];
-  }
-  const requestGeneration = authRequestGeneration;
   state.admin.filterUserId = String(userId || '');
   state.admin.filterProjectId = String(projectId || '');
   state.admin.filterState = normalizeAdminSessionState(sessionState);
-  state.admin.loading = true;
-  if (renderAfter) {
-    render();
-  }
-  try {
-    const payload = await apiFetch(adminSessionsPath(state.admin.filterUserId, state.admin.filterProjectId, state.admin.filterState));
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return [];
-    }
-    state.admin.sessions = normalizeAdminItems(payload);
-    state.error = '';
-    return state.admin.sessions;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return [];
-    }
-    handleApiError(error);
-    return [];
-  } finally {
-    if (isAuthRequestCurrent(requestGeneration)) {
-      state.admin.loading = false;
-      if (renderAfter) {
-        render();
-      }
-    }
-  }
-}
-
-async function updateAdminSettings(patch = {}) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  try {
-    const payload = await apiFetch('/api/admin/settings', {
-      method: 'PATCH',
-      body: patch,
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.admin.settings = payload?.settings || state.admin.settings;
-    state.error = '';
-    render();
-    return state.admin.settings;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  }
+  await loadAdminResource('sessions', { force: true, renderAfter, cursor });
+  return state.admin.sessions;
 }
 
 async function onAdminProjectSubmit(event) {
@@ -9561,146 +9106,36 @@ async function onAdminUserSubmit(event) {
   });
 }
 
-async function saveAdminProject(project) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const cwd = String(project.cwd || '').trim();
-  const existingId = String(project.id || '').trim();
-  const id = existingId || cwd;
-  const isEditing = Boolean(existingId);
-  const requestGeneration = authRequestGeneration;
-  try {
-    const payload = await apiFetch(isEditing ? `/api/admin/projects/${encodeURIComponent(id)}` : '/api/admin/projects', {
-      method: isEditing ? 'PATCH' : 'POST',
-      body: {
-        id,
-        cwd,
-        displayName: String(project.displayName || '').trim(),
-        enabled: project.enabled !== false,
-        showWorkDetailsToMembers: project.showWorkDetailsToMembers !== false,
-        activeSessionLimit: project.activeSessionLimit == null ? 30 : project.activeSessionLimit,
-      },
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.error = '';
-    state.admin.editingProjectId = '';
-    await refreshAdminConsole({ renderAfter: true });
-    return payload?.project || null;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  }
+function saveAdminProject(project) {
+  const cwd = String(project.cwd || '').trim(), id = String(project.id || '').trim();
+  return saveAdminRecord('project', id, id ? `/api/admin/projects/${encodeURIComponent(id)}` : '/api/admin/projects', id ? 'PATCH' : 'POST', {
+    id: id || cwd, cwd, displayName: String(project.displayName || '').trim(), enabled: project.enabled !== false,
+    showWorkDetailsToMembers: project.showWorkDetailsToMembers !== false,
+    activeSessionLimit: project.activeSessionLimit == null ? 30 : project.activeSessionLimit,
+  }, 'project');
 }
 
-async function saveAdminRole(role) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  try {
-    const payload = await apiFetch('/api/admin/roles', {
-      method: 'POST',
-      body: {
-        id: String(role.id || '').trim(),
-        name: String(role.name || '').trim(),
-        projectIds: Array.isArray(role.projectIds) ? role.projectIds : [],
-        projectGrants: projectGrantsFromProjectIds(role.projectIds),
-      },
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.error = '';
-    state.admin.editingRoleId = '';
-    await refreshAdminConsole({ renderAfter: true });
-    return payload?.role || null;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  }
+function saveAdminRole(role) {
+  return saveAdminRecord('role', state.admin.editingRoleId || '', '/api/admin/roles', 'POST', {
+    id: String(role.id || '').trim(), name: String(role.name || '').trim(),
+    projectIds: Array.isArray(role.projectIds) ? role.projectIds : [], projectGrants: projectGrantsFromProjectIds(role.projectIds),
+  }, 'role');
 }
 
-async function saveAdminUser(user) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  try {
-    const roleId = String(user.roleId || '').trim();
-    const body = {
-      username: String(user.username || '').trim(),
-      email: String(user.email || '').trim(),
-      password: String(user.password || ''),
-      enabled: user.enabled !== false,
-      roleId,
-      roleIds: roleId
-        ? [roleId]
-        : Array.isArray(user.roleIds) ? user.roleIds.slice(0, 1) : [],
-    };
-    const payload = await apiFetch('/api/admin/users', {
-      method: 'POST',
-      body,
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.error = '';
-    state.admin.editingUserId = '';
-    await refreshAdminConsole({ renderAfter: true });
-    return payload?.user || null;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  }
-}
-
-async function saveAdminUserAccess(user) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const userId = String(user.id || '').trim();
-  if (!userId) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
+function saveAdminUser(user) {
   const roleId = String(user.roleId || '').trim();
-  try {
-    const body = {
-      email: String(user.email || '').trim(),
-      enabled: user.enabled !== false,
-      roleId,
-      roleIds: roleId ? [roleId] : [],
-    };
-    const payload = await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
-      method: 'PATCH',
-      body,
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.error = '';
-    state.admin.editingUserId = '';
-    await refreshAdminConsole({ renderAfter: true });
-    return payload?.user || null;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  }
+  return saveAdminRecord('user', '', '/api/admin/users', 'POST', {
+    username: String(user.username || '').trim(), email: String(user.email || '').trim(), password: String(user.password || ''),
+    enabled: user.enabled !== false, roleId, roleIds: roleId ? [roleId] : Array.isArray(user.roleIds) ? user.roleIds.slice(0, 1) : [],
+  }, 'user');
+}
+
+function saveAdminUserAccess(user) {
+  const id = String(user.id || '').trim(), roleId = String(user.roleId || '').trim();
+  if (!id) return Promise.resolve(null);
+  return saveAdminRecord('user', id, `/api/admin/users/${encodeURIComponent(id)}`, 'PATCH', {
+    email: String(user.email || '').trim(), enabled: user.enabled !== false, roleId, roleIds: roleId ? [roleId] : [],
+  }, 'user');
 }
 
 async function toggleAdminUserEnabled(userId, enabled) {
@@ -9716,61 +9151,32 @@ async function toggleAdminUserEnabled(userId, enabled) {
   });
 }
 
-async function deleteAdminUser(userId) {
-  if (!isAdminPrincipal()) {
-    return null;
-  }
-  const normalizedUserId = String(userId || '').trim();
-  if (!normalizedUserId) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  try {
-    await apiFetch(`/api/admin/users/${encodeURIComponent(normalizedUserId)}`, {
-      method: 'DELETE',
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    state.error = '';
-    await refreshAdminConsole({ renderAfter: true });
-    return true;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  }
+function deleteAdminUser(userId) {
+  const id = String(userId || '').trim();
+  return id ? saveAdminRecord('user', id, `/api/admin/users/${encodeURIComponent(id)}`, 'DELETE', undefined, 'user') : Promise.resolve(null);
 }
 
-function projectGrantsFromProjectIds(projectIds) {
-  const uniqueIds = [...new Set((Array.isArray(projectIds) ? projectIds : [])
-    .map((projectId) => String(projectId || '').trim())
-    .filter(Boolean))];
-  return uniqueIds.map((projectId) => ({
-    projectId,
-    canRead: true,
-    canCreate: true,
-    canWrite: true,
-  }));
-}
 
 async function openAdminObservedSession(sessionId) {
   if (!sessionId || !isAdminPrincipal()) {
     return;
   }
+  cancelSessionOpen();
+  const operation = adminObservedRequests.start();
+  const navigation = sessionNavigationGeneration;
+  const requestGeneration = authRequestGeneration;
+  const owns = () => operation.isCurrent() && navigation === sessionNavigationGeneration && isAuthRequestCurrent(requestGeneration);
   saveCurrentTimeline();
   stopStream();
   state.status = 'Loading session';
   state.statusTone = 'warn';
   state.admin.observedSessionLoading = true;
   state.error = '';
-  const requestGeneration = authRequestGeneration;
+  state.admin.observedSessionError = '';
   render();
   try {
-    const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}`);
-    if (!isAuthRequestCurrent(requestGeneration)) {
+    const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, { signal: operation.controller.signal });
+    if (!owns()) {
       return;
     }
     const session = {
@@ -9789,25 +9195,32 @@ async function openAdminObservedSession(sessionId) {
     state.view = isDesktopLayout() ? 'admin' : 'chat';
     state.admin.page = 'sessions';
     state.timelineShouldFollowLatest = false;
+    state.timelineWindowEnd = TIMELINE_DOM_WINDOW;
+    SESSION_READING.input();
+    nextTimelineRestoreSnapshot = { ...captureTimelineViewport(), anchors: [], scrollTop: 0, shouldFollowLatest: false };
+    state.admin.observedSessionLoading = false;
     state.status = 'Ready';
     state.statusTone = 'success';
     state.error = '';
     render();
-    scrollTimelineToTop();
+    nextTimelineRestoreSnapshot = null;
   } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
+    if (!owns()) {
       return;
     }
-    handleApiError(error);
+    state.admin.observedSessionError = error?.message || 'Request failed';
+    if ([401, 403].includes(error?.status)) handleApiError(error);
   } finally {
-    if (isAuthRequestCurrent(requestGeneration)) {
+    if (owns()) {
       state.admin.observedSessionLoading = false;
       render();
     }
+    operation.finish();
   }
 }
 
 async function openSessionFileByPath(filePath, { preserveSnapshot = false } = {}) {
+  cancelSessionOpen();
   const normalizedPath = decodeHtmlEntityText(filePath).trim();
   const resolvablePath = decodeSessionFilePath(stripSessionFileLocationSuffix(normalizedPath.replace(/[?#].*$/u, '')));
   if (!resolvablePath) {
@@ -9888,13 +9301,25 @@ async function openSessionFileByPath(filePath, { preserveSnapshot = false } = {}
 }
 
 async function loadResolvedSessionFile(file, loadController, { skipAuth = false } = {}) {
-  const response = await fetchSessionFileContent(file.contentUrl, {
+  if (!['markdown', 'html'].includes(file.kind) && file.sizeBytes > 8 * 1024 * 1024) {
+    file.previewTruncated = true;
+    file.previewUnavailable = true;
+    file.totalBytes = file.sizeBytes;
+    state.currentSessionFileLoading = false;
+    renderSessionFileWithScrollPreserved(() => {});
+    return;
+  }
+  const previewUrl = new URL(file.contentUrl, window.location.origin);
+  previewUrl.searchParams.set('preview', '1');
+  const response = await fetchSessionFileContent(previewUrl.pathname + previewUrl.search, {
     signal: loadController.signal,
     skipAuth,
   });
   if (!isActiveSessionFileLoad(loadController)) {
     return;
   }
+  file.previewTruncated = response.headers?.get?.('X-Content-Truncated') === 'true';
+  file.totalBytes = Number(response.headers?.get?.('X-Content-Total-Bytes')) || file.sizeBytes;
   if (file.kind === 'markdown' || file.kind === 'html') {
     const content = await response.text();
     if (!isActiveSessionFileLoad(loadController)) {
@@ -9964,6 +9389,10 @@ async function openSharedReportById(reportId, { path = '', preserveSnapshot = fa
       return;
     }
     const content = payload?.content || '';
+    Object.assign(state.currentSessionFile, {
+      previewTruncated: payload.previewTruncated === true, totalBytes: payload.totalBytes || report.sizeBytes,
+      downloadUrl: `/api/share/${encodeURIComponent(token)}/reports/${encodeURIComponent(reportId)}/download`,
+    });
     state.currentSessionFileContent = content;
     state.currentSessionFileBlob = createTextFileBlob(content, state.currentSessionFile?.mimeType);
     state.currentSessionFileObjectUrl = createSessionFileObjectUrl(state.currentSessionFileBlob);
@@ -10093,92 +9522,46 @@ function preloadAllSessionsInBackground() {
   return preloadPromise;
 }
 
-async function refreshCurrentView() {
-  if (isShareContext()) {
-    return;
-  }
-  if (!state.token) {
-    return;
-  }
-  const requestGeneration = authRequestGeneration;
-  const wasPending = state.pendingTurn;
-  if (!wasPending) {
-    state.status = 'Refreshing';
-    state.statusTone = 'warn';
-    render();
-  }
-  try {
-    if (state.view === 'chat' && state.sessionId) {
-      await refreshCurrentSessionMetadata({ hydrateTimeline: true });
-      if (!isAuthRequestCurrent(requestGeneration)) {
-        return;
+let visibleRefreshPromise = null;
+async function refreshCurrentView({ sessionOnly = false } = {}) {
+  if (isShareContext() || !state.token) return;
+  const sessionRefresh = Boolean(state.sessionId && (state.view === 'chat' || sessionOnly));
+  const generation = authRequestGeneration;
+  const navigation = sessionNavigationGeneration;
+  const sessionId = state.sessionId;
+  const key = `${generation}:${navigation}:${sessionRefresh ? sessionId : currentSessionScope()}`;
+  if (visibleRefreshPromise?.key === key) return visibleRefreshPromise.promise;
+  const isCurrent = () => isAuthRequestCurrent(generation) && navigation === sessionNavigationGeneration && state.sessionId === sessionId;
+  const promise = (async () => {
+    if (!state.pendingTurn) { state.status = 'Refreshing'; state.statusTone = 'warn'; renderChatWithTimelineRestored(() => {}); }
+    try {
+      let result = true;
+      if (sessionRefresh) {
+        state.sessionRefreshOutcome = 'pending';
+        result = await refreshCurrentSessionMetadata({ hydrateTimeline: true });
+        if (!isCurrent()) return;
+        if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) connectActiveTurnStream({ forceReconnect: true });
+      } else {
+        rememberSessionListScroll();
+        await refreshSessionsList({ renderAfter: false, scope: currentSessionScope() });
+        if (!isCurrent()) return;
       }
-      if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) {
-        connectActiveTurnStream({ forceReconnect: true });
+      if (!state.pendingTurn) {
+        const failed = sessionRefresh && (!result || state.sessionRefreshOutcome === 'failed' || state.sessionHistoryError || state.sessionStatusError);
+        if (failed) { state.status = 'Refresh failed'; state.statusTone = 'warn'; }
+        else if (!isRuntimeStatusLabel(state.status)) { state.status = 'Ready'; state.statusTone = 'success'; }
       }
-    } else {
-      rememberSessionListScroll();
-      await refreshSessionsList({
-        renderAfter: false,
-        scope: currentSessionScope(),
-      });
-      if (!isAuthRequestCurrent(requestGeneration)) {
-        return;
-      }
-      render();
-    }
-    if (!state.pendingTurn && !isRuntimeStatusLabel(state.status)) {
-      state.status = 'Ready';
-      state.statusTone = 'success';
-      render();
-    }
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    handleApiError(error);
-  }
+      renderChatWithTimelineRestored(() => {});
+    } catch (error) { if (isCurrent()) handleApiError(error); }
+  })();
+  visibleRefreshPromise = { key, promise };
+  try { return await promise; }
+  finally { if (visibleRefreshPromise?.promise === promise) visibleRefreshPromise = null; }
 }
 
-async function handleComposerRefresh() {
-  if (!state.sessionId) {
-    return;
-  }
+function handleComposerRefresh() {
   passiveDesktopSessionId = '';
-  const requestGeneration = authRequestGeneration;
-  const wasPending = state.pendingTurn;
-  if (!wasPending) {
-    state.status = 'Refreshing';
-    state.statusTone = 'warn';
-    render();
-  }
-  state.timelineShouldFollowLatest = true;
-  try {
-    await refreshCurrentSessionMetadata({
-      hydrateTimeline: true,
-      viewportSnapshot: {
-        bottomOffset: 0,
-        shouldFollowLatest: true,
-        hadPromptFocus: document.activeElement === document.querySelector('#prompt-input'),
-      },
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) {
-      connectActiveTurnStream({ forceReconnect: true });
-    }
-    if (!state.pendingTurn && !isRuntimeStatusLabel(state.status)) {
-      state.status = 'Ready';
-      state.statusTone = 'success';
-      render();
-    }
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    handleApiError(error);
-  }
+  return refreshCurrentView({ sessionOnly: true });
 }
 
 function hydrateCurrentTimelineFromSession(session, { forceAuthoritative = false } = {}) {
@@ -10188,7 +9571,9 @@ function hydrateCurrentTimelineFromSession(session, { forceAuthoritative = false
     return false;
   }
   syncTerminalTurnIdsFromSession(session);
-  const previousStart = state.sessionHistoryItems.length && !isPreviewOnlySessionHistory()
+  const reading = captureTimelineViewport();
+  const readingIndex = !reading.shouldFollowLatest ? fullHistory.findIndex(item => reading.anchors.some(anchor => anchor.id === item.id)) : -1;
+  const previousStart = readingIndex >= 0 ? Math.max(0, Math.min(readingIndex, state.sessionHistoryStartIndex)) : state.sessionHistoryItems.length && !isPreviewOnlySessionHistory()
     ? Math.min(state.sessionHistoryStartIndex, fullHistory.length)
     : visibleHydratedStartIndex(fullHistory);
   setSessionHistoryWindow(fullHistory, previousStart);
@@ -10207,7 +9592,7 @@ function hydrateCurrentTimelineFromSession(session, { forceAuthoritative = false
     item?.kind === 'message'
     && item.role === 'assistant'
     && timelineTurnId(item) === state.turnId
-    && (item.source === 'stream' || String(item.id || '').startsWith(`assistant_${state.turnId || ''}`))
+    && (item.source === 'stream' || !item.source && String(item.id || '').startsWith(`assistant_${state.turnId || ''}`))
   ));
   const currentStreamOwnsTimeline = Boolean(
     state.pendingTurn
@@ -10221,7 +9606,7 @@ function hydrateCurrentTimelineFromSession(session, { forceAuthoritative = false
   if (!hydratedText || sameMessageDisplay) {
     return false;
   }
-  const unmatchedPendingMessages = pendingTimelineMessagesMissingFromHistory(fullHistory, state.timeline);
+  const unmatchedPendingMessages = pendingTimelineMessagesMissingFromHistory(fullHistory, state.timeline, { authoritative: true });
   const historyWithPending = [
     ...fullHistory,
     ...unmatchedPendingMessages.map((item) => ({ ...item })),
@@ -10356,24 +9741,12 @@ function timelineMessageDisplaySignature(items) {
     .join('\n');
 }
 
-function pendingTimelineMessagesMissingFromHistory(historyItems, timelineItems) {
-  const historyMessages = (Array.isArray(historyItems) ? historyItems : [])
-    .filter((item) => item?.kind === 'message');
-  const localMessages = (Array.isArray(timelineItems) ? timelineItems : [])
-    .filter((item) => item?.kind === 'message');
-  return localMessages.filter((item, index) => {
-    if (item?.meta !== 'pending') {
-      return false;
-    }
-    const identity = timelineMessageIdentity(item);
-    const priorOccurrences = localMessages
-      .slice(0, index)
-      .filter((candidate) => timelineMessageIdentity(candidate) === identity)
-      .length;
-    const historyOccurrences = historyMessages
-      .filter((candidate) => timelineMessageIdentity(candidate) === identity)
-      .length;
-    return historyOccurrences <= priorOccurrences;
+function pendingTimelineMessagesMissingFromHistory(historyItems, timelineItems, { authoritative = false } = {}) {
+  return globalThis.CodexWebTimelineReconciliation.pendingMessages(historyItems || [], timelineItems || [], {
+    identity: timelineMessageIdentity, turnId: timelineTurnId, authoritative,
+    pendingSubmissionIds: new Set(state.submissionOutbox.keys()),
+    latestWindow: state.currentSession?.timelineHasNewer !== true,
+    completeHistory: state.currentSession?.timelineComplete === true,
   });
 }
 
@@ -10822,7 +10195,7 @@ function normalizeSessions(payload) {
         lastUserInput: typeof session.lastUserInput === 'string' ? session.lastUserInput : '',
         lastInputAt: typeof session.lastInputAt === 'number' ? session.lastInputAt : null,
         updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : null,
-        activityState: session.activityState === 'running' || session.activityState === 'waiting_approval'
+        activityState: ['running', 'waiting_approval', 'failed', 'stale'].includes(session.activityState)
           ? session.activityState
           : null,
         settings: session.settings && typeof session.settings === 'object' ? session.settings : null,
@@ -10964,6 +10337,7 @@ function serializeSessionSummaryForCache(session) {
       summary[key] = normalized[key];
     }
   }
+  if (typeof normalized.canRename === 'boolean') summary.canRename = normalized.canRename;
   if (normalized.readOnly === true) {
     summary.readOnly = true;
   }
@@ -10973,7 +10347,7 @@ function serializeSessionSummaryForCache(session) {
   if (typeof normalized.activeTurnId === 'string' && normalized.activeTurnId.trim()) {
     summary.activeTurnId = normalized.activeTurnId.trim();
   }
-  if (normalized.activityState === 'running' || normalized.activityState === 'waiting_approval') {
+  if (['running', 'waiting_approval', 'failed', 'stale'].includes(normalized.activityState)) {
     summary.activityState = normalized.activityState;
   }
   if (Object.prototype.hasOwnProperty.call(normalized, 'goal')) {
@@ -11039,6 +10413,7 @@ function syncCurrentWorkDetailsAccessFromSessions(sessions) {
     ...state.currentSession,
     projectId: session.projectId || state.currentSession.projectId,
     canViewWorkDetails: session.canViewWorkDetails,
+    ...(typeof session.canRename === 'boolean' ? { canRename: session.canRename } : {}),
   };
   enforceCurrentWorkDetailsAccess();
 }
@@ -11101,6 +10476,12 @@ function isSessionArchived(session) {
 }
 
 function sessionBelongsToScope(session, scope) {
+  const query = state.sessionsQueryByScope[scope] || '';
+  const queryParams = new URL(query || '/api/sessions', window.location.origin).searchParams;
+  const search = queryParams.get('q')?.toLocaleLowerCase();
+  const activity = queryParams.get('activity');
+  if (search && ![session.title, session.preview, session.firstUserInput, session.lastUserInput, session.cwd, session.projectName].some((value) => String(value || '').toLocaleLowerCase().includes(search))) return false;
+  if (activity && session.activityState !== activity) return false;
   const archived = isSessionArchived(session);
   if (scope === 'archived') {
     return archived;
@@ -11175,6 +10556,7 @@ function sessionSummaryOnly(session) {
 }
 
 function saveCurrentTimeline() {
+  SESSION_READING.remember(); SESSION_READING.flush();
   clearScheduledTimelineSave();
   if (!state.sessionId) {
     return;
@@ -11268,6 +10650,8 @@ function timelineHistorySnapshotForCache(previous) {
   return {
     history,
     historyComplete: Boolean(baseHistoryComplete && history.length === combinedHistory.length),
+    hasNewer: state.currentSession?.timelineHasNewer === true,
+    nextBefore: state.currentSession?.timelineNextBefore ?? null, nextAfter: state.currentSession?.timelineNextAfter ?? null,
   };
 }
 
@@ -11299,6 +10683,11 @@ function flushScheduledTimelineSave() {
 
 function restoreTimelineForSession(session, options = {}) {
   resetSessionHistoryWindow();
+  if (options.latest && state.timelineCache.get(session.id)?.hasNewer === true) {
+    state.timelineCache.delete(session.id);
+    if (session.timelineHasNewer === true) delete session.timeline;
+    Object.assign(session, { timelineHasNewer: false, timelineNextBefore: null, timelineNextAfter: null, timelineComplete: false });
+  }
   syncTerminalTurnIdsFromSession(session);
   const fullHistory = fullHydratedTimelineFromSession(session);
   if (options.fullHistory) {
@@ -11311,9 +10700,11 @@ function restoreTimelineForSession(session, options = {}) {
   }
   const cached = state.timelineCache.get(session.id);
   if (cached) {
+    if (!Array.isArray(session.timeline)) Object.assign(session, { timelineHasNewer: cached.hasNewer === true, timelineNextBefore: cached.nextBefore ?? null, timelineNextAfter: cached.nextAfter ?? null, timelineComplete: cached.historyComplete === true });
     state.batches = new Map(cached.batches);
     state.approvals = new Map(cached.approvals);
-    state.timeline = cached.timeline.map((item) => ({ ...item }));
+    // Restored output is a cache snapshot, not a live stream in this page.
+    state.timeline = cached.timeline.map((item) => ({ ...item, ...(item.role === 'assistant' ? { source: 'cache', streaming: false } : {}) }));
     const cachedHistory = Array.isArray(cached.history) ? cached.history : [];
     const historyItems = cachedHistory.length
       ? cachedHistory
@@ -11785,7 +11176,7 @@ function drainSubmissionOutbox({ force = false } = {}) {
 }
 
 async function drainSubmissionOutboxOnce({ force = false } = {}) {
-  if (!state.authSession || isShareContext() || navigator.onLine === false) {
+  if (!state.authSession || isCachedAuthPrincipalPending() || AUTH_RECOVERY.needsRecovery() || isShareContext() || navigator.onLine === false) {
     return false;
   }
   let attempted = false;
@@ -11814,7 +11205,7 @@ function scheduleSubmissionRetry() {
     clearTimeout(submissionRetryTimer);
     submissionRetryTimer = null;
   }
-  if (!state.authSession || navigator.onLine === false) {
+  if (!state.authSession || isCachedAuthPrincipalPending() || AUTH_RECOVERY.needsRecovery() || navigator.onLine === false) {
     return;
   }
   const nextAttemptAt = pendingSubmissionEntries()
@@ -11908,6 +11299,7 @@ function serializeTimelineCacheEntry(sessionId, value) {
     timeline: cloneTimelineEntries(value.timeline || []),
     history: cloneTimelineEntries(value.history || []),
     historyComplete: value.historyComplete === true,
+    hasNewer: value.hasNewer === true, nextBefore: value.nextBefore ?? null, nextAfter: value.nextAfter ?? null,
     batches: [...cloneCacheMap(value.batches).entries()],
     approvals: [...cloneCacheMap(value.approvals).entries()],
     ...(normalizeStreamCursor(value.streamCursor) ? { streamCursor: normalizeStreamCursor(value.streamCursor) } : {}),
@@ -11933,6 +11325,7 @@ function deserializeTimelineCacheEntry(entry) {
       timeline: cloneTimelineEntries(Array.isArray(entry.timeline) ? entry.timeline : []),
       history: cloneTimelineEntries(Array.isArray(entry.history) ? entry.history : []),
       historyComplete: entry.historyComplete === true,
+      hasNewer: entry.hasNewer === true, nextBefore: entry.nextBefore ?? null, nextAfter: entry.nextAfter ?? null,
       batches: new Map(batches),
       approvals: new Map(approvals),
       ...(normalizeStreamCursor(entry.streamCursor) ? { streamCursor: normalizeStreamCursor(entry.streamCursor) } : {}),
@@ -12283,25 +11676,9 @@ function timelineSemanticProjectionKey(item, turnId = timelineTurnId(item)) {
 }
 
 function timelineEntriesAreTransientDuplicates(previous, next) {
-  if (previous?.kind !== 'message' || next?.kind !== 'message' || previous.role !== next.role) {
-    return false;
-  }
-  if (timelineMessageIdentity(previous) !== timelineMessageIdentity(next)) {
-    return false;
-  }
-  const previousPending = previous.meta === 'pending' || Boolean(previous.submissionId);
-  const nextPending = next.meta === 'pending' || Boolean(next.submissionId);
-  if (!previousPending && !nextPending) {
-    return false;
-  }
-  const previousSubmissionId = String(previous.submissionId || '').trim();
-  const nextSubmissionId = String(next.submissionId || '').trim();
-  if (previousSubmissionId && nextSubmissionId && previousSubmissionId !== nextSubmissionId) {
-    return false;
-  }
-  const previousTurnId = timelineTurnId(previous);
-  const nextTurnId = timelineTurnId(next);
-  return !previousTurnId || !nextTurnId || previousTurnId === nextTurnId;
+  return globalThis.CodexWebTimelineReconciliation.transientDuplicate(previous, next, {
+    identity: timelineMessageIdentity, turnId: timelineTurnId,
+  });
 }
 
 function preferredTimelineDuplicate(previous, next) {
@@ -12354,6 +11731,7 @@ function normalizeSessionTimelineItem(item) {
     ...(typeof item.clientMessageId === 'string' && item.clientMessageId
       ? { clientMessageId: item.clientMessageId }
       : {}),
+    ...Object.fromEntries(['submissionId', 'deliveryLabel', 'historyAnchorId'].filter(key => typeof item[key] === 'string' && item[key]).map(key => [key, item[key]])),
     ...(typeof item.phase === 'string' && item.phase ? { phase: item.phase } : {}),
     ...(typeof item.lifecycle === 'string' && item.lifecycle ? { lifecycle: item.lifecycle } : {}),
     ...(item.streaming === true ? { streaming: true } : {}),
@@ -12419,10 +11797,24 @@ function visibleStartIndexForTimeline(historyItems, timelineItems) {
   return visibleHydratedStartIndex(historyItems);
 }
 
+function hasMoreSessionHistory() {
+  const total = allDisplayTimelineItems().length;
+  return Math.min(total, state.timelineWindowEnd ?? total) > TIMELINE_DOM_WINDOW
+    || state.sessionHistoryStartIndex > 0
+    || (state.currentSession?.timelineComplete === false && state.currentSession?.timelineNextBefore != null);
+}
+
+function syncReadingControls() {
+  const button = document.querySelector('#timeline-jump-latest');
+  if (button) button.hidden = state.timelineShouldFollowLatest && state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer !== true;
+}
+
 function showMoreSessionHistory() {
-  if ((!isDesktopWorkspaceView() && state.view !== 'chat') || !state.sessionId) {
+  if ((!isDesktopWorkspaceView() && state.view !== 'chat' && !isAdminObservedSession()) || !state.sessionId) {
     return false;
   }
+  const visibleEnd = Math.min(allDisplayTimelineItems().length, state.timelineWindowEnd ?? allDisplayTimelineItems().length);
+  if (visibleEnd > TIMELINE_DOM_WINDOW) { moveTimelineWindow(-1); return true; }
   let historyItems = state.sessionHistoryItems;
   if (!historyItems.length && state.currentSession) {
     historyItems = fullHydratedTimelineFromSession(state.currentSession);
@@ -12430,8 +11822,7 @@ function showMoreSessionHistory() {
   }
   if (!state.sessionHistoryItems.length || state.sessionHistoryStartIndex <= 0) {
     if (state.currentSession?.timelineComplete === false && state.currentSession?.timelineNextBefore != null) {
-      void loadOlderSessionTimelinePage();
-      return true;
+      return loadOlderSessionTimelinePage();
     }
     return false;
   }
@@ -12443,30 +11834,39 @@ function showMoreSessionHistory() {
   if (nextStart === state.sessionHistoryStartIndex) {
     return false;
   }
-  const oldScrollHeight = document.querySelector('#timeline')?.scrollHeight || 0;
+  const historyAnchor = captureTimelineViewport();
+  state.timelineShouldFollowLatest = false;
   state.sessionHistoryStartIndex = nextStart;
   state.timeline = state.sessionHistoryItems.slice(nextStart).map((item) => ({ ...item }));
   state.batches = new Map();
   state.approvals = new Map();
+  revealPrependedHistory(historyAnchor);
   saveCurrentTimeline();
   render();
-  restoreExpandedTimelineScroll(oldScrollHeight);
+  restoreTimelineViewport(historyAnchor);
   return true;
 }
 
-function loadOlderSessionTimelinePage() {
+function revealPrependedHistory(anchor) {
+  if (!anchor) return;
+  const items = allDisplayTimelineItems();
+  const index = items.findIndex((item) => item.id === (anchor.id || anchor.anchors?.[0]?.id));
+  if (items.length > TIMELINE_DOM_WINDOW && index >= 0) state.timelineWindowEnd = Math.min(items.length, Math.max(TIMELINE_DOM_WINDOW, index + 20));
+}
+function loadOlderSessionTimelinePage(direction = 'before') {
+  const key = direction === 'after' ? 'timelineNextAfter' : 'timelineNextBefore';
   const sessionId = state.sessionId;
-  if (!sessionId || state.currentSession?.timelineNextBefore == null) {
+  if (!sessionId || state.currentSession?.[key] == null) {
     return Promise.resolve(false);
   }
-  const before = String(state.currentSession.timelineNextBefore);
+  const before = String(state.currentSession[key]);
   if (sessionTimelinePageRequest) {
-    if (sessionTimelinePageRequest.sessionId === sessionId && sessionTimelinePageRequest.before === before) {
+    if (sessionTimelinePageRequest.sessionId === sessionId && sessionTimelinePageRequest.before === before && sessionTimelinePageRequest.direction === direction) {
       return sessionTimelinePageRequest.promise;
     }
     cancelSessionTimelinePageLoad();
   }
-  const oldScrollHeight = document.querySelector('#timeline')?.scrollHeight || 0;
+  const generation = sessionNavigationGeneration;
   const controller = new AbortController();
   const cancelledResult = {};
   let settleCancellation = null;
@@ -12475,7 +11875,7 @@ function loadOlderSessionTimelinePage() {
   });
   const request = {
     sessionId,
-    before,
+    before, direction,
     controller,
     timeoutTimer: null,
     promise: null,
@@ -12485,46 +11885,49 @@ function loadOlderSessionTimelinePage() {
     request.timeoutTimer = null;
     if (sessionTimelinePageRequest === request) {
       sessionTimelinePageRequest = null;
+      if (state.sessionId === sessionId) {
+        state.sessionHistoryError = 'History could not be loaded. Retry to recover your messages.';
+        render();
+      }
     }
     request.cancel();
     controller.abort();
   }, SESSION_TIMELINE_PAGE_TIMEOUT_MS);
   const promise = Promise.race([
-    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/timeline?limit=50&before=${encodeURIComponent(before)}`, {
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/timeline?limit=50&${direction}=${encodeURIComponent(before)}`, {
       signal: controller.signal,
     }),
     cancellation,
   ])
     .then((payload) => {
       if (payload === cancelledResult
+        || generation !== sessionNavigationGeneration
+        || sessionTimelinePageRequest !== request
         || state.sessionId !== sessionId
         || state.currentSession?.id !== sessionId
         || !Array.isArray(payload?.items)) {
         return false;
       }
+      const historyAnchor = captureTimelineViewport();
       const olderItems = normalizeSessionTimeline(payload.items);
-      const combinedHistory = dedupeTimelineProjectionEntries([
-        ...olderItems,
-        ...state.sessionHistoryItems,
-      ]);
+      const combinedHistory = dedupeTimelineProjectionEntries(direction === 'after' ? [...state.sessionHistoryItems, ...olderItems] : [...olderItems, ...state.sessionHistoryItems]);
       state.currentSession = {
         ...state.currentSession,
         timeline: combinedHistory,
-        timelineComplete: payload.hasMore !== true,
-        timelineNextBefore: payload.nextBefore ?? null,
+        ...(direction === 'after' ? { timelineHasNewer: payload.hasNewer === true, timelineNextAfter: payload.nextAfter ?? null } : { timelineComplete: payload.hasMore !== true, timelineNextBefore: payload.nextBefore ?? null }),
       };
       state.sessionHistoryItems = combinedHistory.map((item) => ({ ...item }));
       state.sessionHistoryStartIndex = 0;
-      state.timeline = dedupeTimelineProjectionEntries([
-        ...olderItems,
-        ...state.timeline,
-      ]);
+      state.timeline = combinedHistory.map(item => ({ ...item }));
+      revealPrependedHistory(historyAnchor);
+      state.sessionHistoryError = '';
       saveCurrentTimeline();
       render();
-      restoreExpandedTimelineScroll(oldScrollHeight, sessionId);
+      restoreTimelineViewport(historyAnchor);
       return true;
     })
     .catch((error) => {
+      if (state.sessionId !== sessionId || sessionTimelinePageRequest !== request) return false;
       if (error?.name === 'AbortError') {
         return false;
       }
@@ -12533,7 +11936,8 @@ function loadOlderSessionTimelinePage() {
       } else if (isMissingSessionError(error)) {
         handleMissingSession(error, '');
       } else {
-        console.warn('[codex-web] older session timeline load failed', error);
+        state.sessionHistoryError = 'History could not be loaded. Retry to recover your messages.';
+        render();
       }
       return false;
     })
@@ -12544,11 +11948,24 @@ function loadOlderSessionTimelinePage() {
       }
       if (sessionTimelinePageRequest === request) {
         sessionTimelinePageRequest = null;
+        if (generation === sessionNavigationGeneration && state.sessionId === sessionId) renderChatWithTimelineRestored(() => {});
       }
     });
   request.promise = promise;
   sessionTimelinePageRequest = request;
+  renderChatWithTimelineRestored(() => {});
   return promise;
+}
+
+async function jumpToLatestTimeline() {
+  SESSION_READING.input();
+  const snapshot = captureTimelineViewport();
+  if (state.currentSession?.timelineHasNewer) {
+    const session = await refreshCurrentSessionMetadata({ hydrateTimeline: true, latest: true, viewportSnapshot: snapshot });
+    if (!session || state.sessionHistoryError || !SESSION_READING.isCurrent(snapshot)) return;
+  }
+  state.timelineWindowEnd = null;
+  renderChatAtLatest(() => {});
 }
 
 function cancelSessionTimelinePageLoad() {
@@ -12564,20 +11981,6 @@ function cancelSessionTimelinePageLoad() {
   request.cancel();
   request.controller.abort();
   return true;
-}
-
-function restoreExpandedTimelineScroll(previousScrollHeight, expectedSessionId = '') {
-  requestAnimationFrame(() => {
-    if (expectedSessionId
-      && (state.sessionId !== expectedSessionId || state.currentSession?.id !== expectedSessionId)) {
-      return;
-    }
-    const timeline = document.querySelector('#timeline');
-    if (!timeline || !previousScrollHeight) {
-      return;
-    }
-    timeline.scrollTop = Math.max(0, timeline.scrollHeight - previousScrollHeight);
-  });
 }
 
 function findCompleteExchangeStarts(items) {
@@ -13069,25 +12472,38 @@ function readOnlyTimelineRestoreOptions(session) {
   return isReadOnlySession(session) ? { fullHistory: true } : {};
 }
 
-function setTimelineOpenPositionForSession(session) {
-  state.timelineShouldFollowLatest = !isReadOnlySession(session);
-}
-
-function scrollTimelineToOpenPositionForSession(session) {
-  if (isReadOnlySession(session)) {
-    scrollTimelineToTop();
+function setTimelineOpenPositionForSession(session, saved = null) {
+  state.timelineShouldFollowLatest = saved ? saved.shouldFollowLatest : true;
+  if (!saved) {
+    state.timelineWindowEnd = null;
+    if (session?.timelineHasNewer === true) { state.timeline = []; state.sessionHistoryItems = []; state.sessionHistoryStartIndex = 0; }
+    nextTimelineRestoreSnapshot = latestTimelineViewportSnapshot();
     return;
   }
-  scrollTimelineToBottom();
+  if (!saved.shouldFollowLatest) {
+    const index = state.sessionHistoryItems.findIndex(item => saved.anchors.some(anchor => anchor.id === item.id));
+    if (index >= 0 && index < state.sessionHistoryStartIndex) {
+      state.sessionHistoryStartIndex = Math.max(0, index - 2);
+      state.timeline = state.sessionHistoryItems.slice(state.sessionHistoryStartIndex).map(item => ({ ...item }));
+    }
+    const items = allDisplayTimelineItems();
+    const visibleIndex = items.findIndex(item => saved.anchors.some(anchor => anchor.id === item.id));
+    if (visibleIndex >= 0 && items.length - visibleIndex > TIMELINE_DOM_WINDOW) state.timelineWindowEnd = Math.min(items.length, Math.max(TIMELINE_DOM_WINDOW, visibleIndex + 20));
+  }
+  nextTimelineRestoreSnapshot = saved;
 }
 
-function shouldOpenTimelineAtEarliest() {
-  return state.view === 'chat'
-    && isReadOnlySession(state.currentSession)
-    && state.timelineShouldFollowLatest === false;
+function scrollTimelineToOpenPositionForSession(_session, saved = null) {
+  nextTimelineRestoreSnapshot = null;
+  if (saved) restoreTimelineViewport(saved);
+  else scrollTimelineToBottom();
 }
 
 function resetAdminState() {
+  ADMIN_EDITORS.clear();
+  ADMIN_DATA.clear();
+  state.admin.editorKind = ''; state.admin.notice = ''; state.admin.observedSessionError = '';
+  state.admin.sessionsNextCursor = null; state.admin.sessionsHasMore = false; state.admin.sessionsPage = 0;
   state.admin.loading = false;
   state.admin.loaded = false;
   state.admin.settings = null;
@@ -13104,29 +12520,10 @@ function resetAdminState() {
   state.admin.editingUserId = '';
   state.admin.observedSession = null;
   state.admin.observedSessionLoading = false;
+  state.admin.returnSessionId = '';
 }
 
-function adminSessionsPath(userId = '', projectId = '', filterState = 'all') {
-  const normalizedUserId = String(userId || '').trim();
-  const normalizedProjectId = String(projectId || '').trim();
-  const normalizedState = normalizeAdminSessionState(filterState);
-  const params = [];
-  if (normalizedUserId) {
-    params.push(`userId=${encodeURIComponent(normalizedUserId)}`);
-  }
-  if (normalizedProjectId) {
-    params.push(`projectId=${encodeURIComponent(normalizedProjectId)}`);
-  }
-  if (normalizedState !== 'all') {
-    params.push(`state=${encodeURIComponent(normalizedState)}`);
-  }
-  const query = params.join('&');
-  return query ? `/api/admin/sessions?${query}` : '/api/admin/sessions';
-}
 
-function normalizeAdminSessionState(value) {
-  return value === 'active' || value === 'archived' ? value : 'all';
-}
 
 function normalizeSortMode(mode) {
   if (mode === 'favorites' || mode === 'archived') {
@@ -13284,7 +12681,7 @@ function currentAdminPage() {
 
 function normalizeAdminPage(page) {
   const value = String(page || '').trim();
-  return ['projects', 'roles', 'users', 'sessions'].includes(value) ? value : 'sessions';
+  return ['projects', 'roles', 'users', 'sessions', 'system'].includes(value) ? value : 'sessions';
 }
 
 function projectNameForSession(session, fallbackCwd = '') {
@@ -13304,143 +12701,6 @@ function normalizeReports(payload) {
   return reports
     .map(normalizeReport)
     .filter(Boolean);
-}
-
-function normalizeSessionFile(file, fallbackPath = '') {
-  if (!file || typeof file !== 'object') {
-    return null;
-  }
-  const name = typeof file.name === 'string' && file.name.trim()
-    ? file.name.trim()
-    : fileNameFromPath(fallbackPath || file.id) || 'file';
-  const kind = normalizeSessionFileKind(file.kind, name || fallbackPath);
-  return {
-    id: typeof file.id === 'string' ? file.id : '',
-    name,
-    kind,
-    mimeType: typeof file.mimeType === 'string' ? file.mimeType : '',
-    sizeBytes: Number.isFinite(file.sizeBytes) ? Number(file.sizeBytes) : 0,
-    updatedAt: typeof file.updatedAt === 'string' ? file.updatedAt : '',
-    source: typeof file.source === 'string' ? file.source : '',
-    contentUrl: typeof file.contentUrl === 'string' ? file.contentUrl : '',
-    downloadUrl: typeof file.downloadUrl === 'string' ? file.downloadUrl : '',
-  };
-}
-
-function sessionFilePlaceholder(filePath) {
-  return normalizeSessionFile({
-    name: fileNameFromPath(filePath),
-    kind: sessionFileKindFromPath(filePath),
-  }, filePath);
-}
-
-function normalizeSessionFileKind(kind, filePath = '') {
-  const normalized = String(kind || '').toLowerCase();
-  if (['markdown', 'html', 'pdf', 'image', 'file'].includes(normalized)) {
-    return normalized;
-  }
-  return sessionFileKindFromPath(filePath);
-}
-
-function sessionFileKindFromPath(filePath) {
-  const normalized = String(filePath || '').split(/[?#]/u)[0].toLowerCase();
-  if (/\.(?:md|markdown)$/u.test(normalized)) {
-    return 'markdown';
-  }
-  if (/\.html?$/u.test(normalized)) {
-    return 'html';
-  }
-  if (/\.pdf$/u.test(normalized)) {
-    return 'pdf';
-  }
-  if (/\.(?:png|jpe?g|gif|webp|bmp|avif|tiff?)$/u.test(normalized)) {
-    return 'image';
-  }
-  return 'file';
-}
-
-function sessionFileMetadata(file) {
-  return [
-    file?.mimeType || '',
-    Number(file?.sizeBytes) > 0 ? formatAttachmentSize(file.sizeBytes) : '',
-  ].filter(Boolean).join(' · ');
-}
-
-function isSafeSessionFileContentUrl(value) {
-  const contentUrl = String(value || '').trim();
-  const origin = String(window.location?.origin || '').trim();
-  if (!contentUrl || !origin) {
-    return false;
-  }
-  try {
-    const resolved = new URL(contentUrl, `${origin}/`);
-    return resolved.origin === origin
-      && !resolved.username
-      && !resolved.password
-      && /^\/api\/(?:admin\/)?sessions\/[^/]+\/files\/[^/]+\/content$/u.test(resolved.pathname);
-  } catch (_error) {
-    return false;
-  }
-}
-
-function sessionFileProtocolError() {
-  const error = new Error('Could not open this file.');
-  error.payload = { error: 'invalid_file_response' };
-  return error;
-}
-
-function sessionFileErrorCode(error) {
-  return String(error?.payload?.error || error?.message || 'file_error');
-}
-
-function sessionFileErrorMessage(code) {
-  if (code === 'file_not_found') {
-    return 'File not found.';
-  }
-  if (code === 'file_access_denied') {
-    return 'File access denied.';
-  }
-  if (code === 'unsupported_file') {
-    return 'This file cannot be previewed.';
-  }
-  if (code === 'file_too_large') {
-    return 'This file is too large to open.';
-  }
-  if (code === 'file_busy') {
-    return 'File preview is busy. Try again.';
-  }
-  return 'Could not open this file.';
-}
-
-function decodeSessionFilePath(value) {
-  try {
-    return decodeURIComponent(String(value || '')).trim();
-  } catch (_error) {
-    return String(value || '').trim();
-  }
-}
-
-function createTextFileBlob(content, mimeType = '') {
-  if (typeof Blob === 'undefined') {
-    return null;
-  }
-  return new Blob([String(content || '')], { type: mimeType || 'text/plain;charset=utf-8' });
-}
-
-function createSessionFileObjectUrl(blob) {
-  if (!blob || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
-    return '';
-  }
-  return URL.createObjectURL(blob);
-}
-
-function revokeSessionFileObjectUrl() {
-  const objectUrl = state.currentSessionFileObjectUrl;
-  state.currentSessionFileObjectUrl = '';
-  if (!objectUrl || typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') {
-    return;
-  }
-  URL.revokeObjectURL(objectUrl);
 }
 
 function normalizeReport(report) {
@@ -13521,9 +12781,10 @@ function sessionAttentionPriority(session) {
   if (activityState === 'waiting_approval') {
     return 2;
   }
-  if (activityState === 'running' || findActiveTurn(session)) {
+  if (activityState === 'running' || activityState === 'stale' || findActiveTurn(session)) {
     return 1;
   }
+  if (activityState === 'failed') return 0.5;
   return 0;
 }
 
@@ -13787,194 +13048,6 @@ function normalizeTheme(theme) {
 
 function normalizeLanguage(language) {
   return SUPPORTED_LANGUAGES.includes(language) ? language : DEFAULT_LANGUAGE;
-}
-
-function translateUi(key, language = state.language, params = {}) {
-  const source = String(key || '');
-  const dictionary = UI_TRANSLATIONS[normalizeLanguage(language)] || {};
-  const template = dictionary[source] || source;
-  return Object.entries(params || {}).reduce(
-    (text, [name, value]) => text.replaceAll(`{${name}}`, String(value ?? '')),
-    template,
-  );
-}
-
-function t(key, params = {}) {
-  return translateUi(key, state.language, params);
-}
-
-function translateText(text) {
-  const value = String(text || '');
-  if (!value) {
-    return '';
-  }
-  const exact = t(value);
-  if (exact !== value) {
-    return exact;
-  }
-  return value
-    .replace(/\bObserver Mode\b/gu, t('Observer Mode'))
-    .replace(/\bRead only\b/gu, t('Read only'));
-}
-
-function localizeUiHtml(html) {
-  if (state.language === DEFAULT_LANGUAGE) {
-    return String(html || '');
-  }
-  return localizeUiHtmlOutsideProtectedHtml(String(html || ''));
-}
-
-function localizeUiHtmlOutsideProtectedHtml(html) {
-  const protectedBlocks = [];
-  const protect = (block) => {
-    const token = `__CODEX_WEB_I18N_BLOCK_${protectedBlocks.length}__`;
-    protectedBlocks.push(block);
-    return token;
-  };
-  const tokenized = protectUiContentBlocks(String(html || ''), protect)
-    .replace(/<(pre|code|script|style|iframe)\b[\s\S]*?<\/\1>/giu, protect)
-    .replace(/<textarea\b([^>]*)>([\s\S]*?)<\/textarea>/giu, (_match, attrs, content) => (
-      `<textarea${attrs}>${protect(content)}</textarea>`
-    ));
-  const localized = tokenized
-    .replace(/\s(aria-label|title|placeholder)="([^"]*)"/gu, (_match, name, value) => (
-      ` ${name}="${escapeAttribute(translateText(unescapeBasicHtml(value)))}"`
-    ))
-    .replace(/>([^<>]+)</gu, (_match, text) => {
-      if (/__CODEX_WEB_I18N_BLOCK_\d+__/u.test(text)) {
-        return `>${text}<`;
-      }
-      if (!text.trim()) {
-        return `>${text}<`;
-      }
-      const leading = text.match(/^\s*/u)?.[0] || '';
-      const trailing = text.match(/\s*$/u)?.[0] || '';
-      const body = text.slice(leading.length, text.length - trailing.length);
-      return `>${leading}${escapeHtml(translateText(unescapeBasicHtml(body)))}${trailing}<`;
-    });
-  return restoreProtectedUiContentBlocks(localized, protectedBlocks);
-}
-
-function restoreProtectedUiContentBlocks(html, protectedBlocks) {
-  let result = String(html || '');
-  for (let pass = 0; pass <= protectedBlocks.length; pass += 1) {
-    const next = result.replace(/__CODEX_WEB_I18N_BLOCK_(\d+)__/gu, (token, index) => (
-      protectedBlocks[Number(index)] ?? token
-    ));
-    if (next === result) {
-      return result;
-    }
-    result = next;
-  }
-  return result;
-}
-
-function protectUiContentBlocks(html, protect) {
-  const ranges = findProtectedUiContentRanges(html);
-  let nextHtml = String(html || '');
-  for (const range of ranges.sort((left, right) => right.start - left.start)) {
-    nextHtml = `${nextHtml.slice(0, range.start)}${protect(nextHtml.slice(range.start, range.end))}${nextHtml.slice(range.end)}`;
-  }
-  return nextHtml;
-}
-
-function findProtectedUiContentRanges(html) {
-  const ranges = [];
-  const stack = [];
-  const tagPattern = /<\/?([a-z][\w:-]*)\b[^>]*>/giu;
-  const voidTags = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
-  let match;
-  while ((match = tagPattern.exec(html))) {
-    const tag = match[0];
-    const tagName = String(match[1] || '').toLowerCase();
-    const closing = /^<\//u.test(tag);
-    const selfClosing = /\/\s*>$/u.test(tag) || voidTags.has(tagName);
-    if (!closing && !selfClosing) {
-      stack.push({
-        tagName,
-        start: match.index,
-        protect: hasHtmlAttribute(tag, 'data-i18n-skip') || isProtectedUiContentTag(tagName, tag),
-      });
-      continue;
-    }
-    if (!closing) {
-      continue;
-    }
-    for (let index = stack.length - 1; index >= 0; index -= 1) {
-      if (stack[index].tagName !== tagName) {
-        continue;
-      }
-      const opening = stack.splice(index, 1)[0];
-      if (opening.protect) {
-        ranges.push({ start: opening.start, end: tagPattern.lastIndex });
-      }
-      break;
-    }
-  }
-  return ranges
-    .sort((left, right) => (left.start - right.start) || (right.end - left.end))
-    .filter((range, index, sortedRanges) => (
-      !sortedRanges.some((other, otherIndex) => (
-        otherIndex < index && other.start <= range.start && range.end <= other.end
-      ))
-    ));
-}
-
-function isProtectedUiContentTag(tagName, tag) {
-  if (tagName === 'p') {
-    return hasHtmlClass(tag, 'message-text');
-  }
-  return tagName === 'div'
-    && hasHtmlClass(tag, 'markdown-body')
-    && hasHtmlClass(tag, 'message-text');
-}
-
-function hasHtmlClass(tag, className) {
-  const match = String(tag || '').match(/\sclass=(["'])(.*?)\1/iu);
-  if (!match) {
-    return false;
-  }
-  return match[2].split(/\s+/u).includes(className);
-}
-
-function hasHtmlAttribute(tag, attributeName) {
-  const escapedName = String(attributeName || '').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  return new RegExp(`\\s${escapedName}(?:\\s|=|>|/)`, 'iu').test(String(tag || ''));
-}
-
-function localizeElement(element) {
-  if (element?.innerHTML !== undefined) {
-    element.innerHTML = localizeUiHtml(element.innerHTML);
-  }
-  return element;
-}
-
-function localizeFragment(html) {
-  return localizeUiHtml(html);
-}
-
-function unescapeBasicHtml(value) {
-  return String(value || '')
-    .replace(/&quot;/gu, '"')
-    .replace(/&lt;/gu, '<')
-    .replace(/&gt;/gu, '>')
-    .replace(/&(times|middot);/gu, (_match, name) => ({
-      times: '×',
-      middot: '·',
-    })[name])
-    .replace(/&#x([0-9a-f]+);/giu, (match, codePoint) => decodeHtmlCodePoint(match, codePoint, 16))
-    .replace(/&#([0-9]+);/gu, (match, codePoint) => decodeHtmlCodePoint(match, codePoint, 10))
-    .replace(/&amp;/gu, '&');
-}
-
-function decodeHtmlCodePoint(match, value, radix) {
-  const codePoint = Number.parseInt(value, radix);
-  return Number.isInteger(codePoint)
-    && codePoint >= 0
-    && codePoint <= 0x10ffff
-    && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
-    ? String.fromCodePoint(codePoint)
-    : match;
 }
 
 function applyLanguage(language, options = {}) {
@@ -14244,6 +13317,9 @@ function setupPwaPullToRefresh() {
   pullToRefreshCleanup = window.CodexPullToRefresh.init({
     root: document.querySelector('#app'),
     getScrollContainer: getActiveScrollContainer,
+    getLabels: ({ target }) => isTimelinePullTarget(target)
+      ? { pull: t('Pull for earlier messages'), ready: t('Release to load earlier messages'), loading: t('Loading history…') }
+      : { pull: t('Pull to refresh'), ready: t('Release to refresh'), loading: t('Refreshing') },
     threshold: 120,
     onRefresh: (pull) => {
       return handlePwaPullRefresh(pull);
@@ -14254,10 +13330,7 @@ function setupPwaPullToRefresh() {
 function handlePwaPullRefresh(pull = {}) {
   if (state.view === 'chat') {
     if (isTimelinePullTarget(pull.target)) {
-      if (showMoreSessionHistory()) {
-        return Promise.resolve();
-      }
-      return Promise.resolve();
+      return Promise.resolve(showMoreSessionHistory());
     }
     if (isChatTitlePullTarget(pull.target)) {
       return refreshCurrentView();
@@ -14276,6 +13349,7 @@ function isChatTitlePullTarget(target) {
 }
 
 function getActiveScrollContainer(pull = {}) {
+  if (state.view === 'chat' && isTimelinePullTarget(pull.target) && !hasMoreSessionHistory()) return false;
   if (state.view === 'admin') {
     return false;
   }
@@ -14342,6 +13416,7 @@ function resetEdgeSwipeNavigation() {
 
 function onVisibilityChange() {
   if (document.visibilityState === 'hidden') {
+    SESSION_READING.remember(); SESSION_READING.flush();
     flushScheduledTimelineSave();
     if (state.view === 'chat' && state.sessionId) {
       chatTimelineForegroundSnapshot = captureTimelineViewport();
@@ -14352,6 +13427,8 @@ function onVisibilityChange() {
     return;
   }
   if (document.visibilityState === 'visible') {
+    void CONNECTION.check();
+    if (AUTH_RECOVERY.needsRecovery()) { void restoreAuth({ automatic: true }); return; }
     void checkForAppUpdate();
     void drainSubmissionOutbox();
     void recoverActiveTurnAfterForeground();
@@ -14359,6 +13436,8 @@ function onVisibilityChange() {
 }
 
 function onPageResume() {
+  void CONNECTION.check();
+  if (AUTH_RECOVERY.needsRecovery()) { void restoreAuth({ automatic: true }); return; }
   if (document.visibilityState === 'hidden') {
     return;
   }
@@ -14368,6 +13447,8 @@ function onPageResume() {
 }
 
 function onNetworkOnline() {
+  void CONNECTION.check();
+  if (AUTH_RECOVERY.needsRecovery()) { void restoreAuth({ automatic: true }); return; }
   void drainSubmissionOutbox({ force: true });
   cancelStreamReconnect();
   void recoverActiveTurnIfStreamUnhealthy({ forceReconnect: true, reconcile: true });
@@ -14449,11 +13530,8 @@ function recoverActiveTurnAfterForeground() {
   if (!state.authSession || !state.sessionId || isPassivelySelectedDesktopSession() || isShareContext()) {
     return Promise.resolve(null);
   }
-  const viewportSnapshot = isDesktopWorkspaceView()
-    ? latestTimelineViewportSnapshot()
-    : rememberedTimelineViewport()
-      || chatTimelineForegroundSnapshot
-      || latestTimelineViewportSnapshot();
+  const remembered = rememberedTimelineViewport();
+  const viewportSnapshot = SESSION_READING.isCurrent(remembered) ? remembered : captureTimelineViewport();
   return recoverActiveTurnIfStreamUnhealthy({
     viewportSnapshot,
     forceReconnect: state.streamWasBackgrounded || !isTurnStreamHealthy(),
@@ -14466,6 +13544,8 @@ function setupStreamRecoveryWatchdog() {
     return;
   }
   streamRecoveryTimer = setInterval(() => {
+    void CONNECTION.check();
+    if (AUTH_RECOVERY.needsRecovery()) { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) void restoreAuth({ automatic: true }); return; }
     void recoverActiveTurnIfStreamUnhealthy({ reconcile: false });
   }, STREAM_RECOVERY_CHECK_MS);
 }
@@ -14500,6 +13580,7 @@ async function recoverActiveTurnIfStreamUnhealthyOnce({
   if (document.visibilityState === 'hidden') {
     return null;
   }
+  if (!forceReconnect && streamReconnectTimer) return null;
   const shouldReconnect = state.pendingTurn
     && state.turnId
     && (forceReconnect || !isTurnStreamHealthy());
@@ -14508,10 +13589,7 @@ async function recoverActiveTurnIfStreamUnhealthyOnce({
   } else if (!reconcile) {
     return null;
   }
-  const snapshot = viewportSnapshot || (isDesktopWorkspaceView()
-    ? latestTimelineViewportSnapshot()
-    : rememberedTimelineViewport()
-      || latestTimelineViewportSnapshot());
+  const snapshot = viewportSnapshot || captureTimelineViewport();
   const session = reconcile
     ? await reconcileCurrentSessionInBackground({ viewportSnapshot: snapshot })
     : null;
@@ -14634,43 +13712,11 @@ function isNetworkStreamError(error) {
 }
 
 function isRetryableStreamError(error) {
-  return isNetworkStreamError(error);
+  return globalThis.CodexWebNetworkRecovery.retryable(error);
 }
 
-async function apiFetch(path, options = {}) {
-  const headers = {
-    Accept: 'application/json',
-    ...(options.skipAuth ? {} : state.token ? { Authorization: `Bearer ${state.token}` } : {}),
-    ...options.headers,
-  };
-  if (options.body !== undefined) {
-    headers['Content-Type'] = 'application/json';
-  }
-  const response = await fetch(path, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    signal: options.signal,
-  });
-  if (!response.ok) {
-    throw await buildApiError(response);
-  }
-  if (response.status === 204) {
-    return null;
-  }
-  return response.json();
-}
-
-async function buildApiError(response) {
-  let payload = null;
-  try {
-    payload = await response.json();
-  } catch (_error) {
-  }
-  const error = new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-  error.status = response.status;
-  error.payload = payload;
-  return error;
+function apiFetch(path, options = {}) {
+  return API_CLIENT.request(path, options);
 }
 
 function handleApiError(error, options = {}) {
@@ -14726,27 +13772,7 @@ function inferDeviceName() {
 }
 
 function scrollTimelineToBottom() {
-  const apply = () => {
-    const timeline = document.querySelector('#timeline');
-    if (timeline) {
-      timeline.scrollTop = timeline.scrollHeight;
-      state.timelineShouldFollowLatest = true;
-      rememberCurrentTimelineViewport();
-    }
-  };
-  apply();
-  requestAnimationFrame(apply);
-}
-
-function scrollTimelineToTop() {
-  requestAnimationFrame(() => {
-    const timeline = document.querySelector('#timeline');
-    if (timeline) {
-      timeline.scrollTop = 0;
-      state.timelineShouldFollowLatest = false;
-      rememberCurrentTimelineViewport();
-    }
-  });
+  restoreTimelineViewport(latestTimelineViewportSnapshot());
 }
 
 function rememberCurrentTimelineViewport() {
@@ -14754,6 +13780,7 @@ function rememberCurrentTimelineViewport() {
     return;
   }
   const snapshot = captureTimelineViewport();
+  SESSION_READING.remember();
   chatTimelineViewportSnapshot = {
     ...snapshot,
     sessionId: state.sessionId,
@@ -14764,8 +13791,7 @@ function rememberedTimelineViewport() {
   if (!state.sessionId || chatTimelineViewportSnapshot?.sessionId !== state.sessionId) {
     return null;
   }
-  const { sessionId: _sessionId, ...snapshot } = chatTimelineViewportSnapshot;
-  return { ...snapshot };
+  return { ...chatTimelineViewportSnapshot };
 }
 
 function startCase(value) {
@@ -14816,8 +13842,16 @@ function shorten(value, maxLength) {
   return `${text.slice(0, maxLength - 1)}…`;
 }
 
-function renderMarkdown(value) {
-  return MARKDOWN_RENDERER.renderMarkdown(value);
+function renderMarkdown(value, documentMode = false) {
+  const text = String(value || '');
+  const key = `${documentMode}:${isShareContext()}:${text}`;
+  if (markdownResultCache.has(key)) return markdownResultCache.get(key);
+  const result = MARKDOWN_RENDERER.renderMarkdown(text, { documentMode });
+  if (text.length <= 50000) {
+    markdownResultCache.set(key, result);
+    if (markdownResultCache.size > 100) markdownResultCache.delete(markdownResultCache.keys().next().value);
+  }
+  return result;
 }
 
 function canRenderSessionFileLink(value) {

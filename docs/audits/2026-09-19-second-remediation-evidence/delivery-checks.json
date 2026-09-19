@@ -1,0 +1,840 @@
+[
+  {
+    "phase": "recovered-dist",
+    "timestamp": "2026-09-19T09:42:22.300Z",
+    "mode": "dist",
+    "buildId": "5b7aabddf4e04b844a52",
+    "appBytes": 342797,
+    "appSha256": "057ff4d36f0d6c16bf514053f869f04c997351c907d26c5fef85d69c428c6a59",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200
+      },
+      {
+        "path": "/styles.css",
+        "status": 200
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200
+      },
+      {
+        "path": "/app.js",
+        "status": 200
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  },
+  {
+    "phase": "recovery-stability",
+    "timestamp": "2026-09-19T09:46:02.948Z",
+    "mode": "dist",
+    "buildId": "5b7aabddf4e04b844a52",
+    "appBytes": 342797,
+    "appSha256": "057ff4d36f0d6c16bf514053f869f04c997351c907d26c5fef85d69c428c6a59",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200
+      },
+      {
+        "path": "/styles.css",
+        "status": 200
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200
+      },
+      {
+        "path": "/app.js",
+        "status": 200
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  },
+  {
+    "phase": "rollback-source",
+    "timestamp": "2026-09-19T10:24:46.524Z",
+    "mode": "source",
+    "buildId": "5a441ca155f9431ae5c2",
+    "appBytes": 499839,
+    "appSha256": "efdc059a473c75057c32f796a941ac6ed3153b624e4723c7b39affadc25fb1de",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200
+      },
+      {
+        "path": "/styles.css",
+        "status": 200
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200
+      },
+      {
+        "path": "/app.js",
+        "status": 200
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  },
+  {
+    "phase": "final-dist",
+    "timestamp": "2026-09-19T10:44:44.398Z",
+    "mode": "dist",
+    "buildId": "a32826b26a9b774dda90",
+    "appBytes": 342797,
+    "appSha256": "fbf74db4f77dd8d7fab5a67410c02c5a5d92db3133742b96e8539f2466def145",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200
+      },
+      {
+        "path": "/styles.css",
+        "status": 200
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200
+      },
+      {
+        "path": "/app.js",
+        "status": 200
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  },
+  {
+    "phase": "ordering-and-entry-deployed",
+    "timestamp": "2026-09-19T11:23:07.945Z",
+    "mode": "dist",
+    "buildId": "c0d2a8f48d9bff24bd94",
+    "appBytes": 342835,
+    "appSha256": "71afdd0617783a59f3aa708bba015eca3410b7d66929f9b06ca0305aff8c7518",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200
+      },
+      {
+        "path": "/styles.css",
+        "status": 200
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200
+      },
+      {
+        "path": "/timeline-reconciliation.js",
+        "status": 200
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200
+      },
+      {
+        "path": "/app.js",
+        "status": 200
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  },
+  {
+    "phase": "ordering-fix",
+    "timestamp": "2026-09-19T12:42:01.649Z",
+    "mode": "dist",
+    "buildId": "fd8488a69c35d5184542",
+    "appBytes": 343139,
+    "appSha256": "1622ef74d07880d80b15da787964674126756be0c79ef14944268661110964b8",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200
+      },
+      {
+        "path": "/styles.css",
+        "status": 200
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200
+      },
+      {
+        "path": "/timeline-reconciliation.js",
+        "status": 200
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200
+      },
+      {
+        "path": "/app.js",
+        "status": 200
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  },
+  {
+    "phase": "final-admin-ui",
+    "timestamp": "2026-09-19T14:08:44.109Z",
+    "mode": "dist",
+    "buildId": "5fa5a3f77899c8cad919",
+    "appBytes": 343473,
+    "appSha256": "d6e5722d33382f4b0d7b36ff19e8cfdf3011391e9264968aef26086a9b370fd9",
+    "statuses": [
+      {
+        "path": "/theme-init.js",
+        "status": 200
+      },
+      {
+        "path": "/styles.css",
+        "status": 200
+      },
+      {
+        "path": "/pwa-pull-refresh.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-copy.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-kit.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-upload.js",
+        "status": 200
+      },
+      {
+        "path": "/attachment-utils.js",
+        "status": 200
+      },
+      {
+        "path": "/markdown-renderer.js",
+        "status": 200
+      },
+      {
+        "path": "/ui-localization.js",
+        "status": 200
+      },
+      {
+        "path": "/session-file-viewer.js",
+        "status": 200
+      },
+      {
+        "path": "/webhook-settings.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-data.js",
+        "status": 200
+      },
+      {
+        "path": "/admin-editor.js",
+        "status": 200
+      },
+      {
+        "path": "/request-context.js",
+        "status": 200
+      },
+      {
+        "path": "/session-reading.js",
+        "status": 200
+      },
+      {
+        "path": "/timeline-reconciliation.js",
+        "status": 200
+      },
+      {
+        "path": "/session-loader.js",
+        "status": 200
+      },
+      {
+        "path": "/network-recovery.js",
+        "status": 200
+      },
+      {
+        "path": "/session-rename.js",
+        "status": 200
+      },
+      {
+        "path": "/draft-store.js",
+        "status": 200
+      },
+      {
+        "path": "/session-pagination.js",
+        "status": 200
+      },
+      {
+        "path": "/app.js",
+        "status": 200
+      },
+      {
+        "path": "/api/health",
+        "status": 401
+      },
+      {
+        "path": "/api/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/admin/sessions",
+        "status": 401
+      },
+      {
+        "path": "/api/metrics",
+        "status": 401
+      },
+      {
+        "path": "/api/reports",
+        "status": 401
+      },
+      {
+        "path": "/api/turns/synthetic-verification/events",
+        "status": 401
+      }
+    ]
+  }
+]

@@ -1,0 +1,795 @@
+{
+  "measuredAt": "2026-09-19T05:28:02.071Z",
+  "environment": "Chromium, isolated fixture, synthetic users/projects/sessions; no real accounts or Codex calls",
+  "cases": [
+    {
+      "name": "layout_desktop",
+      "usersGeometry": {
+        "width": 1440,
+        "documentWidth": 1440,
+        "form": {
+          "top": 156,
+          "bottom": 541
+        },
+        "firstUserTop": 156,
+        "inputs": [
+          {
+            "name": "username",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "email",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "password",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "roleId",
+            "size": "16px",
+            "height": 44
+          }
+        ],
+        "buttons": [
+          {
+            "text": "编辑",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "停用",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "删除",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "编辑",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "停用",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "删除",
+            "width": 50,
+            "height": 36
+          }
+        ]
+      },
+      "sessionsGeometry": {
+        "width": 1440,
+        "documentWidth": 1440,
+        "regions": [
+          {
+            "selector": ".admin-layout",
+            "left": 14,
+            "right": 1426,
+            "width": 1412,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-content",
+            "left": 246,
+            "right": 706,
+            "width": 460,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-observed-panel",
+            "left": 722,
+            "right": 1426,
+            "width": 704,
+            "display": "flex",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-observed-placeholder-header .admin-status-badge",
+            "left": 1379,
+            "right": 1413,
+            "width": 34,
+            "display": "flex",
+            "clippedRightByViewport": 0
+          }
+        ]
+      },
+      "sessionTitleDisplayed": false,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "layout_phone",
+      "usersGeometry": {
+        "width": 390,
+        "documentWidth": 390,
+        "form": {
+          "top": 438,
+          "bottom": 831
+        },
+        "firstUserTop": 907,
+        "inputs": [
+          {
+            "name": "username",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "email",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "password",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "roleId",
+            "size": "16px",
+            "height": 44
+          }
+        ],
+        "buttons": [
+          {
+            "text": "编辑",
+            "width": 98,
+            "height": 44
+          },
+          {
+            "text": "停用",
+            "width": 98,
+            "height": 44
+          },
+          {
+            "text": "删除",
+            "width": 98,
+            "height": 44
+          },
+          {
+            "text": "编辑",
+            "width": 98,
+            "height": 44
+          },
+          {
+            "text": "停用",
+            "width": 98,
+            "height": 44
+          },
+          {
+            "text": "删除",
+            "width": 98,
+            "height": 44
+          }
+        ]
+      },
+      "sessionsGeometry": {
+        "width": 390,
+        "documentWidth": 390,
+        "regions": [
+          {
+            "selector": ".admin-layout",
+            "left": 12,
+            "right": 378,
+            "width": 366,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-content",
+            "left": 12,
+            "right": 378,
+            "width": 366,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-observed-panel",
+            "present": false
+          },
+          {
+            "selector": ".admin-observed-placeholder-header .admin-status-badge",
+            "present": false
+          }
+        ]
+      },
+      "sessionTitleDisplayed": false,
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "layout_intermediate",
+      "usersGeometry": {
+        "width": 980,
+        "documentWidth": 980,
+        "form": {
+          "top": 156,
+          "bottom": 541
+        },
+        "firstUserTop": 617,
+        "inputs": [
+          {
+            "name": "username",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "email",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "password",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "roleId",
+            "size": "16px",
+            "height": 44
+          }
+        ],
+        "buttons": [
+          {
+            "text": "编辑",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "停用",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "删除",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "编辑",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "停用",
+            "width": 50,
+            "height": 36
+          },
+          {
+            "text": "删除",
+            "width": 50,
+            "height": 36
+          }
+        ]
+      },
+      "sessionsGeometry": {
+        "width": 980,
+        "documentWidth": 980,
+        "regions": [
+          {
+            "selector": ".admin-layout",
+            "left": 14,
+            "right": 966,
+            "width": 952,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-content",
+            "left": 246,
+            "right": 646,
+            "width": 400,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-observed-panel",
+            "left": 662,
+            "right": 1102,
+            "width": 440,
+            "display": "flex",
+            "clippedRightByViewport": 122
+          },
+          {
+            "selector": ".admin-observed-placeholder-header .admin-status-badge",
+            "left": 1055,
+            "right": 1089,
+            "width": 34,
+            "display": "flex",
+            "clippedRightByViewport": 109
+          }
+        ]
+      },
+      "sessionTitleDisplayed": false,
+      "viewport": {
+        "width": 980,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "layout_compact",
+      "usersGeometry": {
+        "width": 320,
+        "documentWidth": 320,
+        "form": {
+          "top": 438,
+          "bottom": 831
+        },
+        "firstUserTop": 907,
+        "inputs": [
+          {
+            "name": "username",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "email",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "password",
+            "size": "16px",
+            "height": 42
+          },
+          {
+            "name": "roleId",
+            "size": "16px",
+            "height": 44
+          }
+        ],
+        "buttons": [
+          {
+            "text": "编辑",
+            "width": 74.65625,
+            "height": 44
+          },
+          {
+            "text": "停用",
+            "width": 74.671875,
+            "height": 44
+          },
+          {
+            "text": "删除",
+            "width": 74.65625,
+            "height": 44
+          },
+          {
+            "text": "编辑",
+            "width": 74.65625,
+            "height": 44
+          },
+          {
+            "text": "停用",
+            "width": 74.671875,
+            "height": 44
+          },
+          {
+            "text": "删除",
+            "width": 74.65625,
+            "height": 44
+          }
+        ]
+      },
+      "sessionsGeometry": {
+        "width": 320,
+        "documentWidth": 320,
+        "regions": [
+          {
+            "selector": ".admin-layout",
+            "left": 12,
+            "right": 308,
+            "width": 296,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-content",
+            "left": 12,
+            "right": 308,
+            "width": 296,
+            "display": "grid",
+            "clippedRightByViewport": 0
+          },
+          {
+            "selector": ".admin-observed-panel",
+            "present": false
+          },
+          {
+            "selector": ".admin-observed-placeholder-header .admin-status-badge",
+            "present": false
+          }
+        ]
+      },
+      "sessionTitleDisplayed": false,
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "failed_project_save_draft",
+      "displayNameAfterFailure": "未保存的项目名称",
+      "cwdAfterFailure": "/Users/test/workspaces/unsaved-project",
+      "enabledBeforeFailure": false,
+      "enabledAfterFailure": true,
+      "error": "Display name already exists",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "switch_edit_target_with_dirty_inputs",
+      "editingProjectId": "project_beta",
+      "expectedName": "自动化报告",
+      "actualName": "为第一个项目输入的新名称",
+      "expectedCwd": "/Users/test/workspaces/automation-reports",
+      "actualCwd": "/Users/test/workspaces/changed-first-project",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "duplicate_user_submission",
+      "disabledDuringRequest": false,
+      "requestsForTwoClicks": 2,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "observer_navigation_race",
+      "lastClicked": "audit_session_b",
+      "beforeLateResponse": "audit_session_b",
+      "afterLateResponse": "audit_session_a",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "one_admin_endpoint_failure",
+      "state": {
+        "loaded": false,
+        "users": 0,
+        "projects": 0,
+        "sessions": 0,
+        "error": "synthetic_roles_unavailable"
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "admin_edit_boundaries",
+      "draftAfterTabRoundtrip": "",
+      "currentAdminEnabledCheckboxDisabled": false,
+      "currentAdminRoleSelectDisabled": false,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "admin_1000_sessions_scale",
+      "sessions": 1000,
+      "renderedRows": 1000,
+      "domNodes": 9107,
+      "renderMsAt4xCPU": [
+        139.89999997615814,
+        141.60000002384186,
+        127.20000004768372,
+        143.69999992847443
+      ],
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    },
+    {
+      "name": "admin_theme_contrast",
+      "themes": [
+        {
+          "theme": "fresh-light",
+          "samples": [
+            {
+              "selector": ".admin-page-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.313726 0.34902 0.4 / 0.64)",
+              "background": [
+                252,
+                252,
+                253
+              ],
+              "contrast": 2.9863766381178465
+            },
+            {
+              "selector": ".admin-nav-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.313726 0.34902 0.4 / 0.64)",
+              "background": [
+                244,
+                245,
+                247
+              ],
+              "contrast": 2.900571572961858
+            },
+            {
+              "selector": ".admin-row-meta",
+              "fontSize": "11px",
+              "color": "color(srgb 0.313726 0.34902 0.4 / 0.62)",
+              "background": [
+                253,
+                253,
+                254
+              ],
+              "contrast": 2.8739978963814017
+            },
+            {
+              "selector": ".admin-status-badge",
+              "fontSize": "10px",
+              "color": "rgb(8, 122, 85)",
+              "background": [
+                235,
+                244,
+                241
+              ],
+              "contrast": 4.774874916984864
+            }
+          ]
+        },
+        {
+          "theme": "retro",
+          "samples": [
+            {
+              "selector": ".admin-page-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.380392 0.356863 0.32549 / 0.64)",
+              "background": [
+                254,
+                253,
+                251
+              ],
+              "contrast": 2.911654032904759
+            },
+            {
+              "selector": ".admin-nav-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.380392 0.356863 0.32549 / 0.64)",
+              "background": [
+                252,
+                249,
+                242
+              ],
+              "contrast": 2.8653595963120284
+            },
+            {
+              "selector": ".admin-row-meta",
+              "fontSize": "11px",
+              "color": "color(srgb 0.380392 0.356863 0.32549 / 0.62)",
+              "background": [
+                255,
+                254,
+                253
+              ],
+              "contrast": 2.8272726102561276
+            },
+            {
+              "selector": ".admin-status-badge",
+              "fontSize": "10px",
+              "color": "rgb(38, 115, 77)",
+              "background": [
+                238,
+                244,
+                241
+              ],
+              "contrast": 5.174777784705527
+            }
+          ]
+        },
+        {
+          "theme": "terminal",
+          "samples": [
+            {
+              "selector": ".admin-page-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.698039 0.721569 0.74902 / 0.64)",
+              "background": [
+                21,
+                25,
+                30
+              ],
+              "contrast": 4.376215010128628
+            },
+            {
+              "selector": ".admin-nav-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.698039 0.721569 0.74902 / 0.64)",
+              "background": [
+                17,
+                21,
+                26
+              ],
+              "contrast": 4.453165319254773
+            },
+            {
+              "selector": ".admin-row-meta",
+              "fontSize": "11px",
+              "color": "color(srgb 0.698039 0.721569 0.74902 / 0.62)",
+              "background": [
+                22,
+                26,
+                31
+              ],
+              "contrast": 4.142006662952978
+            },
+            {
+              "selector": ".admin-status-badge",
+              "fontSize": "10px",
+              "color": "rgb(131, 201, 149)",
+              "background": [
+                32,
+                41,
+                41
+              ],
+              "contrast": 7.6234431712657145
+            }
+          ]
+        },
+        {
+          "theme": "dark-gold",
+          "samples": [
+            {
+              "selector": ".admin-page-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.72549 0.72549 0.756863 / 0.64)",
+              "background": [
+                30,
+                30,
+                32
+              ],
+              "contrast": 4.299255319873045
+            },
+            {
+              "selector": ".admin-nav-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.72549 0.72549 0.756863 / 0.64)",
+              "background": [
+                24,
+                24,
+                26
+              ],
+              "contrast": 4.446242450201935
+            },
+            {
+              "selector": ".admin-row-meta",
+              "fontSize": "11px",
+              "color": "color(srgb 0.72549 0.72549 0.756863 / 0.62)",
+              "background": [
+                31,
+                31,
+                33
+              ],
+              "contrast": 4.1357631804620745
+            },
+            {
+              "selector": ".admin-status-badge",
+              "fontSize": "10px",
+              "color": "rgb(110, 231, 168)",
+              "background": [
+                38,
+                48,
+                45
+              ],
+              "contrast": 8.851603837891542
+            }
+          ]
+        },
+        {
+          "theme": "oled-black",
+          "samples": [
+            {
+              "selector": ".admin-page-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.72549 0.72549 0.756863 / 0.64)",
+              "background": [
+                15,
+                15,
+                15
+              ],
+              "contrast": 4.592153426899799
+            },
+            {
+              "selector": ".admin-nav-count",
+              "fontSize": "11px",
+              "color": "color(srgb 0.72549 0.72549 0.756863 / 0.64)",
+              "background": [
+                0,
+                0,
+                0
+              ],
+              "contrast": 4.6619402740842615
+            },
+            {
+              "selector": ".admin-row-meta",
+              "fontSize": "11px",
+              "color": "color(srgb 0.72549 0.72549 0.756863 / 0.62)",
+              "background": [
+                18,
+                18,
+                18
+              ],
+              "contrast": 4.3926476420046665
+            },
+            {
+              "selector": ".admin-status-badge",
+              "fontSize": "10px",
+              "color": "rgb(110, 231, 168)",
+              "background": [
+                28,
+                38,
+                33
+              ],
+              "contrast": 10.128267369802435
+            }
+          ]
+        }
+      ],
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageErrors": [],
+      "assetFailures": []
+    }
+  ],
+  "sourceSha256": {
+    "app.js": "c7c22bc71bf5d0068572ed21ee27f491516078672f359da44bab88427b703564",
+    "admin-ui.js": "825c641840de5b2e5c80b242a4e50ec10b5a47d43327d4179dff560575f32820",
+    "styles.css": "56a780c8200e6f3d84fa4d4ed380b2713dc38032a77c1f12fca6ffd7d3087dab",
+    "network-recovery.js": "d81fb351892b38e4dca0cd27d1634418fbac079c3bd6bd31bb85f2179405a253",
+    "session-loader.js": "db774079eb38e2cb34184aab2776807489421e3beb7bc6f78166cf22348b83be"
+  },
+  "completedAt": "2026-09-19T05:28:15.835Z"
+}

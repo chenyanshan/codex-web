@@ -187,8 +187,8 @@ test('off-page and legacy outbox records never create an Unknown project', async
   });
 
   await page.goto('/');
-  await expect(page.locator('[data-session-id="local-submission:off_page_managed"]')).toContainText('Retry an off-page project session');
-  await expect(page.locator('[data-session-id="local-submission:legacy_unresolved"]')).toHaveCount(0);
+  await expect(page.locator('button[data-session-id="local-submission:off_page_managed"]')).toContainText('Retry an off-page project session');
+  await expect(page.locator('button[data-session-id="local-submission:legacy_unresolved"]')).toHaveCount(0);
   await expect(page.getByText('Unknown project', { exact: true })).toHaveCount(0);
 
   const mobileToggle = page.locator('#mobile-sidebar-toggle-button');
@@ -267,7 +267,7 @@ test('failed session messages can be dismissed without leaving a stuck list badg
   });
 
   await page.goto('/');
-  const sessionButton = page.locator('[data-session-id="session_browser_fixture"]');
+  const sessionButton = page.locator('button[data-session-id="session_browser_fixture"]');
   await expect(sessionButton).toContainText('Send failed');
   const statusResponse = page.waitForResponse((response) => (
     new URL(response.url()).pathname === '/api/sessions/session_browser_fixture/status'
@@ -320,7 +320,7 @@ test('failed session messages can be dismissed without leaving a stuck list badg
   if (testInfo.project.name !== 'desktop') {
     await page.getByRole('button', { name: 'Sessions' }).click();
   }
-  await expect(page.locator('[data-session-id="session_browser_fixture"]')).not.toContainText('Send failed');
+  await expect(page.locator('button[data-session-id="session_browser_fixture"]')).not.toContainText('Send failed');
 });
 
 test('workspace is usable without overflow and exposes work and status semantics', async ({ page }, testInfo) => {
@@ -353,7 +353,7 @@ test('workspace is usable without overflow and exposes work and status semantics
       return box ? { height: box.height, bottom: box.bottom } : null;
     }));
     expect(topbarGeometry.every(Boolean)).toBe(true);
-    expect(topbarGeometry.every((box) => Math.abs(box.height - 66) <= 1)).toBe(true);
+    expect(topbarGeometry.every((box) => Math.abs(box.height - 56) <= 1)).toBe(true);
     const topbarBottoms = topbarGeometry.map((box) => box.bottom);
     expect(Math.max(...topbarBottoms) - Math.min(...topbarBottoms)).toBeLessThanOrEqual(1);
   }
@@ -361,7 +361,7 @@ test('workspace is usable without overflow and exposes work and status semantics
   const newSessionButton = page.locator('#open-new-session-button');
   await expect(newSessionButton).toBeVisible();
 
-  const sessionButton = page.locator('[data-session-id="session_browser_fixture"]');
+  const sessionButton = page.locator('button[data-session-id="session_browser_fixture"]');
   await expect(sessionButton).toBeVisible();
   await expect(sessionButton).toContainText('yanshan_quant');
   await expect(sessionButton).toContainText('Active');
@@ -371,7 +371,7 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(projectFavoriteButton).toHaveCount(1);
   await expect(projectFavoriteButton).toHaveAttribute('aria-pressed', 'true');
   await expect(projectFavoriteButton.locator('.project-rail-favorite-icon')).toHaveCount(1);
-  await expect(page.locator('[data-session-id="session_browser_history"] .session-preview'))
+  await expect(page.locator('button[data-session-id="session_browser_history"] .session-preview'))
     .toHaveCSS('font-weight', '400');
   if (testInfo.project.name.startsWith('mobile-')) {
     for (const locator of [
@@ -602,7 +602,7 @@ test('session pagination loads an older page without replacing visible sessions'
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto('/');
 
-  const currentSession = page.locator('[data-session-id="session_browser_fixture"]');
+  const currentSession = page.locator('button[data-session-id="session_browser_fixture"]');
   const loadMore = page.locator('#load-more-sessions-button');
   await expect(page.locator('[data-project-scope-key=""] .project-rail-item-meta')).toHaveText('5');
   await expect(page.locator('[data-project-scope-key="project_browser_fixture"] .project-rail-item-meta')).toHaveText('5');
@@ -615,7 +615,7 @@ test('session pagination loads an older page without replacing visible sessions'
   await loadMore.click();
 
   await expect(currentSession).toBeVisible();
-  await expect(page.locator('[data-session-id="session_browser_older"]')).toBeVisible();
+  await expect(page.locator('button[data-session-id="session_browser_older"]')).toBeVisible();
   await expect(page.locator('[data-project-scope-key=""] .project-rail-item-meta')).toHaveText('5');
   await expect(loadMore).toHaveCount(0);
 
@@ -647,7 +647,7 @@ test('opening a session from All Sessions keeps All Sessions selected', async ({
   const allSessions = page.locator('[data-project-scope-key=""]');
   const project = page.locator('[data-project-scope-key="project_browser_fixture"]');
   await expect(allSessions).toHaveAttribute('aria-pressed', 'true');
-  await page.locator('[data-session-id="session_browser_idle"]').click();
+  await page.locator('button[data-session-id="session_browser_idle"]').click();
 
   await expect(allSessions).toHaveAttribute('aria-pressed', 'true');
   await expect(project).toHaveAttribute('aria-pressed', 'false');
@@ -661,7 +661,7 @@ test('mobile composer expands after four lines and restores the compact attachme
   test.skip(testInfo.project.name !== 'mobile-compact');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('button[data-session-id="session_browser_fixture"]').click();
   const promptInput = page.locator('#prompt-input');
   await expect(promptInput).toBeVisible();
   await promptInput.fill('First line\nSecond line\nThird line\nFourth line');
@@ -725,7 +725,7 @@ test('narrow desktop browser keeps the web composer in the single-session layout
 
   await page.setViewportSize({ width: 900, height: 844 });
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('button[data-session-id="session_browser_fixture"]').click();
 
   await expect(page.locator('.desktop-workspace')).toHaveCount(0);
   await expect(page.locator('.mobile-session-topbar')).toHaveCount(0);
@@ -857,7 +857,7 @@ test('reasoning summaries use plain message borders without timeline ornaments',
   test.skip(testInfo.project.name !== 'mobile-portrait', 'One viewport covers shared message-card styling.');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('button[data-session-id="session_browser_fixture"]').click();
   const styles = await page.evaluate(() => {
     const timeline = document.querySelector('#timeline');
     const card = document.createElement('article');
@@ -929,7 +929,8 @@ test('lost new-session responses recover from the durable outbox after reload', 
 
   await expect(page.locator('#timeline .message-card.user')).toContainText('Recover this weak-network session');
   await expect(page.locator('#timeline [data-submission-retry-id]')).toHaveCount(0);
-  await expect(page.locator('.composer-status')).toContainText('Waiting to send');
+  await expect(page.locator('.composer-status')).toContainText('Connection interrupted');
+  await expect(page.locator('.composer-status')).toContainText('Reconnecting');
   const storedBeforeReload = await page.evaluate(() => {
     const prefix = 'codexWebSubmissionOutbox:';
     return Array.from({ length: window.localStorage.length }, (_item, index) => (
@@ -950,7 +951,8 @@ test('lost new-session responses recover from the durable outbox after reload', 
       window.localStorage.key(index)
     )).filter((key) => key?.startsWith(prefix)).length;
   })).toBe(0);
-  await expect(page.locator('[data-session-id="session_browser_recovered"]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await expect(page.locator('button[data-session-id="session_browser_recovered"]')).toHaveCount(1);
   expect(submissionIds).toEqual([acceptedSubmissionId, acceptedSubmissionId]);
 });
 
@@ -958,7 +960,7 @@ test('mobile session opens a relative Markdown file and returns to the same time
   test.skip(testInfo.project.name !== 'mobile-portrait', 'One phone viewport covers the full-screen Markdown viewer.');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_files"]').click();
+  await page.locator('button[data-session-id="session_browser_files"]').click();
 
   const timeline = page.locator('#timeline');
   const fileLink = page.getByRole('link', { name: 'Browser session guide' });
@@ -1001,7 +1003,7 @@ test('historical image attachment opens in the session viewer and returns to its
   test.skip(testInfo.project.name !== 'mobile-compact', 'The compact phone viewport covers retained attachment viewing.');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_files"]').click();
+  await page.locator('button[data-session-id="session_browser_files"]').click();
 
   const attachment = page.locator('.message-attachment', { hasText: 'history-image.png' });
   await expect(attachment).toBeVisible();
@@ -1036,7 +1038,7 @@ test('assistant xlsx link downloads the host file on remote browser layouts', as
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_files"]').click();
+  await page.locator('button[data-session-id="session_browser_files"]').click();
 
   const fileLink = page.getByRole('link', { name: 'download the deduplicated XLSX file' });
   await expect(fileLink).toBeVisible();
@@ -1075,15 +1077,21 @@ test('sandboxed HTML preview blocks scripts, remote assets, and refresh navigati
   test.skip(testInfo.project.name !== 'desktop', 'One desktop browser covers HTML sandbox enforcement.');
 
   const previewRequests = [];
-  page.on('request', (request) => {
-    const pathname = new URL(request.url()).pathname;
+  const deliveredRequests = [];
+  await page.route('**/html-probe*', (route) => { deliveredRequests.push(route.request().url()); return route.abort(); });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  const blocked = [];
+  cdp.on('Network.loadingFailed', (event) => { if (event.blockedReason) blocked.push(event.blockedReason); });
+  page.on('response', (response) => {
+    const pathname = new URL(response.url()).pathname;
     if (pathname.startsWith('/html-probe') || pathname === '/html-refresh-target') {
       previewRequests.push(pathname);
     }
   });
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_files"]').click();
+  await page.locator('button[data-session-id="session_browser_files"]').click();
   const htmlLink = page.getByRole('link', { name: 'sandboxed HTML preview' });
   await htmlLink.click();
 
@@ -1102,6 +1110,9 @@ test('sandboxed HTML preview blocks scripts, remote assets, and refresh navigati
   });
 
   expect(previewRequests).toEqual([]);
+  expect(deliveredRequests).toEqual([]);
+  expect(new URL(page.url()).pathname).toBe('/');
+  expect(blocked.filter((reason) => reason === 'csp').length).toBeGreaterThanOrEqual(2);
   const previewFrame = page.frames().find((frame) => frame.parentFrame() === page.mainFrame());
   expect(previewFrame?.url() || '').not.toContain('/html-refresh-target');
   await page.keyboard.press('Escape');
@@ -1115,7 +1126,7 @@ test('archived sessions use a visible filter and a clear restore icon', async ({
   await page.goto('/');
   await page.locator('[data-sort-mode="archived"]').click();
 
-  await expect(page.locator('[data-session-id="session_browser_archived"]')).toBeVisible();
+  await expect(page.locator('button[data-session-id="session_browser_archived"]')).toBeVisible();
   const restoreButton = page.getByRole('button', { name: 'Unarchive' });
   await expect(restoreButton).toBeVisible();
   await expect(restoreButton.locator('.session-action-icon-stroke')).toBeVisible();
@@ -1131,14 +1142,14 @@ test('opening an archived session never restores it to recents', async ({ page }
 
   await page.goto('/');
   await page.locator('[data-sort-mode="archived"]').click();
-  await page.locator('[data-session-id="session_browser_archived"]').click();
+  await page.locator('button[data-session-id="session_browser_archived"]').click();
   await expect(page.locator('.read-only-composer-wrap')).toBeVisible();
 
   await page.getByRole('button', { name: 'Sessions' }).click();
   await page.locator('[data-sort-mode="time"]').click();
 
-  await expect(page.locator('[data-session-id="session_browser_archived"]')).toHaveCount(0);
-  await expect(page.locator('[data-session-id="session_browser_idle"]')).toBeVisible();
+  await expect(page.locator('button[data-session-id="session_browser_archived"]')).toHaveCount(0);
+  await expect(page.locator('button[data-session-id="session_browser_idle"]')).toBeVisible();
 });
 
 test('large work details use one stable vertical scroll surface', async ({ page }, testInfo) => {
@@ -1146,7 +1157,7 @@ test('large work details use one stable vertical scroll surface', async ({ page 
   await page.setViewportSize({ width: 1060, height: 503 });
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('button[data-session-id="session_browser_fixture"]').click();
   await page.locator('#open-work-details-button').click();
   const workDialog = page.locator('.work-details-dialog');
   const workTurn = workDialog.locator('.work-turn');
@@ -1195,7 +1206,7 @@ test('expanded work details pause live following until new activity is requested
   test.skip(testInfo.project.name !== 'desktop', 'One desktop viewport covers live Work state preservation.');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('button[data-session-id="session_browser_fixture"]').click();
   await page.locator('#open-work-details-button').click();
 
   const list = page.locator('.work-details-list');
@@ -1230,7 +1241,7 @@ test('expanded work details pause live following until new activity is requested
   await expect(newActivityButton).toHaveText('1 new activity');
   await expect(commandDetail).toHaveAttribute('open', '');
   await expect(commandSummary).toBeFocused();
-  await expect(page.locator('.work-details-dialog')).not.toContainText('git status --short');
+  await expect(page.locator('.work-events')).not.toContainText('git status --short');
   expect(await list.evaluate((element) => element.scrollTop)).toBe(scrollTop);
 
   await newActivityButton.click();
@@ -1248,7 +1259,7 @@ test('Chinese work details render symbols and activity labels without escaped en
     window.localStorage.setItem('codexWebLanguage', 'zh-CN');
   });
   await page.reload();
-  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('button[data-session-id="session_browser_fixture"]').click();
   const openWorkDetailsButton = page.locator('#open-work-details-button');
   await expect(openWorkDetailsButton.locator('.composer-status-disclosure')).toHaveText('›');
   await openWorkDetailsButton.click();
@@ -1270,7 +1281,7 @@ test('desktop prompt accepts pasted files as uploaded attachments', async ({ pag
   test.skip(!testInfo.project.name.startsWith('desktop'), 'Desktop and portrait desktop cover paste uploads.');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_idle"]').click();
+  await page.locator('button[data-session-id="session_browser_idle"]').click();
   await expect(page.locator('#prompt-input')).toBeVisible();
 
   const defaultPrevented = await page.evaluate(() => {
@@ -1299,7 +1310,7 @@ test('desktop wheel at the top reveals earlier session exchanges', async ({ page
   test.skip(!testInfo.project.name.startsWith('desktop'), 'Desktop and portrait desktop cover wheel history expansion.');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_history"]').click();
+  await page.locator('button[data-session-id="session_browser_history"]').click();
 
   const timeline = page.locator('#timeline');
   await expect(timeline).toContainText('Latest browser answer');
@@ -1407,9 +1418,9 @@ test('console session layout keeps Codex controls usable in a compact transcript
     layout: document.documentElement.dataset.sessionLayout,
   }))).toEqual({ theme: 'terminal', layout: 'console' });
   if (testInfo.project.name === 'mobile-portrait') {
-    await page.locator('[data-session-id="session_browser_fixture"]').click();
+    await page.locator('button[data-session-id="session_browser_fixture"]').click();
   } else {
-    await page.locator('[data-session-id="session_browser_history"]').click();
+    await page.locator('button[data-session-id="session_browser_history"]').click();
   }
 
   await expect(page.locator('#timeline')).toBeVisible();
@@ -1530,7 +1541,7 @@ test('five themes keep canvas and chat surfaces aligned', async ({ page }, testI
       };
     });
 
-    await page.locator('[data-session-id="session_browser_history"]').click();
+    await page.locator('button[data-session-id="session_browser_history"]').click();
     await expect(page.locator('.message-card.user').last()).toBeVisible();
     await expect(page.locator('.message-card.assistant').last()).toBeVisible();
     const chatSurfaces = await page.evaluate(() => {
@@ -1631,7 +1642,7 @@ test('dark themes keep block and inline code visibly separated', async ({ page }
       window.localStorage.setItem('codexWebTheme', nextTheme);
     }, theme);
     await page.reload();
-    await page.locator('[data-session-id="session_browser_history"]').click();
+    await page.locator('button[data-session-id="session_browser_history"]').click();
     await expect(page.locator('#timeline')).toBeVisible();
     const colors = await page.evaluate(() => {
       const card = document.createElement('article');
@@ -1717,6 +1728,7 @@ test('webhook settings keep the key copyable after enable and rotation', async (
 
   const keyInput = webhookSection.locator('#webhook-key-input');
   const copyKeyButton = webhookSection.locator('#webhook-copy-key-button');
+  await expect(keyInput).toHaveValue(/^cwwh_browser_fixture_/u);
   const firstKey = await keyInput.inputValue();
   expect(firstKey).toMatch(/^cwwh_browser_fixture_/u);
   await copyKeyButton.click();
@@ -1754,7 +1766,7 @@ test('mobile session menu opens archive confirmation for an idle session', async
   test.skip(testInfo.project.name !== 'mobile-compact', 'The compact mobile viewport covers this menu flow.');
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_idle"]').click();
+  await page.locator('button[data-session-id="session_browser_idle"]').click();
   await page.getByRole('button', { name: 'Session menu' }).click();
 
   const archiveButton = page.getByRole('button', { name: 'Archive', exact: true });
@@ -1826,7 +1838,7 @@ test('repeated chat renders release detached DOM and listeners', async ({ page, 
   test.setTimeout(60_000);
 
   await page.goto('/');
-  await page.locator('[data-session-id="session_browser_fixture"]').click();
+  await page.locator('button[data-session-id="session_browser_fixture"]').click();
   await expect(page.getByText('Approval requested', { exact: true })).toBeVisible();
   const settingsButton = page.locator('#settings-toggle');
   await expect(settingsButton).toBeVisible();

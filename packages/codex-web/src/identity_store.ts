@@ -1,3 +1,4 @@
+import { FileVersionCache } from './file_version_cache.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -142,25 +143,54 @@ export interface BootstrapAdminPasswordHashInput {
   passwordIterations?: number;
 }
 
+const identitySnapshotVersions = new WeakMap<CodexWebIdentityState, string>();
+export function identityStateVersion(state: CodexWebIdentityState): string | undefined { return identitySnapshotVersions.get(state); }
+
+export class LastAdministratorError extends Error {
+  readonly code = 'last_admin_required';
+  constructor() {
+    super('Keep at least one enabled administrator with a password.');
+    this.name = 'LastAdministratorError';
+  }
+}
+
+function hasLoginAdministrator(state: CodexWebIdentityState): boolean {
+  const roles = new Set(state.roles.filter((role) => role.isAdmin).map((role) => role.id));
+  return state.users.some((user) => user.enabled && user.passwordHash && user.passwordSalt
+    && user.roleIds.some((id) => roles.has(id)));
+}
+
+function retainAdministrator(hadAdministrator: boolean, state: CodexWebIdentityState): void {
+  if (hadAdministrator && !hasLoginAdministrator(state)) throw new LastAdministratorError();
+}
+
+export function readIdentitySnapshot(store: { readState(): Promise<CodexWebIdentityState>; readSnapshot?(): Promise<CodexWebIdentityState> }): Promise<CodexWebIdentityState> {
+  return store.readSnapshot ? store.readSnapshot() : store.readState();
+}
+
 export class FileIdentityStore {
   private readonly identityPath: string;
+
+  private readonly snapshotCache: FileVersionCache<CodexWebIdentityState>;
 
   private mutationLock: Promise<void> = Promise.resolve();
 
   constructor({ identityPath }: { identityPath: string }) {
     this.identityPath = identityPath;
+    this.snapshotCache = new FileVersionCache(identityPath, raw => normalizeState(JSON.parse(raw)), emptyState);
+  }
+
+  async readSnapshot(): Promise<CodexWebIdentityState> {
+    const snapshot = await this.snapshotCache.read();
+    identitySnapshotVersions.set(snapshot.value, snapshot.version);
+    return snapshot.value;
   }
 
   async readState(): Promise<CodexWebIdentityState> {
-    try {
-      const raw = await fs.readFile(this.identityPath, 'utf8');
-      return normalizeState(JSON.parse(raw));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return emptyState();
-      }
-      throw error;
-    }
+    const snapshot = await this.readSnapshot();
+    const state = structuredClone(snapshot);
+    identitySnapshotVersions.set(state, identityStateVersion(snapshot)!);
+    return state;
   }
 
   async setMultiUserEnabled(enabled: boolean): Promise<CodexWebIdentityState> {
@@ -226,6 +256,7 @@ export class FileIdentityStore {
   async upsertUserWithPassword(input: UpsertUserWithPasswordInput): Promise<CodexWebUser> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
+      const hadAdministrator = hasLoginAdministrator(state);
       const normalized = normalizePassword(input.password);
       const username = normalizeUsername(input.username);
       const userId = deriveUserId(username, input.id, state.users);
@@ -250,6 +281,8 @@ export class FileIdentityStore {
         favoriteProjectIds: [],
       };
       state.users = upsertById(state.users, user);
+      state.userSessions = state.userSessions.filter((session) => session.userId !== user.id);
+      retainAdministrator(hadAdministrator, state);
       await this.writeState(state);
       return user;
     });
@@ -258,6 +291,7 @@ export class FileIdentityStore {
   async updateUserAccess(input: UpdateUserAccessInput): Promise<CodexWebUser> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
+      const hadAdministrator = hasLoginAdministrator(state);
       const userId = normalizeRequiredId(input.id, 'user id');
       const existing = state.users.find((user) => user.id === userId);
       if (!existing) {
@@ -276,6 +310,7 @@ export class FileIdentityStore {
           : existing.directProjectGrants,
       };
       state.users = upsertById(state.users, user);
+      retainAdministrator(hadAdministrator, state);
       await this.writeState(state);
       return user;
     });
@@ -284,6 +319,7 @@ export class FileIdentityStore {
   async deleteUser(userId: string): Promise<void> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
+      const hadAdministrator = hasLoginAdministrator(state);
       const normalizedUserId = normalizeRequiredId(userId, 'user id');
       const existing = state.users.find((user) => user.id === normalizedUserId);
       if (!existing) {
@@ -299,6 +335,7 @@ export class FileIdentityStore {
       state.shares = state.shares.filter((share) => share.createdByUserId !== normalizedUserId && !removedSessionIds.has(share.sessionId));
       state.userSessions = state.userSessions.filter((session) => session.userId !== normalizedUserId);
       state.webhookCredentials = state.webhookCredentials.filter((credential) => credential.ownerUserId !== normalizedUserId);
+      retainAdministrator(hadAdministrator, state);
       await this.writeState(state);
     });
   }
@@ -331,8 +368,10 @@ export class FileIdentityStore {
   async upsertRole(role: CodexWebRole): Promise<CodexWebRole> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
+      const hadAdministrator = hasLoginAdministrator(state);
       const normalized = normalizeRole(role);
       state.roles = upsertById(state.roles, normalized);
+      retainAdministrator(hadAdministrator, state);
       await this.writeState(state);
       return normalized;
     });
@@ -382,7 +421,7 @@ export class FileIdentityStore {
   }
 
   async verifyUserPassword(username: string, password: string): Promise<string | null> {
-    const state = await this.readState();
+    const state = await this.readSnapshot();
     const normalizedUsername = normalizeUsername(username);
     const user = state.users.find((item) => item.username === normalizedUsername && item.enabled !== false);
     if (!user?.passwordHash || !user.passwordSalt) {
@@ -447,10 +486,14 @@ export class FileIdentityStore {
     });
   }
 
-  async addUserSession(session: CodexWebUserSession): Promise<CodexWebUserSession> {
+  async addUserSession(session: CodexWebUserSession, expectedPasswordHash?: string): Promise<CodexWebUserSession> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
       const normalized = normalizeUserSession(session);
+      if (expectedPasswordHash !== undefined) {
+        const user = state.users.find((item) => item.id === session.userId && item.enabled !== false);
+        if (!state.settings.multiUserEnabled || user?.passwordHash !== expectedPasswordHash) throw new Error('Credentials changed during login');
+      }
       state.userSessions = upsertById(state.userSessions, normalized);
       await this.writeState(state);
       return normalized;
@@ -464,6 +507,7 @@ export class FileIdentityStore {
       if (index < 0) {
         return;
       }
+      if (Date.parse(lastSeenAt) - Date.parse(state.userSessions[index]!.lastSeenAt) < 30_000) return;
       state.userSessions[index] = {
         ...state.userSessions[index]!,
         lastSeenAt,
@@ -482,7 +526,7 @@ export class FileIdentityStore {
 
   async findShareByToken(token: string): Promise<string | null> {
     const tokenHash = hashToken(String(token ?? '').trim());
-    const state = await this.readState();
+    const state = await this.readSnapshot();
     const now = Date.now();
     return state.shares.find((share) => (
       share.enabled !== false
@@ -495,7 +539,7 @@ export class FileIdentityStore {
 
   async getWebhookCredential(ownerUserId: string): Promise<CodexWebWebhookCredential | null> {
     const normalizedOwnerUserId = normalizeRequiredId(ownerUserId, 'webhook owner user id');
-    const state = await this.readState();
+    const state = await this.readSnapshot();
     return state.webhookCredentials.find((credential) => credential.ownerUserId === normalizedOwnerUserId) ?? null;
   }
 
@@ -576,7 +620,7 @@ export class FileIdentityStore {
       return null;
     }
     const tokenHash = hashToken(normalizedToken);
-    const state = await this.readState();
+    const state = await this.readSnapshot();
     return state.webhookCredentials.find((credential) => (
       credential.enabled === true
       && safeEqual(credential.tokenHash, tokenHash)
@@ -584,6 +628,7 @@ export class FileIdentityStore {
   }
 
   private async writeState(state: CodexWebIdentityState): Promise<void> {
+    this.snapshotCache.invalidate();
     await fs.mkdir(path.dirname(this.identityPath), { recursive: true, mode: 0o700 });
     const payload = `${JSON.stringify(normalizeState(state), null, 2)}\n`;
     const tempPath = path.join(
@@ -593,7 +638,9 @@ export class FileIdentityStore {
     try {
       await fs.writeFile(tempPath, payload, { mode: 0o600 });
       await fs.rename(tempPath, this.identityPath);
+      identitySnapshotVersions.set(state, crypto.createHash('sha256').update(payload).digest('hex'));
       await fs.chmod(this.identityPath, 0o600).catch(() => {});
+      this.snapshotCache.invalidate();
     } catch (error) {
       await fs.rm(tempPath, { force: true }).catch(() => {});
       throw error;

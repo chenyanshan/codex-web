@@ -1,0 +1,43 @@
+{
+  "checkedAt": "2026-09-19T03:33:14.742Z",
+  "focusedTests": {
+    "passed": 723,
+    "failed": 0
+  },
+  "browserTests": {
+    "passed": 80,
+    "skippedForViewport": 160,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "build": "passed",
+  "lint": "passed",
+  "diffCheck": "passed",
+  "builtPublicSmoke": {
+    "scripts": 14,
+    "emittedAppBytes": 337005,
+    "browserErrors": []
+  },
+  "appSourceBytes": 498584,
+  "viewedScreenshots": [
+    "desktop-dialog.png",
+    "phone-dialog.png",
+    "phone-failure.png",
+    "intermediate-dialog.png",
+    "compact-dialog.png",
+    "phone-saved-chat.png"
+  ],
+  "integrationScope": "Real HTTP server, runtime and native adapter with isolated synthetic provider; no real sessions modified.",
+  "sourceSha256": {
+    "packages/codex-native-api/src/codex_app_client.ts": "57a4931158616d6215718db08237fb5efd69aa27c59b5519fa62157d4d47e84a",
+    "packages/codex-web/src/runtime.ts": "239c0014f1f7efe74e7a7cfb7ad01e8d8abc194cf98369411c7fb13ccfc8e4bf",
+    "packages/codex-web/src/server.ts": "9381b9869928142f05dc08977c0710570404438da90ae54e2642c52aa7d1303c",
+    "packages/codex-web/src/session_directory.ts": "1976e6e5e09186d5fad2696493e46aa1a87a3b6e27e169f2c363808b6d052f2e",
+    "packages/codex-web/src/session_name.ts": "080271058a34519943a036ba6cf4d0e6ef1c8c1c03f4b1100b943e9229f617a9",
+    "packages/codex-web/public/app.js": "6fb1f2c2fb3dce11b318b2e82ef22fa8e93d531f02fe20741e8da6a957a9039a",
+    "packages/codex-web/public/session-rename.js": "495ebf6b9c71753f37df37befad9afd84507ab38aeedd984d149b6a3ca81bd24",
+    "packages/codex-web/public/styles.css": "56a780c8200e6f3d84fa4d4ed380b2713dc38032a77c1f12fca6ffd7d3087dab",
+    "packages/codex-web/public/index.html": "d70ef1f12435ff9a1a04b6669d5797428b68d3eb9fbeacf8e3016d9809166595",
+    "packages/codex-web/public/service-worker.js": "7eadb007750bcff771c9effbb1d12a2757e5f8de4468766ba765ac659ae19ae9"
+  }
+}

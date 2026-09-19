@@ -2475,3 +2475,11 @@ test('app client ignores stderr runtime errors emitted before a turn wait starts
 
   assert.equal(result.outputText, 'Recovered');
 });
+
+test('app client persists the native thread name with the bounded name-set RPC', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const calls: unknown[] = [];
+  client.request = async (...args: any[]) => { calls.push(args); return {}; };
+  await client.setThreadName('thread_named', '用户自定义名称');
+  assert.deepEqual(calls, [['thread/name/set', { threadId: 'thread_named', name: '用户自定义名称' }, { timeoutMs: 10_000 }]]);
+});

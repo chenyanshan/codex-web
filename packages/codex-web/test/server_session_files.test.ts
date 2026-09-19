@@ -127,11 +127,11 @@ class PausingSessionFileStore extends FileSessionFileStore {
     return { ready, resume, done };
   }
 
-  override async readFile(
+  override async openContent(
     scope: CodexWebSessionFileScope,
     fileId: string,
   ): Promise<CodexWebSessionFileContent> {
-    const content = await super.readFile(scope, fileId);
+    const content = await super.openContent(scope, fileId);
     const gate = this.nextGate;
     this.nextGate = null;
     if (gate) {
@@ -580,4 +580,50 @@ test('multi-user session files enforce session ownership, project read access, a
   } finally {
     await server.stop();
   }
+});
+
+test('large text previews are bounded while authenticated downloads support ranges', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-preview-'));
+  const filename = path.join(root, 'large.md');
+  await fs.writeFile(filename, 'A'.repeat(300 * 1024));
+  const server = createCodexWebServer({ auth: singleUserAuth(), runtime: runtimeForProjects({ thread: root }) as any, config: createConfig(root, root) });
+  await server.start();
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  const resolved = await resolveFile(server.baseUrl, 'thread', filename);
+  const { file } = await resolved.json();
+  const headers = { Authorization: 'Bearer local-token' };
+  const preview = await fetch(`${server.baseUrl}${file.contentUrl}?preview=1`, { headers });
+  assert.equal(preview.headers.get('x-content-truncated'), 'true');
+  assert.equal((await preview.arrayBuffer()).byteLength, 256 * 1024);
+  const range = await fetch(`${server.baseUrl}${file.downloadUrl}`, { headers: { ...headers, Range: 'bytes=10-19' } });
+  assert.equal(range.status, 206);
+  assert.equal(range.headers.get('content-range'), `bytes 10-19/${300 * 1024}`);
+  assert.equal(await range.text(), 'A'.repeat(10));
+  const invalid = await fetch(`${server.baseUrl}${file.downloadUrl}`, { headers: { ...headers, Range: 'bytes=999999-' } });
+  assert.equal(invalid.status, 416);
+  await invalid.arrayBuffer();
+  assert.equal((await fetch(`${server.baseUrl}${file.downloadUrl}`)).status, 401);
+});
+
+test('streamed file handles close when response headers fail before piping', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-file-response-failure-'));
+  await fs.writeFile(path.join(root, 'readme.md'), 'hello');
+  let closeHandle: (() => void) | undefined;
+  const closed = new Promise<void>(resolve => { closeHandle = resolve; });
+  class InvalidHeaderStore extends FileSessionFileStore {
+    override async openContent(scope: CodexWebSessionFileScope, id: string) {
+      const content = await super.openContent(scope, id);
+      content.file.mimeType = 'text/plain\ninvalid';
+      content.stream!.once('close', () => closeHandle!());
+      return content;
+    }
+  }
+  const server = createCodexWebServer({ auth: singleUserAuth(), runtime: runtimeForProjects({ thread: root }) as any,
+    sessionFileStore: new InvalidHeaderStore(), config: createConfig(root, root) });
+  await server.start();
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  const { file } = await (await resolveFile(server.baseUrl, 'thread', path.join(root, 'readme.md'))).json();
+  const response = await fetch(`${server.baseUrl}${file.contentUrl}`, { headers: { Authorization: 'Bearer local-token' } });
+  assert.equal(response.status, 500); await response.arrayBuffer();
+  await Promise.race([closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('file handle did not close')), 1000).unref())]);
 });

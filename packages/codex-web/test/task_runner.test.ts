@@ -389,3 +389,44 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+test('scheduled terminal waits release subscriptions on deadline, cancellation and runtime restart', async () => {
+  const { waitForScheduledTurnTerminal } = await import('../src/task_runner.js');
+  let listeners = 0;
+  const runtime = { eventBus: { epoch: 'first' }, getTurnEvents: () => [],
+    subscribeToTurn: () => { listeners++; return () => { listeners--; }; } };
+  await assert.rejects(waitForScheduledTurnTerminal(runtime, 'never', { timeoutMs: 10 }), /deadline/);
+  assert.equal(listeners, 0);
+  const controller = new AbortController();
+  const cancelled = waitForScheduledTurnTerminal(runtime, 'cancel', { signal: controller.signal });
+  controller.abort(new Error('operator cancelled'));
+  await assert.rejects(cancelled, /operator cancelled/);
+  assert.equal(listeners, 0);
+  const restarted = waitForScheduledTurnTerminal(runtime, 'restart');
+  runtime.eventBus.epoch = 'second';
+  await assert.rejects(restarted, /restarted/);
+  assert.equal(listeners, 0);
+});
+
+test('deadline interrupts incomplete scheduled work, releases its file lock and never archives it', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-task-deadline-'));
+  let archived = false;
+  let interrupted = 0;
+  const runtime = {
+    createSession: async () => createSession('incomplete'), startTurn: async () => ({ turnId: 'incomplete-turn' }) as CodexWebStartTurnResult,
+    archiveSession: async () => { archived = true; return true; }, getTurnEvents: () => [], subscribeToTurn: () => () => {},
+    interruptTurn: async () => { interrupted++; },
+  };
+  try {
+    await assert.rejects(runScheduledTask({ task: createTask({ id: 'deadline' }), runtime, stateDir, terminalTimeoutMs: 10 }), /deadline/);
+    assert.equal(archived, false);
+    assert.equal(interrupted, 1);
+    assert.equal((await fs.readdir(path.join(stateDir, 'task-runs'))).some(name => name.endsWith('.lock')), false);
+    const controller = new AbortController();
+    const stopped = import('../src/task_runner.js').then(({ waitForScheduledTurnTerminal }) => {
+      const waiting = waitForScheduledTurnTerminal({ ...runtime, lifecycleSignal: controller.signal }, 'shutdown');
+      controller.abort(); return waiting;
+    });
+    await assert.rejects(stopped, /runtime stopped/);
+  } finally { await fs.rm(stateDir, { recursive: true, force: true }); }
+});

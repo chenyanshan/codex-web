@@ -1,0 +1,95 @@
+{
+  "measuredAt": "2026-09-19T04:00:47.246Z",
+  "environment": "Chromium desktop/mobile emulation, synthetic local fixture; delay and error injection, not physical cellular measurements",
+  "scenarios": [
+    {
+      "name": "fast_history_waits_for_slow_status",
+      "injectedStatusDelayMs": 4200,
+      "timelineResponseMs": 162,
+      "historyVisibleMs": 4335,
+      "at900ms": {
+        "historyResponseReceived": true,
+        "historyVisible": false
+      }
+    },
+    {
+      "name": "models_delay_blocks_initial_list_paint",
+      "observedBlockedMs": 13000,
+      "listResponseMs": 39,
+      "listVisibleMs": 13077,
+      "whileModelsBlocked": {
+        "status": "Syncing sessions",
+        "authSessionId": "browser_auth_fixture",
+        "pendingTurn": false,
+        "sessionCount": 4,
+        "renderedSessionCount": 0,
+        "error": ""
+      }
+    },
+    {
+      "name": "transient_sse_502_marks_task_failed",
+      "injectedResponses": 1,
+      "before": {
+        "status": "Turn running",
+        "authSessionId": "browser_auth_fixture",
+        "pendingTurn": true,
+        "streamConnection": "connected",
+        "sessionCount": 4,
+        "renderedSessionCount": 0,
+        "error": "",
+        "feedback": "已连接 · 已运行 0s · 最近工作事件 0s"
+      },
+      "afterError": {
+        "status": "Request failed",
+        "authSessionId": "browser_auth_fixture",
+        "pendingTurn": false,
+        "streamConnection": "reconnecting",
+        "sessionCount": 4,
+        "renderedSessionCount": 0,
+        "error": "",
+        "feedback": "本轮已结束 · 最近工作事件 0s"
+      },
+      "afterWatchdog": {
+        "status": "Request failed",
+        "authSessionId": "browser_auth_fixture",
+        "pendingTurn": false,
+        "streamConnection": "reconnecting",
+        "sessionCount": 4,
+        "renderedSessionCount": 0,
+        "error": "",
+        "feedback": "本轮已结束 · 最近工作事件 11s"
+      },
+      "observedAfterErrorMs": 11000,
+      "additionalReconnectRequests": 0
+    },
+    {
+      "name": "failed_auth_bootstrap_does_not_retry_when_online",
+      "authRequests": 1,
+      "observedAfterOnlineMs": 2000,
+      "afterOnline": {
+        "status": "Offline",
+        "authSessionId": "cached",
+        "pendingTurn": false,
+        "sessionCount": 0,
+        "renderedSessionCount": 0,
+        "error": "Failed to fetch"
+      }
+    },
+    {
+      "name": "cached_shell_history_and_draft_survive_offline_reload",
+      "measuredAt": "2026-09-19T04:02:44.736Z",
+      "secureContext": true,
+      "serviceWorkerSupportedOrigin": "http://127.0.0.1:41743",
+      "fixtureNormalization": "Assistant answers include real runtime final-answer DTO markers",
+      "shellAndDraftReadyMs": 44,
+      "historyRetained": true,
+      "draftRetained": true,
+      "offline": {
+        "status": "网络不可用",
+        "renderedSessionCount": 0,
+        "feedback": "网络不可用"
+      }
+    }
+  ],
+  "appSourceSha256": "6fb1f2c2fb3dce11b318b2e82ef22fa8e93d531f02fe20741e8da6a957a9039a"
+}

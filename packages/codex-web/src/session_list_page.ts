@@ -31,26 +31,45 @@ export class InvalidSessionListCursorError extends Error {
   }
 }
 
-export function paginateSessionList<T extends Record<string, unknown>>(
+const immutableLists = new WeakSet<object[]>();
+const sortedLists = new WeakMap<object[], object[]>();
+
+/** Opt-in cache contract: freeze both sort keys and membership before indexing. */
+export function cacheSessionListSnapshot<T extends object>(items: T[]): T[] {
+  for (const item of items) Object.freeze(item);
+  Object.freeze(items);
+  immutableLists.add(items);
+  return items;
+}
+
+export function paginateSessionList<T extends object>(
   input: T[],
   options: SessionListPageOptions,
 ): SessionListPage<T> {
   const limit = normalizeSessionListLimit(options.limit);
-  const uniqueItems = new Map<string, T>();
-  for (const item of input) {
-    const id = sessionListItemId(item);
-    if (id && !uniqueItems.has(id)) {
-      uniqueItems.set(id, item);
+  let items = sortedLists.get(input) as T[] | undefined;
+  if (!items) {
+    const uniqueItems = new Map<string, T>();
+    for (const item of input) {
+      const id = sessionListItemId(item as Record<string, unknown>);
+      if (id && !uniqueItems.has(id)) uniqueItems.set(id, item);
+    }
+    items = [...uniqueItems.values()].sort((a, b) => compareSessionListItems(a as Record<string, unknown>, b as Record<string, unknown>));
+    if (immutableLists.has(input)) sortedLists.set(input, items);
+  }
+  const cursor = decodeSessionListCursor(options.cursor, options);
+  let start = 0;
+  if (cursor) {
+    let end = items.length;
+    while (start < end) {
+      const middle = Math.floor((start + end) / 2);
+      if (isSessionListItemAfterCursor(items[middle] as Record<string, unknown>, cursor)) end = middle;
+      else start = middle + 1;
     }
   }
-  const items = [...uniqueItems.values()].sort(compareSessionListItems);
-  const cursor = decodeSessionListCursor(options.cursor, options);
-  const remaining = cursor
-    ? items.filter((item) => isSessionListItemAfterCursor(item, cursor))
-    : items;
-  const pageItems = remaining.slice(0, limit);
-  const nextCursor = remaining.length > limit && pageItems.length
-    ? encodeSessionListCursor(pageItems[pageItems.length - 1]!, options)
+  const pageItems = items.slice(start, start + limit);
+  const nextCursor = items.length > start + limit && pageItems.length
+    ? encodeSessionListCursor(pageItems[pageItems.length - 1]! as Record<string, unknown>, options)
     : null;
   return { items: pageItems, nextCursor };
 }
@@ -88,11 +107,12 @@ function sessionListItemId(item: Record<string, unknown>): string {
 
 function sessionListActivityPriority(item: Record<string, unknown>): number {
   if (item.activityState === 'waiting_approval') {
+    return 3;
+  }
+  if (item.activityState === 'running' || item.activityState === 'stale' || (typeof item.activeTurnId === 'string' && item.activeTurnId)) {
     return 2;
   }
-  if (item.activityState === 'running' || (typeof item.activeTurnId === 'string' && item.activeTurnId)) {
-    return 1;
-  }
+  if (item.activityState === 'failed') return 1;
   return 0;
 }
 
@@ -156,5 +176,5 @@ function isSessionListItemAfterCursor(item: Record<string, unknown>, cursor: Ses
   if (key.updatedAt !== cursor.updatedAt) {
     return key.updatedAt < cursor.updatedAt;
   }
-  return key.id > cursor.id;
+  return key.id.localeCompare(cursor.id) > 0;
 }

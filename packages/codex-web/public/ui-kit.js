@@ -6,6 +6,7 @@
     admin: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
     archive: '<rect x="3" y="5" width="18" height="4" rx="1"/><path d="M5 9v10h14V9M9 13h6"/>',
     arrowLeft: '<path d="m15 18-6-6 6-6"/>',
+    arrowDown: '<path d="M12 5v14m-7-7 7 7 7-7"/>',
     attachment: '<path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.6 9.6a2 2 0 0 1-2.8-2.8l8.9-8.9"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     chevronDown: '<path d="m6 9 6 6 6-6"/>',
@@ -56,6 +57,10 @@
         `).join('')}
       </div>
     `;
+  }
+
+  function renderJumpLatest(hidden, label) {
+    return `<button class="ghost timeline-jump-latest" id="timeline-jump-latest" type="button" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${hidden ? ' hidden' : ''}>${icon('arrowDown', { className: 'button-icon' })}</button>`;
   }
 
   function hideTooltip(tooltip = globalObject.document?.querySelector('#global-tooltip')) {
@@ -285,6 +290,7 @@
       if (model) {
         context.listenRendered(model, 'change', (event) => {
           const current = state();
+          current.draftSettingsEdited = { ...current.draftSettingsEdited, model: true, reasoningEffort: true };
           current.model = event.target.value;
           current.reasoningEffort = current.model
             ? context.reasoningEffortForModel(current.model, current.reasoningEffort)
@@ -296,6 +302,7 @@
       const reasoning = context.document.querySelector('#new-session-reasoning-select');
       if (reasoning) {
         context.listenRendered(reasoning, 'change', (event) => {
+          state().draftSettingsEdited = { ...state().draftSettingsEdited, reasoningEffort: true };
           state().reasoningEffort = event.target.value;
         });
       }
@@ -338,6 +345,7 @@
     renderAppearanceSettings,
     renderConsoleComposerStatus,
     renderConsoleSessionIntro,
+    renderJumpLatest,
     normalizeSessionLayout,
     segmentedControl,
     storeBoolean,

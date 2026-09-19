@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Readable } from 'node:stream';
 import { constants as fsConstants } from 'node:fs';
 import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
@@ -20,6 +21,10 @@ export interface CodexWebSessionFile {
 export interface CodexWebSessionFileContent {
   file: CodexWebSessionFile;
   data: Buffer;
+  stream?: Readable;
+  contentLength?: number;
+  contentRange?: string;
+  truncated?: boolean;
   release: () => void;
 }
 
@@ -175,6 +180,44 @@ export class FileSessionFileStore {
     } finally {
       await validated.fileHandle.close();
     }
+  }
+
+  async openContent(scope: CodexWebSessionFileScope, fileId: string, options: { preview?: boolean; range?: string } = {}): Promise<CodexWebSessionFileContent> {
+    this.pruneHandles();
+    const handle = this.handles.get(fileId);
+    if (!handle || handle.principalId !== scope.principalId || handle.sessionId !== scope.sessionId) throw new SessionFileNotFoundError();
+    const release = this.reserveContentCapacity(256 * 1024);
+    let validated: ValidatedSessionFile | null = null;
+    let streaming = false;
+    try {
+      validated = await validateSessionFile(scope, handle.absolutePath, handle.source);
+      const file = metadataFromValidated(handle, validated);
+      if (file.sizeBytes > MAX_CONTENT_BYTES) throw new SessionFileTooLargeError();
+      const preview = options.preview && (file.kind === 'markdown' || file.kind === 'html' || file.mimeType.startsWith('text/'));
+      if (preview) {
+        const size = Math.min(file.sizeBytes, 256 * 1024);
+        const data = await readExactFile(validated.fileHandle, size);
+        if (!sameFileVersion(validated.stat, await validated.fileHandle.stat())) throw new SessionFileNotFoundError();
+        return { file, data, release, truncated: file.sizeBytes > size };
+      }
+      let start = 0;
+      let end = file.sizeBytes - 1;
+      if (options.range) {
+        const match = /^bytes=(\d*)-(\d*)$/u.exec(options.range);
+        if (!match || (!match[1] && !match[2])) throw Object.assign(new Error('Invalid byte range'), { code: 'invalid_range', size: file.sizeBytes });
+        if (!match[1]) start = Math.max(0, file.sizeBytes - Number(match[2]));
+        else start = Number(match[1]);
+        if (match[1] && match[2]) end = Math.min(end, Number(match[2]));
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start < 0) throw Object.assign(new Error('Unsatisfiable byte range'), { code: 'invalid_range', size: file.sizeBytes });
+      }
+      if (!file.sizeBytes) return { file, data: Buffer.alloc(0), release };
+      const stream = validated.fileHandle.createReadStream({ start, end, highWaterMark: 64 * 1024, autoClose: true });
+      streaming = true;
+      stream.once('close', release);
+      return { file, data: Buffer.alloc(0), stream, release: () => { stream.destroy(); }, contentLength: end - start + 1,
+        ...(options.range ? { contentRange: `bytes ${start}-${end}/${file.sizeBytes}` } : {}) };
+    } catch (error) { release(); throw error; }
+    finally { if (!streaming) await validated?.fileHandle.close(); }
   }
 
   private reserveContentCapacity(sizeBytes: number): () => void {
