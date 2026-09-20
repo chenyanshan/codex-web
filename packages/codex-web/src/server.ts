@@ -244,6 +244,7 @@ const DEFAULT_STATIC_SOURCE_FILES = [
   'draft-store.js',
   'session-rename.js',
   'network-recovery.js',
+  'submission-delivery.js',
   'session-loader.js',
   'session-reading.js',
   'timeline-reconciliation.js',
@@ -512,6 +513,7 @@ function loadDefaultStaticFiles(): StaticFilesRecord {
     '/request-context.js': () => versionedAsset(readText('request-context.js'), 'application/javascript; charset=utf-8'),
     '/session-loader.js': () => versionedAsset(readText('session-loader.js'), 'application/javascript; charset=utf-8'),
     '/network-recovery.js': () => versionedAsset(readText('network-recovery.js'), 'application/javascript; charset=utf-8'),
+    '/submission-delivery.js': () => versionedAsset(readText('submission-delivery.js'), 'application/javascript; charset=utf-8'),
     '/session-rename.js': () => versionedAsset(readText('session-rename.js'), 'application/javascript; charset=utf-8'),
     '/draft-store.js': () => versionedAsset(readText('draft-store.js'), 'application/javascript; charset=utf-8'),
     '/ui-localization.js': () => versionedAsset(readText('ui-localization.js'), 'application/javascript; charset=utf-8'),
@@ -2627,30 +2629,26 @@ async function handleSessionSubmissionEndpoint({
   const match = pathname.match(/^\/api\/session-submissions\/([^/]+)$/u);
   if (match && method === 'GET') {
     const submissionId = normalizeSessionSubmissionId(decodeURIComponent(match[1]!));
-    const record = await sessionSubmissionStore.read(principal.userId, submissionId);
+    let record = await sessionSubmissionStore.read(principal.userId, submissionId);
     if (!record) {
       throw createHttpError(404, 'submission_not_found', 'Session submission was not found.');
     }
-    const execution = await runSessionSubmissionOperation({
-      operations: sessionSubmissionOperations,
-      store: sessionSubmissionStore,
-      ownerUserId: principal.userId,
-      submissionId,
-      payloadHash: record.payloadHash,
-      operation: () => advanceSessionSubmission({
-        record,
-        created: false,
-        principal,
-        identityStore,
-        identityState,
-        runtime,
-        config,
-        store: sessionSubmissionStore,
-        localApiUrl,
-        attachmentStore,
-      }),
+    await authorizeStoredSessionSubmission({ record, principal, identityStore, identityState, runtime, intent: 'read' });
+    // A status probe must neither join a slow POST nor start/steer a turn. A
+    // missing turn in a partial runtime snapshot is not proof of non-delivery.
+    const inFlight = sessionSubmissionOperations.has(`${principal.userId}\0${submissionId}\0${record.payloadHash}`);
+    if (!inFlight && shouldRecoverSessionSubmission(record) && record.runtimeSessionId) {
+      const session = await runtime.readSession(record.runtimeSessionId).catch(() => null);
+      const turnId = session ? recoverSubmittedTurnId(session, record) : null;
+      if (turnId) record = await markSessionSubmissionTurnSubmitted(sessionSubmissionStore, record, turnId);
+    }
+    const retryAllowed = !inFlight && record.status !== 'submitted' && record.status !== 'outcome_unknown'
+      && !Array.isArray(record.turnBaseline)
+      && (record.status !== 'failed' || record.error?.retryable === true);
+    writeJson(response, 200, {
+      ...await presentSessionSubmissionResponse({ current: record, principal, identityStore, identityState, runtime, hydrateSession: false }),
+      retryAllowed,
     });
-    writeJson(response, 200, execution.response);
     return true;
   }
   return false;
@@ -2851,6 +2849,20 @@ async function advanceSessionSubmission({
       };
     }
 
+    if (current.status === 'outcome_unknown' || shouldRecoverSessionSubmission(current)) {
+      await authorizeStoredSessionSubmission({ record: current, principal, identityStore, identityState, runtime, intent: 'read' });
+      const session = current.runtimeSessionId ? await runtime.readSession(current.runtimeSessionId).catch(() => null) : null;
+      const recoveredTurnId = session ? recoverSubmittedTurnId(session, current) : null;
+      current = recoveredTurnId
+        ? await markSessionSubmissionTurnSubmitted(store, current, recoveredTurnId)
+        : await store.update(current.ownerUserId, current.id, value => value.status === 'submitted' ? value
+          : ({ ...value, status: 'outcome_unknown', updatedAt: new Date().toISOString() }));
+      return {
+        created, record: current,
+        response: await presentSessionSubmissionResponse({ current, principal, identityStore, identityState, runtime, hydrateSession: false }),
+      };
+    }
+
     let target = await resolveSessionSubmissionTarget({
       record: current,
       principal,
@@ -2880,18 +2892,6 @@ async function advanceSessionSubmission({
         localApiUrl,
       });
       current = await store.read(record.ownerUserId, record.id) ?? current;
-    }
-
-    const recoveredTurnId = shouldRecoverSessionSubmission(current)
-      ? recoverSubmittedTurnId(target.runtimeSession, current)
-      : null;
-    if (recoveredTurnId) {
-      current = await markSessionSubmissionTurnSubmitted(store, current, recoveredTurnId);
-      return {
-        created,
-        record: current,
-        response: await presentSessionSubmissionResponse({ current, principal, identityStore, identityState, runtime }),
-      };
     }
 
     const turnBody: Record<string, unknown> = {
@@ -3015,11 +3015,11 @@ async function advanceSessionSubmission({
     const stored = await store.read(record.ownerUserId, record.id);
     if (stored && stored.status !== 'submitted' && !isSubmissionAuthorizationError(normalizedError)) {
       const retryable = isRetryableSubmissionError(normalizedError);
-      const outcomeUnknown = isUncertainSubmissionStartError(normalizedError)
-        && Array.isArray(stored.turnBaseline);
-      current = await store.update(stored.ownerUserId, stored.id, (value) => ({
+      const outcomeUnknown = stored.status === 'outcome_unknown'
+        || (isUncertainSubmissionStartError(normalizedError) && Array.isArray(stored.turnBaseline));
+      current = await store.update(stored.ownerUserId, stored.id, (value) => value.status === 'submitted' ? value : ({
         ...value,
-        status: 'failed',
+        status: outcomeUnknown ? 'outcome_unknown' : 'failed',
         turnBaseline: outcomeUnknown ? value.turnBaseline : null,
         error: {
           code: normalizedError.code,
@@ -3030,6 +3030,8 @@ async function advanceSessionSubmission({
         },
         updatedAt: new Date().toISOString(),
       }));
+      normalizedError.retryable = retryable;
+      normalizedError.outcomeUnknown = outcomeUnknown;
     }
     throw normalizedError;
   }
@@ -3279,6 +3281,9 @@ async function authorizeStoredSessionSubmission({
   intent: 'read' | 'execute';
 }): Promise<void> {
   if (!isMultiUserSubmission(identityState, principal)) {
+    // The owner-scoped receipt remains readable even while runtime history is
+    // unavailable. Reading it grants no new access to the runtime session.
+    if (intent === 'read') return;
     const runtimeSessionId = record.runtimeSessionId ?? record.payload.sessionId;
     if (runtimeSessionId && !await runtime.readSession(runtimeSessionId)) {
       throw createHttpError(404, 'submission_not_found', 'Session submission was not found.');
@@ -3353,6 +3358,7 @@ function shouldRecoverSessionSubmission(submission: CodexWebSessionSubmissionRec
   return Array.isArray(submission.turnBaseline)
     && (
       submission.status === 'starting'
+      || submission.status === 'outcome_unknown'
       || (submission.status === 'failed' && submission.error?.outcomeUnknown === true)
     );
 }
@@ -3423,7 +3429,7 @@ function turnMatchesSubmissionInput(
       return true;
     }
     if (
-      submission.payload.attachments.length > 0
+      (submission.payload.attachments.length > 0 || submission.payload.attachmentIds.length > 0)
       && expected
       && actual.startsWith(`${expected} Attachments:`)
     ) {
@@ -3446,7 +3452,7 @@ function sessionSummaryMatchesSubmissionInput(
     return true;
   }
   const expected = normalizeSubmissionInputText(submission.payload.text);
-  return submission.payload.attachments.length > 0
+  return (submission.payload.attachments.length > 0 || submission.payload.attachmentIds.length > 0)
     && expected.length < 237
     && actual.startsWith(`${expected} Attachments:`);
 }
@@ -3475,7 +3481,7 @@ async function markSessionSubmissionTurnSubmitted(
   submission: CodexWebSessionSubmissionRecord,
   turnId: string,
 ): Promise<CodexWebSessionSubmissionRecord> {
-  return store.update(submission.ownerUserId, submission.id, (value) => ({
+  return store.update(submission.ownerUserId, submission.id, (value) => value.status === 'submitted' || !shouldRecoverSessionSubmission(value) ? value : ({
     ...value,
     status: 'submitted',
     turnBaseline: null,
@@ -3508,15 +3514,17 @@ async function presentSessionSubmissionResponse({
   identityStore,
   identityState,
   runtime,
+  hydrateSession = true,
 }: {
   current: CodexWebSessionSubmissionRecord;
   principal: CodexWebPrincipal;
   identityStore: CodexWebIdentityStoreLike | null;
   identityState: CodexWebIdentityState | null;
   runtime: CodexWebRuntime;
+  hydrateSession?: boolean;
 }): Promise<Record<string, unknown>> {
   let session: unknown = null;
-  if (current.runtimeSessionId) {
+  if (hydrateSession && current.runtimeSessionId) {
     // Session details are optional response enrichment; a transient read failure
     // must not turn an already-persisted submission into an HTTP failure.
     const runtimeSession = await runtime.readSession(current.runtimeSessionId).catch((error) => {
@@ -8117,6 +8125,7 @@ interface HttpError extends Error {
   code: string;
   activeTurnId?: string;
   retryable?: boolean;
+  outcomeUnknown?: boolean;
   stage?: string;
 }
 
@@ -8185,7 +8194,8 @@ function writeErrorResponse({
         error: error.code,
         message: error.message,
         ...(error.activeTurnId ? { activeTurnId: error.activeTurnId } : {}),
-        ...(error.retryable === true ? { retryable: true } : {}),
+        ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+        ...(typeof error.outcomeUnknown === 'boolean' ? { outcomeUnknown: error.outcomeUnknown } : {}),
       });
     }
     return;

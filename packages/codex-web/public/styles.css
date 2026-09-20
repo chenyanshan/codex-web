@@ -2424,6 +2424,7 @@ button:disabled {
 }
 
 .session-attention-state[data-state="pending"],
+.session-attention-state[data-state="outcome_unknown"],
 .session-attention-state[data-state="sending"] {
   border-color: color-mix(in srgb, var(--warn) 48%, var(--border));
   background: color-mix(in srgb, var(--warn) 12%, var(--panel));
@@ -2710,6 +2711,16 @@ button:disabled {
 .message-card .markdown-body code {
   font-size: 1em;
   line-height: 1.6;
+}
+
+.submission-confirmation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .submission-delivery-actions {

@@ -152,6 +152,7 @@ test('off-page and legacy outbox records never create an Unknown project', async
     const base = {
       ownerKey: 'single',
       status: 'failed',
+      outcomeKnown: true,
       settings: {},
       attachments: [],
       createdAt: Date.parse('2026-07-15T08:03:00.000Z'),
@@ -224,6 +225,7 @@ test('failed session messages can be dismissed without leaving a stuck list badg
       ownerKey: 'single',
       text: 'Message that should not remain stuck',
       status: 'failed',
+      outcomeKnown: true,
       sessionId: 'session_browser_fixture',
       projectId: '',
       cwd: '/Users/test/yanshan_quant',
@@ -880,43 +882,42 @@ test('reasoning summaries use plain message borders without timeline ornaments',
   }
 });
 
-test('lost new-session responses recover from the durable outbox after reload', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'mobile-portrait', 'One phone viewport covers weak-network recovery.');
+test('lost new-session responses query the original receipt after reload without another POST', async ({ page }, testInfo) => {
+  test.skip(!['mobile-compact', 'mobile-portrait', 'desktop'].includes(testInfo.project.name));
 
   let acceptedSubmissionId = '';
   const submissionIds = [];
+  const receiptQueries = [];
+  let confirmed = false;
+  const session = {
+    id: 'session_browser_recovered', cwd: '/Users/test/yanshan_quant', projectName: 'yanshan_quant',
+    firstUserInput: 'Recover this weak-network session', lastUserInput: 'Recover this weak-network session',
+    updatedAt: Date.now(), lastInputAt: Date.now(), settings: {}, activeTurnId: null, activityState: 'idle',
+    thread: { id: 'session_browser_recovered', turns: [{ id: 'turn_browser_recovered', status: 'completed', items: [] }] },
+  };
+  await page.route(/\/api\/sessions\/session_browser_recovered(?:\/(?:status|timeline))?(?:\?|$)/, route => route.fulfill({
+    json: { session, items: [], complete: true },
+  }));
   await page.route('**/api/session-submissions', async (route) => {
     const body = JSON.parse(route.request().postData() || '{}');
     submissionIds.push(body.submissionId);
-    if (!acceptedSubmissionId) {
-      acceptedSubmissionId = body.submissionId;
-      await route.abort('failed');
-      return;
-    }
+    acceptedSubmissionId = body.submissionId;
+    await route.fulfill({ status: 504, contentType: 'text/html', body: '<html>Gateway timeout</html>' });
+  });
+  await page.route('**/api/session-submissions/*', async (route) => {
+    expect(route.request().method()).toBe('GET');
+    receiptQueries.push(new URL(route.request().url()).pathname);
     await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
+      json: {
         submission: {
           id: acceptedSubmissionId,
-          status: 'submitted',
-          sessionId: 'session_browser_recovered',
-          turnId: 'turn_browser_recovered',
+          status: confirmed ? 'submitted' : 'starting',
+          sessionId: session.id,
+          turnId: confirmed ? 'turn_browser_recovered' : null,
           error: null,
         },
-        session: {
-          id: 'session_browser_recovered',
-          cwd: '/Users/test/yanshan_quant',
-          projectName: 'yanshan_quant',
-          firstUserInput: 'Recover this weak-network session',
-          lastUserInput: 'Recover this weak-network session',
-          updatedAt: Date.now(),
-          lastInputAt: Date.now(),
-          settings: {},
-          thread: { id: 'session_browser_recovered', turns: [] },
-        },
-        turnId: 'turn_browser_recovered',
-      }),
+        retryAllowed: false,
+      },
     });
   });
 
@@ -928,9 +929,15 @@ test('lost new-session responses recover from the durable outbox after reload', 
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 
   await expect(page.locator('#timeline .message-card.user')).toContainText('Recover this weak-network session');
-  await expect(page.locator('#timeline [data-submission-retry-id]')).toHaveCount(0);
-  await expect(page.locator('.composer-status')).toContainText('Connection interrupted');
-  await expect(page.locator('.composer-status')).toContainText('Reconnecting');
+  const confirm = page.locator('#timeline [data-submission-retry-id]');
+  await expect(confirm).toHaveText('Confirm send result');
+  await expect(page.locator('#timeline .delivery-failed')).toHaveCount(0);
+  await expect(page.locator('#timeline [data-submission-cancel-id]')).toHaveCount(0);
+  await page.locator('#prompt-input').fill('Keep my next draft');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => receiptQueries.length).toBeGreaterThan(0);
+  await expect(page.locator('#prompt-input')).toHaveValue('Keep my next draft');
+  await page.screenshot({ path: testInfo.outputPath('submission-confirmation.png'), fullPage: true });
   const storedBeforeReload = await page.evaluate(() => {
     const prefix = 'codexWebSubmissionOutbox:';
     return Array.from({ length: window.localStorage.length }, (_item, index) => (
@@ -942,7 +949,9 @@ test('lost new-session responses recover from the durable outbox after reload', 
   expect(storedBeforeReload).toHaveLength(1);
   expect(storedBeforeReload[0].id).toBe(acceptedSubmissionId);
   expect(storedBeforeReload[0].text).toBe('Recover this weak-network session');
+  expect(storedBeforeReload[0].status).toBe('outcome_unknown');
 
+  confirmed = true;
   await page.reload();
 
   await expect.poll(async () => page.evaluate(() => {
@@ -950,10 +959,13 @@ test('lost new-session responses recover from the durable outbox after reload', 
     return Array.from({ length: window.localStorage.length }, (_item, index) => (
       window.localStorage.key(index)
     )).filter((key) => key?.startsWith(prefix)).length;
-  })).toBe(0);
-  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  }), { timeout: 10000 }).toBe(0);
+  if (testInfo.project.name !== 'desktop') await page.getByRole('button', { name: 'Sessions', exact: true }).click();
   await expect(page.locator('button[data-session-id="session_browser_recovered"]')).toHaveCount(1);
-  expect(submissionIds).toEqual([acceptedSubmissionId, acceptedSubmissionId]);
+  await expect(page.locator('button[data-session-id="session_browser_recovered"]')).not.toContainText('Send failed');
+  expect(submissionIds).toEqual([acceptedSubmissionId]);
+  expect(receiptQueries.length).toBeGreaterThanOrEqual(2);
+  expect(receiptQueries.every(path => path === `/api/session-submissions/${acceptedSubmissionId}`)).toBe(true);
 });
 
 test('mobile session opens a relative Markdown file and returns to the same timeline', async ({ page }, testInfo) => {

@@ -88,7 +88,6 @@ const SESSION_RECONCILE_TIMEOUT_MS = 12_000;
 const SESSION_TIMELINE_PAGE_TIMEOUT_MS = 12_000;
 const APP_VERSION_CHECK_COOLDOWN_MS = 15_000;
 const TIMELINE_PERSIST_DEBOUNCE_MS = 750;
-const FIRST_TURN_RECOVERY_DELAY_MS = 10_000;
 const LOCAL_TURN_SYNC_GRACE_MS = 10_000;
 const SESSION_DETAIL_CACHE_FRESH_MS = 3 * 60_000;
 const DESKTOP_WORKSPACE_MIN_WIDTH = 980;
@@ -469,6 +468,32 @@ let pendingFocusRestore = false;
 let submissionDrainPromise = null;
 let submissionRetryTimer = null;
 const submissionRequestControllers = new Map();
+const SUBMISSION_DELIVERY = globalThis.CodexWebSubmissionDelivery.createController({
+  get: id => state.submissionOutbox.get(id), owns: submissionBelongsToCurrentOwner,
+  save: upsertSubmissionOutboxEntry, request: apiFetch, controllers: submissionRequestControllers,
+  generation: () => authRequestGeneration, timeoutMs: SUBMISSION_REQUEST_TIMEOUT_MS,
+  retryDelay: submissionRetryDelay, schedule: scheduleSubmissionRetry,
+  changed: (entry, { interactive, checking }) => {
+    state.submissionSending = interactive;
+    if (!entry) return;
+    if (isActiveNewSessionSubmission(entry) || state.sessionId === entry.sessionId) {
+      state.status = checking ? 'Confirm send result' : entry.status === 'pending' ? 'Waiting to send' : 'Sending to server';
+      state.statusTone = 'warn'; state.error = '';
+      renderChatAtLatestIfFollowing(() => {});
+    } else renderSessionListAfterBackgroundUpdate();
+  },
+  accepted: (entry, result, payload, options) => {
+    state.submissionSending = false;
+    return completeDeliveredSubmission(entry, result, payload, options);
+  },
+  failed: (entry, error) => {
+    state.submissionSending = false;
+    failSubmissionDelivery(entry, error, { wasActiveDraft: isActiveNewSessionSubmission(entry) });
+  },
+  reset: resetSubmissionAfterAuthChange, authError: handleApiError,
+  storageError: error => { state.error = error?.message || 'Could not save this message for delivery.'; state.status = 'Send failed'; state.statusTone = 'danger'; render(); },
+  defer: (entry, error) => isSteerSubmissionEntry(entry) && isActiveTurnNotSteerableError(error) && deferSteerSubmissionUntilTurnCompletes(entry),
+});
 
 let retainedTimeline = null;
 let lastTimelineFingerprint = '';
@@ -2402,7 +2427,7 @@ function renderSessionCards() {
           <span class="session-card-main">
             <span class="session-card-title-row">
               <span class="session-title" data-i18n-skip>${escapeHtml(sessionDisplayTitle(session))}</span>
-              ${deliveryState === 'failed' && deliveryFailureVisible
+              ${deliveryState === 'outcome_unknown' || (deliveryState === 'failed' && deliveryFailureVisible)
                 ? `<span class="session-attention-state" data-state="${escapeAttribute(deliveryState)}">${escapeHtml(t(submissionDeliveryLabel(deliveryState)))}</span>`
                 : activityState ? `<span class="session-attention-state" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityState === 'waiting_approval' ? 'Needs approval' : activityState === 'failed' ? 'Failed' : activityState === 'stale' ? 'No recent activity' : 'Active'))}</span>` : ''}
             </span>
@@ -2416,8 +2441,8 @@ function renderSessionCards() {
         </button>
         ${session.localSubmission === true ? `
           <div class="session-card-actions submission-session-actions">
-            ${session.deliveryFailureVisible === true && session.retryable !== false ? `<button class="ghost compact-button" type="button" data-submission-retry-id="${escapeAttribute(session.submissionId)}" aria-label="${escapeAttribute(t('Retry send'))}" title="${escapeAttribute(t('Retry send'))}"><span aria-hidden="true">&#8635;</span></button>` : ''}
-            ${session.deliveryState !== 'sending' ? `<button class="ghost compact-button" type="button" data-submission-cancel-id="${escapeAttribute(session.submissionId)}" aria-label="${escapeAttribute(t('Cancel send'))}" title="${escapeAttribute(t('Cancel send'))}"><span aria-hidden="true">&times;</span></button>` : ''}
+            ${session.deliveryState === 'outcome_unknown' || (session.deliveryFailureVisible === true && session.retryable !== false) ? `<button class="ghost compact-button" type="button" data-submission-retry-id="${escapeAttribute(session.submissionId)}" aria-label="${escapeAttribute(t(session.deliveryState === 'outcome_unknown' ? 'Confirm send result' : 'Retry send'))}"><span aria-hidden="true">&#8635;</span></button>` : ''}
+            ${!['sending', 'outcome_unknown'].includes(session.deliveryState) ? `<button class="ghost compact-button" type="button" data-submission-cancel-id="${escapeAttribute(session.submissionId)}" aria-label="${escapeAttribute(t('Cancel send'))}" title="${escapeAttribute(t('Cancel send'))}"><span aria-hidden="true">&times;</span></button>` : ''}
           </div>
         ` : `
           <div class="session-card-actions">
@@ -2437,10 +2462,10 @@ function pendingSubmissionForSessionCard(session) {
   const lastAcceptedInputAt = Math.max(0, Number(session?.lastInputAt) || 0);
   let latest = null;
   for (const entry of pendingSubmissionEntries()) {
-    if (entry.sessionId !== session?.id) {
+    if ((entry.resolvedSessionId || entry.sessionId) !== session?.id) {
       continue;
     }
-    if (lastAcceptedInputAt > Number(entry.updatedAt || 0)) {
+    if (entry.status !== 'outcome_unknown' && lastAcceptedInputAt > Number(entry.updatedAt || 0)) {
       continue;
     }
     if (!latest || Number(entry.updatedAt || 0) >= Number(latest.updatedAt || 0)) {
@@ -2949,6 +2974,7 @@ function renderTimelineItem(item) {
 }
 
 function submissionDeliveryLabel(status) {
+  if (status === 'outcome_unknown') return 'Confirm send result';
   if (status === 'sending') {
     return 'Sending to server';
   }
@@ -2962,6 +2988,9 @@ function submissionDeliveryLabel(status) {
 }
 
 function renderSubmissionDeliveryActions(item, submission) {
+  if (item?.role === 'user' && submission?.status === 'outcome_unknown') {
+    return `<div class="submission-confirmation" role="status"><button type="button" class="ghost compact-button" data-submission-retry-id="${escapeAttribute(submission.id)}">${escapeHtml(t('Confirm send result'))}</button><span>${escapeHtml(t('The message may already be running. Checking automatically.'))}</span></div>`;
+  }
   const failed = submissionFailureIsVisible(submission)
     || (!submission && item?.deliveryLabel === 'Send failed');
   if (item?.role !== 'user' || !failed) {
@@ -2986,7 +3015,7 @@ function submissionFailureIsVisible(submission) {
   if (!submission || submission.status !== 'failed') {
     return false;
   }
-  return submission.retryable === false
+  return submission.manualRetryRequired === true || submission.retryable === false
     || Number(submission.attempts || 0) >= SUBMISSION_VISIBLE_FAILURE_ATTEMPT;
 }
 
@@ -6353,6 +6382,12 @@ async function onComposerSubmit(event) {
   if (state.submissionSending) {
     return;
   }
+  const unresolved = pendingSubmissionEntries().find(entry => entry.status === 'outcome_unknown'
+    && (entry.sessionId ? entry.sessionId === state.sessionId : entry.resolvedSessionId === state.sessionId || entry.id === state.activeSubmissionId));
+  if (unresolved) {
+    await deliverSubmission(unresolved.id, { interactive: true, force: true });
+    return;
+  }
   const text = state.prompt.trim();
   if (!text) {
     return;
@@ -6514,187 +6549,8 @@ async function sendDurableComposerMessage(text, options = {}) {
   return deliverSubmission(submission.id, { interactive: true });
 }
 
-async function deliverSubmission(submissionId, { interactive = false, force = false } = {}) {
-  const current = state.submissionOutbox.get(submissionId);
-  if (!current || !submissionBelongsToCurrentOwner(current)) {
-    return null;
-  }
-  if (current.retryable === false || submissionRequestControllers.has(submissionId)) {
-    return null;
-  }
-  if (!force && current.nextAttemptAt > Date.now()) {
-    scheduleSubmissionRetry();
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  const wasNewSession = !current.sessionId;
-  const wasActiveDraft = isActiveNewSessionSubmission(current);
-  let sending;
-  try {
-    sending = upsertSubmissionOutboxEntry({
-      ...current,
-      status: 'sending',
-      updatedAt: Date.now(),
-      attempts: current.attempts + 1,
-      nextAttemptAt: 0,
-      error: '',
-    });
-  } catch (error) {
-    if (wasActiveDraft || state.sessionId === current.sessionId) {
-      state.status = 'Send failed';
-      state.statusTone = 'danger';
-      state.error = error?.message || 'Could not save this message for delivery.';
-      renderChatAtLatestIfFollowing(() => {});
-    }
-    return null;
-  }
-  state.submissionSending = interactive;
-  if (wasActiveDraft || state.sessionId === sending.sessionId) {
-    state.status = 'Sending to server';
-    state.statusTone = 'warn';
-    state.error = '';
-    renderChatAtLatestIfFollowing(() => {});
-  } else {
-    renderSessionListAfterBackgroundUpdate();
-  }
-
-  const controller = new AbortController();
-  let requestTimedOut = false;
-  const timeoutId = setTimeout(() => {
-    requestTimedOut = true;
-    controller.abort();
-  }, SUBMISSION_REQUEST_TIMEOUT_MS);
-  timeoutId?.unref?.();
-  submissionRequestControllers.set(submissionId, controller);
-  try {
-    const body = submissionRequestBody(sending);
-    const payload = await apiFetch(
-      wasNewSession
-        ? '/api/session-submissions'
-        : `/api/sessions/${encodeURIComponent(sending.sessionId)}/turns`,
-      { method: 'POST', body, signal: controller.signal },
-    );
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      resetSubmissionAfterAuthChange(sending);
-      return null;
-    }
-    const normalized = normalizeSubmissionResponse(payload, sending);
-    if (normalized.status === 'failed') {
-      const error = new Error(normalized.error || 'Request failed');
-      error.payload = {
-        error: normalized.errorCode || 'submission_failed',
-        message: normalized.error || 'Request failed',
-        retryable: normalized.retryable,
-      };
-      throw error;
-    }
-    if (normalized.status !== 'submitted') {
-      state.submissionSending = false;
-      upsertSubmissionOutboxEntry({
-        ...sending,
-        status: 'pending',
-        updatedAt: Date.now(),
-        nextAttemptAt: Date.now() + submissionRetryDelay(sending.attempts),
-      });
-      scheduleSubmissionRetry();
-      return payload;
-    }
-    state.submissionSending = false;
-    return completeDeliveredSubmission(sending, normalized, payload);
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      resetSubmissionAfterAuthChange(sending);
-      return null;
-    }
-    if (requestTimedOut) {
-      const timeoutError = new Error('Server acknowledgement timed out. The message remains saved and will be retried.');
-      timeoutError.status = 408;
-      timeoutError.payload = {
-        error: 'submission_timeout',
-        message: timeoutError.message,
-        retryable: true,
-      };
-      error = timeoutError;
-    }
-    state.submissionSending = false;
-    if (
-      isSteerSubmissionEntry(sending)
-      && isActiveTurnNotSteerableError(error)
-      && deferSteerSubmissionUntilTurnCompletes(sending)
-    ) {
-      return null;
-    }
-    failSubmissionDelivery(sending, error, { wasActiveDraft });
-    return null;
-  } finally {
-    clearTimeout(timeoutId);
-    if (submissionRequestControllers.get(submissionId) === controller) {
-      submissionRequestControllers.delete(submissionId);
-    }
-    state.submissionSending = false;
-  }
-}
-
-function submissionRequestBody(entry) {
-  return {
-    submissionId: entry.id,
-    text: entry.text,
-    settings: entry.settings,
-    ...(entry.sessionId ? {} : entry.projectId ? { projectId: entry.projectId } : { cwd: entry.cwd || null }),
-    ...(entry.attachments.length
-      ? {
-          attachmentIds: entry.attachments.map((attachment) => attachment.id),
-          attachments: entry.attachments,
-        }
-      : {}),
-  };
-}
-
-function normalizeSubmissionResponse(payload, fallback) {
-  const submission = payload?.submission && typeof payload.submission === 'object'
-    ? payload.submission
-    : null;
-  const result = payload?.result && typeof payload.result === 'object' ? payload.result : payload;
-  const rawStatus = String(submission?.status || '').trim();
-  const responseSubmissionId = String(submission?.id || '').trim();
-  if (submission && responseSubmissionId !== fallback.id) {
-    throw invalidSubmissionAcknowledgement('Server acknowledgement did not match the saved message.');
-  }
-  const failed = rawStatus === 'failed';
-  const turnId = String(submission?.turnId || payload?.turnId || result?.turnId || '').trim();
-  const commandResult = result?.type === 'command' ? result : null;
-  const legacyAccepted = !submission && Boolean(fallback.sessionId && (turnId || commandResult));
-  if (!submission && !legacyAccepted) {
-    throw invalidSubmissionAcknowledgement('Server response did not acknowledge the saved message.');
-  }
-  if (submission && !failed && !['queued', 'creating', 'starting', 'submitted'].includes(rawStatus)) {
-    throw invalidSubmissionAcknowledgement('Server returned an invalid submission status.');
-  }
-  const sessionId = String(submission?.sessionId || payload?.session?.id || result?.session?.id || fallback.sessionId || '').trim();
-  if ((rawStatus === 'submitted' || legacyAccepted) && !sessionId) {
-    throw invalidSubmissionAcknowledgement('Server acknowledgement did not include a session.');
-  }
-  return {
-    status: failed ? 'failed' : legacyAccepted ? 'submitted' : rawStatus,
-    sessionId,
-    turnId,
-    clientMessageId: String(submission?.clientMessageId || ''),
-    session: payload?.session || result?.session || null,
-    commandResult,
-    error: String(submission?.error?.message || '').trim(),
-    errorCode: String(submission?.error?.code || '').trim(),
-    retryable: submission?.error?.retryable !== false,
-  };
-}
-
-function invalidSubmissionAcknowledgement(message) {
-  const error = new Error(message);
-  error.payload = {
-    error: 'invalid_submission_acknowledgement',
-    message,
-    retryable: true,
-  };
-  return error;
+function deliverSubmission(submissionId, options = {}) {
+  return SUBMISSION_DELIVERY.deliver(submissionId, options);
 }
 
 function isActiveNewSessionSubmission(entry) {
@@ -6705,9 +6561,12 @@ function isActiveNewSessionSubmission(entry) {
   );
 }
 
-function completeDeliveredSubmission(entry, normalized, payload) {
+function completeDeliveredSubmission(entry, normalized, payload, { recovered = false } = {}) {
   const sessionId = normalized.sessionId;
-  const session = normalized.session;
+  const session = normalized.session || knownSessionSummary(sessionId) || {
+    id: sessionId, projectId: entry.projectId, cwd: entry.cwd, settings: entry.settings,
+    firstUserInput: entry.text, lastUserInput: entry.text, lastInputAt: entry.createdAt,
+  };
   if (!entry.sessionId && sessionId && !knownSessionSummary(sessionId)) {
     transitionSessionListStats(null, session || {
       id: sessionId,
@@ -6722,7 +6581,7 @@ function completeDeliveredSubmission(entry, normalized, payload) {
   const shouldAdoptSession = Boolean(sessionId && (
     entry.sessionId
       ? state.sessionId === entry.sessionId
-      : !state.sessionId && state.draftSessionActive && isActiveNewSessionSubmission(entry)
+      : state.sessionId === sessionId || !state.sessionId && state.draftSessionActive && isActiveNewSessionSubmission(entry)
   ));
   const continuesActiveTurn = Boolean(
     isSteerSubmissionEntry(entry)
@@ -6742,7 +6601,7 @@ function completeDeliveredSubmission(entry, normalized, payload) {
     };
     state.cwd = state.currentSession.cwd || entry.cwd || state.cwd;
     migrateDraftPromptToSession(sessionId);
-    optimisticallyUpdateSessionInput(entry.text);
+    if (!recovered) optimisticallyUpdateSessionInput(entry.text);
   }
   const timelineEntry = state.timeline.find((item) => item?.submissionId === entry.id);
   if (timelineEntry) {
@@ -6770,6 +6629,15 @@ function completeDeliveredSubmission(entry, normalized, payload) {
     }
   }
   if (normalized.turnId) {
+    if (recovered) {
+      if (shouldAdoptSession) {
+        state.error = '';
+        syncRuntimeStatusFromSession(session, { source: 'stale' });
+        void refreshCurrentSessionMetadata({ hydrateTimeline: true }).then(() => connectActiveTurnStream());
+        renderChatAtLatestIfFollowing(() => {});
+      } else renderSessionListAfterBackgroundUpdate();
+      return payload;
+    }
     setSessionSummaryActivity(sessionId, 'running', normalized.turnId);
     if (shouldAdoptSession) {
       state.turnId = normalized.turnId;
@@ -6817,15 +6685,19 @@ function markCachedSubmissionDelivered(entry, sessionId, turnId, clientMessageId
 
 function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
   const message = String(error?.payload?.message || error?.message || 'Request failed');
-  const retryable = isSubmissionDeliveryRetryable(error);
-  const retrySilently = retryable && entry.attempts < SUBMISSION_VISIBLE_FAILURE_ATTEMPT;
+  const unknown = error?.payload?.outcomeUnknown === true;
+  const retryable = unknown || isSubmissionDeliveryRetryable(error);
+  const manualRetryRequired = error?.payload?.manualRetryRequired === true;
+  const retrySilently = retryable && !manualRetryRequired && entry.attempts < SUBMISSION_VISIBLE_FAILURE_ATTEMPT;
   const failed = upsertSubmissionOutboxEntry({
     ...entry,
-    status: 'failed',
+    status: unknown ? 'outcome_unknown' : 'failed',
+    outcomeKnown: !unknown,
+    manualRetryRequired,
     updatedAt: Date.now(),
     error: message,
     retryable,
-    nextAttemptAt: retrySilently ? Date.now() + submissionRetryDelay(entry.attempts) : 0,
+    nextAttemptAt: unknown || retrySilently ? Date.now() + submissionRetryDelay(entry.attempts + (entry.confirmationAttempts || 0)) : 0,
   });
   if (entry.queuedMessageId && entry.sessionId) {
     setQueuedMessageSending(entry.sessionId, entry.queuedMessageId, false);
@@ -6836,8 +6708,7 @@ function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
   }
   if (wasActiveDraft || state.sessionId === entry.sessionId) {
     const preservesActiveTurn = Boolean(
-      isSteerSubmissionEntry(entry)
-      && state.sessionId === entry.sessionId
+      state.sessionId === entry.sessionId
       && state.turnId
       && state.pendingTurn
     );
@@ -6846,16 +6717,16 @@ function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
     }
     state.status = preservesActiveTurn
       ? 'Turn running'
-      : retrySilently
+      : unknown ? 'Confirm send result' : retrySilently
         ? 'Waiting to send'
         : 'Send failed';
-    state.statusTone = retrySilently ? 'warn' : 'danger';
-    state.error = retrySilently ? '' : message;
+    state.statusTone = unknown || retrySilently ? 'warn' : 'danger';
+    state.error = unknown || retrySilently ? '' : message;
     renderChatAtLatestIfFollowing(() => {});
   } else {
     renderSessionListAfterBackgroundUpdate();
   }
-  if (retrySilently) {
+  if (unknown || retrySilently) {
     scheduleSubmissionRetry();
   }
 }
@@ -6904,7 +6775,7 @@ function resetSubmissionAfterAuthChange(entry) {
   try {
     upsertSubmissionOutboxEntry({
       ...current,
-      status: 'pending',
+      status: 'outcome_unknown',
       updatedAt: Date.now(),
       nextAttemptAt: 0,
       error: '',
@@ -6930,170 +6801,6 @@ function submissionRetryDelay(attempts) {
     SUBMISSION_RETRY_MAX_MS,
     SUBMISSION_RETRY_BASE_MS * (2 ** Math.max(0, Math.min(6, attempts - 1))),
   );
-}
-
-async function sendComposerMessageLegacy(text, { queuedMessageId = '', sessionId: preferredSessionId = '', includeComposerAttachments = true } = {}) {
-  const requestGeneration = authRequestGeneration;
-  state.error = '';
-  state.pendingTurn = true;
-  state.lastTurnEventSequence = null;
-  state.lastTurnEventEpoch = '';
-  state.lastTurnEventAt = Date.now();
-  state.streamWasBackgrounded = false;
-  state.status = 'Starting turn';
-  state.statusTone = 'warn';
-  const attachments = includeComposerAttachments ? readyComposerAttachments() : [];
-  const optimisticUserEntry = {
-    id: `local_user_${Date.now()}`,
-    kind: 'message',
-    role: 'user',
-    label: 'You',
-    meta: 'pending',
-    text,
-    ...(attachments.length ? { attachments } : {}),
-  };
-  appendMessage(optimisticUserEntry);
-  if (state.sessionId) {
-    saveCurrentTimeline();
-  }
-  const promptToSend = text;
-  clearPromptDraftForCurrentSession();
-  renderChatAtLatest(() => {});
-
-  const wasNewSession = !state.sessionId;
-  let submittedSessionId = '';
-  try {
-    const sessionId = preferredSessionId || await ensureSession();
-    if (!isAuthRequestCurrent(requestGeneration) || !sessionId) {
-      return;
-    }
-    submittedSessionId = sessionId;
-    clearPromptDraftForCurrentSession();
-    optimisticallyUpdateSessionInput(promptToSend);
-    saveCurrentTimeline();
-    const settings = collectSettings();
-    const turn = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, {
-      method: 'POST',
-      body: {
-        text: promptToSend,
-        settings,
-        ...(attachments.length
-          ? {
-              attachmentIds: attachments.map((attachment) => attachment.id),
-              attachments,
-            }
-          : {}),
-      },
-    });
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    if (attachments.length) {
-      state.composerAttachments = [];
-    }
-    if (queuedMessageId) {
-      removeQueuedMessage(sessionId, queuedMessageId);
-    }
-    if (turn?.type === 'command') {
-      if (state.sessionId === sessionId) {
-        handleCommandResult(turn);
-      } else if (turn.session) {
-        upsertSession(turn.session);
-      }
-      return;
-    }
-    if (turn.session) {
-      upsertSession(turn.session);
-      if (state.sessionId === sessionId) {
-        state.currentSession = state.currentSession?.id === sessionId ? state.currentSession : turn.session;
-        state.cwd = turn.session.cwd || state.cwd;
-        resetSessionHistoryWindow();
-        optimisticallyUpdateSessionInput(promptToSend);
-      }
-    }
-    if (state.sessionId !== sessionId) {
-      setSessionSummaryActivity(sessionId, 'running', turn.turnId);
-      return;
-    }
-    state.turnId = turn.turnId;
-    state.latestTurnId = turn.turnId;
-    markLocallyStartedTurn(turn.turnId);
-    state.status = 'Turn running';
-    state.statusTone = 'warn';
-    renderChatAtLatest(() => {});
-    void streamTurnEvents(turn.turnId);
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return;
-    }
-    const failedQueuedSessionId = submittedSessionId || preferredSessionId || state.sessionId;
-    if (queuedMessageId && failedQueuedSessionId) {
-      setQueuedMessageSending(failedQueuedSessionId, queuedMessageId, false);
-    }
-    if (handleMissingSession(error, promptToSend)) {
-      return;
-    }
-    if (handleTurnConflict(error, {
-      promptText: promptToSend,
-      optimisticEntryId: optimisticUserEntry.id,
-      queuedMessageId,
-      sessionId: submittedSessionId || preferredSessionId || state.sessionId,
-    })) {
-      return;
-    }
-    if (scheduleFirstTurnRecovery({
-      error,
-      promptText: promptToSend,
-      sessionId: submittedSessionId || state.sessionId,
-      wasNewSession,
-    })) {
-      return;
-    }
-    state.pendingTurn = false;
-    surfaceTimelineError(state.turnId || `request_${Date.now()}`, error?.payload?.message || error?.message || 'Request failed');
-    handleApiError(error, { suppressComposerError: true });
-  }
-}
-
-function handleTurnConflict(error, {
-  promptText,
-  optimisticEntryId,
-  queuedMessageId = '',
-  sessionId = '',
-} = {}) {
-  if (error?.status !== 409 || error?.payload?.error !== 'turn_conflict') {
-    return false;
-  }
-  removeTimelineEntryById(optimisticEntryId);
-  const activeTurnId = String(error?.payload?.activeTurnId || '').trim();
-  if (queuedMessageId && sessionId) {
-    const stillQueued = queuedMessagesForSession(sessionId).some((message) => message.id === queuedMessageId);
-    if (stillQueued) {
-      setQueuedMessageSending(sessionId, queuedMessageId, false);
-    } else {
-      enqueueQueuedMessage(sessionId, promptText);
-    }
-    state.prompt = '';
-  } else {
-    state.prompt = promptText || state.prompt;
-    savePromptDraftForCurrentSession();
-  }
-  state.pendingTurn = Boolean(activeTurnId);
-  state.turnId = activeTurnId || state.turnId;
-  if (activeTurnId) {
-    state.latestTurnId = activeTurnId;
-  }
-  if (!activeTurnId) {
-    clearLocallyStartedTurn();
-  }
-  state.status = activeTurnId ? 'Turn running' : 'Request blocked';
-  state.statusTone = 'warn';
-  state.error = '';
-  renderChatAtLatestIfFollowing(() => {});
-  if (activeTurnId) {
-    connectActiveTurnStream({ forceReconnect: true });
-  }
-  return true;
 }
 
 function handleCommandResult(result) {
@@ -8613,80 +8320,6 @@ function isMissingSessionError(error) {
   const message = error?.payload?.message || error?.message || '';
   return error?.status === 404 && code === 'session_not_found'
     || /thread not found|session not found|unknown session|unknown thread/i.test(message);
-}
-
-function isUnavailableSessionError(error) {
-  const message = error?.payload?.message || error?.message || '';
-  return /thread not loaded|no rollout found for thread id|rollout .* is empty/i.test(message);
-}
-
-function scheduleFirstTurnRecovery({
-  error,
-  promptText,
-  sessionId,
-  wasNewSession,
-}) {
-  if (!wasNewSession || !sessionId || !isUnavailableSessionError(error)) {
-    return false;
-  }
-  const message = error?.payload?.message || error?.message || 'Request failed';
-  state.pendingTurn = true;
-  state.status = 'Waiting for first response';
-  state.statusTone = 'warn';
-  state.error = '';
-  renderChatAtLatestIfFollowing(() => {});
-  setTimeout(() => {
-    void recoverFirstTurnAfterDelay({
-      sessionId,
-      promptText,
-      message,
-    });
-  }, FIRST_TURN_RECOVERY_DELAY_MS);
-  return true;
-}
-
-async function recoverFirstTurnAfterDelay({ sessionId, promptText, message }) {
-  if (state.sessionId !== sessionId || !state.pendingTurn) {
-    return;
-  }
-  const session = await refreshCurrentSessionMetadata({ hydrateTimeline: true });
-  if (session && hasRecoveredFirstTurn(session, promptText)) {
-    state.pendingTurn = false;
-    state.streamWasBackgrounded = false;
-    state.turnId = null;
-    state.status = 'Ready';
-    state.statusTone = 'success';
-    state.error = '';
-    renderChatAtLatest(() => {});
-    return;
-  }
-  state.pendingTurn = false;
-  state.status = 'Request failed';
-  state.statusTone = 'danger';
-  surfaceTimelineError(`request_${sessionId}`, message);
-  renderChatAtLatest(() => {});
-}
-
-function hasRecoveredFirstTurn(session, promptText) {
-  const turns = Array.isArray(session?.thread?.turns) ? session.thread.turns : [];
-  const activeTurn = findActiveTurn(session);
-  if (activeTurn?.id) {
-    state.turnId = activeTurn.id;
-    return true;
-  }
-  const prompt = String(promptText || '').trim();
-  for (const turn of turns) {
-    if (!isTerminalTurnStatus(turn?.status)) {
-      continue;
-    }
-    const items = Array.isArray(turn?.items) ? turn.items : [];
-    const hasPrompt = !prompt || items.some((item) => item?.role === 'user' && String(item.text || '').trim() === prompt);
-    const hasAssistantAnswer = items.some((item) => item?.role === 'assistant' && String(item.text || '').trim());
-    if (hasPrompt && hasAssistantAnswer) {
-      return true;
-    }
-  }
-  return false;
 }
 
 async function refreshCurrentSessionMetadata({
@@ -11030,9 +10663,9 @@ function normalizeSubmissionOutboxEntry(entry, { restore = false } = {}) {
     return null;
   }
   const rawStatus = String(entry.status || '').trim();
-  const status = restore && rawStatus === 'sending'
-    ? 'pending'
-    : ['pending', 'sending', 'failed'].includes(rawStatus)
+  const status = restore && (rawStatus === 'sending' || rawStatus === 'failed' && entry.outcomeKnown !== true)
+    ? 'outcome_unknown'
+    : ['pending', 'sending', 'failed', 'outcome_unknown'].includes(rawStatus)
       ? rawStatus
       : 'pending';
   const createdAt = Number(entry.createdAt) || Date.now();
@@ -11050,6 +10683,9 @@ function normalizeSubmissionOutboxEntry(entry, { restore = false } = {}) {
     text,
     status,
     sessionId: String(entry.sessionId || '').trim(),
+    resolvedSessionId: String(entry.resolvedSessionId || '').trim(),
+    outcomeKnown: entry.outcomeKnown === true,
+    manualRetryRequired: entry.manualRetryRequired === true,
     projectId: String(entry.projectId || '').trim(),
     cwd: String(entry.cwd || '').trim(),
     settings,
@@ -11057,9 +10693,10 @@ function normalizeSubmissionOutboxEntry(entry, { restore = false } = {}) {
     createdAt,
     updatedAt,
     attempts: Math.max(0, Number(entry.attempts) || 0),
+    confirmationAttempts: Math.max(0, Number(entry.confirmationAttempts) || 0),
     nextAttemptAt: Math.max(0, Number(entry.nextAttemptAt) || 0),
     error: String(entry.error || '').slice(0, 1000),
-    retryable: entry.retryable !== false,
+    retryable: status === 'outcome_unknown' || entry.retryable !== false,
     queuedMessageId: String(entry.queuedMessageId || '').trim(),
   };
 }
@@ -11226,9 +10863,11 @@ async function retrySubmission(submissionId) {
   if (!current || !submissionBelongsToCurrentOwner(current) || current.status === 'sending') {
     return null;
   }
+  if (current.status === 'outcome_unknown') return deliverSubmission(submissionId, { interactive: true, force: true });
   upsertSubmissionOutboxEntry({
     ...current,
     status: 'pending',
+    manualRetryRequired: false,
     error: '',
     retryable: true,
     nextAttemptAt: 0,
@@ -11239,7 +10878,7 @@ async function retrySubmission(submissionId) {
 
 function cancelSubmission(submissionId) {
   const current = state.submissionOutbox.get(submissionId);
-  if (!current || !submissionBelongsToCurrentOwner(current) || current.status === 'sending') {
+  if (!current || !submissionBelongsToCurrentOwner(current) || ['sending', 'outcome_unknown'].includes(current.status)) {
     return false;
   }
   removeSubmissionOutboxEntry(submissionId);
@@ -12048,7 +11687,7 @@ function localSubmissionSessionId(submissionId) {
 function pendingSubmissionSessionSummaries() {
   const knownSessionIds = new Set(state.sessions.map((session) => session.id));
   return pendingSubmissionEntries()
-    .filter((entry) => !entry.sessionId || !knownSessionIds.has(entry.sessionId))
+    .filter((entry) => !knownSessionIds.has(entry.resolvedSessionId || entry.sessionId))
     .flatMap((entry) => {
       const ownership = submissionOwnership(entry);
       if (!ownership) {

@@ -61,6 +61,36 @@ test('session submission payload hashes are stable across object key order', () 
   assert.notEqual(hashSessionSubmissionPayload(left), hashSessionSubmissionPayload(payload({ text: 'different' })));
 });
 
+test('legacy uncertain failures migrate to non-terminal receipts and survive retention pruning', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-unknown-receipt-'));
+  try {
+    const store = new FileSessionSubmissionStore({ stateDir, terminalRetentionMs: 1 });
+    const value = payload();
+    const now = new Date().toISOString();
+    const base = {
+      id: 'uncertain', ownerUserId: 'alice', payloadHash: hashSessionSubmissionPayload(value), payload: value,
+      status: 'outcome_unknown' as const, sessionId: 'thread_1', runtimeSessionId: 'thread_1',
+      turnBaseline: [], turnId: null, result: null,
+      error: { code: 'internal_error', message: 'lost acknowledgement', retryable: true, outcomeUnknown: true },
+      createdAt: now, updatedAt: now,
+    };
+    await store.create(base);
+    const filename = path.join(stateDir, 'session-submissions.json');
+    const legacy = JSON.parse(await fs.readFile(filename, 'utf8'));
+    for (const record of Object.values(legacy.submissions) as any[]) {
+      record.status = 'failed';
+      record.updatedAt = '2020-01-01T00:00:00.000Z';
+    }
+    await fs.writeFile(filename, JSON.stringify(legacy));
+    const reopened = new FileSessionSubmissionStore({ stateDir, terminalRetentionMs: 1 });
+    assert.equal((await reopened.read('alice', 'uncertain'))?.status, 'outcome_unknown');
+    await reopened.create({ ...base, id: 'next', status: 'queued', error: null });
+    assert.equal((await reopened.read('alice', 'uncertain'))?.status, 'outcome_unknown');
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('session submission store normalizes optional webhook metadata without changing file version', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-webhook-submission-metadata-'));
   const store = new FileSessionSubmissionStore({ stateDir });

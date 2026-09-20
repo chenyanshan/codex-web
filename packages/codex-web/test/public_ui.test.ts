@@ -10148,7 +10148,7 @@ test('retryable submission failures stay quiet until three delivery attempts fai
         return {
           ok: false,
           status: 500,
-          json: async () => ({ error: 'internal_error', message: 'Codex refused the first turn' }),
+          json: async () => ({ error: 'internal_error', message: 'Codex refused the first turn', outcomeUnknown: false }),
         };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -10705,7 +10705,7 @@ test('a delayed first-message response cannot take over a newer draft', async ()
   assert.deepEqual(streamRequests, []);
 });
 
-test('lost new-session response retries the same submission after reload', async () => {
+test('lost new-session response queries the same submission after reload without another POST', async () => {
   let firstSubmissionId = '';
   const first = await loadAppHarness({
     fetch: async (path, options = {}) => {
@@ -10728,7 +10728,7 @@ test('lost new-session response retries the same submission after reload', async
   const second = await loadAppHarness({
     storage: Object.fromEntries(storedOutbox),
     fetch: async (path, options = {}) => {
-      retryCalls.push({ path, body: JSON.parse(options.body) });
+      retryCalls.push({ path, method: options.method });
       return {
         ok: true,
         status: 200,
@@ -10746,8 +10746,8 @@ test('lost new-session response retries the same submission after reload', async
   await second.api.drainSubmissionOutbox({ force: true });
 
   assert.equal(retryCalls.length, 1);
-  assert.equal(retryCalls[0]?.path, '/api/session-submissions');
-  assert.equal(retryCalls[0]?.body.submissionId, firstSubmissionId);
+  assert.equal(retryCalls[0]?.path, `/api/session-submissions/${firstSubmissionId}`);
+  assert.equal(retryCalls[0]?.method, 'GET');
   assert.equal(submissionStorageEntries(second.storage).length, 0);
   assert.equal(second.api.state.sessions.some((session) => session.id === 'session_recovered'), true);
 });
@@ -10769,15 +10769,16 @@ test('silently retrying new-session submissions remain visible and can be reopen
 
   const [pending] = api.sortedSessions();
   assert.equal(pending?.localSubmission, true);
-  assert.equal(pending?.deliveryState, 'failed');
+  assert.equal(pending?.deliveryState, 'outcome_unknown');
   assert.match(api.renderSessionCards(), /Visible pending session/u);
-  assert.doesNotMatch(api.renderSessionCards(), /Send failed|data-submission-retry-id/u);
+  assert.doesNotMatch(api.renderSessionCards(), /Send failed/u);
+  assert.match(api.renderSessionCards(), /Confirm send result/u);
 
   await api.selectSession(pending.id);
   assert.equal(api.state.activeSubmissionId, pending.submissionId);
   assert.equal(api.state.timeline[0]?.text, 'Visible pending session');
-  assert.equal(api.state.status, 'Waiting to send');
-  assert.doesNotMatch(api.renderTimelineItem(api.state.timeline[0]), /Retry send/u);
+  assert.equal(api.state.status, 'Confirm send result');
+  assert.doesNotMatch(api.renderTimelineItem(api.state.timeline[0]), /Retry send|delivery-failed/u);
 });
 
 test('independent submission storage keys prevent stale tabs from overwriting each other', async () => {
@@ -11053,13 +11054,13 @@ test('malformed successful responses retain the durable submission', async () =>
   await api.onComposerSubmit({ preventDefault() {} });
 
   const [submission] = api.state.submissionOutbox.values();
-  assert.equal(submission.status, 'failed');
+  assert.equal(submission.status, 'outcome_unknown');
   assert.equal(submission.retryable, true);
   assert.match(submission.error, /did not acknowledge/u);
   assert.equal(submissionStorageEntries(storage).length, 1);
 });
 
-test('submission requests time out and remain retryable', async () => {
+test('submission requests time out into confirmation rather than a send failure', async () => {
   const timeoutHandle = {};
   const { api } = await loadAppHarness({
     setTimeout(callback, delay) {
@@ -11089,9 +11090,89 @@ test('submission requests time out and remain retryable', async () => {
 
   const [submission] = api.state.submissionOutbox.values();
   assert.equal(api.SUBMISSION_REQUEST_TIMEOUT_MS, 30_000);
-  assert.equal(submission.status, 'failed');
+  assert.equal(submission.status, 'outcome_unknown');
   assert.equal(submission.retryable, true);
   assert.match(submission.error, /acknowledgement timed out/u);
+});
+
+test('unknown submissions keep checking beyond three failures, merge with the real session, and never repost', async () => {
+  const calls: Array<{ path: string; method: string; body?: any }> = [];
+  let submitted = false;
+  const { api } = await loadAppHarness({
+    fetch: async (path, options = {}) => {
+      calls.push({ path, method: options.method, body: options.body ? JSON.parse(options.body) : undefined });
+      if (options.method === 'POST') return { ok: false, status: 504, json: async () => { throw new Error('HTML gateway'); } };
+      const id = calls[0].body.submissionId;
+      return { ok: true, status: 200, json: async () => ({ submission: { id, status: submitted ? 'submitted' : 'starting', sessionId: 'session_original', turnId: submitted ? 'turn_original' : null }, retryAllowed: false }) };
+    },
+  });
+  Object.assign(api.state, { token: 'token', authSession: { id: 'auth' }, view: 'chat', draftSessionActive: true, cwd: '/repo', prompt: 'Check two attachments' });
+  api.state.composerAttachments = ['image.png', 'notes.md'].map((fileName, index) => ({ status: 'ready', uploaded: { id: `att_${index}`, fileName, localPath: `/uploads/${fileName}`, kind: index ? 'file' : 'image' } }));
+  await api.onComposerSubmit({ preventDefault() {} });
+  const id = calls[0].body.submissionId;
+  assert.equal(calls[0].body.attachments.length, 2);
+  for (let index = 0; index < 4; index++) await api.drainSubmissionOutbox({ force: true });
+  assert.equal(api.state.submissionOutbox.get(id).status, 'outcome_unknown');
+  assert.equal(api.state.submissionOutbox.get(id).attempts, 1);
+  assert.equal(api.state.submissionOutbox.get(id).confirmationAttempts, 4);
+  assert.equal(api.cancelSubmission(id), false);
+  api.state.sessions = [{ id: 'session_original', cwd: '/repo', activeTurnId: 'turn_original' }];
+  assert.equal(api.sortedSessions().length, 1);
+  assert.doesNotMatch(api.renderTimelineItem(api.state.timeline[0]), /delivery-failed|data-submission-cancel-id/u);
+  api.state.prompt = 'Keep this next draft';
+  await api.onComposerSubmit({ preventDefault() {} });
+  assert.equal(api.state.prompt, 'Keep this next draft');
+  // Complete in the background, so adoption cannot steal another open draft.
+  api.state.activeSubmissionId = '';
+  submitted = true;
+  await api.retrySubmission(id);
+  assert.equal(api.state.submissionOutbox.size, 0);
+  assert.equal(api.sortedSessions().length, 1);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.ok(calls.slice(1).every(call => call.path === `/api/session-submissions/${id}` && call.method === 'GET'));
+});
+
+test('legacy failed messages recheck their receipt and missing receipts require explicit retry', async () => {
+  const old = failedSessionSubmission({ id: 'old_receipt', sessionId: '', cwd: '/repo', outcomeKnown: undefined, retryable: false });
+  const calls = [];
+  const { api } = await loadAppHarness({
+    storage: { 'codexWebSubmissionOutbox:old_receipt': JSON.stringify({ version: 1, entry: old }) },
+    fetch: async (path, options) => {
+      calls.push(options.method);
+      if (options.method === 'GET') return { ok: false, status: 404, json: async () => ({ error: 'submission_not_found' }) };
+      assert.equal(JSON.parse(options.body).submissionId, old.id);
+      return { ok: true, status: 200, json: async () => ({ submission: { id: old.id, status: 'submitted', sessionId: 'retried', turnId: 'turn_retried' } }) };
+    },
+  });
+  Object.assign(api.state, { token: 'token', authSession: { id: 'auth' } });
+  assert.equal(api.state.submissionOutbox.get(old.id).status, 'outcome_unknown');
+  await api.drainSubmissionOutbox({ force: true });
+  await api.drainSubmissionOutbox({ force: true });
+  assert.deepEqual(calls, ['GET']);
+  assert.equal(api.state.submissionOutbox.get(old.id).manualRetryRequired, true);
+  await api.retrySubmission(old.id);
+  assert.deepEqual(calls, ['GET', 'POST']);
+  assert.equal(api.state.submissionOutbox.size, 0);
+});
+
+test('receipt recovery does not resurrect a turn that already completed while the acknowledgement was lost', async () => {
+  const old = failedSessionSubmission({ id: 'finished_receipt', sessionId: 'session_1', status: 'outcome_unknown' });
+  const session = { id: 'session_1', cwd: '/repo', activeTurnId: null, activityState: 'idle', thread: { turns: [{ id: 'turn_finished', status: 'completed', items: [{ role: 'user', text: old.text }, { role: 'assistant', text: 'Done' }] }] } };
+  const { api } = await loadAppHarness({
+    storage: { 'codexWebSubmissionOutbox:finished_receipt': JSON.stringify({ version: 1, entry: old }) },
+    fetch: async (path) => {
+      if (path.includes('/events')) throw new Error('A completed turn must not be restarted');
+      if (path.includes('/session-submissions/')) return { ok: true, status: 200, json: async () => ({ submission: { id: old.id, status: 'submitted', sessionId: 'session_1', turnId: 'turn_finished' }, session }) };
+      return { ok: true, status: 200, json: async () => ({ session, items: [] }) };
+    },
+  });
+  Object.assign(api.state, { token: 'token', authSession: { id: 'auth' }, sessionId: 'session_1', currentSession: session, sessions: [session], view: 'chat' });
+  await api.drainSubmissionOutbox({ force: true });
+  await flushMicrotasks();
+  assert.equal(api.state.submissionOutbox.size, 0);
+  assert.equal(api.state.pendingTurn, false);
+  assert.equal(api.state.turnId, null);
+  assert.doesNotMatch(api.renderSessionCards(), /Send failed|data-activity-state="running"/u);
 });
 
 test('logout during delivery resets sending state for a later login', async () => {
@@ -11100,7 +11181,7 @@ test('logout during delivery resets sending state for a later login', async () =
   const { api } = await loadAppHarness({
     fetch: async (_path, options = {}) => {
       requestCount += 1;
-      submissionId = JSON.parse(options.body).submissionId;
+      if (options.body) submissionId = JSON.parse(options.body).submissionId;
       if (requestCount === 1) {
         return new Promise((_resolve, reject) => {
           options.signal.addEventListener('abort', () => reject(new Error('aborted')));
@@ -11129,7 +11210,7 @@ test('logout during delivery resets sending state for a later login', async () =
   api.handleApiError({ status: 401, payload: { message: 'expired' } });
   await sending;
 
-  assert.equal(api.state.submissionOutbox.get(submissionId)?.status, 'pending');
+  assert.equal(api.state.submissionOutbox.get(submissionId)?.status, 'outcome_unknown');
   api.state.token = 'replacement-token';
   api.state.authSession = { id: 'auth_2' };
   await api.drainSubmissionOutbox({ force: true });
@@ -11566,7 +11647,7 @@ test('mobile UI refreshes session metadata after turn completion', async () => {
 
   assert.match(app, /async function refreshCurrentSessionMetadata\(/u);
   assert.match(app, /function optimisticallyUpdateSessionInput\(text\)/u);
-  assert.match(app, /optimisticallyUpdateSessionInput\(promptToSend\)/u);
+  assert.match(app, /optimisticallyUpdateSessionInput\(entry\.text\)/u);
   assert.match(app, /case 'turn\.completed':[\s\S]*void refreshCurrentSessionMetadata\(\);/u);
   assert.match(app, /const sessionId = state\.sessionId;[\s\S]*loadSessionOpenData\(state\.currentSession \|\| \{ id: sessionId \}/u);
 });
@@ -17806,7 +17887,7 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 }
 
 async function loadAppHarness(overrides = {}) {
-  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView] = await Promise.all([
+  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, submissionDelivery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(uiCopyUrl, 'utf8'),
     readFile(uiKitUrl, 'utf8'),
@@ -17821,6 +17902,7 @@ async function loadAppHarness(overrides = {}) {
     readFile(webhookSettingsUrl, 'utf8'),
     readFile(new URL('../public/session-rename.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/network-recovery.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/submission-delivery.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/session-loader.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/session-reading.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/admin-editor.js', import.meta.url), 'utf8'),
@@ -18192,6 +18274,7 @@ ${workView}
 ${webhookSettings}
 ${sessionRename}
 ${networkRecovery}
+${submissionDelivery}
 ${sessionLoader}
 ${sessionReading}
 ${adminEditor}
@@ -18373,6 +18456,7 @@ function failedSessionSubmission(overrides = {}) {
     ownerKey: 'single',
     text: 'Follow-up still needs delivery',
     status: 'failed',
+    outcomeKnown: true,
     sessionId: 'session_1',
     projectId: '',
     cwd: '',

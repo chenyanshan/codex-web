@@ -1580,6 +1580,7 @@ test('reject_if_busy records a retryable failure without start or steer and succ
       message: 'The session already has an active turn.',
       activeTurnId: 'turn_active',
       retryable: true,
+      outcomeUnknown: false,
     });
     assert.equal(runtime.startInputs.length, 1);
     assert.equal(runtime.steerInputs.length, 0);
@@ -1659,6 +1660,7 @@ test('clientRequestId defaults to steer and reject_if_busy maps a start race to 
       message: 'The session already has an active turn.',
       activeTurnId: 'turn_raced',
       retryable: true,
+      outcomeUnknown: false,
     });
     assert.equal(runtime.steerInputs.length, 1);
   } finally {

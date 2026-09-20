@@ -341,6 +341,100 @@ test('single-user draft attachments upload without creating a session and send w
   }
 });
 
+test('status probes return while the original POST is blocked and read accepted receipts without runtime hydration', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-slow-submission-'));
+  const runtime = runtimeStub();
+  const gate = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  runtime.startTurn = async () => {
+    runtime.calls.start += 1;
+    started.resolve();
+    await gate.promise;
+    return { turnId: 'turn_slow' };
+  };
+  const server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config: createConfig(stateDir) });
+  await server.start();
+  const body = { submissionId: 'slow', text: 'accept once' };
+  const pending = postJson(`${server.baseUrl}/api/session-submissions`, body);
+  try {
+    await started.promise;
+    const query = () => fetch(`${server.baseUrl}/api/session-submissions/slow`, {
+      headers: { Authorization: 'Bearer token' }, signal: AbortSignal.timeout(2000),
+    });
+    const processing = await (await query()).json() as any;
+    assert.equal(processing.submission.status, 'starting');
+    assert.equal(processing.retryAllowed, false);
+    gate.resolve();
+    assert.equal((await (await pending).json() as any).turnId, 'turn_slow');
+    runtime.readSession = async () => { throw new Error('runtime history unavailable'); };
+    const accepted = await (await query()).json() as any;
+    assert.equal(accepted.submission.status, 'submitted');
+    assert.equal(accepted.turnId, 'turn_slow');
+    assert.deepEqual(runtime.calls, { create: 1, start: 1 });
+  } finally {
+    gate.resolve();
+    await pending;
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('uncertain start failures stay non-replayable until the accepted turn appears in history', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-delayed-receipt-'));
+  const runtime = runtimeStub();
+  runtime.startTurn = async () => {
+    runtime.calls.start += 1;
+    throw new Error('turn/start acknowledgement lost');
+  };
+  const config = createConfig(stateDir);
+  let server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config });
+  await server.start();
+  const body = { submissionId: 'delayed', text: 'do this once' };
+  try {
+    const first = await postJson(`${server.baseUrl}/api/session-submissions`, body);
+    assert.equal(first.status, 500);
+    assert.equal((await first.json() as any).outcomeUnknown, true);
+    await server.stop();
+    server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config });
+    await server.start();
+    const replay = await postJson(`${server.baseUrl}/api/session-submissions`, body);
+    assert.equal((await replay.json() as any).submission.status, 'outcome_unknown');
+    const query = () => fetch(`${server.baseUrl}/api/session-submissions/delayed`, { headers: { Authorization: 'Bearer token' } });
+    assert.equal((await (await query()).json() as any).retryAllowed, false);
+    assert.deepEqual(runtime.calls, { create: 1, start: 1 });
+    runtime.sessions.get('thread_1').thread.turns.push({ id: 'accepted_late', status: 'completed', items: [{ role: 'user', text: body.text }] });
+    const recovered = await (await query()).json() as any;
+    assert.equal(recovered.submission.status, 'submitted');
+    assert.equal(recovered.turnId, 'accepted_late');
+    assert.deepEqual(runtime.calls, { create: 1, start: 1 });
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('failed submission status probes report the rejection without retrying execution', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-failed-receipt-'));
+  const runtime = runtimeStub();
+  runtime.startTurn = async () => {
+    runtime.calls.start += 1;
+    throw Object.assign(new Error('A turn is already running.'), { code: 'turn_conflict', activeTurnId: 'busy' });
+  };
+  const server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config: createConfig(stateDir) });
+  await server.start();
+  try {
+    assert.equal((await postJson(`${server.baseUrl}/api/session-submissions`, { submissionId: 'rejected', text: 'retry later' })).status, 409);
+    const response = await fetch(`${server.baseUrl}/api/session-submissions/rejected`, { headers: { Authorization: 'Bearer token' } });
+    const payload = await response.json() as any;
+    assert.equal(payload.submission.status, 'failed');
+    assert.equal(payload.submission.error.code, 'turn_conflict');
+    assert.deepEqual(runtime.calls, { create: 1, start: 1 });
+  } finally {
+    await server.stop();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('session submission ids reject payload conflicts without another side effect', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-submission-conflict-'));
   const runtime = runtimeStub();
@@ -420,7 +514,7 @@ test('existing turn route uses durable idempotency when submissionId is present'
   }
 });
 
-test('GET resumes a persisted starting submission after restart', async () => {
+test('GET never resumes a starting submission without evidence of delivery after restart', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-resume-submission-'));
   const runtime = runtimeStub();
   runtime.sessions.set('thread_recovered', {
@@ -466,9 +560,14 @@ test('GET resumes a persisted starting submission after restart', async () => {
     });
     assert.equal(response.status, 200);
     const payload = await response.json() as any;
-    assert.equal(payload.submission.status, 'submitted');
-    assert.equal(payload.turnId, 'turn_1');
-    assert.deepEqual(runtime.calls, { create: 0, start: 1 });
+    assert.equal(payload.submission.status, 'starting');
+    assert.equal(payload.retryAllowed, false);
+    assert.equal(payload.submission.turnId, null);
+    const replay = await postJson(`${server.baseUrl}/api/session-submissions`, {
+      submissionId: 'sub-recover', cwd: '/tmp/project', text: 'resume me',
+    });
+    assert.equal((await replay.json() as any).submission.status, 'outcome_unknown');
+    assert.deepEqual(runtime.calls, { create: 0, start: 0 });
   } finally {
     await server.stop();
   }
@@ -651,8 +750,10 @@ test('recovery does not adopt a baseline turn when the process stopped before st
       headers: { Authorization: 'Bearer token' },
     });
     assert.equal(response.status, 200);
-    assert.equal((await response.json() as any).turnId, 'turn_1');
-    assert.deepEqual(runtime.calls, { create: 0, start: 1 });
+    const payload = await response.json() as any;
+    assert.equal(payload.submission.turnId, null);
+    assert.equal(payload.retryAllowed, false);
+    assert.deepEqual(runtime.calls, { create: 0, start: 0 });
   } finally {
     await server.stop();
   }

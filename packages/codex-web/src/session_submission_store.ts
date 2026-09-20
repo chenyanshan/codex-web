@@ -12,6 +12,7 @@ export type CodexWebSessionSubmissionStatus =
   | 'queued'
   | 'creating'
   | 'starting'
+  | 'outcome_unknown'
   | 'submitted'
   | 'failed';
 
@@ -218,7 +219,9 @@ function submissionKey(ownerUserId: string, submissionId: string): string {
 }
 
 function normalizeRecord(record: CodexWebSessionSubmissionRecord): CodexWebSessionSubmissionRecord {
-  const status = isSubmissionStatus(record.status) ? record.status : 'failed';
+  const status = record.status === 'failed' && record.error?.outcomeUnknown === true
+    ? 'outcome_unknown'
+    : isSubmissionStatus(record.status) ? record.status : 'failed';
   const createdAt = normalizeString(record.createdAt) || new Date().toISOString();
   return {
     id: normalizeString(record.id),
@@ -339,6 +342,7 @@ function isSubmissionStatus(value: unknown): value is CodexWebSessionSubmissionS
   return value === 'queued'
     || value === 'creating'
     || value === 'starting'
+    || value === 'outcome_unknown'
     || value === 'submitted'
     || value === 'failed';
 }
