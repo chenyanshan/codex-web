@@ -9608,14 +9608,14 @@ test('session cards surface lightweight activity states and prioritize approvals
     ['session_approval', 'session_running', 'session_recent'],
   );
   const html = api.renderSessionCards();
-  assert.match(html, /data-activity-state="waiting_approval"[\s\S]*data-state="waiting_approval">Needs approval<\/span>/u);
-  assert.match(html, /data-activity-state="running"[\s\S]*data-state="running">Active<\/span>/u);
+  assert.match(html, /data-activity-state="waiting_approval"[\s\S]*data-state="waiting_approval"[^>]*aria-label="Needs approval"/u);
+  assert.match(html, /data-activity-state="running"[\s\S]*data-state="running"[^>]*aria-label="Running"/u);
   assert.match(html, /data-session-favorite-id="session_approval"[^>]*aria-label="Favorite"[^>]*title="Favorite"/u);
   assert.match(html, /data-session-archive-request-id="session_approval"[^>]*aria-label="Archive"[^>]*title="Archive"/u);
 
   api.state.sessionId = 'session_running';
   api.state.pendingTurn = false;
-  assert.match(api.renderSessionCards(), /data-session-id="session_running"[\s\S]*data-state="running">Active<\/span>/u);
+  assert.match(api.renderSessionCards(), /data-session-id="session_running"[\s\S]*data-state="running"[^>]*aria-label="Running"/u);
 });
 
 test('session summaries follow local approval and terminal events without another request', async () => {
@@ -9640,7 +9640,7 @@ test('session summaries follow local approval and terminal events without anothe
     summary: {},
   }, null);
 
-  assert.match(api.renderSessionCards(), /data-state="waiting_approval">Needs approval<\/span>/u);
+  assert.match(api.renderSessionCards(), /data-state="waiting_approval"[^>]*aria-label="Needs approval"/u);
 
   api.applyTurnEvent({
     type: 'turn.failed',
@@ -9650,7 +9650,64 @@ test('session summaries follow local approval and terminal events without anothe
   }, null);
 
   assert.equal(api.state.pendingTurn, false);
-  assert.doesNotMatch(api.renderSessionCards(), /data-activity-state=/u);
+  assert.match(api.renderSessionCards(), /data-activity-state="failed"/u);
+});
+
+test('authoritative Ready clears stale running summaries and keeps completion unread until viewed', async () => {
+  const storage = new Map();
+  const { api } = await loadAppHarness({ storage });
+  const session = { id: 'session_result', cwd: '/repo', activeTurnId: 'turn_result', activityState: 'running', settings: {} };
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessionId = session.id;
+  api.state.currentSession = session;
+  api.state.sessions = [session];
+  api.state.view = 'sessions';
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_result';
+  api.state.status = 'Turn running';
+  api.syncRuntimeStatusFromSession({ ...session, activeTurnId: null, activityState: null, thread: { turns: [{ id: 'turn_result', status: 'completed' }] } });
+  assert.equal(api.state.status, 'Ready');
+  assert.equal(api.state.sessions[0].activityState, null);
+  assert.doesNotMatch(api.renderSessionCards(), /data-state="running"/u);
+  api.state.currentSession.latestTurn = { id: 'turn_result', status: 'completed' };
+  api.state.sessions = [api.state.currentSession];
+  assert.match(api.renderSessionCards(), /data-state="unread"/u);
+  api.state.view = 'chat';
+  // Merely selecting a row, or failing to load its answer, cannot mark it read.
+  api.state.sessionHistoryError = 'History failed';
+  assert.match(api.renderSessionCards(), /data-state="unread"/u);
+  api.state.sessionHistoryError = '';
+  api.state.timeline = [{ id: 'answer', kind: 'message', role: 'assistant', turnId: 'turn_result', text: 'Completed answer' }];
+  assert.doesNotMatch(api.renderSessionCards(), /data-state="unread"/u);
+  const { api: reloaded } = await loadAppHarness({ storage });
+  reloaded.state.authSession = { id: 'auth_1' };
+  reloaded.state.sessions = api.state.sessions;
+  assert.doesNotMatch(reloaded.renderSessionCards(), /data-state="unread"/u);
+  reloaded.state.sessions[0] = { ...session, activeTurnId: null, activityState: null, latestTurn: { id: 'turn_next', status: 'completed' } };
+  assert.match(reloaded.renderSessionCards(), /data-state="unread"/u);
+  reloaded.state.sessions[0].activityState = 'failed';
+  assert.match(reloaded.renderSessionCards(), /data-state="failed"/u);
+});
+
+test('background activity status refresh replaces green with unread without navigating', async () => {
+  const { api } = await loadAppHarness({
+    fetch: async path => {
+      assert.equal(path, '/api/sessions/background/status');
+      return { ok: true, status: 200, json: async () => ({ session: {
+        id: 'background', activeTurnId: null, latestTurn: { id: 'completed_background', status: 'completed' }, settings: {},
+      } }) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'sessions';
+  api.state.sessions = [{ id: 'background', activeTurnId: 'completed_background', activityState: 'running', settings: {} }];
+  await api.refreshBackgroundSessionAttention();
+  assert.equal(api.state.sessionId, null);
+  assert.equal(api.state.sessions[0].activeTurnId, null);
+  assert.equal(api.state.sessions[0].activityState, null);
+  assert.match(api.renderSessionCards(), /data-state="unread"/u);
+  assert.doesNotMatch(api.renderSessionCards(), /data-state="running"/u);
 });
 
 test('weak-network session failures keep cached sessions and require a manual retry', async () => {
@@ -14221,6 +14278,56 @@ test('desktop new session submit does not auto-select an existing session', asyn
   assert.match(api.context.document.querySelector('#app').innerHTML, /AI 只是工具，其回答未必正确无误。/u);
 });
 
+test('delayed session list refresh preserves a newly created session and its active turn', async () => {
+  for (const desktop of [true, false]) {
+    const { api } = await loadAppHarness({
+      viewportWidth: desktop ? 1280 : 390,
+      desktopPointer: desktop,
+      fetch: async (path, options = {}) => {
+        if (path === '/api/session-submissions') return {
+          ok: true, status: 201, json: async () => ({
+            submission: { id: JSON.parse(options.body).submissionId, status: 'submitted', sessionId: 'session_new', turnId: 'turn_new' },
+            session: { id: 'session_new', cwd: '/repo/new', settings: {}, thread: { turns: [] } },
+            turnId: 'turn_new',
+          }),
+        };
+        if (path === '/api/turns/turn_new/events') return {
+          ok: true, status: 200, body: { getReader: () => ({ read: async () => new Promise(() => {}) }) },
+        };
+        throw new Error(`unexpected fetch ${path}`);
+      },
+    });
+    const oldSession = { id: 'session_old', cwd: '/repo/old', settings: {} };
+    api.state.token = 'token';
+    api.state.authSession = { id: 'auth_1' };
+    api.state.projectsLoaded = true;
+    api.state.view = 'sessions';
+    api.state.sortMode = 'time';
+    api.state.sessions = [oldSession];
+    api.state.sessionsByScope.all = [oldSession];
+    let resolveList;
+    const refreshing = api.refreshSessionsList({ scope: 'all', request: new Promise(resolve => { resolveList = resolve; }) });
+    api.openNewSessionPage();
+    api.state.newCwd = '/repo/new';
+    api.onNewSessionSubmit({ preventDefault() {} });
+    api.state.prompt = 'Keep this new conversation';
+    await api.onComposerSubmit({ preventDefault() {} });
+    assert.equal(api.state.sessionId, 'session_new');
+    resolveList({ items: [oldSession] });
+    await refreshing;
+    assert.equal(api.state.sessionId, 'session_new');
+    assert.equal(api.state.currentSession.id, 'session_new');
+    assert.equal(api.state.cwd, '/repo/new');
+    assert.equal(api.state.turnId, 'turn_new');
+    assert.equal(api.state.pendingTurn, true);
+    assert.ok(api.state.timeline.some(item => item.text === 'Keep this new conversation'));
+    // A subsequent filtered/partial list also must not control the open chat.
+    await api.refreshSessionsList({ scope: 'all', request: Promise.resolve({ items: [] }) });
+    assert.equal(api.state.sessionId, 'session_new');
+    assert.equal(api.state.currentSession.id, 'session_new');
+  }
+});
+
 test('desktop new session submit with the default cwd still shows the composer', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
@@ -16068,7 +16175,7 @@ test('duplicate foreground recovery triggers share one compact reconciliation', 
   await Promise.all([first, duplicate]);
 });
 
-test('terminal event metadata refresh requests status without downloading timeline history', async () => {
+test('terminal event refresh recovers final output from authoritative history', async () => {
   const fetchCalls: string[] = [];
   const { api } = await loadAppHarness({
     fetch: async (path) => {
@@ -16078,6 +16185,19 @@ test('terminal event metadata refresh requests status without downloading timeli
           ok: true,
           status: 200,
           json: async () => ({ session: { id: 'session_terminal_status', cwd: '/repo', activeTurnId: null } }),
+        };
+      }
+      if (path === '/api/sessions/session_terminal_status/timeline?limit=50') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: [
+              { id: 'original_input', kind: 'message', role: 'user', turnId: 'turn_terminal_status', meta: 'history', text: 'Analyze this architecture.' },
+              { id: 'recovered_final', kind: 'message', role: 'assistant', turnId: 'turn_terminal_status', meta: 'final', text: 'The complete answer survived the missing stream output.' },
+            ],
+            hasMore: false,
+          }),
         };
       }
       throw new Error(`unexpected fetch ${path}`);
@@ -16090,6 +16210,7 @@ test('terminal event metadata refresh requests status without downloading timeli
   api.state.currentSession = { id: 'session_terminal_status', cwd: '/repo' };
   api.state.pendingTurn = true;
   api.state.turnId = 'turn_terminal_status';
+  api.state.timeline = [{ id: 'original_input', kind: 'message', role: 'user', turnId: 'turn_terminal_status', meta: 'history', text: 'Analyze this architecture.' }];
 
   api.applyTurnEvent({
     type: 'turn.completed',
@@ -16098,7 +16219,12 @@ test('terminal event metadata refresh requests status without downloading timeli
   }, null);
   await flushMicrotasks();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/session_terminal_status/status']);
+  assert.deepEqual(fetchCalls, [
+    '/api/sessions/session_terminal_status/status',
+    '/api/sessions/session_terminal_status/timeline?limit=50',
+  ]);
+  assert.equal(api.state.timeline.find((item: any) => item.role === 'assistant')?.text,
+    'The complete answer survived the missing stream output.');
 });
 
 test('terminal turns with steered input reconcile authoritative message order', async () => {
@@ -17887,7 +18013,7 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 }
 
 async function loadAppHarness(overrides = {}) {
-  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, submissionDelivery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView] = await Promise.all([
+  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, submissionDelivery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView, sessionAttention] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(uiCopyUrl, 'utf8'),
     readFile(uiKitUrl, 'utf8'),
@@ -17910,6 +18036,7 @@ async function loadAppHarness(overrides = {}) {
     readFile(new URL('../public/attachment-upload.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/timeline-reconciliation.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/work-details-view.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/session-attention.js', import.meta.url), 'utf8'),
   ]);
   const storage = overrides.storage instanceof Map
     ? overrides.storage
@@ -18273,6 +18400,7 @@ ${fileViewer}
 ${workView}
 ${webhookSettings}
 ${sessionRename}
+${sessionAttention}
 ${networkRecovery}
 ${submissionDelivery}
 ${sessionLoader}
@@ -18344,6 +18472,8 @@ globalThis.__codexWebTest = {
   refreshCurrentSessionMetadata,
   loadSessionOpenData: typeof loadSessionOpenData === 'function' ? loadSessionOpenData : null,
   applySessionTurnSnapshot: typeof applySessionTurnSnapshot === 'function' ? applySessionTurnSnapshot : null,
+  SESSION_ATTENTION,
+  refreshBackgroundSessionAttention,
   syncRuntimeStatusFromSession: typeof syncRuntimeStatusFromSession === 'function' ? syncRuntimeStatusFromSession : null,
   refreshSessionsList: typeof refreshSessionsList === 'function' ? refreshSessionsList : null,
   refreshCurrentView: typeof refreshCurrentView === 'function' ? refreshCurrentView : null,

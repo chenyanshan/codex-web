@@ -87,6 +87,7 @@ export interface CodexWebSession {
   goal?: ProviderThreadGoal | null;
   activeTurnId: string | null;
   activityState: CodexWebSessionActivityState;
+  latestTurn?: { id: string; status: string } | null;
   lastBusinessActivityAt?: number | null;
   turnStartedAt?: number | null;
   settings: CodexWebStoredSessionSettings;
@@ -355,7 +356,7 @@ export class CodexWebRuntime {
 
   private readonly timelineReads = new Map<string, Promise<CodexWebSession | null>>();
 
-  private readonly businessActivity = new Map<string, { at: number; failed: boolean; startedAt?: number }>();
+  private readonly businessActivity = new Map<string, { at: number; failed: boolean; startedAt?: number; latestTurn?: { id: string; status: string } }>();
 
   private readonly defaultCwd: string;
 
@@ -1629,6 +1630,9 @@ export class CodexWebRuntime {
         at: Date.now(),
         failed: event.type === 'turn.failed' || (!['turn.started', 'turn.completed'].includes(event.type) && previousActivity?.failed === true),
         startedAt: event.type === 'turn.started' ? Date.now() : previousActivity?.startedAt,
+        latestTurn: event.type === 'turn.completed' ? { id: turnId, status: event.status || 'completed' }
+          : event.type === 'turn.failed' ? { id: turnId, status: 'failed' }
+            : event.type === 'turn.started' ? { id: turnId, status: 'inProgress' } : previousActivity?.latestTurn,
       });
       if (event.type === 'turn.started' || event.type === 'turn.completed' || event.type === 'turn.failed') {
         this.historyRevisions.set(businessThreadId, (this.historyRevisions.get(businessThreadId) ?? 0) + 1);
@@ -1890,6 +1894,7 @@ export class CodexWebRuntime {
       favoriteOrder: current.favoriteOrder ?? null,
       goal: null,
       activeTurnId,
+      latestTurn: this.latestSessionTurn(thread, activeTurnId),
       lastBusinessActivityAt: this.businessActivity.get(thread.threadId)?.at ?? null,
       turnStartedAt: this.businessActivity.get(thread.threadId)?.startedAt ?? null,
       activityState: sessionActivityState(
@@ -1928,6 +1933,7 @@ export class CodexWebRuntime {
       favorite: current.favorite === true,
       favoriteOrder: current.favoriteOrder ?? null,
       activeTurnId,
+      latestTurn: this.latestSessionTurn(thread, activeTurnId),
       lastBusinessActivityAt: this.businessActivity.get(thread.threadId)?.at ?? null,
       turnStartedAt: this.businessActivity.get(thread.threadId)?.startedAt ?? null,
       activityState: sessionActivityState(
@@ -2049,6 +2055,19 @@ export class CodexWebRuntime {
       }
       this.activeTurnByThread.delete(oldestThreadId);
     }
+  }
+
+  private latestSessionTurn(thread: ProviderThreadSummary, activeTurnId: string | null): CodexWebSession['latestTurn'] {
+    if (activeTurnId) return { id: activeTurnId, status: 'inProgress' };
+    const activity = this.businessActivity.get(thread.threadId);
+    const observed = activity?.latestTurn;
+    const latest = thread.turns?.at(-1);
+    const updatedAt = Number(thread.updatedAt) || 0;
+    const updatedMs = updatedAt < 1e12 ? updatedAt * 1000 : updatedAt;
+    // Do not replace a locally completed turn with an older provider result.
+    const terminalObserved = observed && !isActiveTurnStatus(observed.status);
+    if (observed && (!latest || (terminalObserved && (latest.id === observed.id || updatedMs <= activity.at)))) return observed;
+    return latest?.id ? { id: latest.id, status: latest.status || '' } : observed ?? null;
   }
 
   private rememberThreadTurns(thread: ProviderThreadSummary): void {
@@ -2198,7 +2217,8 @@ export class CodexWebRuntime {
     if (approvalTurnId) {
       return approvalTurnId;
     }
-    const providerTurnId = latestActiveThreadTurnId(thread);
+    const candidateTurnId = latestActiveThreadTurnId(thread);
+    const providerTurnId = candidateTurnId && !this.terminalTurns.has(candidateTurnId) ? candidateTurnId : null;
     const runtimeStatus = threadRuntimeStatusType(thread);
     if (thread && runtimeStatus && runtimeStatus !== 'active') {
       this.forgetTrackedTurnsForThread(threadId);
@@ -2222,7 +2242,7 @@ export class CodexWebRuntime {
         return turnId;
       }
     }
-    return latestActiveThreadTurnId(thread);
+    return providerTurnId;
   }
 
   private pendingApprovalTurnIdForThread(threadId: string): string | null {
@@ -2975,8 +2995,13 @@ function sessionActivityState(
   thread: ProviderThreadSummary,
   activeTurnId: string | null,
   hasPendingApproval: boolean,
-  activity?: { at: number; failed: boolean },
+  activity?: { at: number; failed: boolean; latestTurn?: { id: string; status: string } },
 ): CodexWebSessionActivityState {
+  const updatedAt = Number(thread.updatedAt) || 0;
+  const updatedMs = updatedAt < 1e12 ? updatedAt * 1000 : updatedAt;
+  const observedTerminal = activity?.latestTurn && !isActiveTurnStatus(activity.latestTurn.status)
+    && updatedMs <= activity.at;
+  if (!activeTurnId && !hasPendingApproval && observedTerminal) return activity.failed || isFailureTurnStatus(activity.latestTurn?.status) ? 'failed' : null;
   const activeFlags = Array.isArray(thread.runtimeStatus?.activeFlags)
     ? thread.runtimeStatus.activeFlags.map((flag) => normalizeTurnStatus(flag))
     : [];

@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import vm from 'node:vm';
+
+test('unread results survive reload and missing summaries, and reading is scoped to each account', async () => {
+  const source = await readFile(new URL('../public/session-attention.js', import.meta.url), 'utf8');
+  const context: any = {};
+  vm.runInNewContext(source, context);
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key), setItem: (key: string, value: string) => values.set(key, value) };
+  let owner = 'alice';
+  const create = () => context.CodexWebSessionAttention.createController({ storage, owner: () => owner });
+  let attention = create();
+  const session = { id: 'session', latestTurn: { id: 'result_1', status: 'completed' } };
+  assert.equal(attention.unread(session), true);
+  attention = create();
+  assert.equal(attention.unread({ id: 'session', latestTurn: null }), true);
+  attention.markRead(session);
+  assert.equal(create().unread(session), false);
+  assert.equal(attention.unread({ ...session, title: 'Renamed session' }), false);
+  owner = 'bob';
+  assert.equal(attention.unread(session), true);
+  owner = 'alice';
+  assert.equal(attention.unread(session), false);
+  assert.equal(attention.unread({ ...session, latestTurn: { id: 'result_2', status: 'completed' } }), true);
+  assert.equal(attention.unread({ ...session, latestTurn: { id: 'result_2', status: 'inProgress' } }), true);
+  assert.equal(attention.unread({ ...session, latestTurn: { id: 'result_3', status: 'inProgress' } }), false);
+  assert.equal(attention.unread({ ...session, latestTurn: { id: 'result_3', status: 'failed' } }), false);
+});

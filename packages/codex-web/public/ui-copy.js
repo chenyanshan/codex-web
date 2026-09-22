@@ -96,6 +96,7 @@
       'Upload failed': '上传失败',
       Ready: '就绪',
       Active: '活动中',
+      'Completed · Unread': '已完成 · 未读',
       'Needs approval': '等待审批',
       Reconnecting: '正在重连',
       'Connection interrupted': '连接中断',

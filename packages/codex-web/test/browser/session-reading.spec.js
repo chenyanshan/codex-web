@@ -65,11 +65,84 @@ async function refresh(page) {
   else { await page.locator('#settings-toggle').click(); await page.locator('#refresh-session-button').click(); }
 }
 
-test('an accessible history button reveals the full conversation and preserves the anchor', async ({ page }) => {
+test('a short conversation opens without a history boundary or extra space', async ({ page }, info) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await open(page, { count: 2, handle: async (route, url) => {
+    if (!url.pathname.endsWith('/timeline')) return false;
+    const items = messages(2).map((item, index) => ({ ...item, text: index ? 'Answer 1: ready to help.' : 'Start a new session' }));
+    await route.fulfill({ json: { session: metadata, items, hasMore: false, nextBefore: null } });
+    return true;
+  } });
+  const marker = page.locator('.timeline-history-end');
+  await expect(marker).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Show earlier messages', exact: true })).toHaveCount(0);
+  expect(await marker.evaluate(element => element.getBoundingClientRect().height)).toBe(0);
+  await page.locator('#timeline').dispatchEvent('wheel', { deltaY: -200 });
+  await page.locator('#timeline').dispatchEvent('keydown', { key: 'Home' });
+  await expect(marker).toBeHidden();
+  await page.screenshot({ path: info.outputPath('short-session.png') });
+  if (info.project.name === 'desktop') {
+    await page.setViewportSize({ width: 980, height: 900 });
+    await expect(marker).toBeHidden();
+    await page.screenshot({ path: info.outputPath('short-session-980.png'), animations: 'disabled' });
+  }
+  await page.reload();
+  await expect(page.locator('#timeline')).toContainText('Answer 1');
+  await expect(marker).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test('a long conversation shows its boundary only at the top, regardless of how it is scrolled', async ({ page }, info) => {
+  await open(page, { count: 4 });
+  const marker = page.locator('.timeline-history-end');
+  await expect(marker).toBeVisible();
+  await expect(marker).not.toBeInViewport();
+  // Scrollbar, wheel, touch and restored positions all use the same content boundary.
+  await readAt(page, 0);
+  await expect(marker).toBeInViewport();
+  await page.screenshot({ path: info.outputPath('history-boundary.png') });
+  if (info.project.name === 'desktop') await page.locator('button[data-session-id="session_browser_idle"]').click();
+  else {
+    await page.locator('#back-to-list-button').click();
+    await page.locator('button[data-session-id="session_browser_idle"]').click();
+  }
+  await expect(page.locator('#timeline')).toHaveAttribute('data-session-id', 'session_browser_idle');
+  await expect(page.locator('.timeline-history-end')).toBeHidden();
+});
+
+test('the history boundary disappears when the conversation fits after resizing', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop');
+  await open(page, { count: 4 });
+  await expect(page.locator('.timeline-history-end')).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 2400 });
+  await expect(page.locator('.timeline-history-end')).toBeHidden();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.locator('.timeline-history-end')).toBeVisible();
+  await readAt(page, 0);
+  await expect(page.locator('.timeline-history-end')).toBeInViewport();
+});
+
+test('an accessible history button reveals the full conversation and preserves the anchor', async ({ page }, info) => {
   await open(page);
   await readAt(page, 0);
+  const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
+  await expect(earlier).toHaveCSS('border-top-width', '0px');
+  await expect(earlier).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  const buttonBox = await earlier.boundingBox();
+  const timelineBox = await page.locator('#timeline').boundingBox();
+  expect(buttonBox.width).toBeLessThan(timelineBox.width * 0.7);
+  expect(Math.abs(buttonBox.x + buttonBox.width / 2 - timelineBox.x - timelineBox.width / 2)).toBeLessThanOrEqual(2);
+  if (info.project.name === 'mobile-portrait') expect(buttonBox.height).toBeGreaterThanOrEqual(44);
+  await page.screenshot({ path: info.outputPath('history-control.png') });
+  if (info.project.name === 'desktop') {
+    await page.setViewportSize({ width: 980, height: 900 });
+    await page.screenshot({ path: info.outputPath('history-control-980.png'), animations: 'disabled' });
+    await readAt(page, 0);
+  }
   const before = await position(page);
-  await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+  await earlier.focus();
+  await page.keyboard.press('Enter');
   await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(6);
   await expectAnchor(page, before);
   await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();

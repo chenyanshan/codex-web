@@ -2402,39 +2402,28 @@ button:disabled {
 }
 
 .session-attention-state {
-  flex: 0 0 auto;
-  min-height: 20px;
-  padding: 2px 7px;
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid color-mix(in srgb, var(--success) 44%, var(--border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--success) 10%, var(--panel));
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  display: inline-block;
+  border-radius: 50%;
+  background: currentColor;
   color: var(--success);
-  font-size: 10px;
-  font-weight: 650;
-  line-height: 1;
-  white-space: nowrap;
 }
-
-.session-attention-state[data-state="waiting_approval"] {
-  border-color: color-mix(in srgb, var(--warn) 48%, var(--border));
-  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
-  color: var(--warn);
+.session-attention-state[data-state="running"] {
+  animation: session-running-pulse 1.8s ease-in-out infinite;
 }
-
-.session-attention-state[data-state="pending"],
+.session-attention-state[data-state="unread"] { color: var(--info); }
+.session-attention-state[data-state="waiting_approval"],
 .session-attention-state[data-state="outcome_unknown"],
-.session-attention-state[data-state="sending"] {
-  border-color: color-mix(in srgb, var(--warn) 48%, var(--border));
-  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
-  color: var(--warn);
+.session-attention-state[data-state="stale"] { color: var(--warn); }
+.session-attention-state[data-state="failed"] { color: var(--danger); }
+@keyframes session-running-pulse {
+  50% { opacity: 0.45; }
 }
-
-.session-attention-state[data-state="failed"] {
-  border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
-  background: color-mix(in srgb, var(--danger) 10%, var(--panel));
-  color: var(--danger);
+@media (prefers-reduced-motion: reduce) {
+  .session-attention-state[data-state="running"] { animation: none; }
 }
 
 .session-action-symbol {
@@ -5009,16 +4998,18 @@ pre.command {
     width: 100%;
   }
 
+  /* Keep titles and previews full width; only the footer shares action space. */
+  .desktop-session-list .session-card-meta {
+    min-height: 34px;
+    padding-right: 84px;
+  }
+
   .desktop-session-list .session-card-actions {
     position: absolute;
-    top: 50%;
-    right: 10px;
-    padding-left: 10px;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    bottom: 12px;
+    right: 12px;
     opacity: 0;
     pointer-events: none;
-    transform: translateY(-50%);
     transition: opacity 120ms ease;
   }
 
@@ -5862,7 +5853,26 @@ pre.command {
 .chat-title-stack { min-width: 0; }
 .chat-title-stack .project-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-load-error { padding: 12px; color: var(--warn); border: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.timeline-window-control { min-height: 44px; width: 100%; }
+.timeline-window-control {
+  justify-self: center;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.timeline-window-control:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (pointer: coarse) {
+  .timeline-window-control { min-height: 44px; }
+}
 .timeline-history-end { text-align: center; padding: 8px; color: var(--muted); font-size: 12px; }
 .timeline-jump-latest { position: absolute; z-index: 12; right: 20px; bottom: calc(var(--composer-height, 72px) + 20px); width: 44px; height: 44px; min-height: 44px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--text); background: var(--panel); border: 1px solid var(--border); box-shadow: 0 2px 8px #0001; }
 .timeline-jump-latest[hidden] { display: none; }
@@ -5917,16 +5927,8 @@ pre.command {
 @media (pointer: coarse) {
   .approval-actions button, .card .actions button, .settings-toggle-button, .composer-status-action { min-height: 44px; min-width: 44px; }
 }
-.session-attention-state[data-state="failed"] { color: var(--danger); border-color: var(--danger); }
-.session-attention-state[data-state="stale"] { color: var(--warn); border-color: var(--warn); }
 .settings-drawer { max-height: min(700px, calc(100dvh - var(--chat-header-height, 80px) - var(--composer-height, 100px) - 20px)); }
 @media (max-width: 360px) { .approval-actions button { font-size: 14px; padding-inline: 6px; white-space: nowrap; } }
-@media (min-width: 980px) and (orientation: landscape) and (hover: hover) and (pointer: fine) {
-  .desktop-session-list .session-card { grid-template-columns: minmax(0, 1fr) 72px; }
-  .desktop-session-list .session-card-actions { position: static; padding: 0; transform: none; background: transparent; align-self: end; }
-  .desktop-session-list .session-card-title-row { flex-wrap: wrap; }
-}
-
 #session-name-input { min-height: 44px; font-size: 16px; }
 #session-name-error { color: var(--danger); }
 

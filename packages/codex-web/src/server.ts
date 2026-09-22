@@ -243,6 +243,7 @@ const DEFAULT_STATIC_SOURCE_FILES = [
   'request-context.js',
   'draft-store.js',
   'session-rename.js',
+  'session-attention.js',
   'network-recovery.js',
   'submission-delivery.js',
   'session-loader.js',
@@ -515,6 +516,7 @@ function loadDefaultStaticFiles(): StaticFilesRecord {
     '/network-recovery.js': () => versionedAsset(readText('network-recovery.js'), 'application/javascript; charset=utf-8'),
     '/submission-delivery.js': () => versionedAsset(readText('submission-delivery.js'), 'application/javascript; charset=utf-8'),
     '/session-rename.js': () => versionedAsset(readText('session-rename.js'), 'application/javascript; charset=utf-8'),
+    '/session-attention.js': () => versionedAsset(readText('session-attention.js'), 'application/javascript; charset=utf-8'),
     '/draft-store.js': () => versionedAsset(readText('draft-store.js'), 'application/javascript; charset=utf-8'),
     '/ui-localization.js': () => versionedAsset(readText('ui-localization.js'), 'application/javascript; charset=utf-8'),
     '/session-file-viewer.js': () => versionedAsset(readText('session-file-viewer.js'), 'application/javascript; charset=utf-8'),
@@ -6049,6 +6051,7 @@ function presentSessionForUser({
       ? { goal: presentSessionGoal(session.goal) }
       : {}),
     activeTurnId: typeof session.activeTurnId === 'string' ? session.activeTurnId : null,
+    latestTurn: session.latestTurn ? { id: session.latestTurn.id, status: session.latestTurn.status } : null,
     ...(includeActivity && activityState ? { activityState } : {}),
     ...(includeActivity && Number.isFinite(session.turnStartedAt) ? { turnStartedAt: session.turnStartedAt } : {}),
     ...(includeActivity && Number.isFinite(session.lastBusinessActivityAt) ? { lastBusinessActivityAt: session.lastBusinessActivityAt } : {}),

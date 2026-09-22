@@ -414,6 +414,33 @@ test('runtime lists sessions from thread summaries without hydrating every threa
   assert.equal(sessions[1]?.activityState, 'running');
 });
 
+test('session summaries expose terminal results and do not revive a completed provider turn', async () => {
+  const stale = { ...createThread('thread_1'), runtimeStatus: { type: 'active', activeFlags: [] },
+    turns: [{ id: 'turn_result', status: 'inProgress', error: null, items: [] }] };
+  let started = false;
+  const client = createThreadListClient(async () => ({ items: started ? [stale] : [createThread()], nextCursor: null }));
+  client.readThread = async () => started ? stale : createThread();
+  client.startTurn = async args => {
+    await args.onTurnStarted?.({ threadId: 'thread_1', turnId: 'turn_result' });
+    started = true;
+    return { threadId: 'thread_1', turnId: 'turn_result', status: 'completed', outputText: 'Final answer' };
+  };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+  try {
+    await runtime.startTurn('thread_1', { text: 'Run task' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const sessions = await runtime.listSessions();
+    assert.equal(sessions[0]?.activeTurnId, null);
+    assert.equal(sessions[0]?.activityState, null);
+    assert.deepEqual(sessions[0]?.latestTurn, { id: 'turn_result', status: 'completed' });
+    const detail = await runtime.readSession('thread_1');
+    assert.equal(detail?.activeTurnId, null);
+    assert.deepEqual(detail?.latestTurn, { id: 'turn_result', status: 'completed' });
+    stale.turns = [{ id: 'turn_older', status: 'completed', error: null, items: [] }];
+    assert.deepEqual((await runtime.readSession('thread_1'))?.latestTurn, { id: 'turn_result', status: 'completed' });
+  } finally { await runtime.stop(); }
+});
+
 test('runtime follows thread list cursors until every session is collected', async () => {
   const cursors: Array<string | null | undefined> = [];
   const client = createThreadListClient(async (args) => {

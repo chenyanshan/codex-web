@@ -513,6 +513,8 @@ const SESSION_RENAME = globalThis.CodexWebSessionRename.createController({
   },
 });
 
+const SESSION_ATTENTION = globalThis.CodexWebSessionAttention.createController({ storage: localStorage, owner: currentDraftOwnerKey });
+
 const loadSessionOpenData = globalThis.CodexWebSessionLoader.createLoader({
   state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, dedupeTimelineProjectionEntries,
 });
@@ -896,6 +898,7 @@ function render() {
     resetComposerOffset();
     return;
   }
+  markVisibleSessionResultRead();
   const nextMain = renderMain();
   const nextDrawer = nextMain.querySelector?.('.settings-drawer');
   const liveDrawer = app.querySelector?.('.settings-drawer');
@@ -921,6 +924,7 @@ function render() {
   if (timeline) {
     syncComposerOffset();
     attachTimelineScrollTracking({ updateInitial: false });
+    syncTimelineHistoryBoundary();
     restoreTimelineViewport(viewport);
   } else {
     resetComposerOffset();
@@ -2387,6 +2391,7 @@ function normalizeTimelineMessageDisplay(role, text, attachments) {
 }
 
 function renderSessionCards() {
+  markVisibleSessionResultRead();
   const sessions = sortedSessions();
   if (!sessions.length) {
     if (isCurrentSessionScopeLoading()) {
@@ -2417,6 +2422,8 @@ function renderSessionCards() {
     const deliveryFailureVisible = session.localSubmission === true
       ? session.deliveryFailureVisible === true
       : submissionFailureIsVisible(pendingDelivery);
+    const attentionState = deliveryState === 'outcome_unknown' || (deliveryState === 'failed' && deliveryFailureVisible)
+      ? deliveryState : activityState || (SESSION_ATTENTION.unread(session) ? 'unread' : '');
     const favorite = isFavoriteSession(session);
     const favoriteLabel = t(favorite ? 'Unfavorite' : 'Favorite');
     const archiveLabel = t(session.archived === true ? 'Unarchive' : 'Archive');
@@ -2427,9 +2434,7 @@ function renderSessionCards() {
           <span class="session-card-main">
             <span class="session-card-title-row">
               <span class="session-title" data-i18n-skip>${escapeHtml(sessionDisplayTitle(session))}</span>
-              ${deliveryState === 'outcome_unknown' || (deliveryState === 'failed' && deliveryFailureVisible)
-                ? `<span class="session-attention-state" data-state="${escapeAttribute(deliveryState)}">${escapeHtml(t(submissionDeliveryLabel(deliveryState)))}</span>`
-                : activityState ? `<span class="session-attention-state" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityState === 'waiting_approval' ? 'Needs approval' : activityState === 'failed' ? 'Failed' : activityState === 'stale' ? 'No recent activity' : 'Active'))}</span>` : ''}
+              ${renderSessionAttentionDot(attentionState, attentionState === deliveryState ? submissionDeliveryLabel(deliveryState) : '')}
             </span>
             ${latestPreview ? `<span class="session-preview" data-i18n-skip>${escapeHtml(latestPreview)}</span>` : ''}
           </span>
@@ -2524,12 +2529,33 @@ function normalizeSessionCardText(value) {
 function sessionActivityState(session) {
   if (session?.id === state.sessionId && state.pendingTurn) {
     const waitingApproval = [...state.approvals.values()].some((approval) => approval?.resolved === false);
-    if (waitingApproval) {
+    if (waitingApproval || session.activityState === 'waiting_approval') {
       return 'waiting_approval';
     }
     return 'running';
   }
+  if (session?.id === state.sessionId && !state.sessionStatusPending && state.currentSession?.id === session.id) {
+    if (state.status === 'Ready' && !state.currentSession.activeTurnId) return null;
+    if (state.status === 'Turn failed') return 'failed';
+  }
   return sessionActivityStateFromSummary(session);
+}
+
+function renderSessionAttentionDot(status, deliveryLabel = '') {
+  if (!status) return '';
+  const label = t(deliveryLabel || { running: 'Running', waiting_approval: 'Needs approval', failed: 'Failed', stale: 'No recent activity', unread: 'Completed · Unread', outcome_unknown: 'Confirm send result' }[status] || 'Waiting to send');
+  return `<span class="session-attention-state" data-state="${escapeAttribute(status)}" role="img" aria-label="${escapeAttribute(label)}" title="${escapeAttribute(label)}"></span>`;
+}
+
+function markVisibleSessionResultRead() {
+  if (document.visibilityState === 'hidden' || !state.sessionId || state.pendingTurn
+    || state.sessionHistoryPending || state.sessionHistoryError || isPassivelySelectedDesktopSession()
+    || state.desktopSettingsOpen || state.desktopOverlay || !state.timelineShouldFollowLatest || state.currentSession?.timelineHasNewer
+    || state.view === 'new' || !(state.view === 'chat' || isDesktopWorkspaceView())) return false;
+  const session = state.currentSession;
+  const turn = SESSION_ATTENTION.latestTurn(session);
+  if (!turn?.id || !state.timeline.some(item => item.role === 'assistant' && timelineTurnId(item) === turn.id)) return false;
+  return SESSION_ATTENTION.markRead(session);
 }
 
 function setSessionSummaryActivity(sessionId, activityState, activeTurnId = '') {
@@ -2537,7 +2563,7 @@ function setSessionSummaryActivity(sessionId, activityState, activeTurnId = '') 
   if (!normalizedSessionId) {
     return false;
   }
-  const normalizedActivity = activityState === 'running' || activityState === 'waiting_approval'
+  const normalizedActivity = ['running', 'waiting_approval', 'failed', 'stale'].includes(activityState)
     ? activityState
     : null;
   const normalizedTurnId = String(activeTurnId || '').trim();
@@ -2548,7 +2574,7 @@ function setSessionSummaryActivity(sessionId, activityState, activeTurnId = '') 
     }
     const previousActivity = sessionActivityStateFromSummary(session);
     const previousTurnId = String(session.activeTurnId || '').trim();
-    const nextTurnId = normalizedActivity ? (normalizedTurnId || previousTurnId) : '';
+    const nextTurnId = ['running', 'waiting_approval', 'stale'].includes(normalizedActivity) ? (normalizedTurnId || previousTurnId) : '';
     if (previousActivity === normalizedActivity && previousTurnId === nextTurnId) {
       return session;
     }
@@ -2560,7 +2586,7 @@ function setSessionSummaryActivity(sessionId, activityState, activeTurnId = '') 
     if (normalizedActivity) {
       next.activityState = normalizedActivity;
     } else {
-      delete next.activityState;
+      next.activityState = null;
     }
     return next;
   };
@@ -2574,10 +2600,25 @@ function setSessionSummaryActivity(sessionId, activityState, activeTurnId = '') 
 }
 
 function sessionActivityStateFromSummary(session) {
+  const latest = SESSION_ATTENTION.latestTurn(session);
+  if (session?.activityState === 'failed' || session?.activityState === 'waiting_approval') return session.activityState;
+  if (session?.activityState === 'running' && !session.activeTurnId && !session.latestTurn) return 'running';
+  if (latest && (!session?.activeTurnId || session.activeTurnId === latest.id)) {
+    if (isFailureTurnStatus(latest.status)) return 'failed';
+    if (isSuccessTurnStatus(latest.status) || isInterruptedTurnStatus(latest.status)) return null;
+  }
   if (['running', 'waiting_approval', 'failed', 'stale'].includes(session?.activityState)) {
     return session.activityState;
   }
   return String(session?.activeTurnId || '').trim() ? 'running' : null;
+}
+
+function recordSessionTerminalTurn(turnId, status) {
+  if (!state.sessionId || !turnId) return;
+  const update = session => session?.id === state.sessionId ? { ...session, latestTurn: { id: turnId, status } } : session;
+  state.currentSession = update(state.currentSession);
+  state.sessions = state.sessions.map(update);
+  for (const scope of Object.keys(state.sessionsByScope)) state.sessionsByScope[scope] = state.sessionsByScope[scope].map(update);
 }
 
 function renderArchiveActionIcon() {
@@ -2785,7 +2826,7 @@ function renderTimeline() {
   }
   const allItems = allDisplayTimelineItems();
   const end = Math.min(allItems.length, state.timelineWindowEnd ?? allItems.length);
-  const earlier = hasMoreSessionHistory() ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="-1"${sessionTimelinePageRequest ? ' disabled aria-busy="true"' : ''}>${escapeHtml(t(sessionTimelinePageRequest ? 'Loading history…' : 'Show earlier messages'))}</button>` : state.sessionHistoryPending ? '' : `<div class="timeline-history-end meta">${escapeHtml(t('Beginning of conversation'))}</div>`;
+  const earlier = hasMoreSessionHistory() ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="-1"${sessionTimelinePageRequest ? ' disabled aria-busy="true"' : ''}>${escapeHtml(t(sessionTimelinePageRequest ? 'Loading history…' : 'Show earlier messages'))}</button>` : state.sessionHistoryPending || state.sessionHistoryError ? '' : `<div class="timeline-history-end meta" hidden>${escapeHtml(t('Beginning of conversation'))}</div>`;
   const newer = end < allItems.length || state.currentSession?.timelineHasNewer === true ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="1">${escapeHtml(t('Show newer messages'))}</button>` : '';
   return historyNotice + earlier + visibleItems.map((item) => renderTimelineItem(item)).join('') + newer;
 }
@@ -5020,6 +5061,7 @@ function syncComposerOffset() {
       document.documentElement.style.setProperty('--chat-header-height', `${headerHeight}px`);
       const offset = Math.max(220, height + 16);
       document.documentElement.style.setProperty('--composer-offset', `${offset}px`);
+      syncTimelineHistoryBoundary();
     };
     applyComposerOffset();
     if ('ResizeObserver' in window) {
@@ -5147,6 +5189,7 @@ function syncComposerAttachButton() {
 }
 
 function refreshChatDynamicUi({ dirtyEntryIds = [] } = {}) {
+  if (markVisibleSessionResultRead()) refreshVisibleSessionCards();
   if (state.view !== 'chat' && !(state.view === 'sessions' && isDesktopLayout())) {
     return false;
   }
@@ -5163,6 +5206,7 @@ function refreshChatDynamicUi({ dirtyEntryIds = [] } = {}) {
   syncComposerStatusDisplay();
   syncWorkDetailsDialogContent();
   syncComposerErrorDisplay();
+  syncTimelineHistoryBoundary();
   syncComposerOffset();
   return true;
 }
@@ -7974,7 +8018,8 @@ function applyTurnEvent(event, assistantEntry) {
       state.terminalTurnIds.add(event.turnId);
       setWorkStatus(event.turnId, event.status || 'completed');
       state.pendingTurn = false;
-      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, null);
+      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, isFailureTurnStatus(event.status) ? 'failed' : null);
+      recordSessionTerminalTurn(event.turnId, event.status || 'completed');
       state.streamWasBackgrounded = false;
       {
         const completedSessionId = state.sessionId;
@@ -7997,19 +8042,16 @@ function applyTurnEvent(event, assistantEntry) {
       }
       state.turnId = null;
       stopStream();
-      void refreshCurrentSessionMetadata({
-        hydrateTimeline: state.timeline.filter((item) => (
-          item?.kind === 'message'
-          && item.role === 'user'
-          && timelineTurnId(item) === event.turnId
-        )).length > 1,
-      });
+      // Completion confirms execution, not delivery of every assistant event.
+      // Reconcile with stored history even when the live stream missed the answer.
+      void refreshCurrentSessionMetadata({ hydrateTimeline: true });
       break;
     case 'turn.failed':
       state.terminalTurnIds.add(event.turnId);
       setWorkStatus(event.turnId, 'failed');
       state.pendingTurn = false;
-      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, null);
+      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'failed');
+      recordSessionTerminalTurn(event.turnId, 'failed');
       state.streamWasBackgrounded = false;
       state.status = 'Turn failed';
       state.statusTone = 'danger';
@@ -9413,7 +9455,7 @@ function syncRuntimeStatusFromSession(session, { source = 'detail' } = {}) {
         errorMessage: timelineFailure.message,
       });
     }
-    const latestTurn = latestRuntimeTurn(turns);
+    const latestTurn = latestRuntimeTurn(turns) || session.latestTurn;
     if (!latestTurn) {
       if (source === 'detail') {
         clearRuntimeTurnState();
@@ -9523,6 +9565,9 @@ function setRuntimeStatus(status, tone, result) {
   if (canReplace) {
     state.status = status;
     state.statusTone = tone;
+  }
+  if (!result.activeTurnId && ['Ready', 'Turn failed', 'Turn stopped'].includes(status)) {
+    setSessionSummaryActivity(state.sessionId, status === 'Turn failed' ? 'failed' : null);
   }
   return {
     changed: previousStatus !== state.status || previousTone !== state.statusTone || Boolean(result.activeTurnId || result.terminalTurnId),
@@ -9963,6 +10008,7 @@ function serializeSessionSummaryForCache(session) {
     lastUserInput: normalized.lastUserInput,
     lastInputAt: normalized.lastInputAt,
     updatedAt: normalized.updatedAt,
+    latestTurn: normalized.latestTurn || null,
     settings: normalized.settings,
   };
   for (const key of ['projectId', 'projectDisplayName', 'ownerUserId', 'mode', 'archivedAt', 'archivedByUserId', 'archiveSource']) {
@@ -10020,9 +10066,8 @@ function syncCurrentSessionFromList() {
   }
   const session = state.sessions.find((item) => item.id === state.sessionId);
   if (!session) {
-    state.sessionId = null;
-    state.currentSession = null;
-    state.draftSessionActive = false;
+    // Lists may be filtered, paginated, or requested before this session existed.
+    // Only an explicit navigation or a session-not-found response closes the chat.
     return;
   }
   syncProjectWorkDetailsCapability(session);
@@ -10170,6 +10215,7 @@ function mergeSessionSummary(previous, next) {
   return {
     ...previous,
     ...next,
+    ...(Object.prototype.hasOwnProperty.call(next, 'activeTurnId') ? { activityState: next.activityState || null } : {}),
     cwd: next.cwd || previous.cwd,
     projectName: next.projectName || previous.projectName,
     title: next.title || previous.title,
@@ -11443,7 +11489,23 @@ function hasMoreSessionHistory() {
     || (state.currentSession?.timelineComplete === false && state.currentSession?.timelineNextBefore != null);
 }
 
+function syncTimelineHistoryBoundary() {
+  const timeline = document.querySelector('#timeline');
+  const marker = timeline?.querySelector?.('.timeline-history-end');
+  if (!marker || !timeline.clientHeight) return;
+  // The boundary itself must not turn a short conversation into a scrollable one.
+  const markerSpace = marker.hidden ? 0
+    : marker.getBoundingClientRect().height + (parseFloat(getComputedStyle(timeline).rowGap) || 0);
+  const hidden = timeline.scrollHeight - markerSpace <= timeline.clientHeight + 1;
+  if (marker.hidden === hidden) return;
+  const snapshot = captureTimelineViewport();
+  marker.hidden = hidden;
+  restoreTimelineViewport(snapshot);
+}
+
 function syncReadingControls() {
+  syncTimelineHistoryBoundary();
+  if (markVisibleSessionResultRead()) refreshVisibleSessionCards();
   const button = document.querySelector('#timeline-jump-latest');
   if (button) button.hidden = state.timelineShouldFollowLatest && state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer !== true;
 }
@@ -13186,7 +13248,33 @@ function setupStreamRecoveryWatchdog() {
     void CONNECTION.check();
     if (AUTH_RECOVERY.needsRecovery()) { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) void restoreAuth({ automatic: true }); return; }
     void recoverActiveTurnIfStreamUnhealthy({ reconcile: false });
+    void refreshBackgroundSessionAttention();
   }, STREAM_RECOVERY_CHECK_MS);
+}
+
+let backgroundSessionAttentionRequest = null;
+let backgroundSessionAttentionOffset = 0;
+async function refreshBackgroundSessionAttention() {
+  if (backgroundSessionAttentionRequest) return backgroundSessionAttentionRequest;
+  if (!state.token || !state.authSession || document.visibilityState === 'hidden' || isShareContext()
+    || !(state.view === 'sessions' || isDesktopWorkspaceView())) return;
+  const sessions = state.sessions.filter(session => session.id !== state.sessionId
+    && ['running', 'waiting_approval', 'stale'].includes(sessionActivityStateFromSummary(session)));
+  if (!sessions.length) return;
+  const offset = backgroundSessionAttentionOffset % sessions.length;
+  const targets = [...sessions.slice(offset), ...sessions.slice(0, offset)].slice(0, 4);
+  backgroundSessionAttentionOffset = offset + targets.length;
+  const generation = authRequestGeneration;
+  const request = Promise.allSettled(targets.map(async session => {
+    const payload = await apiFetch(`/api/sessions/${encodeURIComponent(session.id)}/status`);
+    if (!isAuthRequestCurrent(generation) || !payload?.session || state.sessionId === session.id) return;
+    upsertSession(payload.session);
+  })).then(() => {
+    if (isAuthRequestCurrent(generation)) refreshVisibleSessionCards();
+  });
+  backgroundSessionAttentionRequest = request;
+  try { await request; }
+  finally { if (backgroundSessionAttentionRequest === request) backgroundSessionAttentionRequest = null; }
 }
 
 async function recoverActiveTurnIfStreamUnhealthy({
