@@ -2,6 +2,24 @@
 /** @typedef {{id?: string, kind?: string, role?: string, meta?: string, text?: string, turnId?: string, clientMessageId?: string, submissionId?: string, deliveryLabel?: string, historyAnchorId?: string}} TimelineMessage */
 (function installTimelineReconciliation() {
   /**
+   * A latest history page owns the order of its overlap with cached history.
+   * Concatenating and deduplicating would keep cached replies before newly
+   * confirmed prompts whose optimistic copies were removed.
+   * @template {TimelineMessage} T
+   * @param {T[]} cached
+   * @param {T[]} incoming
+   * @param {(item: T) => string[]} identities
+   * @returns {T[]}
+   */
+  function mergeLatestHistory(cached, incoming, identities) {
+    const freshIds = new Set(incoming.flatMap(identities));
+    const overlap = cached.findIndex(item => identities(item).some(id => freshIds.has(id)));
+    return [
+      ...(overlap < 0 ? [] : cached.slice(0, overlap).filter(item => item.meta !== 'pending')),
+      ...incoming,
+    ];
+  }
+  /**
    * Authoritative pages describe their own order. A cached "pending" display
    * flag is not a delivery receipt, especially when an older turn left the page.
    * @param {TimelineMessage[]} historyItems
@@ -60,5 +78,5 @@
     const beforeTurn = options.turnId(previous), afterTurn = options.turnId(next);
     return !beforeTurn || !afterTurn || beforeTurn === afterTurn;
   }
-  Object.assign(globalThis, { CodexWebTimelineReconciliation: { pendingMessages, transientDuplicate } });
+  Object.assign(globalThis, { CodexWebTimelineReconciliation: { pendingMessages, transientDuplicate, mergeLatestHistory } });
 }());

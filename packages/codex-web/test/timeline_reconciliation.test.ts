@@ -4,7 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../public/timeline-reconciliation.js', import.meta.url), 'utf8');
-const { pendingMessages, transientDuplicate } = vm.runInNewContext(`${source}\nCodexWebTimelineReconciliation;`);
+const { pendingMessages, transientDuplicate, mergeLatestHistory } = vm.runInNewContext(`${source}\nCodexWebTimelineReconciliation;`);
 type Message = { id: string; kind: string; role: string; text: string; meta: string; turnId?: string; submissionId?: string; clientMessageId?: string; deliveryLabel?: string; historyAnchorId?: string };
 const message = (id: string, overrides: Partial<Message> = {}): Message => ({ id, kind: 'message', role: 'user', text: 'Continue', meta: 'pending', ...overrides });
 const options = (overrides = {}) => ({
@@ -14,6 +14,29 @@ const options = (overrides = {}) => ({
   activeTurnId: '', authoritative: true, latestWindow: true, ...overrides,
 });
 const ids = (items: Message[]) => Array.from(items, item => item.id);
+const identities = (item: Message) => [`id:${item.id}`, ...(item.clientMessageId ? [`client:${item.clientMessageId}`] : [])];
+
+test('latest history replaces overlapping cached order while preserving the older prefix', () => {
+  const older = message('older', { meta: 'history' });
+  const prompt = message('prompt', { meta: 'history' });
+  const answer = message('answer', { role: 'assistant', meta: 'final' });
+  const pending = message('local', { deliveryLabel: 'Server received' });
+  assert.deepEqual(ids(mergeLatestHistory([older, pending, answer], [prompt, answer], identities)), ['older', 'prompt', 'answer']);
+  // Repair an already cached inversion too, even without an optimistic copy.
+  assert.deepEqual(ids(mergeLatestHistory([older, answer, prompt], [prompt, answer], identities)), ['older', 'prompt', 'answer']);
+});
+
+test('latest history uses stable aliases and preserves distinct same-text prompts', () => {
+  const previous = message('previous', { meta: 'history', clientMessageId: 'previous-client' });
+  const cached = message('cached', { meta: 'history', clientMessageId: 'new-client' });
+  const native = message('native', { meta: 'history', clientMessageId: 'new-client' });
+  assert.deepEqual(ids(mergeLatestHistory([previous, cached], [native], identities)), ['previous', 'native']);
+});
+
+test('disconnected latest pages do not append unrelated cached history', () => {
+  assert.deepEqual(ids(mergeLatestHistory([message('old')], [message('new')], identities)), ['new']);
+  assert.deepEqual(ids(mergeLatestHistory([], [message('new')], identities)), ['new']);
+});
 
 test('a recent authoritative page does not append an old receipt but keeps real unsent messages', () => {
   const history = [message('native-new', { meta: 'history', turnId: 'new' })];

@@ -178,6 +178,40 @@ test('old acknowledged attachment messages never reappear at the latest edge aft
   await expect(page.locator('[data-timeline-id="local_old_A"]')).toHaveCount(0);
 });
 
+test('overlapping latest history keeps a confirmed prompt before its cached AI answer', async ({ page }, info) => {
+  const history = messages(52);
+  const prompt = { id: 'native_latest_prompt', kind: 'message', role: 'user', text: 'Show all direct replies', meta: 'history', turnId: 'latest_turn' };
+  const answer = { id: 'latest_answer', kind: 'message', role: 'assistant', text: 'Here are all direct replies', meta: 'final', turnId: 'latest_turn' };
+  const receipt = { ...prompt, id: 'local_latest_prompt', meta: 'pending', submissionId: 'received_submission', deliveryLabel: 'Server received', historyAnchorId: history.at(-1).id };
+  const cached = [...history, receipt, answer];
+  await page.addInitScript(({ id, cached }) => {
+    if (!localStorage.getItem('codexWebTimelineCache')) localStorage.setItem('codexWebTimelineCache', JSON.stringify({ version: 3, entries: [{ sessionId: id, savedAt: Date.now(), timeline: cached, history: cached, historyComplete: true, batches: [], approvals: [] }] }));
+  }, { id, cached });
+  await open(page, { count: 52, handle: async (route, url) => {
+    if (!url.pathname.endsWith('/timeline')) return false;
+    await route.fulfill({ json: { session: metadata, items: [...history.slice(-48), prompt, answer], hasMore: true, nextBefore: '4', hasNewer: false } });
+    return true;
+  } });
+  for (const action of [async () => {}, () => refresh(page), () => page.reload()]) {
+    await action();
+    await expect(page.locator('[data-timeline-id="native_latest_prompt"]')).toHaveCount(1);
+    await expect(page.locator('[data-timeline-id="local_latest_prompt"]')).toHaveCount(0);
+    const order = await page.locator('#timeline [data-timeline-id]').evaluateAll(nodes => nodes.map(node => node.textContent));
+    expect(order.findIndex(text => text.includes(prompt.text))).toBeLessThan(order.findIndex(text => text.includes(answer.text)));
+  }
+  // A reader can still hold an inverted in-memory window from the old merger.
+  // The foreground refresh must not reintroduce it after the loader repairs it.
+  await page.evaluate(({ history, prompt, answer }) => {
+    globalThis.__readingTest.state.sessionHistoryItems = [...history, answer, prompt];
+  }, { history, prompt, answer });
+  const before = await readAt(page, 250);
+  await refresh(page);
+  await expect.poll(() => page.evaluate(() => globalThis.__readingTest.state.sessionHistoryItems.slice(-2).map(item => item.text))).toEqual([prompt.text, answer.text]);
+  expect(await page.evaluate(() => globalThis.__readingTest.state.sessionHistoryItems[0].id)).toBe(history[0].id);
+  await expectAnchor(page, before);
+  await page.screenshot({ path: info.outputPath('confirmed-prompt-order.png'), animations: 'disabled' });
+});
+
 test('late initial status preserves the already visible history and user reading position', async ({ page }) => {
   const gate = deferred();
   await open(page, { slowStatus: true, handle: async (route, url) => {

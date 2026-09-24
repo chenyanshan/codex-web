@@ -1,5 +1,5 @@
 (function initializeSessionLoader(globalScope) {
-  function createLoader({ state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, dedupeTimelineProjectionEntries }) {
+  function createLoader({ state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, mergeLatestTimelineHistory }) {
     return async function loadSessionOpenData(sessionSummary, { signal = null, onProgress = null, anchors = [], latest = false } = {}) {
       const sessionId = String(sessionSummary?.id || '').trim();
       if (!sessionId) throw new Error('Session id is required.');
@@ -36,7 +36,7 @@
         const cached = state.timelineCache.get(sessionId);
         const cachedTimeline = cached?.history?.length ? cached.history : cached?.timeline?.length ? cached.timeline : null;
         const joined = hasRemoteTimeline && !latest && cached?.hasNewer !== true && timelinePayload.hasNewer !== true && timelinePayload.hasMore === true && cachedTimeline && timelinesHaveStableOverlap(cachedTimeline, timelinePayload.items);
-        const timeline = hasRemoteTimeline ? joined ? dedupeTimelineProjectionEntries([...cachedTimeline.filter(item => item.meta !== 'pending'), ...timelinePayload.items]) : timelinePayload.items : cachedTimeline;
+        const timeline = hasRemoteTimeline ? joined ? mergeLatestTimelineHistory(cachedTimeline, timelinePayload.items) : timelinePayload.items : cachedTimeline;
         return {
           session: {
             ...sessionSummary, ...(timelineSession || {}), ...(statusSession || {}), ...executionFields,

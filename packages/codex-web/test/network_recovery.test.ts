@@ -153,7 +153,7 @@ test('compact history/status arrive independently and confirmed status beats a l
     const stages: any[] = [];
     const load = context.CodexWebSessionLoader.createLoader({
       state: { timelineCache: new Map() }, apiFetch: (path: string) => new Promise((done) => { resolve[path.includes('/status') ? 'status' : 'timeline'] = done; }),
-      isFatalSessionOpenError: () => false, timelinesHaveStableOverlap: () => false, dedupeTimelineProjectionEntries: (items: unknown[]) => items,
+      isFatalSessionOpenError: () => false, timelinesHaveStableOverlap: () => false, mergeLatestTimelineHistory: (_cached: unknown[], items: unknown[]) => items,
     });
     const loading = load({ id: 'one' }, { onProgress: (payload: unknown) => stages.push(payload) });
     const payloads = {
@@ -188,7 +188,7 @@ test('execution summaries prefer freshness and otherwise retain an active turn f
   ] as const) {
     const load = context.CodexWebSessionLoader.createLoader({ state: { timelineCache: new Map() },
       apiFetch: async (path: string) => path.includes('/status') ? { session: { id: 'one', ...status }, turnSnapshot: { turnId: 'wrong' } } : { session: { id: 'one', ...timeline }, items: [], turnSnapshot: { turnId: 'running' } },
-      isFatalSessionOpenError: () => false, timelinesHaveStableOverlap: () => false, dedupeTimelineProjectionEntries: (items: unknown[]) => items });
+      isFatalSessionOpenError: () => false, timelinesHaveStableOverlap: () => false, mergeLatestTimelineHistory: (_cached: unknown[], items: unknown[]) => items });
     const result = await load({ id: 'one' });
     assert.equal(result.session.activeTurnId, expected);
     assert.equal(result.turnSnapshot?.turnId || null, expected);

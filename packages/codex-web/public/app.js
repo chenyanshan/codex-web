@@ -516,7 +516,7 @@ const SESSION_RENAME = globalThis.CodexWebSessionRename.createController({
 const SESSION_ATTENTION = globalThis.CodexWebSessionAttention.createController({ storage: localStorage, owner: currentDraftOwnerKey });
 
 const loadSessionOpenData = globalThis.CodexWebSessionLoader.createLoader({
-  state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, dedupeTimelineProjectionEntries,
+  state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, mergeLatestTimelineHistory,
 });
 
 const CONNECTION = globalThis.CodexWebNetworkRecovery.createConnectionState({
@@ -6305,6 +6305,12 @@ async function selectSession(sessionId) {
   } finally { if (isCurrent()) navigation.finish(); }
 }
 
+function mergeLatestTimelineHistory(cached, incoming) {
+  return dedupeTimelineProjectionEntries(globalThis.CodexWebTimelineReconciliation.mergeLatestHistory(
+    cached, incoming, timelineContinuityIdentities,
+  ));
+}
+
 function timelinesHaveStableOverlap(first, second) {
   const firstIdentities = new Set(
     (Array.isArray(first) ? first : []).flatMap(timelineContinuityIdentities),
@@ -8392,7 +8398,7 @@ async function refreshCurrentSessionMetadata({
     if (!latest && payload.hasTimelineData && !snapshot.shouldFollowLatest) {
       const incoming = normalizeSessionTimeline(payload.session.timeline);
       const overlap = timelinesHaveStableOverlap(state.sessionHistoryItems, incoming);
-      if (overlap && state.currentSession?.timelineHasNewer !== true && payload.session.timelineHasNewer !== true) payload.session.timeline = dedupeTimelineProjectionEntries([...state.sessionHistoryItems.filter(item => item.meta !== 'pending'), ...incoming]);
+      if (overlap && state.currentSession?.timelineHasNewer !== true && payload.session.timelineHasNewer !== true) payload.session.timeline = mergeLatestTimelineHistory(state.sessionHistoryItems, incoming);
       else if (!snapshot.anchors.some(anchor => incoming.some(item => item.id === anchor.id)) && snapshot.anchors.length) {
         Object.assign(payload.session, { timeline: state.sessionHistoryItems, timelineComplete: state.currentSession.timelineComplete, timelineNextBefore: state.currentSession.timelineNextBefore, timelineNextAfter: state.currentSession.timelineNextAfter, timelineHasNewer: state.currentSession.timelineHasNewer });
       }
