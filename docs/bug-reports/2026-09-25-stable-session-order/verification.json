@@ -1,0 +1,238 @@
+{
+  "recordedAt": "2026-09-25T01:57:21.150291+00:00",
+  "scope": [
+    "stable session order",
+    "archive target guard",
+    "cached session loading banner layout"
+  ],
+  "sourceCheckpoint": "/home/ubuntu/.codex-web/source-checkpoints/stable-session-order-20260925T012558Z/",
+  "incrementalPatch": {
+    "path": "implementation.patch",
+    "sha256": "372e62abac3b839e99bd26068446ce79338ba07ff1879712122efdf82bfa484f",
+    "files": [
+      "packages/codex-web/public/app.js",
+      "packages/codex-web/public/session-pagination.js",
+      "packages/codex-web/src/admin_session_page.ts",
+      "packages/codex-web/src/runtime.ts",
+      "packages/codex-web/src/server.ts",
+      "packages/codex-web/src/session_list_page.ts",
+      "packages/codex-web/src/session_settings_store.ts",
+      "packages/codex-web/test/admin_session_page.test.ts",
+      "packages/codex-web/test/browser/fixture-server.mjs",
+      "packages/codex-web/test/browser/session-attention.spec.js",
+      "packages/codex-web/test/browser/session-cache-stability.spec.js",
+      "packages/codex-web/test/browser/session-stable-order.spec.js",
+      "packages/codex-web/test/browser/weak-network.spec.js",
+      "packages/codex-web/test/public_ui.test.ts",
+      "packages/codex-web/test/runtime.test.ts",
+      "packages/codex-web/test/server_auth.test.ts",
+      "packages/codex-web/test/server_multi_user.test.ts",
+      "packages/codex-web/test/session_list_page.test.ts",
+      "packages/codex-web/test/session_settings_store.test.ts"
+    ],
+    "reverseApplyCheck": "passed, not applied"
+  },
+  "sourceFiles": {
+    "packages/codex-web/public/app.js": "2973d30f7cbca4cfaedad3331b8aad3f113176e5db32f284a8ab3ef4cab89d1a",
+    "packages/codex-web/public/session-pagination.js": "0c38a32552fcb89cdb86b24d595d0706cf76405f6d1aeeea0ac0c8c53b9acb16",
+    "packages/codex-web/src/admin_session_page.ts": "0ca84982347ffb32353eaa99a7ada88cc438f3bf596c31850ddf804d891682d7",
+    "packages/codex-web/src/runtime.ts": "9033d085482eca7b5d9c69e0dbe11cbfc4798ab90dec60246b9cfa7d129bf76b",
+    "packages/codex-web/src/server.ts": "2aa860122b8192f683c258239a542d2645f82abe18f4a48ffac47afcbb44e2f0",
+    "packages/codex-web/src/session_list_page.ts": "c66478590b9aa2cbd678407f03ddf4a1d0d5f5fd1b783f4335ea23af34c27597",
+    "packages/codex-web/src/session_settings_store.ts": "aeadb125b4daf25ca6042029358950b332bbf9d8b10226a80fcd7ae2d546a90a",
+    "packages/codex-web/test/admin_session_page.test.ts": "a9e91f97c6d3ee090fe4e63b6b247e919c1f8b8f538bef7139b9984848322809",
+    "packages/codex-web/test/browser/fixture-server.mjs": "df34e8b83a296a64eb6af4035a97f45422f72e5a5f28e57d779ee73a95e64e19",
+    "packages/codex-web/test/browser/session-attention.spec.js": "10e8fa48b96fc26871bd35db97cc0473d4418f152ccc322e735c979101311223",
+    "packages/codex-web/test/browser/session-cache-stability.spec.js": "d127b9f153fa3093dc42add2ea961339f191e91e586dc66b82d37ab9b6de4b62",
+    "packages/codex-web/test/browser/session-stable-order.spec.js": "212984716efbd2f69a29bce15b106fabd1de0377b13149755f8a8fae4f16b529",
+    "packages/codex-web/test/browser/weak-network.spec.js": "d2d5ce6482a0f52e8c972144edc57e7399d9755f4c2950d1187e5d6adde2de4d",
+    "packages/codex-web/test/public_ui.test.ts": "efc4bf3d29b988ca4942b22a134320d1fca3b945c4b5ff4cd3b15f3cff35433c",
+    "packages/codex-web/test/runtime.test.ts": "04b251dcdcb7c8b54a106c0fb48481770c95766cfa99db9568112fda9955b3fc",
+    "packages/codex-web/test/server_auth.test.ts": "fd62e19bd455509b110cc7adbd3ee17e4402580c2c01b87e56337ab5b9b8818c",
+    "packages/codex-web/test/server_multi_user.test.ts": "0e6a84ff82407659b37ed5a2d5685c5651c835f060360d98c7cacaac4364c471",
+    "packages/codex-web/test/session_list_page.test.ts": "ba52708af8e448626aa26c228b36fe94ff7a66c5070808cd014993c601055e4b",
+    "packages/codex-web/test/session_settings_store.test.ts": "270a811bf4cc2779062e01c418d53675e1e20b961bceafb543c1b82cf4a8cf80"
+  },
+  "checks": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "result": "passed",
+      "log": {
+        "path": "/tmp/codex-stable-order-final-typecheck.log",
+        "sha256": "6741b5a8e00a5b45cde28af3408f3feb8520b72d50c75aa88be9aabd1dd9b6c9"
+      }
+    },
+    "lint": {
+      "command": "npm run lint",
+      "result": "passed",
+      "log": {
+        "path": "/tmp/codex-stable-order-lint.log",
+        "sha256": "c29534b8d513bb453278ee4d47a1f3d1f835b0a6d4a1daf7b046befd7e31c11f"
+      }
+    },
+    "runtimeAndStore": {
+      "result": "103 passed",
+      "log": {
+        "path": "/tmp/stable-order-runtime-tests.log",
+        "sha256": "d2ebdbac03b4f8815f55894ab3db2c4e6c02c67df9ef5d5d5898934df6af5ca7"
+      }
+    },
+    "focusedRegression": {
+      "scope": "runtime, settings, UI, startup budget, service worker, attention, list paging, submission API; before final cache-banner adjustment",
+      "result": "618 passed",
+      "log": {
+        "path": "/tmp/codex-stable-order-final-focused.log",
+        "sha256": "0e60ceb8dceef95b3b6b4ce4fd3af75dc6101494eaadb1dd23bfeed11a31bf8b"
+      }
+    },
+    "finalUiAndBudget": {
+      "scope": "final app.js and public_ui.test.ts, frontend_budget.test.ts",
+      "result": "476 passed",
+      "log": {
+        "path": "/tmp/codex-stable-order-final-ui-budget.log",
+        "sha256": "51736b51b7be8ed047dace5db5652aa55f62cc173e46b2512e947b552be0dc95"
+      }
+    },
+    "adminAndMultiUser": {
+      "scope": "admin audit ordering and multi-user authorization",
+      "result": "76 passed",
+      "log": {
+        "path": "/tmp/codex-stable-order-admin-tests.log",
+        "sha256": "3c31655e5cf1eeba88641d49c93d52e2bd01b4180cbd2ace882e1f4f8c13052b"
+      }
+    },
+    "backendEarlierRun": {
+      "scope": "auth, list, submission, admin, multi-user",
+      "result": "173 passed, 1 admin audit-order regression fixed and covered by subsequent 76-pass run",
+      "log": {
+        "path": "/tmp/codex-stable-order-backend-tests.log",
+        "sha256": "d8965535966ca487a006ced66c3c8e7720145eb859b7884f5918b49127fb85b4"
+      }
+    },
+    "browserRegression": {
+      "scope": "stable order, archive, reading, weak network, output recovery, attention, Markdown links, admin history",
+      "result": "80 passed, 119 skipped; 1 attention fixture missing canonical listOrderAt, resolved in targeted rerun",
+      "log": {
+        "path": "/tmp/codex-stable-order-regression-browser.log",
+        "sha256": "6c5592791e6a56e5067c78f01ad318d1d43babadb070f95030c8188bae517a0a"
+      }
+    },
+    "browserAttentionRerun": {
+      "result": "2 passed, 3 skipped",
+      "log": {
+        "path": "/tmp/codex-stable-order-attention-browser.log",
+        "sha256": "a934be7ca5e8b752e7503e736710bc54379bd551467abfd3be5f347d79cbf6c2"
+      }
+    },
+    "browserCacheAndReading": {
+      "scope": "cached geometry, reading position, weak network",
+      "result": "51 passed, 92 skipped; 2 old weak-network loading-banner expectations updated because actual content was already visible",
+      "log": {
+        "path": "/tmp/codex-stable-order-cache-browser.log",
+        "sha256": "03281223ab9be66ea95e40ea7cccb40edc31491a4553929c2c227ceb4d1e4872"
+      }
+    },
+    "browserCacheAndWeakNetworkRerun": {
+      "scope": "cached geometry: desktop, 390 px, 320 px all passed; all weak-network cases passed",
+      "result": "14 passed, 24 skipped; 2 new empty-first-open fixture failures resolved below",
+      "log": {
+        "path": "/tmp/codex-stable-order-cache-final-browser.log",
+        "sha256": "de8cad5a4521066505da4643a1633d21f1f40d6dad41628fddbbc8768501401e"
+      }
+    },
+    "browserEmptyFirstOpenRerun": {
+      "command": "npx playwright test session-cache-stability.spec.js --grep 'uncached empty' --workers=2",
+      "resolution": "The fixture title was a legacy visible message preview. Empty title exercises an actually empty timeline. Loading and eventual-content assertions unchanged.",
+      "result": "2 passed, 3 skipped",
+      "log": {
+        "path": "/tmp/codex-stable-order-empty-cache-browser.log",
+        "sha256": "e3fe51325544dcc218f620206e6b097c927be45e617304e73fc2b5173c29c3b6"
+      }
+    },
+    "build": {
+      "command": "npm run build",
+      "result": "passed; 39 public assets, 767722 bytes",
+      "log": {
+        "path": "/tmp/codex-stable-order-build-final.log",
+        "sha256": "1d0cb5c91f5946ba0627bf84bbb0bb8e31ca0b29069411aa543da954899991d4"
+      }
+    },
+    "builtPublicSmoke": {
+      "command": "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/home/ubuntu/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome npm run test:built-public --workspace packages/codex-web",
+      "result": "passed; 27 scripts, 0 browser errors",
+      "log": {
+        "path": "/tmp/codex-stable-order-built-smoke-final.log",
+        "sha256": "b2e792f55aaa15a7d126c0d0167d20abe634f7a67c65fe3069b498c3c89317aa"
+      }
+    },
+    "gatewayVerification": {
+      "result": "433 gateway + 96 AIOps tests passed; format, lint, mypy, diff checks passed; source-stamp check repeated successfully",
+      "log": {
+        "path": "/tmp/codex-stable-order-gateway-verification.log",
+        "sha256": "19e2d108f8cbce3e27f50de514dcfb0976b87131364445c6e8c345b933e49133"
+      }
+    },
+    "diffWhitespace": "git diff --check passed",
+    "independentSessionVisualRollback": "git apply --reverse --check docs/audits/2026-09-25-frontend-redesign-evidence/session-polish.patch passed; not applied",
+    "priorAuditEvidence": "14 overwritten images/resize record restored byte-for-byte from pre-task checkpoint"
+  },
+  "browserEnvironment": {
+    "engine": "Chromium",
+    "executable": "/home/ubuntu/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome",
+    "note": "Desktop and emulated mobile viewports; not physical-device testing. Skips are explicit viewport scoping."
+  },
+  "assetBudget": {
+    "criticalGzipBytes": 143325,
+    "criticalGzipLimit": 143360,
+    "appSourceBytes": 497066,
+    "appBuiltBytes": 258843,
+    "appByteLimit": 500000,
+    "criticalAssetCount": 30
+  },
+  "limitations": [
+    "Test counts overlap and must not be summed as unique coverage. No full repository test run was claimed.",
+    "Critical startup gzip has only 35 bytes of remaining budget; thresholds were not raised.",
+    "One-time metadata initialization for 1000 simulated old sessions took approximately 3.2 seconds across all pages; real-network migration performance was not measured.",
+    "When metadata writes fail, current-process stable ordering is retained, but persistence across restart cannot be guaranteed.",
+    "No real user session was archived during validation.",
+    "Activation checks HTTP delivery and unauthenticated API boundaries; production authenticated SSE and physical-device PWA flows are not exercised by the activation runner.",
+    "Restart waits for all observed active turns, including this turn. A small final-check-to-restart race remains; this is not atomic draining."
+  ],
+  "activation": {
+    "directory": "/home/ubuntu/.codex-web/source-checkpoints/stable-order-activation-20260925T015607Z",
+    "unit": "codex-web-stable-order-activate-20260925t015607z",
+    "script": "/home/ubuntu/.codex-web/source-checkpoints/stable-order-activation-20260925T015607Z/activation.mjs",
+    "state": "passed",
+    "expectedSourceBuildId": "d5dfdb1dddc2096c8744",
+    "preparedAt": "2026-09-25T01:56:15.291Z",
+    "expiresAt": "2026-09-25T02:06:15.291Z",
+    "originalMainPid": 3760441,
+    "activeTurnBarrierCount": 1,
+    "sourceHash": "6de29ad25ffec830393a9cd9f5da384f67661f1621772639f5fb0d869c85eb07",
+    "scriptHash": "190906d832b8d560a8a440ae8d2b83a17e6aa7a5576f1f730343eac13aea61a4",
+    "finalResultFile": "/home/ubuntu/.codex-web/source-checkpoints/stable-order-activation-20260925T015607Z/status.json",
+    "queuedObservedAt": "2026-09-25T01:57:43.908766+00:00",
+    "observedStatus": {
+      "startedAt": "2026-09-25T01:57:31.498Z",
+      "phase": "passed",
+      "restartRequested": true,
+      "expectedBuildId": "d5dfdb1dddc2096c8744",
+      "updatedAt": "2026-09-25T01:58:07.799Z",
+      "lastHttpFailure": {
+        "target": "local",
+        "path": "/",
+        "check": "status",
+        "expectedStatus": 200,
+        "actualStatus": null,
+        "errorType": "TypeError",
+        "at": "2026-09-25T01:58:06.600Z"
+      },
+      "mainPid": 3852476,
+      "finishedAt": "2026-09-25T01:58:07.799Z"
+    },
+    "completedAt": "2026-09-25T01:58:07.799Z",
+    "recheckedAt": "2026-09-25T02:02:00.619295+00:00",
+    "localAndPublicChecks": "passed",
+    "serviceStatus": "active/running"
+  }
+}

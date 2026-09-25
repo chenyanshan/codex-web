@@ -83,6 +83,7 @@ export interface CodexWebSession {
   firstUserInput: string | null;
   lastUserInput: string | null;
   lastInputAt: number | null;
+  listOrderAt?: number | null;
   favorite: boolean;
   favoriteOrder: number | null;
   goal?: ProviderThreadGoal | null;
@@ -362,6 +363,7 @@ export class CodexWebRuntime {
 
   private readonly defaultCwd: string;
 
+  private readonly orderWrites = new Map<string, Promise<void>>();
   private readonly settingsStore: CodexWebSessionSettingsStore | null;
 
   private readonly timelineStore: CodexWebSessionTimelineStore | null;
@@ -677,7 +679,7 @@ export class CodexWebRuntime {
       .filter((thread): thread is ProviderThreadSummary => Boolean(thread?.threadId))
       .map((thread) => this.toSessionSummary(thread)));
     return sessions.sort((left, right) => (left.favoriteOrder ?? Number.MAX_SAFE_INTEGER) - (right.favoriteOrder ?? Number.MAX_SAFE_INTEGER)
-      || (right.lastInputAt ?? 0) - (left.lastInputAt ?? 0));
+      || (right.listOrderAt ?? 0) - (left.listOrderAt ?? 0));
   }
 
   private async readFavoriteThreadSummary(threadId: string): Promise<ProviderThreadSummary | null> {
@@ -736,6 +738,7 @@ export class CodexWebRuntime {
       await this.persistSessionSettings(started.threadId, {
         ...effectiveSettings,
         bridgeSessionId: started.threadId,
+        listOrderAt: Date.now(),
         updatedAt: Date.now(),
       });
       return await this.toSession(thread);
@@ -890,6 +893,7 @@ export class CodexWebRuntime {
       }
     }
     if (thread) {
+      await this.ensureSessionListOrder(thread);
       await this.client.archiveThread(sessionId);
       this.invalidateThreadListSnapshots();
       this.activeGoalThreads.delete(sessionId);
@@ -905,6 +909,19 @@ export class CodexWebRuntime {
   async unarchiveSession(sessionId: string): Promise<CodexWebSession | null> {
     if (typeof this.client.unarchiveThread !== 'function') {
       throw new Error('Thread unarchive is not supported by this Codex runtime');
+    }
+    if ((await this.getSessionSettings(sessionId)).listOrderAt == null) {
+      // Read metadata before restoration can change provider updatedAt; never load history for ordering.
+      let thread = this.threadSummaries.get(sessionId) ?? null;
+      if (!thread) {
+        try { thread = await this.readProviderThread(sessionId, false); }
+        catch (error) {
+          this.logger.warn?.(`Could not read pre-restore ordering metadata for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      await this.ensureSessionListOrder(thread ?? {
+        threadId: sessionId, cwd: null, title: null, updatedAt: null, preview: '', turns: [],
+      });
     }
     await this.client.unarchiveThread(sessionId);
     this.invalidateThreadListSnapshots();
@@ -1006,6 +1023,7 @@ export class CodexWebRuntime {
       await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
       const result = createHelpCommandResult();
       await this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
+      await this.recordAcceptedInstruction(sessionId);
       return {
         ...result,
         session: await this.readSession(sessionId),
@@ -1025,6 +1043,7 @@ export class CodexWebRuntime {
       }
       const result = await this.handleGoalCommand(sessionId, goalCommand);
       await this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
+      await this.recordAcceptedInstruction(sessionId);
       return {
         ...result,
         session: await this.readSession(sessionId),
@@ -1115,7 +1134,8 @@ export class CodexWebRuntime {
         raw: summarizeRuntimeValue(raw),
       });
       try {
-        resolveStarted?.(buildStartedResult(turnId));
+        const startedResult = buildStartedResult(turnId);
+        void this.recordAcceptedInstruction(sessionId).then(() => resolveStarted?.(startedResult));
       } catch (error) {
         rejectStarted?.(error);
         throw error;
@@ -1413,6 +1433,7 @@ export class CodexWebRuntime {
         attachmentCount: Array.isArray(input.attachments) ? input.attachments.length : 0,
         clientUserMessageId,
       });
+      await this.recordAcceptedInstruction(threadId);
       return { turnId: expectedTurnId };
     } catch (error) {
       if (isActiveTurnNotSteerableError(error)) {
@@ -1911,7 +1932,7 @@ export class CodexWebRuntime {
     await this.timelineWrites.get(thread.threadId);
     this.rememberThreadSummary(thread);
     this.rememberThreadTurns(thread);
-    const current = await this.getSessionSettings(thread.threadId);
+    const current = await this.ensureSessionListOrder(thread);
     thread = this.applyThreadName(thread, nameRevision);
     this.rememberThreadSummary(thread);
     const updatedAt = thread.updatedAt ?? null;
@@ -1927,6 +1948,7 @@ export class CodexWebRuntime {
       firstUserInput: inputSummary.firstUserInput,
       lastUserInput: inputSummary.lastUserInput,
       lastInputAt: updatedAt,
+      listOrderAt: current.listOrderAt ?? 0,
       favorite: current.favorite === true,
       favoriteOrder: current.favoriteOrder ?? null,
       goal: null,
@@ -1951,7 +1973,7 @@ export class CodexWebRuntime {
     const nameRevision = this.nameRevision;
     this.rememberThreadSummary(thread);
     this.rememberThreadTurns(thread);
-    const current = await this.getSessionSettings(thread.threadId);
+    const current = await this.ensureSessionListOrder(thread);
     thread = this.applyThreadName(thread, nameRevision);
     this.rememberThreadSummary(thread);
     const updatedAt = thread.updatedAt ?? null;
@@ -1967,6 +1989,7 @@ export class CodexWebRuntime {
       firstUserInput: inputSummary.firstUserInput,
       lastUserInput: inputSummary.lastUserInput,
       lastInputAt: updatedAt,
+      listOrderAt: current.listOrderAt ?? 0,
       favorite: current.favorite === true,
       favoriteOrder: current.favoriteOrder ?? null,
       activeTurnId,
@@ -2055,6 +2078,7 @@ export class CodexWebRuntime {
       firstUserInput: null,
       lastUserInput: null,
       lastInputAt: updatedAt,
+      listOrderAt: settings.listOrderAt ?? 0,
       favorite: settings.favorite === true,
       favoriteOrder: settings.favoriteOrder ?? null,
       activeTurnId: null,
@@ -2353,6 +2377,49 @@ export class CodexWebRuntime {
     };
   }
 
+  private async ensureSessionListOrder(thread: ProviderThreadSummary): Promise<CodexWebStoredSessionSettings> {
+    // A pending accepted instruction may already have set the in-memory marker even if disk failed.
+    await this.orderWrites.get(thread.threadId)?.catch(() => {});
+    const current = await this.getSessionSettings(thread.threadId);
+    if (current.listOrderAt != null) return current;
+    try {
+      await this.writeSessionListOrder(thread.threadId, Number.isFinite(thread.updatedAt) ? thread.updatedAt! : 0, true);
+    } catch (error) {
+      this.logger.warn?.(`Session ordering bootstrap could not be persisted for ${thread.threadId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return this.getSessionSettings(thread.threadId);
+  }
+
+  private writeSessionListOrder(sessionId: string, at: number, initializeOnly: boolean): Promise<void> {
+    const previous = this.orderWrites.get(sessionId) ?? Promise.resolve();
+    const write = previous.catch(() => {}).then(async () => {
+      const current = await this.getSessionSettings(sessionId);
+      if (initializeOnly && current.listOrderAt != null) return;
+      const settings = { ...current, listOrderAt: Math.max(current.listOrderAt ?? 0, at) };
+      // Keep accepted input visible even if disk persistence fails; never turn acceptance into a retryable rejection.
+      this.sessionSettings.set(sessionId, settings);
+      this.settingsRevision = null;
+      this.activityRevision += 1;
+      if (this.settingsStore?.updateListOrder) {
+        const stored = await this.settingsStore.updateListOrder(sessionId, settings, at, initializeOnly);
+        this.sessionSettings.set(sessionId, { ...this.sessionSettings.get(sessionId)!, listOrderAt: stored.listOrderAt });
+      } else {
+        await this.settingsStore?.set(sessionId, settings);
+      }
+    }).finally(() => { if (this.orderWrites.get(sessionId) === write) this.orderWrites.delete(sessionId); });
+    this.orderWrites.set(sessionId, write);
+    return write;
+  }
+
+  private async recordAcceptedInstruction(sessionId: string): Promise<void> {
+    try {
+      await this.writeSessionListOrder(sessionId, Date.now(), false);
+    } catch (error) {
+      this.logger.warn?.(`Accepted instruction ordering could not be persisted for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.invalidateThreadListSnapshots();
+  }
+
   private async getSessionSettings(sessionId: string): Promise<CodexWebStoredSessionSettings> {
     const cached = this.sessionSettings.get(sessionId);
     if (cached) {
@@ -2383,12 +2450,28 @@ export class CodexWebRuntime {
       if (revision && revision === this.settingsRevision) return;
       const storedEntries = await this.settingsStore!.list!();
       // Only revision-aware stores promise a complete authoritative snapshot.
-      if (revision) this.sessionSettings.clear();
+      const previousSettings = new Map(this.sessionSettings);
+      if (revision) {
+        this.sessionSettings.clear();
+        // A failed bootstrap/accepted write can have no disk entry. Keep only its order,
+        // never resurrect other settings (such as favorites) removed by an external writer.
+        for (const [sessionId, previous] of previousSettings) {
+          if (previous.listOrderAt == null) continue;
+          this.sessionSettings.set(sessionId, {
+            ...createDefaultSettings(sessionId),
+            metadata: { codexWebDefaultsOnly: true },
+            listOrderAt: previous.listOrderAt,
+          });
+        }
+      }
       for (const [sessionId, stored] of storedEntries) {
         const migratedStored = migrateLegacyModelDefaults(stored);
         if (!migratedStored) continue;
         this.sessionSettings.set(sessionId, {
           ...createDefaultSettings(sessionId), ...migratedStored,
+          listOrderAt: previousSettings.get(sessionId)?.listOrderAt != null
+            ? Math.max(previousSettings.get(sessionId)!.listOrderAt!, migratedStored.listOrderAt ?? 0)
+            : migratedStored.listOrderAt,
           bridgeSessionId: sessionId, metadata: migratedStored.metadata ?? {},
         });
       }
@@ -2406,6 +2489,7 @@ export class CodexWebRuntime {
     const normalized = {
       ...settings,
       bridgeSessionId: sessionId,
+      listOrderAt: this.sessionSettings.get(sessionId)?.listOrderAt ?? settings.listOrderAt ?? null,
       metadata: settings.metadata ?? {},
     };
     this.sessionSettings.set(sessionId, normalized);
@@ -2429,7 +2513,7 @@ export class CodexWebRuntime {
     return [...this.sessionSettings.entries()]
       .filter(([, settings]) => settings.favorite === true)
       .sort(([, left], [, right]) => (left.favoriteOrder ?? Number.MAX_SAFE_INTEGER) - (right.favoriteOrder ?? Number.MAX_SAFE_INTEGER)
-        || (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+        || (right.listOrderAt ?? 0) - (left.listOrderAt ?? 0))
       .map(([sessionId]) => sessionId);
   }
 

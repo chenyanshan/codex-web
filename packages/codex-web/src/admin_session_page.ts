@@ -4,7 +4,8 @@ import { paginateSessionList, type SessionListPageOptions } from './session_list
 export function paginateAdminSessions<T extends { id: string; updatedAt?: unknown; createdAt?: unknown }>(items: T[], options: SessionListPageOptions) {
   const keyed = items.map(item => ({
     id: item.id,
-    updatedAt: timestamp(item.updatedAt) || timestamp(item.createdAt),
+    // Audit history keeps its existing recency order, independently of workspace navigation.
+    listOrderAt: timestamp(item.updatedAt) || timestamp(item.createdAt),
     item,
   }));
   const page = paginateSessionList(keyed, options);

@@ -414,7 +414,6 @@ let composerResizeObserver = null;
 let composerOffsetRun = 0;
 let pullToRefreshCleanup = null;
 let edgeSwipeStart = null;
-let allSessionsPreloadPromise = null;
 let promptFocusRestoreTimer = null;
 let promptFocusLayoutTimer = null;
 let promptRestoreRun = 0;
@@ -817,7 +816,6 @@ function setLoggedOut(message = '') {
   state.authSession = null;
   SESSION_PAGINATION.resetAllState({ incrementRequestId: true });
   state.sessionArchiveOverrides = new Map();
-  allSessionsPreloadPromise = null;
   state.reports = [];
   state.projects = [];
   state.projectsLoaded = false;
@@ -2507,7 +2505,7 @@ function renderSessionCards() {
             <button class="ghost compact-button session-favorite" type="button" data-session-favorite-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(favoriteLabel)}" title="${escapeAttribute(favoriteLabel)}" aria-pressed="${String(favorite)}"><span class="session-action-symbol" aria-hidden="true">${favorite ? '&#9733;' : '&#9734;'}</span></button>
             ${session.archived === true
               ? `<button class="ghost compact-button session-archive" type="button" data-session-unarchive-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderUnarchiveActionIcon()}</button>`
-              : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderArchiveActionIcon()}</button>`}
+              : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}"${isSessionArchiveBlocked(session.id) ? ' disabled' : ''} aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderArchiveActionIcon()}</button>`}
           </div>
         `}
       </article>
@@ -2695,7 +2693,7 @@ function renderUnarchiveActionIcon() {
 }
 
 function renderArchiveConfirmModal() {
-  const session = state.sessions.find((item) => item.id === state.archiveConfirmSessionId);
+  const session = knownSessionSummary(state.archiveConfirmSessionId);
   if (!session) {
     return '';
   }
@@ -2878,7 +2876,7 @@ function renderShareSettingsControl() {
 function renderTimeline() {
   if (retainedTimeline) return '';
   const visibleItems = visibleTimelineItems();
-  const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status">${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}<button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : state.sessionHistoryPending || state.sessionStatusPending ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
+  const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status">${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}<button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : !visibleItems.length && (state.sessionHistoryPending || state.sessionStatusPending) ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
   if (!visibleItems.length) {
     return historyNotice || `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`;
   }
@@ -6639,6 +6637,7 @@ function createComposerSubmission(text, {
     settings: collectSettings(),
     attachments,
     createdAt: Date.now(),
+    listOrderAt: Math.max(Date.now(), ...sessionListCandidates().map(session => sessionListOrderAt(session) + 1)),
     updatedAt: Date.now(),
     attempts: 0,
     nextAttemptAt: 0,
@@ -7044,8 +7043,14 @@ function canSetSiteTitle() {
     || state.authSession?.principal?.isAdmin === true;
 }
 
+function isSessionArchiveBlocked(sessionId) {
+  if (sessionId === state.sessionId && state.pendingTurn) return true;
+  const session = state.currentSession?.id === sessionId ? state.currentSession : knownSessionSummary(sessionId);
+  return ['running', 'waiting_approval', 'stale'].includes(sessionActivityState(session));
+}
+
 function requestArchiveSession(sessionId) {
-  if (!sessionId || state.pendingTurn) {
+  if (!sessionId || isSessionArchiveBlocked(sessionId)) {
     render();
     return;
   }
@@ -7062,7 +7067,7 @@ function cancelArchiveSession() {
 }
 
 async function archiveSession(sessionId) {
-  if (!sessionId || state.pendingTurn) {
+  if (!sessionId || isSessionArchiveBlocked(sessionId)) {
     render();
     return;
   }
@@ -7110,7 +7115,7 @@ async function archiveSession(sessionId) {
 }
 
 async function unarchiveSession(sessionId) {
-  if (!sessionId || state.pendingTurn) {
+  if (!sessionId || isSessionArchiveBlocked(sessionId)) {
     render();
     return;
   }
@@ -8396,9 +8401,6 @@ function workTimelineStatus(batches) {
   return 'completed';
 }
 
-function upsertWorkApproval(_turnId, approval) {
-  appendOrReplace(approval, (item) => item.id === approval.id);
-}
 
 function setWorkStatus(turnId, status) {
   for (const batch of state.batches.values()) {
@@ -8651,24 +8653,6 @@ function createWebhookSettingsState() {
     keyCopied: false,
     error: '',
   };
-}
-
-async function refreshGlobalSettings({ renderAfter = true, request = null } = {}) {
-  const requestGeneration = authRequestGeneration;
-  try {
-    const payload = await (request || apiFetch('/api/settings'));
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    applyGlobalSettingsPayload(payload, { renderAfter });
-    return payload;
-  } catch (error) {
-    if (!isAuthRequestCurrent(requestGeneration)) {
-      return null;
-    }
-    handleApiError(error);
-    return null;
-  }
 }
 
 function applyGlobalSettingsPayload(payload, { renderAfter = true } = {}) {
@@ -9245,24 +9229,6 @@ async function setSessionSortMode(mode) {
   render();
 }
 
-function preloadAllSessionsInBackground() {
-  const allQueryLoaded = SESSION_PAGINATION.scopeMatchesQuery('all');
-  if (!state.token || allQueryLoaded || allSessionsPreloadPromise) {
-    return allSessionsPreloadPromise;
-  }
-  const preloadPromise = refreshSessionsList({ renderAfter: false, scope: 'all', background: true })
-    .catch((error) => {
-      console.warn('[codex-web] all sessions preload failed', error);
-      return null;
-    })
-    .finally(() => {
-      if (allSessionsPreloadPromise === preloadPromise) {
-        allSessionsPreloadPromise = null;
-      }
-    });
-  allSessionsPreloadPromise = preloadPromise;
-  return preloadPromise;
-}
 
 let visibleRefreshPromise = null;
 async function refreshCurrentView({ sessionOnly = false } = {}) {
@@ -9939,6 +9905,7 @@ function normalizeSessions(payload) {
         firstUserInput: typeof session.firstUserInput === 'string' ? session.firstUserInput : '',
         lastUserInput: typeof session.lastUserInput === 'string' ? session.lastUserInput : '',
         lastInputAt: typeof session.lastInputAt === 'number' ? session.lastInputAt : null,
+        listOrderAt: Number.isFinite(session.listOrderAt) ? session.listOrderAt : null,
         updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : null,
         activityState: ['running', 'waiting_approval', 'failed', 'stale'].includes(session.activityState)
           ? session.activityState
@@ -9983,6 +9950,7 @@ function normalizeSessions(payload) {
 
 function normalizeSessionsForScope(payload, scope) {
   const sessions = normalizeSessions(payload)
+    .map(session => ({ ...session, listOrderAt: Math.max(session.listOrderAt || 0, knownSessionSummary(session.id)?.listOrderAt || 0) || null }))
     .map((session) => scope === 'archived'
       ? { ...session, archived: true, readOnly: true }
       : session)
@@ -10074,6 +10042,7 @@ function serializeSessionSummaryForCache(session) {
     firstUserInput: normalized.firstUserInput,
     lastUserInput: normalized.lastUserInput,
     lastInputAt: normalized.lastInputAt,
+    listOrderAt: normalized.listOrderAt,
     updatedAt: normalized.updatedAt,
     latestTurn: normalized.latestTurn || null,
     settings: normalized.settings,
@@ -10290,6 +10259,7 @@ function mergeSessionSummary(previous, next) {
     firstUserInput: next.firstUserInput || previous.firstUserInput,
     lastUserInput: latestInput.lastUserInput || olderInput.lastUserInput,
     lastInputAt: Math.max(previousInputAt, nextInputAt) || null,
+    listOrderAt: Math.max(previous.listOrderAt || 0, next.listOrderAt || 0) || null,
     updatedAt: Math.max(previousUpdatedAt, nextUpdatedAt) || null,
   };
 }
@@ -10806,6 +10776,7 @@ function normalizeSubmissionOutboxEntry(entry, { restore = false } = {}) {
     settings,
     attachments,
     createdAt,
+    listOrderAt: Number.isFinite(entry.listOrderAt) ? entry.listOrderAt : createdAt,
     updatedAt,
     attempts: Math.max(0, Number(entry.attempts) || 0),
     confirmationAttempts: Math.max(0, Number(entry.confirmationAttempts) || 0),
@@ -11841,7 +11812,8 @@ function pendingSubmissionSessionSummaries() {
         firstUserInput: entry.text,
         lastUserInput: entry.text,
         preview: entry.text,
-        lastInputAt: entry.updatedAt,
+        lastInputAt: entry.createdAt,
+        listOrderAt: entry.listOrderAt || entry.createdAt,
         updatedAt: entry.updatedAt,
         settings: entry.settings,
       }];
@@ -12306,9 +12278,6 @@ function normalizeSortMode(mode) {
   return 'time';
 }
 
-function sessionListPath(scope, options) {
-  return SESSION_PAGINATION.listPath(scope, options);
-}
 
 function normalizeActiveSessionLimitInput(value) {
   const normalized = String(value ?? '').trim();
@@ -12339,11 +12308,6 @@ function adminUserRoleId(user) {
   return user?.roleId || (Array.isArray(user?.roleIds) ? user.roleIds[0] : '') || '';
 }
 
-function adminUserProjectIds(user) {
-  return Array.isArray(user?.directProjectGrants)
-    ? user.directProjectGrants.map((grant) => String(grant?.projectId || '').trim()).filter(Boolean)
-    : [];
-}
 
 function projectVisibleName(project, fallback = '') {
   const displayName = cwdLeafName(String(project?.displayName || '').trim());
@@ -12541,25 +12505,19 @@ function lastInputAtForSession(session) {
   return Math.max(session?.lastInputAt || 0, session?.updatedAt || 0);
 }
 
-function compareSessionsForSelection(left, right) {
-  const leftPriority = sessionAttentionPriority(left);
-  const rightPriority = sessionAttentionPriority(right);
-  if (leftPriority !== rightPriority) {
-    return rightPriority - leftPriority;
+// Keep provisional send ordering in the outbox; server timestamps remain authoritative after delivery.
+function sessionListOrderAt(session) {
+  let order = session.listOrderAt || 0;
+  for (const entry of pendingSubmissionEntries()) {
+    if (entry.sessionId === session.id || entry.resolvedSessionId === session.id) {
+      order = Math.max(order, entry.listOrderAt || entry.createdAt);
+    }
   }
-  return lastInputAtForSession(right) - lastInputAtForSession(left);
+  return order;
 }
 
-function sessionAttentionPriority(session) {
-  const activityState = sessionActivityState(session);
-  if (activityState === 'waiting_approval') {
-    return 2;
-  }
-  if (activityState === 'running' || activityState === 'stale' || findActiveTurn(session)) {
-    return 1;
-  }
-  if (activityState === 'failed') return 0.5;
-  return 0;
+function compareSessionsForSelection(left, right) {
+  return sessionListOrderAt(right) - sessionListOrderAt(left) || left.id.localeCompare(right.id);
 }
 
 function applyPermissionPreset(preset) {
@@ -12958,15 +12916,6 @@ function removeAssistantTimelineEntriesForTurn(turnId) {
   ));
 }
 
-function removeTimelineEntryById(entryId) {
-  if (!entryId) {
-    return;
-  }
-  const index = state.timeline.findIndex((item) => item?.id === entryId);
-  if (index >= 0) {
-    state.timeline.splice(index, 1);
-  }
-}
 
 function surfaceTimelineError(turnId, message) {
   if (isTurnInterruptTimeoutMessage(message)) {
@@ -13506,10 +13455,6 @@ function stopStream({ preserveRetryState = false } = {}) {
   state.streamIncludesWorkDetails = false;
 }
 
-function isNetworkStreamError(error) {
-  const message = error instanceof Error ? error.message : String(error || '');
-  return /load failed|network|fetch|terminated|abort|connection|offline/i.test(message);
-}
 
 function isRetryableStreamError(error) {
   return globalThis.CodexWebNetworkRecovery.retryable(error);
@@ -13563,13 +13508,6 @@ function handleApiError(error, options = {}) {
   render();
 }
 
-function inferDeviceName() {
-  return navigator.userAgent.includes('iPhone')
-    ? 'iPhone Safari'
-    : navigator.userAgent.includes('Android')
-      ? 'Android Browser'
-      : 'Phone browser';
-}
 
 function scrollTimelineToBottom() {
   restoreTimelineViewport(latestTimelineViewportSnapshot());
@@ -13612,6 +13550,7 @@ function formatSummaryValue(value) {
   }
   return String(value);
 }
+
 
 function formatShortDate(timestamp) {
   const date = new Date(timestamp);

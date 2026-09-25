@@ -6105,6 +6105,9 @@ function presentSessionForUser({
     firstUserInput: typeof session.firstUserInput === 'string' ? session.firstUserInput : null,
     lastUserInput: typeof session.lastUserInput === 'string' ? session.lastUserInput : null,
     lastInputAt: typeof session.lastInputAt === 'number' && Number.isFinite(session.lastInputAt) ? session.lastInputAt : null,
+    listOrderAt: typeof session.listOrderAt === 'number' && Number.isFinite(session.listOrderAt)
+      ? session.listOrderAt
+      : Date.parse(appSession.createdAt) || 0,
     favorite: session.favorite === true,
     favoriteOrder: typeof session.favoriteOrder === 'number' && Number.isFinite(session.favoriteOrder)
       ? session.favoriteOrder

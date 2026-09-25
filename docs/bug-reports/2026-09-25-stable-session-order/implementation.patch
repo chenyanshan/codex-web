@@ -1,0 +1,2087 @@
+diff --git a/packages/codex-web/public/app.js b/packages/codex-web/public/app.js
+--- a/packages/codex-web/public/app.js
++++ b/packages/codex-web/public/app.js
+@@ -414,7 +414,6 @@
+ let composerOffsetRun = 0;
+ let pullToRefreshCleanup = null;
+ let edgeSwipeStart = null;
+-let allSessionsPreloadPromise = null;
+ let promptFocusRestoreTimer = null;
+ let promptFocusLayoutTimer = null;
+ let promptRestoreRun = 0;
+@@ -817,7 +816,6 @@
+   state.authSession = null;
+   SESSION_PAGINATION.resetAllState({ incrementRequestId: true });
+   state.sessionArchiveOverrides = new Map();
+-  allSessionsPreloadPromise = null;
+   state.reports = [];
+   state.projects = [];
+   state.projectsLoaded = false;
+@@ -2507,7 +2505,7 @@
+             <button class="ghost compact-button session-favorite" type="button" data-session-favorite-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(favoriteLabel)}" title="${escapeAttribute(favoriteLabel)}" aria-pressed="${String(favorite)}"><span class="session-action-symbol" aria-hidden="true">${favorite ? '&#9733;' : '&#9734;'}</span></button>
+             ${session.archived === true
+               ? `<button class="ghost compact-button session-archive" type="button" data-session-unarchive-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderUnarchiveActionIcon()}</button>`
+-              : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}" aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderArchiveActionIcon()}</button>`}
++              : `<button class="ghost compact-button session-archive" type="button" data-session-archive-request-id="${escapeAttribute(session.id)}"${isSessionArchiveBlocked(session.id) ? ' disabled' : ''} aria-label="${escapeAttribute(archiveLabel)}" title="${escapeAttribute(archiveLabel)}">${renderArchiveActionIcon()}</button>`}
+           </div>
+         `}
+       </article>
+@@ -2695,7 +2693,7 @@
+ }
+ 
+ function renderArchiveConfirmModal() {
+-  const session = state.sessions.find((item) => item.id === state.archiveConfirmSessionId);
++  const session = knownSessionSummary(state.archiveConfirmSessionId);
+   if (!session) {
+     return '';
+   }
+@@ -2878,7 +2876,7 @@
+ function renderTimeline() {
+   if (retainedTimeline) return '';
+   const visibleItems = visibleTimelineItems();
+-  const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status">${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}<button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : state.sessionHistoryPending || state.sessionStatusPending ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
++  const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status">${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}<button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : !visibleItems.length && (state.sessionHistoryPending || state.sessionStatusPending) ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
+   if (!visibleItems.length) {
+     return historyNotice || `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`;
+   }
+@@ -6639,6 +6637,7 @@
+     settings: collectSettings(),
+     attachments,
+     createdAt: Date.now(),
++    listOrderAt: Math.max(Date.now(), ...sessionListCandidates().map(session => sessionListOrderAt(session) + 1)),
+     updatedAt: Date.now(),
+     attempts: 0,
+     nextAttemptAt: 0,
+@@ -7044,8 +7043,14 @@
+     || state.authSession?.principal?.isAdmin === true;
+ }
+ 
++function isSessionArchiveBlocked(sessionId) {
++  if (sessionId === state.sessionId && state.pendingTurn) return true;
++  const session = state.currentSession?.id === sessionId ? state.currentSession : knownSessionSummary(sessionId);
++  return ['running', 'waiting_approval', 'stale'].includes(sessionActivityState(session));
++}
++
+ function requestArchiveSession(sessionId) {
+-  if (!sessionId || state.pendingTurn) {
++  if (!sessionId || isSessionArchiveBlocked(sessionId)) {
+     render();
+     return;
+   }
+@@ -7062,7 +7067,7 @@
+ }
+ 
+ async function archiveSession(sessionId) {
+-  if (!sessionId || state.pendingTurn) {
++  if (!sessionId || isSessionArchiveBlocked(sessionId)) {
+     render();
+     return;
+   }
+@@ -7110,7 +7115,7 @@
+ }
+ 
+ async function unarchiveSession(sessionId) {
+-  if (!sessionId || state.pendingTurn) {
++  if (!sessionId || isSessionArchiveBlocked(sessionId)) {
+     render();
+     return;
+   }
+@@ -8396,9 +8401,6 @@
+   return 'completed';
+ }
+ 
+-function upsertWorkApproval(_turnId, approval) {
+-  appendOrReplace(approval, (item) => item.id === approval.id);
+-}
+ 
+ function setWorkStatus(turnId, status) {
+   for (const batch of state.batches.values()) {
+@@ -8651,24 +8653,6 @@
+     keyCopied: false,
+     error: '',
+   };
+-}
+-
+-async function refreshGlobalSettings({ renderAfter = true, request = null } = {}) {
+-  const requestGeneration = authRequestGeneration;
+-  try {
+-    const payload = await (request || apiFetch('/api/settings'));
+-    if (!isAuthRequestCurrent(requestGeneration)) {
+-      return null;
+-    }
+-    applyGlobalSettingsPayload(payload, { renderAfter });
+-    return payload;
+-  } catch (error) {
+-    if (!isAuthRequestCurrent(requestGeneration)) {
+-      return null;
+-    }
+-    handleApiError(error);
+-    return null;
+-  }
+ }
+ 
+ function applyGlobalSettingsPayload(payload, { renderAfter = true } = {}) {
+@@ -9245,24 +9229,6 @@
+   render();
+ }
+ 
+-function preloadAllSessionsInBackground() {
+-  const allQueryLoaded = SESSION_PAGINATION.scopeMatchesQuery('all');
+-  if (!state.token || allQueryLoaded || allSessionsPreloadPromise) {
+-    return allSessionsPreloadPromise;
+-  }
+-  const preloadPromise = refreshSessionsList({ renderAfter: false, scope: 'all', background: true })
+-    .catch((error) => {
+-      console.warn('[codex-web] all sessions preload failed', error);
+-      return null;
+-    })
+-    .finally(() => {
+-      if (allSessionsPreloadPromise === preloadPromise) {
+-        allSessionsPreloadPromise = null;
+-      }
+-    });
+-  allSessionsPreloadPromise = preloadPromise;
+-  return preloadPromise;
+-}
+ 
+ let visibleRefreshPromise = null;
+ async function refreshCurrentView({ sessionOnly = false } = {}) {
+@@ -9939,6 +9905,7 @@
+         firstUserInput: typeof session.firstUserInput === 'string' ? session.firstUserInput : '',
+         lastUserInput: typeof session.lastUserInput === 'string' ? session.lastUserInput : '',
+         lastInputAt: typeof session.lastInputAt === 'number' ? session.lastInputAt : null,
++        listOrderAt: Number.isFinite(session.listOrderAt) ? session.listOrderAt : null,
+         updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : null,
+         activityState: ['running', 'waiting_approval', 'failed', 'stale'].includes(session.activityState)
+           ? session.activityState
+@@ -9983,6 +9950,7 @@
+ 
+ function normalizeSessionsForScope(payload, scope) {
+   const sessions = normalizeSessions(payload)
++    .map(session => ({ ...session, listOrderAt: Math.max(session.listOrderAt || 0, knownSessionSummary(session.id)?.listOrderAt || 0) || null }))
+     .map((session) => scope === 'archived'
+       ? { ...session, archived: true, readOnly: true }
+       : session)
+@@ -10074,6 +10042,7 @@
+     firstUserInput: normalized.firstUserInput,
+     lastUserInput: normalized.lastUserInput,
+     lastInputAt: normalized.lastInputAt,
++    listOrderAt: normalized.listOrderAt,
+     updatedAt: normalized.updatedAt,
+     latestTurn: normalized.latestTurn || null,
+     settings: normalized.settings,
+@@ -10290,6 +10259,7 @@
+     firstUserInput: next.firstUserInput || previous.firstUserInput,
+     lastUserInput: latestInput.lastUserInput || olderInput.lastUserInput,
+     lastInputAt: Math.max(previousInputAt, nextInputAt) || null,
++    listOrderAt: Math.max(previous.listOrderAt || 0, next.listOrderAt || 0) || null,
+     updatedAt: Math.max(previousUpdatedAt, nextUpdatedAt) || null,
+   };
+ }
+@@ -10806,6 +10776,7 @@
+     settings,
+     attachments,
+     createdAt,
++    listOrderAt: Number.isFinite(entry.listOrderAt) ? entry.listOrderAt : createdAt,
+     updatedAt,
+     attempts: Math.max(0, Number(entry.attempts) || 0),
+     confirmationAttempts: Math.max(0, Number(entry.confirmationAttempts) || 0),
+@@ -11841,7 +11812,8 @@
+         firstUserInput: entry.text,
+         lastUserInput: entry.text,
+         preview: entry.text,
+-        lastInputAt: entry.updatedAt,
++        lastInputAt: entry.createdAt,
++        listOrderAt: entry.listOrderAt || entry.createdAt,
+         updatedAt: entry.updatedAt,
+         settings: entry.settings,
+       }];
+@@ -12306,9 +12278,6 @@
+   return 'time';
+ }
+ 
+-function sessionListPath(scope, options) {
+-  return SESSION_PAGINATION.listPath(scope, options);
+-}
+ 
+ function normalizeActiveSessionLimitInput(value) {
+   const normalized = String(value ?? '').trim();
+@@ -12339,11 +12308,6 @@
+   return user?.roleId || (Array.isArray(user?.roleIds) ? user.roleIds[0] : '') || '';
+ }
+ 
+-function adminUserProjectIds(user) {
+-  return Array.isArray(user?.directProjectGrants)
+-    ? user.directProjectGrants.map((grant) => String(grant?.projectId || '').trim()).filter(Boolean)
+-    : [];
+-}
+ 
+ function projectVisibleName(project, fallback = '') {
+   const displayName = cwdLeafName(String(project?.displayName || '').trim());
+@@ -12541,25 +12505,19 @@
+   return Math.max(session?.lastInputAt || 0, session?.updatedAt || 0);
+ }
+ 
++// Keep provisional send ordering in the outbox; server timestamps remain authoritative after delivery.
++function sessionListOrderAt(session) {
++  let order = session.listOrderAt || 0;
++  for (const entry of pendingSubmissionEntries()) {
++    if (entry.sessionId === session.id || entry.resolvedSessionId === session.id) {
++      order = Math.max(order, entry.listOrderAt || entry.createdAt);
++    }
++  }
++  return order;
++}
++
+ function compareSessionsForSelection(left, right) {
+-  const leftPriority = sessionAttentionPriority(left);
+-  const rightPriority = sessionAttentionPriority(right);
+-  if (leftPriority !== rightPriority) {
+-    return rightPriority - leftPriority;
+-  }
+-  return lastInputAtForSession(right) - lastInputAtForSession(left);
+-}
+-
+-function sessionAttentionPriority(session) {
+-  const activityState = sessionActivityState(session);
+-  if (activityState === 'waiting_approval') {
+-    return 2;
+-  }
+-  if (activityState === 'running' || activityState === 'stale' || findActiveTurn(session)) {
+-    return 1;
+-  }
+-  if (activityState === 'failed') return 0.5;
+-  return 0;
++  return sessionListOrderAt(right) - sessionListOrderAt(left) || left.id.localeCompare(right.id);
+ }
+ 
+ function applyPermissionPreset(preset) {
+@@ -12958,15 +12916,6 @@
+   ));
+ }
+ 
+-function removeTimelineEntryById(entryId) {
+-  if (!entryId) {
+-    return;
+-  }
+-  const index = state.timeline.findIndex((item) => item?.id === entryId);
+-  if (index >= 0) {
+-    state.timeline.splice(index, 1);
+-  }
+-}
+ 
+ function surfaceTimelineError(turnId, message) {
+   if (isTurnInterruptTimeoutMessage(message)) {
+@@ -13506,10 +13455,6 @@
+   state.streamIncludesWorkDetails = false;
+ }
+ 
+-function isNetworkStreamError(error) {
+-  const message = error instanceof Error ? error.message : String(error || '');
+-  return /load failed|network|fetch|terminated|abort|connection|offline/i.test(message);
+-}
+ 
+ function isRetryableStreamError(error) {
+   return globalThis.CodexWebNetworkRecovery.retryable(error);
+@@ -13563,13 +13508,6 @@
+   render();
+ }
+ 
+-function inferDeviceName() {
+-  return navigator.userAgent.includes('iPhone')
+-    ? 'iPhone Safari'
+-    : navigator.userAgent.includes('Android')
+-      ? 'Android Browser'
+-      : 'Phone browser';
+-}
+ 
+ function scrollTimelineToBottom() {
+   restoreTimelineViewport(latestTimelineViewportSnapshot());
+@@ -13612,6 +13550,7 @@
+   }
+   return String(value);
+ }
++
+ 
+ function formatShortDate(timestamp) {
+   const date = new Date(timestamp);
+diff --git a/packages/codex-web/public/session-pagination.js b/packages/codex-web/public/session-pagination.js
+--- a/packages/codex-web/public/session-pagination.js
++++ b/packages/codex-web/public/session-pagination.js
+@@ -145,54 +145,59 @@
+         return [...(state.sessionsByScope[normalizedScope] || [])];
+       }
+       const path = listPath(normalizedScope, { cursor: pageCursor });
+-      if (background) {
++      // Revalidate the visible range atomically; never retain an unchecked archived or revoked tail.
++      const rangeTarget = !append && queryMatches ? (state.sessionsByScope[normalizedScope] || []).length : 0;
++      const requestId = state.sessionsRequestId + (background ? 0 : 1);
++      const currentRequest = () => isAuthRequestCurrent(requestGeneration)
++        && expectedQuery === queryKey(normalizedScope) && requestId === state.sessionsRequestId;
++      const fetchRange = async () => {
+         const payload = await (request || apiFetch(path));
+-        if (!isAuthRequestCurrent(requestGeneration) || expectedQuery !== queryKey(normalizedScope)) {
+-          return [];
+-        }
+-        const sessions = normalizeSessionsForScope(payload, normalizedScope);
+-        state.sessionsByScope[normalizedScope] = sessions;
+-        state.sessionsLoadedByScope[normalizedScope] = true;
+-        state.sessionsNextCursorByScope[normalizedScope] = normalizeCursor(payload?.nextCursor);
+-        state.sessionsQueryByScope[normalizedScope] = expectedQuery;
+-        applyStats(normalizedScope, payload);
+-        discardSupersededFailedSubmissions(sessions);
+-        syncCurrentWorkDetailsAccessFromSessions(sessions);
+-        enforceKnownWorkDetailsAccess();
+-        persistSessionsCache();
+-        return sessions;
+-      }
+-      const requestId = state.sessionsRequestId + 1;
++        let items = Array.isArray(payload?.items) ? payload.items : [];
++        let nextCursor = normalizeCursor(payload?.nextCursor);
++        const seen = new Set();
++        while (items.length < rangeTarget && seen.size < rangeTarget && nextCursor && payload?.directoryComplete !== false && currentRequest()) {
++          if (seen.has(nextCursor)) break;
++          seen.add(nextCursor);
++          const page = await apiFetch(listPath(normalizedScope, { cursor: nextCursor }));
++          if (!currentRequest()) return payload;
++          items = mergePage(items, Array.isArray(page?.items) ? page.items : []);
++          nextCursor = normalizeCursor(page?.nextCursor);
++          if (page?.directoryComplete === false) break;
++        }
++        return { ...payload, items, nextCursor };
++      };
+       state.sessionsRequestId = requestId;
+-      if (append) {
+-        state.sessionsLoadingMore = true;
+-        state.sessionsLoadingMoreScope = normalizedScope;
+-      } else {
+-        state.sessionsLoading = true;
+-        state.sessionsLoadingScope = normalizedScope;
+-      }
+-      state.sessionsError = '';
+-      state.sessionsErrorMode = '';
+-      if (!append && !queryMatches) {
+-        resetScope(normalizedScope, { preserveItems: true });
+-      }
+-      if (!append) {
+-        restoreSessionsFromCacheForScope(normalizedScope, expectedQuery);
+-      }
+-      state.sessionsScope = normalizedScope;
+-      state.sessions = normalizedScope === currentSessionScope()
+-        ? [...(state.sessionsByScope[normalizedScope] || [])]
+-        : [];
+-      if (renderAfter) {
+-        render();
++      if (!background) {
++        if (append) {
++          state.sessionsLoadingMore = true;
++          state.sessionsLoadingMoreScope = normalizedScope;
++        } else {
++          state.sessionsLoading = true;
++          state.sessionsLoadingScope = normalizedScope;
++        }
++        state.sessionsError = '';
++        state.sessionsErrorMode = '';
++        if (!append && !queryMatches) {
++          resetScope(normalizedScope, { preserveItems: true });
++        }
++        if (!append) {
++          restoreSessionsFromCacheForScope(normalizedScope, expectedQuery);
++        }
++        state.sessionsScope = normalizedScope;
++        state.sessions = normalizedScope === currentSessionScope()
++          ? [...(state.sessionsByScope[normalizedScope] || [])]
++          : [];
++        if (renderAfter) {
++          render();
++        }
+       }
+       try {
+-        const payload = await (request || apiFetch(path));
++        const payload = await fetchRange();
+         if (!isAuthRequestCurrent(requestGeneration)) {
+           return [];
+         }
+         const pageSessions = normalizeSessionsForScope(payload, normalizedScope);
+-        if (requestId !== state.sessionsRequestId || expectedQuery !== queryKey(normalizedScope)) {
++        if (!currentRequest()) {
+           return pageSessions;
+         }
+         const sessions = append
+@@ -208,9 +213,9 @@
+         enforceKnownWorkDetailsAccess();
+         persistSessionsCache();
+         if (
+-          requestId !== state.sessionsRequestId
++          background
++          || !currentRequest()
+           || normalizedScope !== currentSessionScope()
+-          || expectedQuery !== queryKey(normalizedScope)
+         ) {
+           return sessions;
+         }
+@@ -229,17 +234,21 @@
+         syncCurrentSessionFromList();
+         return state.sessions;
+       } catch (error) {
++        if (append && error?.status === 400 && error?.payload?.error === 'invalid_cursor' && currentRequest()) {
++          state.sessionsLoadingMore = false;
++          state.sessionsLoadingMoreScope = null;
++          return refreshSessionsList({ renderAfter, scope: normalizedScope });
++        }
+         if (
+-          requestId === state.sessionsRequestId
++          !background && currentRequest()
+           && normalizedScope === currentSessionScope()
+-          && isAuthRequestCurrent(requestGeneration)
+         ) {
+           state.sessionsError = append ? 'Could not load older sessions.' : 'Could not update sessions.';
+           state.sessionsErrorMode = append ? 'more' : 'refresh';
+         }
+         throw error;
+       } finally {
+-        if (requestId === state.sessionsRequestId) {
++        if (!background && requestId === state.sessionsRequestId) {
+           if (append) {
+             state.sessionsLoadingMore = false;
+             state.sessionsLoadingMoreScope = null;
+@@ -248,7 +257,7 @@
+             state.sessionsLoadingScope = null;
+           }
+         }
+-        if (renderAfter && isAuthRequestCurrent(requestGeneration)) {
++        if (!background && renderAfter && isAuthRequestCurrent(requestGeneration)) {
+           render();
+         }
+       }
+diff --git a/packages/codex-web/src/admin_session_page.ts b/packages/codex-web/src/admin_session_page.ts
+--- a/packages/codex-web/src/admin_session_page.ts
++++ b/packages/codex-web/src/admin_session_page.ts
+@@ -4,7 +4,8 @@
+ export function paginateAdminSessions<T extends { id: string; updatedAt?: unknown; createdAt?: unknown }>(items: T[], options: SessionListPageOptions) {
+   const keyed = items.map(item => ({
+     id: item.id,
+-    updatedAt: timestamp(item.updatedAt) || timestamp(item.createdAt),
++    // Audit history keeps its existing recency order, independently of workspace navigation.
++    listOrderAt: timestamp(item.updatedAt) || timestamp(item.createdAt),
+     item,
+   }));
+   const page = paginateSessionList(keyed, options);
+diff --git a/packages/codex-web/src/runtime.ts b/packages/codex-web/src/runtime.ts
+--- a/packages/codex-web/src/runtime.ts
++++ b/packages/codex-web/src/runtime.ts
+@@ -83,6 +83,7 @@
+   firstUserInput: string | null;
+   lastUserInput: string | null;
+   lastInputAt: number | null;
++  listOrderAt?: number | null;
+   favorite: boolean;
+   favoriteOrder: number | null;
+   goal?: ProviderThreadGoal | null;
+@@ -362,6 +363,7 @@
+ 
+   private readonly defaultCwd: string;
+ 
++  private readonly orderWrites = new Map<string, Promise<void>>();
+   private readonly settingsStore: CodexWebSessionSettingsStore | null;
+ 
+   private readonly timelineStore: CodexWebSessionTimelineStore | null;
+@@ -677,7 +679,7 @@
+       .filter((thread): thread is ProviderThreadSummary => Boolean(thread?.threadId))
+       .map((thread) => this.toSessionSummary(thread)));
+     return sessions.sort((left, right) => (left.favoriteOrder ?? Number.MAX_SAFE_INTEGER) - (right.favoriteOrder ?? Number.MAX_SAFE_INTEGER)
+-      || (right.lastInputAt ?? 0) - (left.lastInputAt ?? 0));
++      || (right.listOrderAt ?? 0) - (left.listOrderAt ?? 0));
+   }
+ 
+   private async readFavoriteThreadSummary(threadId: string): Promise<ProviderThreadSummary | null> {
+@@ -736,6 +738,7 @@
+       await this.persistSessionSettings(started.threadId, {
+         ...effectiveSettings,
+         bridgeSessionId: started.threadId,
++        listOrderAt: Date.now(),
+         updatedAt: Date.now(),
+       });
+       return await this.toSession(thread);
+@@ -890,6 +893,7 @@
+       }
+     }
+     if (thread) {
++      await this.ensureSessionListOrder(thread);
+       await this.client.archiveThread(sessionId);
+       this.invalidateThreadListSnapshots();
+       this.activeGoalThreads.delete(sessionId);
+@@ -905,6 +909,19 @@
+   async unarchiveSession(sessionId: string): Promise<CodexWebSession | null> {
+     if (typeof this.client.unarchiveThread !== 'function') {
+       throw new Error('Thread unarchive is not supported by this Codex runtime');
++    }
++    if ((await this.getSessionSettings(sessionId)).listOrderAt == null) {
++      // Read metadata before restoration can change provider updatedAt; never load history for ordering.
++      let thread = this.threadSummaries.get(sessionId) ?? null;
++      if (!thread) {
++        try { thread = await this.readProviderThread(sessionId, false); }
++        catch (error) {
++          this.logger.warn?.(`Could not read pre-restore ordering metadata for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
++        }
++      }
++      await this.ensureSessionListOrder(thread ?? {
++        threadId: sessionId, cwd: null, title: null, updatedAt: null, preview: '', turns: [],
++      });
+     }
+     await this.client.unarchiveThread(sessionId);
+     this.invalidateThreadListSnapshots();
+@@ -1006,6 +1023,7 @@
+       await this.ensureThreadReadyForTurn(sessionId, input.runtimeEnv);
+       const result = createHelpCommandResult();
+       await this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
++      await this.recordAcceptedInstruction(sessionId);
+       return {
+         ...result,
+         session: await this.readSession(sessionId),
+@@ -1025,6 +1043,7 @@
+       }
+       const result = await this.handleGoalCommand(sessionId, goalCommand);
+       await this.appendCommandTimeline(sessionId, input.text, result.command, timelineMessagesFromThread(session.thread));
++      await this.recordAcceptedInstruction(sessionId);
+       return {
+         ...result,
+         session: await this.readSession(sessionId),
+@@ -1115,7 +1134,8 @@
+         raw: summarizeRuntimeValue(raw),
+       });
+       try {
+-        resolveStarted?.(buildStartedResult(turnId));
++        const startedResult = buildStartedResult(turnId);
++        void this.recordAcceptedInstruction(sessionId).then(() => resolveStarted?.(startedResult));
+       } catch (error) {
+         rejectStarted?.(error);
+         throw error;
+@@ -1413,6 +1433,7 @@
+         attachmentCount: Array.isArray(input.attachments) ? input.attachments.length : 0,
+         clientUserMessageId,
+       });
++      await this.recordAcceptedInstruction(threadId);
+       return { turnId: expectedTurnId };
+     } catch (error) {
+       if (isActiveTurnNotSteerableError(error)) {
+@@ -1911,7 +1932,7 @@
+     await this.timelineWrites.get(thread.threadId);
+     this.rememberThreadSummary(thread);
+     this.rememberThreadTurns(thread);
+-    const current = await this.getSessionSettings(thread.threadId);
++    const current = await this.ensureSessionListOrder(thread);
+     thread = this.applyThreadName(thread, nameRevision);
+     this.rememberThreadSummary(thread);
+     const updatedAt = thread.updatedAt ?? null;
+@@ -1927,6 +1948,7 @@
+       firstUserInput: inputSummary.firstUserInput,
+       lastUserInput: inputSummary.lastUserInput,
+       lastInputAt: updatedAt,
++      listOrderAt: current.listOrderAt ?? 0,
+       favorite: current.favorite === true,
+       favoriteOrder: current.favoriteOrder ?? null,
+       goal: null,
+@@ -1951,7 +1973,7 @@
+     const nameRevision = this.nameRevision;
+     this.rememberThreadSummary(thread);
+     this.rememberThreadTurns(thread);
+-    const current = await this.getSessionSettings(thread.threadId);
++    const current = await this.ensureSessionListOrder(thread);
+     thread = this.applyThreadName(thread, nameRevision);
+     this.rememberThreadSummary(thread);
+     const updatedAt = thread.updatedAt ?? null;
+@@ -1967,6 +1989,7 @@
+       firstUserInput: inputSummary.firstUserInput,
+       lastUserInput: inputSummary.lastUserInput,
+       lastInputAt: updatedAt,
++      listOrderAt: current.listOrderAt ?? 0,
+       favorite: current.favorite === true,
+       favoriteOrder: current.favoriteOrder ?? null,
+       activeTurnId,
+@@ -2055,6 +2078,7 @@
+       firstUserInput: null,
+       lastUserInput: null,
+       lastInputAt: updatedAt,
++      listOrderAt: settings.listOrderAt ?? 0,
+       favorite: settings.favorite === true,
+       favoriteOrder: settings.favoriteOrder ?? null,
+       activeTurnId: null,
+@@ -2353,6 +2377,49 @@
+     };
+   }
+ 
++  private async ensureSessionListOrder(thread: ProviderThreadSummary): Promise<CodexWebStoredSessionSettings> {
++    // A pending accepted instruction may already have set the in-memory marker even if disk failed.
++    await this.orderWrites.get(thread.threadId)?.catch(() => {});
++    const current = await this.getSessionSettings(thread.threadId);
++    if (current.listOrderAt != null) return current;
++    try {
++      await this.writeSessionListOrder(thread.threadId, Number.isFinite(thread.updatedAt) ? thread.updatedAt! : 0, true);
++    } catch (error) {
++      this.logger.warn?.(`Session ordering bootstrap could not be persisted for ${thread.threadId}: ${error instanceof Error ? error.message : String(error)}`);
++    }
++    return this.getSessionSettings(thread.threadId);
++  }
++
++  private writeSessionListOrder(sessionId: string, at: number, initializeOnly: boolean): Promise<void> {
++    const previous = this.orderWrites.get(sessionId) ?? Promise.resolve();
++    const write = previous.catch(() => {}).then(async () => {
++      const current = await this.getSessionSettings(sessionId);
++      if (initializeOnly && current.listOrderAt != null) return;
++      const settings = { ...current, listOrderAt: Math.max(current.listOrderAt ?? 0, at) };
++      // Keep accepted input visible even if disk persistence fails; never turn acceptance into a retryable rejection.
++      this.sessionSettings.set(sessionId, settings);
++      this.settingsRevision = null;
++      this.activityRevision += 1;
++      if (this.settingsStore?.updateListOrder) {
++        const stored = await this.settingsStore.updateListOrder(sessionId, settings, at, initializeOnly);
++        this.sessionSettings.set(sessionId, { ...this.sessionSettings.get(sessionId)!, listOrderAt: stored.listOrderAt });
++      } else {
++        await this.settingsStore?.set(sessionId, settings);
++      }
++    }).finally(() => { if (this.orderWrites.get(sessionId) === write) this.orderWrites.delete(sessionId); });
++    this.orderWrites.set(sessionId, write);
++    return write;
++  }
++
++  private async recordAcceptedInstruction(sessionId: string): Promise<void> {
++    try {
++      await this.writeSessionListOrder(sessionId, Date.now(), false);
++    } catch (error) {
++      this.logger.warn?.(`Accepted instruction ordering could not be persisted for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
++    }
++    this.invalidateThreadListSnapshots();
++  }
++
+   private async getSessionSettings(sessionId: string): Promise<CodexWebStoredSessionSettings> {
+     const cached = this.sessionSettings.get(sessionId);
+     if (cached) {
+@@ -2383,12 +2450,28 @@
+       if (revision && revision === this.settingsRevision) return;
+       const storedEntries = await this.settingsStore!.list!();
+       // Only revision-aware stores promise a complete authoritative snapshot.
+-      if (revision) this.sessionSettings.clear();
++      const previousSettings = new Map(this.sessionSettings);
++      if (revision) {
++        this.sessionSettings.clear();
++        // A failed bootstrap/accepted write can have no disk entry. Keep only its order,
++        // never resurrect other settings (such as favorites) removed by an external writer.
++        for (const [sessionId, previous] of previousSettings) {
++          if (previous.listOrderAt == null) continue;
++          this.sessionSettings.set(sessionId, {
++            ...createDefaultSettings(sessionId),
++            metadata: { codexWebDefaultsOnly: true },
++            listOrderAt: previous.listOrderAt,
++          });
++        }
++      }
+       for (const [sessionId, stored] of storedEntries) {
+         const migratedStored = migrateLegacyModelDefaults(stored);
+         if (!migratedStored) continue;
+         this.sessionSettings.set(sessionId, {
+           ...createDefaultSettings(sessionId), ...migratedStored,
++          listOrderAt: previousSettings.get(sessionId)?.listOrderAt != null
++            ? Math.max(previousSettings.get(sessionId)!.listOrderAt!, migratedStored.listOrderAt ?? 0)
++            : migratedStored.listOrderAt,
+           bridgeSessionId: sessionId, metadata: migratedStored.metadata ?? {},
+         });
+       }
+@@ -2406,6 +2489,7 @@
+     const normalized = {
+       ...settings,
+       bridgeSessionId: sessionId,
++      listOrderAt: this.sessionSettings.get(sessionId)?.listOrderAt ?? settings.listOrderAt ?? null,
+       metadata: settings.metadata ?? {},
+     };
+     this.sessionSettings.set(sessionId, normalized);
+@@ -2429,7 +2513,7 @@
+     return [...this.sessionSettings.entries()]
+       .filter(([, settings]) => settings.favorite === true)
+       .sort(([, left], [, right]) => (left.favoriteOrder ?? Number.MAX_SAFE_INTEGER) - (right.favoriteOrder ?? Number.MAX_SAFE_INTEGER)
+-        || (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
++        || (right.listOrderAt ?? 0) - (left.listOrderAt ?? 0))
+       .map(([sessionId]) => sessionId);
+   }
+ 
+diff --git a/packages/codex-web/src/server.ts b/packages/codex-web/src/server.ts
+--- a/packages/codex-web/src/server.ts
++++ b/packages/codex-web/src/server.ts
+@@ -6105,6 +6105,9 @@
+     firstUserInput: typeof session.firstUserInput === 'string' ? session.firstUserInput : null,
+     lastUserInput: typeof session.lastUserInput === 'string' ? session.lastUserInput : null,
+     lastInputAt: typeof session.lastInputAt === 'number' && Number.isFinite(session.lastInputAt) ? session.lastInputAt : null,
++    listOrderAt: typeof session.listOrderAt === 'number' && Number.isFinite(session.listOrderAt)
++      ? session.listOrderAt
++      : Date.parse(appSession.createdAt) || 0,
+     favorite: session.favorite === true,
+     favoriteOrder: typeof session.favoriteOrder === 'number' && Number.isFinite(session.favoriteOrder)
+       ? session.favoriteOrder
+diff --git a/packages/codex-web/src/session_list_page.ts b/packages/codex-web/src/session_list_page.ts
+--- a/packages/codex-web/src/session_list_page.ts
++++ b/packages/codex-web/src/session_list_page.ts
+@@ -1,13 +1,12 @@
+ const DEFAULT_SESSION_LIST_PAGE_SIZE = 30;
+ const MAX_SESSION_LIST_PAGE_SIZE = 100;
+-const SESSION_LIST_CURSOR_VERSION = 1;
++const SESSION_LIST_CURSOR_VERSION = 2;
+ 
+ interface SessionListCursor {
+   version: number;
+   scope: string;
+   principalId: string;
+-  priority: number;
+-  updatedAt: number;
++  listOrderAt: number;
+   id: string;
+ }
+ 
+@@ -80,8 +79,7 @@
+ ): number {
+   const leftKey = sessionListSortKey(left);
+   const rightKey = sessionListSortKey(right);
+-  return rightKey.priority - leftKey.priority
+-    || rightKey.updatedAt - leftKey.updatedAt
++  return rightKey.listOrderAt - leftKey.listOrderAt
+     || leftKey.id.localeCompare(rightKey.id);
+ }
+ 
+@@ -93,27 +91,15 @@
+   return Math.min(MAX_SESSION_LIST_PAGE_SIZE, Math.floor(parsed));
+ }
+ 
+-function sessionListSortKey(item: Record<string, unknown>): Pick<SessionListCursor, 'priority' | 'updatedAt' | 'id'> {
++function sessionListSortKey(item: Record<string, unknown>): Pick<SessionListCursor, 'listOrderAt' | 'id'> {
+   return {
+-    priority: sessionListActivityPriority(item),
+-    updatedAt: Math.max(normalizeTimestamp(item.updatedAt), normalizeTimestamp(item.lastInputAt)),
++    listOrderAt: normalizeTimestamp(item.listOrderAt),
+     id: sessionListItemId(item),
+   };
+ }
+ 
+ function sessionListItemId(item: Record<string, unknown>): string {
+   return typeof item.id === 'string' ? item.id : '';
+-}
+-
+-function sessionListActivityPriority(item: Record<string, unknown>): number {
+-  if (item.activityState === 'waiting_approval') {
+-    return 3;
+-  }
+-  if (item.activityState === 'running' || item.activityState === 'stale' || (typeof item.activeTurnId === 'string' && item.activeTurnId)) {
+-    return 2;
+-  }
+-  if (item.activityState === 'failed') return 1;
+-  return 0;
+ }
+ 
+ function normalizeTimestamp(value: unknown): number {
+@@ -150,10 +136,8 @@
+       parsed.version !== SESSION_LIST_CURSOR_VERSION
+       || parsed.scope !== options.scope
+       || parsed.principalId !== options.principalId
+-      || typeof parsed.priority !== 'number'
+-      || !Number.isFinite(parsed.priority)
+-      || typeof parsed.updatedAt !== 'number'
+-      || !Number.isFinite(parsed.updatedAt)
++      || typeof parsed.listOrderAt !== 'number'
++      || !Number.isFinite(parsed.listOrderAt)
+       || typeof parsed.id !== 'string'
+       || !parsed.id
+     ) {
+@@ -170,11 +154,8 @@
+ 
+ function isSessionListItemAfterCursor(item: Record<string, unknown>, cursor: SessionListCursor): boolean {
+   const key = sessionListSortKey(item);
+-  if (key.priority !== cursor.priority) {
+-    return key.priority < cursor.priority;
+-  }
+-  if (key.updatedAt !== cursor.updatedAt) {
+-    return key.updatedAt < cursor.updatedAt;
++  if (key.listOrderAt !== cursor.listOrderAt) {
++    return key.listOrderAt < cursor.listOrderAt;
+   }
+   return key.id.localeCompare(cursor.id) > 0;
+ }
+diff --git a/packages/codex-web/src/session_settings_store.ts b/packages/codex-web/src/session_settings_store.ts
+--- a/packages/codex-web/src/session_settings_store.ts
++++ b/packages/codex-web/src/session_settings_store.ts
+@@ -2,6 +2,7 @@
+ import type { ProviderTurnSessionSettings } from '@codex-mobile-web-app/codex-native-api';
+ 
+ export type CodexWebStoredSessionSettings = ProviderTurnSessionSettings & {
++  listOrderAt?: number | null;
+   favorite?: boolean;
+   favoriteOrder?: number | null;
+ };
+@@ -12,11 +13,27 @@
+   get(sessionId: string): CodexWebStoredSessionSettings | null | Promise<CodexWebStoredSessionSettings | null>;
+   list?(): Array<[string, CodexWebStoredSessionSettings]> | Promise<Array<[string, CodexWebStoredSessionSettings]>>;
+   set(sessionId: string, settings: CodexWebStoredSessionSettings): void | Promise<void>;
++  updateListOrder?(sessionId: string, settings: CodexWebStoredSessionSettings, at: number, initializeOnly: boolean): Promise<CodexWebStoredSessionSettings>;
+   delete(sessionId: string): void | Promise<void>;
+ }
+ 
+ export class FileSessionSettingsStore implements CodexWebSessionSettingsStore {
+-  dispose(): Promise<void> { return this.store.dispose(); }
++  private mutationTail: Promise<unknown> | null = null;
++  async dispose(): Promise<void> {
++    await this.mutationTail?.catch(() => {});
++    await this.store.dispose();
++  }
++  // Contending on the disk lock within one instance adds polling delays and can
++  // time out large metadata bootstraps. Only the queue head acquires that lock;
++  // the partition store still serializes independent processes/instances.
++  private serializeMutation<T>(mutate: () => Promise<T>): Promise<T> {
++    const pending = (this.mutationTail ?? Promise.resolve()).catch(() => {}).then(mutate);
++    this.mutationTail = pending;
++    void pending.finally(() => {
++      if (this.mutationTail === pending) this.mutationTail = null;
++    }).catch(() => {});
++    return pending;
++  }
+   private readonly store: SessionPartitionStore<CodexWebStoredSessionSettings>;
+   constructor({ settingsPath }: { settingsPath: string }) {
+     this.store = new SessionPartitionStore(settingsPath, (value, id) => {
+@@ -29,9 +46,25 @@
+   get(sessionId: string): Promise<CodexWebStoredSessionSettings | null> { return this.store.get(sessionId); }
+   list(): Promise<Array<[string, CodexWebStoredSessionSettings]>> { return this.store.list(); }
+   async set(sessionId: string, settings: CodexWebStoredSessionSettings): Promise<void> {
+-    await this.store.mutate(sessionId, () => settings);
++    await this.serializeMutation(() => this.store.mutate(sessionId, (current) => ({
++      ...settings,
++      // Settings snapshots may predate an accepted instruction. Only updateListOrder advances this field.
++      listOrderAt: current?.listOrderAt ?? settings.listOrderAt ?? null,
++    })));
+   }
+-  async delete(sessionId: string): Promise<void> { await this.store.mutate(sessionId, () => null); }
++  async updateListOrder(sessionId: string, settings: CodexWebStoredSessionSettings, at: number, initializeOnly: boolean): Promise<CodexWebStoredSessionSettings> {
++    let result = settings;
++    await this.serializeMutation(() => this.store.mutate(sessionId, (current) => {
++      const previous = current?.listOrderAt;
++      result = {
++        ...(current ?? settings),
++        listOrderAt: initializeOnly && previous != null ? previous : Math.max(previous ?? 0, at),
++      };
++      return result;
++    }));
++    return result;
++  }
++  async delete(sessionId: string): Promise<void> { await this.serializeMutation(() => this.store.mutate(sessionId, () => null)); }
+ }
+ 
+ function normalizeSettings(
+@@ -56,6 +89,7 @@
+     locale: nullableString(value.locale),
+     metadata: isRecord(value.metadata) ? value.metadata : {},
+     updatedAt: Number.isFinite(value.updatedAt) ? Number(value.updatedAt) : Date.now(),
++    listOrderAt: typeof value.listOrderAt === 'number' && Number.isFinite(value.listOrderAt) ? value.listOrderAt : null,
+     favorite: value.favorite === true,
+     favoriteOrder: Number.isFinite(value.favoriteOrder) ? Number(value.favoriteOrder) : null,
+   };
+diff --git a/packages/codex-web/test/admin_session_page.test.ts b/packages/codex-web/test/admin_session_page.test.ts
+--- a/packages/codex-web/test/admin_session_page.test.ts
++++ b/packages/codex-web/test/admin_session_page.test.ts
+@@ -8,6 +8,7 @@
+   const options = { principalId: 'a', scope: 'admin:all', limit: 30 };
+   const first = paginateAdminSessions(items, options);
+   assert.equal(first.items.length, 30); assert.equal(first.hasMore, true); assert.ok(first.items[0]!.title.startsWith('Native'));
++  assert.equal(first.items[0]!.updatedAt, new Date(20_000).toISOString());
+   const all = [...first.items]; let cursor = first.nextCursor;
+   while (cursor) { const page = paginateAdminSessions(items, { ...options, cursor }); all.push(...page.items); cursor = page.nextCursor; }
+   assert.equal(all.length, 105); assert.equal(new Set(all.map(item => item.id)).size, 105);
+diff --git a/packages/codex-web/test/browser/fixture-server.mjs b/packages/codex-web/test/browser/fixture-server.mjs
+--- a/packages/codex-web/test/browser/fixture-server.mjs
++++ b/packages/codex-web/test/browser/fixture-server.mjs
+@@ -23,6 +23,7 @@
+   firstUserInput: 'Verify the mobile workspace',
+   lastUserInput: 'Verify the mobile workspace',
+   lastInputAt: Date.parse('2026-07-15T08:00:00.000Z'),
++  listOrderAt: Date.parse('2026-07-15T08:00:00.000Z'),
+   updatedAt: Date.parse('2026-07-15T08:01:00.000Z'),
+   archived: false,
+   favorite: true,
+@@ -57,6 +58,7 @@
+   firstUserInput: 'Archive an idle session',
+   lastUserInput: 'Archive an idle session',
+   lastInputAt: Date.parse('2026-07-15T07:00:00.000Z'),
++  listOrderAt: Date.parse('2026-07-15T07:00:00.000Z'),
+   updatedAt: Date.parse('2026-07-15T07:01:00.000Z'),
+   archived: false,
+   favorite: false,
+@@ -101,6 +103,7 @@
+   firstUserInput: 'Load an older session page',
+   lastUserInput: 'Load an older session page',
+   lastInputAt: Date.parse('2026-07-14T06:00:00.000Z'),
++  listOrderAt: Date.parse('2026-07-14T06:00:00.000Z'),
+   updatedAt: Date.parse('2026-07-14T06:01:00.000Z'),
+   thread: {
+     id: 'session_browser_older',
+@@ -212,6 +215,7 @@
+   firstUserInput: 'Open generated files and retained attachments',
+   lastUserInput: 'This image was uploaded in an earlier turn.',
+   lastInputAt: Date.parse('2026-07-15T07:30:00.000Z'),
++  listOrderAt: Date.parse('2026-07-15T07:30:00.000Z'),
+   updatedAt: Date.parse('2026-07-15T07:31:00.000Z'),
+   timeline: fixtureFileTimeline,
+   thread: {
+diff --git a/packages/codex-web/test/browser/session-attention.spec.js b/packages/codex-web/test/browser/session-attention.spec.js
+--- a/packages/codex-web/test/browser/session-attention.spec.js
++++ b/packages/codex-web/test/browser/session-attention.spec.js
+@@ -20,7 +20,7 @@
+     { id: ids[1], title: '已完成的排查结果，还没有查看', activityState: null, activeTurnId: null, latestTurn: { id: 'turn_unread', status: 'completed' } },
+     { id: ids[2], title: '等待确认的文件修改', activityState: 'waiting_approval', activeTurnId: 'turn_approval' },
+     { id: ids[3], title: '执行失败的任务，需要重试', activityState: 'failed', activeTurnId: null, latestTurn: { id: 'turn_failed', status: 'failed' } },
+-  ].map(session => ({ ...session, cwd: '/Users/test/work', settings: {}, updatedAt: 1000 }));
++  ].map((session, index) => ({ ...session, cwd: '/Users/test/work', settings: {}, listOrderAt: 1000 - index, updatedAt: 1000 }));
+   await page.route(/\/api\/sessions(?:\?|$)/u, route => route.fulfill({ json: { items: sessions, directoryComplete: true } }));
+   for (const session of sessions) {
+     await page.route(new RegExp(`/api/sessions/${session.id}(?:[/?]|$)`), route => {
+diff --git a/packages/codex-web/test/browser/session-cache-stability.spec.js b/packages/codex-web/test/browser/session-cache-stability.spec.js
+new file mode 100644
+--- /dev/null
++++ b/packages/codex-web/test/browser/session-cache-stability.spec.js
+@@ -0,0 +1,78 @@
++import { expect, test } from '@playwright/test';
++
++test.use({ serviceWorkers: 'block' });
++
++test('cached messages stay in place while history and execution status refresh', async ({ page }, info) => {
++  test.skip(!['desktop', 'mobile-portrait', 'mobile-compact'].includes(info.project.name));
++  const id = 'session_browser_history';
++  const items = [
++    { id: 'cached_question', kind: 'message', role: 'user', meta: 'history', text: 'Keep this cached conversation steady.' },
++    { id: 'cached_answer', kind: 'message', role: 'assistant', meta: 'final', text: 'The previous answer is already available.' },
++  ];
++  await page.addInitScript(({ id, items }) => {
++    localStorage.setItem('codexWebToken', 'browser-cache-stability');
++    localStorage.setItem('codexWebLanguage', 'en');
++    localStorage.setItem('codexWebTimelineCache', JSON.stringify({ version: 3, entries: [{
++      sessionId: id, savedAt: Date.now(), validatedAt: 0, timeline: items, history: items,
++      historyComplete: true, batches: [], approvals: [],
++    }] }));
++  }, { id, items });
++  await page.route('**/app.js*', async route => {
++    const response = await route.fetch();
++    await route.fulfill({ response, body: `${await response.text()}\nglobalThis.__cacheStability = { state };` });
++  });
++  let release;
++  const gate = new Promise(resolve => { release = resolve; });
++  let requests = 0;
++  await page.route(new RegExp(`/api/sessions/${id}(?:[/?]|$)`), async route => {
++    requests++;
++    await gate;
++    const session = { id, title: 'Cached conversation', cwd: '/Users/test/yanshan_quant', settings: {},
++      listOrderAt: 1000, updatedAt: 1000, activeTurnId: null, activityState: null };
++    await route.fulfill({ json: { session: { ...session, timeline: items, thread: { turns: [] }, timelineComplete: true }, items, hasMore: false } });
++  });
++  await page.goto('/');
++  await page.locator(`button[data-session-id="${id}"]`).click();
++  await expect(page.locator('#timeline')).toContainText(items[1].text);
++  await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
++  await expect(page.locator('.history-load-pending')).toHaveCount(0);
++  await page.locator('#prompt-input').fill('Keep my next draft');
++  const anchor = page.locator('[data-timeline-id="cached_question"]');
++  const before = await anchor.boundingBox();
++  const dimensions = await page.locator('#timeline').evaluate(element => ({ height: element.clientHeight, scroll: element.scrollHeight }));
++  release();
++  await expect.poll(() => page.evaluate(() => {
++    const { state } = globalThis.__cacheStability;
++    return state.sessionHistoryPending || state.sessionStatusPending;
++  })).toBe(false);
++  await expect(page.locator('.history-load-pending')).toHaveCount(0);
++  await expect(page.locator('#prompt-input')).toHaveValue('Keep my next draft');
++  const after = await anchor.boundingBox();
++  expect(Math.abs(after.y - before.y)).toBeLessThan(1);
++  expect(await page.locator('#timeline').evaluate(element => ({ height: element.clientHeight, scroll: element.scrollHeight }))).toEqual(dimensions);
++});
++
++test('an uncached empty conversation keeps loading feedback until history arrives', async ({ page }, info) => {
++  test.skip(!['desktop', 'mobile-portrait'].includes(info.project.name));
++  // A title is also a legacy message preview; omit it to exercise a truly empty view.
++  const session = { id: 'empty_cache_session', title: '', settings: {}, listOrderAt: 1 };
++  await page.addInitScript(() => {
++    localStorage.setItem('codexWebToken', 'browser-empty-cache');
++    localStorage.setItem('codexWebLanguage', 'en');
++  });
++  await page.route(/\/api\/sessions(?:\?|$)/u, route => route.fulfill({ json: { items: [session], directoryComplete: true } }));
++  let release;
++  const gate = new Promise(resolve => { release = resolve; });
++  await page.route('**/api/sessions/empty_cache_session/**', async route => {
++    if (new URL(route.request().url()).pathname.endsWith('/status')) return route.fulfill({ json: { session } });
++    await gate;
++    await route.fulfill({ json: { session, items: [{ id: 'loaded_answer', kind: 'message', role: 'assistant', text: 'History is now available.' }], hasMore: false } });
++  });
++  await page.goto('/');
++  await page.locator('button[data-session-id="empty_cache_session"]').click();
++  await expect(page.locator('.history-load-pending')).toBeVisible();
++  await expect(page.locator('.history-load-pending')).toHaveText('Loading history…');
++  release();
++  await expect(page.locator('#timeline')).toContainText('History is now available.');
++  await expect(page.locator('.history-load-pending')).toHaveCount(0);
++});
+diff --git a/packages/codex-web/test/browser/session-stable-order.spec.js b/packages/codex-web/test/browser/session-stable-order.spec.js
+new file mode 100644
+--- /dev/null
++++ b/packages/codex-web/test/browser/session-stable-order.spec.js
+@@ -0,0 +1,153 @@
++import { expect, test } from '@playwright/test';
++
++test.use({ serviceWorkers: 'block' });
++
++async function setup(page, count = 65) {
++  const errors = [];
++  page.on('pageerror', error => errors.push(error.message));
++  await page.addInitScript(() => {
++    localStorage.setItem('codexWebToken', 'browser-stable-order');
++    localStorage.setItem('codexWebLanguage', 'en');
++  });
++  await page.route('**/app.js*', async route => {
++    const response = await route.fetch();
++    await route.fulfill({ response, body: `${await response.text()}\nglobalThis.__stableOrder = { state, refreshSessionsList, refreshCurrentView, showSessionList, render };` });
++  });
++  const sessions = Array.from({ length: count }, (_, index) => ({
++    id: `stable_${String(index).padStart(2, '0')}`, title: `Session ${index}`,
++    cwd: '/Users/test/work', settings: {}, favorite: true, archived: false,
++    listOrderAt: 10_000 - index, updatedAt: 10_000 - index, lastInputAt: 10_000 - index,
++    activeTurnId: index < 2 ? `turn_stable_${index}` : null,
++    activityState: index < 2 ? 'running' : null,
++  }));
++  const requests = [], archives = [], sends = [];
++  await page.route(/\/api\/sessions(?:\?|$)/u, route => {
++    const url = new URL(route.request().url());
++    requests.push(url.search);
++    const ordered = sessions.filter(session => session.archived === (url.searchParams.get('state') === 'archived'))
++      .sort((left, right) => right.listOrderAt - left.listOrderAt || left.id.localeCompare(right.id));
++    const start = Number(url.searchParams.get('cursor') || 0), end = start + 30;
++    return route.fulfill({ json: { items: ordered.slice(start, end), nextCursor: end < ordered.length ? String(end) : null, totalCount: ordered.length, directoryComplete: true } });
++  });
++  await page.route(/\/api\/sessions\/stable_\d+(?:[/?]|$)/u, route => {
++    const url = new URL(route.request().url()), id = url.pathname.split('/')[3];
++    const session = sessions.find(item => item.id === id);
++    if (url.pathname.endsWith('/archive')) {
++      archives.push(id); session.archived = true;
++      return route.fulfill({ json: { ok: true } });
++    }
++    if (url.pathname.endsWith('/unarchive')) {
++      session.archived = false;
++      return route.fulfill({ json: { session } });
++    }
++    if (url.pathname.endsWith('/turns')) {
++      sends.push(id); session.listOrderAt = 20_000; session.activeTurnId = `turn_sent_${id}`; session.activityState = 'running';
++      return route.fulfill({ json: { turnId: session.activeTurnId, session } });
++    }
++    const items = [{ id: `answer_${id}`, kind: 'message', role: 'assistant', text: `History for ${id}`, meta: 'final' }];
++    return route.fulfill({ json: { session: { ...session, thread: { turns: [] }, timeline: items, timelineComplete: true }, items, hasMore: false } });
++  });
++  await page.route('**/api/turns/*/events*', route => route.fulfill({ contentType: 'text/event-stream', body: ': waiting\n\n' }));
++  await page.goto('/');
++  await expect(page.locator('button[data-session-id="stable_00"]')).toBeVisible();
++  return { sessions, requests, archives, sends, errors };
++}
++
++const rowIds = page => page.locator('.session-list button[data-session-id]').evaluateAll(rows => rows.map(row => row.dataset.sessionId));
++const refreshList = page => page.evaluate(() => globalThis.__stableOrder.refreshCurrentView());
++
++test('concurrent output, attention and return navigation preserve order; explicit send promotes in recents and favorites', async ({ page }, info) => {
++  test.skip(!['desktop', 'mobile-portrait'].includes(info.project.name));
++  const fixture = await setup(page, 25);
++  const expected = await rowIds(page);
++  for (const [index, session] of fixture.sessions.entries()) session.updatedAt = 50_000 + index;
++  fixture.sessions[0].activityState = 'waiting_approval';
++  Object.assign(fixture.sessions[1], { activityState: null, activeTurnId: null, latestTurn: { id: 'turn_stable_1', status: 'completed' } });
++  fixture.sessions[2].activityState = 'failed';
++  await page.evaluate(() => globalThis.__stableOrder.refreshSessionsList({ renderAfter: true, scope: 'all' }));
++  expect(await rowIds(page)).toEqual(expected);
++  await expect(page.locator('[data-session-id="stable_01"] .session-attention-state')).toHaveAttribute('data-state', 'unread');
++  await expect(page.locator('[data-session-id="stable_02"] .session-attention-state')).toHaveAttribute('data-state', 'failed');
++  await page.locator('button[data-session-id="stable_10"]').click();
++  await expect(page.locator('#timeline')).toContainText('History for stable_10');
++  await page.locator('#prompt-input').fill('Keep an unsent draft');
++  if (info.project.name !== 'desktop') await page.locator('.chat-back-button').click();
++  expect(await rowIds(page)).toEqual(expected);
++  await page.locator('[data-sort-mode="favorites"]').click();
++  expect(await rowIds(page)).toEqual(expected);
++  await page.locator('button[data-session-id="stable_10"]').click();
++  await expect(page.locator('#prompt-input')).toHaveValue('Keep an unsent draft');
++  await page.getByRole('button', { name: 'Send', exact: true }).click();
++  await expect.poll(() => fixture.sends).toEqual(['stable_10']);
++  if (info.project.name !== 'desktop') await page.locator('.chat-back-button').click();
++  await page.evaluate(() => globalThis.__stableOrder.refreshSessionsList({ renderAfter: true, scope: 'favorites' }));
++  await expect.poll(() => rowIds(page)).toEqual(['stable_10', ...expected.filter(id => id !== 'stable_10')]);
++  await page.locator('[data-sort-mode="time"]').click();
++  await page.evaluate(() => globalThis.__stableOrder.refreshSessionsList({ renderAfter: true, scope: 'all' }));
++  expect((await rowIds(page))[0]).toBe('stable_10');
++  await page.reload();
++  if (info.project.name !== 'desktop' && await page.locator('.chat-back-button').isVisible()) await page.locator('.chat-back-button').click();
++  await expect.poll(async () => (await rowIds(page))[0]).toBe('stable_10');
++  expect(fixture.errors).toEqual([]);
++});
++
++test('loaded pages and list scroll survive opening a session and refreshing output', async ({ page }, info) => {
++  test.skip(!['desktop', 'mobile-portrait'].includes(info.project.name));
++  const fixture = await setup(page);
++  await page.getByRole('button', { name: 'Load older sessions', exact: true }).click();
++  await expect(page.locator('.session-list button[data-session-id]')).toHaveCount(60);
++  await page.locator('button[data-session-id="stable_45"]').scrollIntoViewIfNeeded();
++  const list = page.locator('.session-list');
++  const before = await list.evaluate(element => element.scrollTop);
++  expect(before).toBeGreaterThan(100);
++  await page.locator('button[data-session-id="stable_45"]').click();
++  await expect(page.locator('#timeline')).toContainText('History for stable_45');
++  if (info.project.name !== 'desktop') await page.locator('.chat-back-button').click();
++  await expect.poll(async () => Math.abs(await list.evaluate(element => element.scrollTop) - before)).toBeLessThan(3);
++  const expected = await rowIds(page);
++  fixture.sessions.forEach((session, index) => { session.updatedAt = 99_000 + index; });
++  await refreshList(page);
++  await expect(page.locator('.session-list button[data-session-id]')).toHaveCount(60);
++  expect(await rowIds(page)).toEqual(expected);
++  await expect.poll(async () => Math.abs(await list.evaluate(element => element.scrollTop) - before)).toBeLessThan(3);
++  // The remaining third page stays lazy until the user asks for it.
++  expect(fixture.requests.some(query => new URLSearchParams(query).get('cursor') === '60')).toBe(false);
++  await page.screenshot({ path: info.outputPath('stable-list-position.png') });
++  expect(fixture.errors).toEqual([]);
++});
++
++test('archive another idle session while current session runs, and restore it without promoting it', async ({ page }, info) => {
++  test.skip(!['desktop', 'mobile-portrait', 'mobile-compact'].includes(info.project.name));
++  const fixture = await setup(page, 8);
++  await page.locator('button[data-session-id="stable_00"]').click();
++  await expect.poll(() => page.evaluate(() => globalThis.__stableOrder.state.pendingTurn)).toBe(true);
++  if (info.project.name !== 'desktop') await page.locator('.chat-back-button').click();
++  await expect(page.locator('[data-session-archive-request-id="stable_00"]')).toBeDisabled();
++  if (info.project.name === 'desktop') {
++    await page.locator('button[data-session-id="stable_02"]').hover();
++    await page.locator('[data-session-archive-request-id="stable_02"]').click();
++  } else {
++    await page.locator('button[data-session-id="stable_02"]').click();
++    // Background pagination may remove the current session from the visible list.
++    await page.evaluate(() => {
++      const { state } = globalThis.__stableOrder;
++      state.sessions = state.sessions.filter(session => session.id !== 'stable_02');
++      for (const scope of ['all', 'favorites']) state.sessionsByScope[scope] = state.sessionsByScope[scope].filter(session => session.id !== 'stable_02');
++    });
++    await page.getByRole('button', { name: 'Session menu', exact: true }).click();
++    await page.getByRole('button', { name: 'Archive', exact: true }).click();
++  }
++  const dialog = page.getByRole('dialog', { name: 'Archive session?' });
++  await expect(dialog).toBeVisible();
++  await dialog.getByRole('button', { name: 'Archive', exact: true }).click();
++  await expect.poll(() => fixture.archives).toEqual(['stable_02']);
++  await expect(page.locator('button[data-session-id="stable_02"]')).toHaveCount(0);
++  await page.locator('[data-sort-mode="archived"]').click();
++  if (info.project.name === 'desktop') await page.locator('button[data-session-id="stable_02"]').hover();
++  await page.locator('[data-session-unarchive-id="stable_02"]').click();
++  await page.locator('[data-sort-mode="time"]').click();
++  await page.evaluate(() => globalThis.__stableOrder.refreshSessionsList({ scope: 'all' }));
++  expect((await rowIds(page)).slice(0, 3)).toEqual(['stable_00', 'stable_01', 'stable_02']);
++  expect(fixture.sessions[2].listOrderAt).toBe(9_998);
++  expect(fixture.errors).toEqual([]);
++});
+diff --git a/packages/codex-web/test/browser/weak-network.spec.js b/packages/codex-web/test/browser/weak-network.spec.js
+--- a/packages/codex-web/test/browser/weak-network.spec.js
++++ b/packages/codex-web/test/browser/weak-network.spec.js
+@@ -40,7 +40,8 @@
+     if (delayed === 'status') await expect(page.locator('#timeline')).toContainText('Latest browser answer');
+     else await expect.poll(() => page.evaluate(() => globalThis.__weakNet.state.sessionStatusPending)).toBe(false);
+     await expect(page.locator('.history-load-error')).toHaveCount(0);
+-    await expect(page.locator('.history-load-pending')).toBeVisible();
++    if (delayed === 'timeline') await expect(page.locator('#timeline')).toContainText('Oldest browser question');
++    await expect(page.locator('.history-load-pending')).toHaveCount(0);
+     await page.locator('#prompt-input').fill('Keep staged draft');
+     release();
+     await expect(page.locator('.history-load-pending')).toHaveCount(0);
+diff --git a/packages/codex-web/test/public_ui.test.ts b/packages/codex-web/test/public_ui.test.ts
+--- a/packages/codex-web/test/public_ui.test.ts
++++ b/packages/codex-web/test/public_ui.test.ts
+@@ -9849,18 +9849,18 @@
+   }
+ });
+ 
+-test('session cards surface lightweight activity states and prioritize approvals', async () => {
++test('session cards surface lightweight activity states without reordering for approvals', async () => {
+   const { api } = await loadAppHarness();
+   api.state.sortMode = 'time';
+   api.state.sessions = [
+-    { id: 'session_recent', firstUserInput: 'Recent idle task', updatedAt: 300, settings: { metadata: {} } },
+-    { id: 'session_running', firstUserInput: 'Background task', updatedAt: 100, activityState: 'running', settings: { metadata: {} } },
+-    { id: 'session_approval', firstUserInput: 'Approval task', updatedAt: 50, activityState: 'waiting_approval', settings: { metadata: {} } },
++    { id: 'session_recent', firstUserInput: 'Recent idle task', listOrderAt: 300, updatedAt: 300, settings: { metadata: {} } },
++    { id: 'session_running', firstUserInput: 'Background task', listOrderAt: 100, updatedAt: 100, activityState: 'running', settings: { metadata: {} } },
++    { id: 'session_approval', firstUserInput: 'Approval task', listOrderAt: 50, updatedAt: 50, activityState: 'waiting_approval', settings: { metadata: {} } },
+   ];
+ 
+   assert.deepEqual(
+     JSON.parse(JSON.stringify(api.sortedSessions().map((session) => session.id))),
+-    ['session_approval', 'session_running', 'session_recent'],
++    ['session_recent', 'session_running', 'session_approval'],
+   );
+   const html = api.renderSessionCards();
+   assert.match(html, /data-activity-state="waiting_approval"[\s\S]*data-state="waiting_approval"[^>]*aria-label="Needs approval"/u);
+@@ -13460,7 +13460,7 @@
+   assert.doesNotMatch(api.context.document.querySelector('#app').innerHTML, /Beta work/u);
+ });
+ 
+-test('desktop project selection prefers a running session over a newer completed session in the same project', async () => {
++test('desktop project selection opens the most recently instructed session despite newer completed output in the same project', async () => {
+   const fetchCalls = [];
+   const { api } = await loadAppHarness({
+     viewportWidth: 1280,
+@@ -13480,7 +13480,7 @@
+                 cwd: '/repo/a',
+                 firstUserInput: 'Completed newer',
+                 lastUserInput: 'Completed newer',
+-                updatedAt: 100,
++                listOrderAt: 10, updatedAt: 100,
+                 settings: { metadata: {} },
+               },
+               {
+@@ -13490,7 +13490,7 @@
+                 cwd: '/repo/a',
+                 firstUserInput: 'Running older',
+                 lastUserInput: 'Running older',
+-                updatedAt: 50,
++                listOrderAt: 50, updatedAt: 50,
+                 activeTurnId: 'turn_active',
+                 activityState: 'running',
+                 settings: { metadata: {} },
+@@ -13556,7 +13556,7 @@
+       cwd: '/repo/a',
+       firstUserInput: 'Completed newer',
+       lastUserInput: 'Completed newer',
+-      updatedAt: 100,
++      listOrderAt: 10, updatedAt: 100,
+       settings: { metadata: {} },
+       thread: { turns: [{ id: 'turn_done', status: 'completed' }] },
+     },
+@@ -13567,7 +13567,7 @@
+       cwd: '/repo/a',
+       firstUserInput: 'Running older',
+       lastUserInput: 'Running older',
+-      updatedAt: 50,
++      listOrderAt: 50, updatedAt: 50,
+       activeTurnId: 'turn_active',
+       settings: { metadata: {} },
+       thread: { turns: [{ id: 'turn_active', status: 'in_progress' }] },
+@@ -14975,9 +14975,9 @@
+   const { api } = await loadAppHarness();
+ 
+   api.state.sessions = [
+-    { id: 'old', updatedAt: 10, settings: { metadata: {} } },
+-    { id: 'older_favorite', favorite: true, favoriteOrder: 1, updatedAt: 20, settings: { favoriteOrder: 1, metadata: {} } },
+-    { id: 'newer_favorite', favorite: true, favoriteOrder: 99, updatedAt: 40, settings: { favoriteOrder: 99, metadata: {} } },
++    { id: 'old', listOrderAt: 10, updatedAt: 10, settings: { metadata: {} } },
++    { id: 'older_favorite', favorite: true, favoriteOrder: 1, listOrderAt: 20, updatedAt: 20, settings: { favoriteOrder: 1, metadata: {} } },
++    { id: 'newer_favorite', favorite: true, favoriteOrder: 99, listOrderAt: 40, updatedAt: 40, settings: { favoriteOrder: 99, metadata: {} } },
+   ];
+ 
+   api.state.sortMode = 'favorites';
+@@ -15201,8 +15201,8 @@
+   api.state.sessionsScope = 'all';
+   api.state.sessionsLoadedByScope.all = true;
+   api.state.sessions = [
+-    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, updatedAt: 200, settings: { metadata: {} } },
+-    { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, updatedAt: 100, settings: { metadata: {} } },
++    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, listOrderAt: 200, updatedAt: 200, settings: { metadata: {} } },
++    { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, listOrderAt: 100, updatedAt: 100, settings: { metadata: {} } },
+   ];
+   api.state.sessionsByScope.all = [...api.state.sessions];
+ 
+@@ -15222,7 +15222,7 @@
+         cwd: '/repo/recent',
+         lastUserInput: 'Newest prompt',
+         lastInputAt: 300,
+-        updatedAt: 300,
++        listOrderAt: 300, updatedAt: 300,
+         settings: { metadata: {} },
+         thread: { turns: [] },
+       },
+@@ -15236,7 +15236,7 @@
+   assert.equal(api.state.sessionId, null);
+ });
+ 
+-test('all tab rerenders in time order when background session refresh finishes after returning to list', async () => {
++test('all tab preserves order when background output refresh finishes after returning to list', async () => {
+   let resolveSessionRefresh: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
+   const { api, context } = await loadAppHarness({
+     fetch: async (path) => {
+@@ -15259,9 +15259,9 @@
+   api.state.sessionsScope = 'all';
+   api.state.sessionsLoadedByScope.all = true;
+   api.state.sessionId = 'session_recent';
+-  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, updatedAt: 100, settings: { metadata: {} } };
++  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, listOrderAt: 100, updatedAt: 100, settings: { metadata: {} } };
+   api.state.sessions = [
+-    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, updatedAt: 200, settings: { metadata: {} } },
++    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, listOrderAt: 200, updatedAt: 200, settings: { metadata: {} } },
+     api.state.currentSession,
+   ];
+   api.state.sessionsByScope.all = [...api.state.sessions];
+@@ -15285,7 +15285,7 @@
+         cwd: '/repo/recent',
+         lastUserInput: 'Newest prompt',
+         lastInputAt: 300,
+-        updatedAt: 300,
++        listOrderAt: 100, updatedAt: 300,
+         settings: { metadata: {} },
+         thread: { turns: [] },
+       },
+@@ -15295,10 +15295,10 @@
+   await flushMicrotasks();
+ 
+   assert.equal(api.state.view, 'sessions');
+-  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"'));
+-});
+-
+-test('all tab uses newer updatedAt when refreshed session omits lastInputAt', async () => {
++  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"'));
++});
++
++test('all tab ignores newer updatedAt when refreshed session omits lastInputAt', async () => {
+   let resolveSessionRefresh: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
+   const { api, context } = await loadAppHarness({
+     fetch: async (path) => {
+@@ -15321,9 +15321,9 @@
+   api.state.sessionsScope = 'all';
+   api.state.sessionsLoadedByScope.all = true;
+   api.state.sessionId = 'session_recent';
+-  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, updatedAt: 100, settings: { metadata: {} } };
++  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, listOrderAt: 100, updatedAt: 100, settings: { metadata: {} } };
+   api.state.sessions = [
+-    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, updatedAt: 200, settings: { metadata: {} } },
++    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, listOrderAt: 200, updatedAt: 200, settings: { metadata: {} } },
+     api.state.currentSession,
+   ];
+   api.state.sessionsByScope.all = [...api.state.sessions];
+@@ -15346,7 +15346,7 @@
+         id: 'session_recent',
+         cwd: '/repo/recent',
+         lastUserInput: 'Newest prompt',
+-        updatedAt: 300,
++        listOrderAt: 100, updatedAt: 300,
+         settings: { metadata: {} },
+         thread: { turns: [] },
+       },
+@@ -15356,7 +15356,7 @@
+   await flushMicrotasks();
+ 
+   assert.equal(api.state.view, 'sessions');
+-  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"'));
++  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"'));
+ });
+ 
+ test('favorites tab never renders manual ordering controls', async () => {
+@@ -15364,8 +15364,8 @@
+ 
+   api.state.sortMode = 'favorites';
+   api.state.sessions = [
+-    { id: 'session_old', favorite: true, favoriteOrder: 1, updatedAt: 10, settings: { favoriteOrder: 1, metadata: {} } },
+-    { id: 'session_new', favorite: true, favoriteOrder: 99, updatedAt: 30, settings: { favoriteOrder: 99, metadata: {} } },
++    { id: 'session_old', favorite: true, favoriteOrder: 1, listOrderAt: 10, updatedAt: 10, settings: { favoriteOrder: 1, metadata: {} } },
++    { id: 'session_new', favorite: true, favoriteOrder: 99, listOrderAt: 30, updatedAt: 30, settings: { favoriteOrder: 99, metadata: {} } },
+   ];
+ 
+   const html = api.renderSessionCards();
+@@ -16070,6 +16070,65 @@
+     favorite: true,
+   });
+   assert.equal(api.state.sessions[0]?.favorite, true);
++});
++
++test('archive controls allow an idle target while another session is running', async () => {
++  const fetchCalls = [];
++  const { api } = await loadAppHarness({
++    fetch: async (path) => {
++      fetchCalls.push(path);
++      return { ok: true, status: 200, json: async () => ({ ok: true, session: { id: 'idle', archived: false, settings: { metadata: {} } } }) };
++    },
++  });
++  api.state.token = 'token';
++  api.state.authSession = { id: 'auth_archive' };
++  api.state.sessionId = 'running';
++  api.state.currentSession = { id: 'running', activeTurnId: 'turn_running', settings: { metadata: {} } };
++  api.state.pendingTurn = true;
++  api.state.sessions = [{ id: 'idle', settings: { metadata: {} } }];
++  api.requestArchiveSession('idle');
++  assert.equal(api.state.archiveConfirmSessionId, 'idle');
++  assert.match(api.renderArchiveConfirmModal(), /data-session-archive-confirm-id="idle"/u);
++  await api.archiveSession('idle');
++  assert.equal(fetchCalls[0], '/api/sessions/idle/archive');
++  assert.equal(api.state.sessionId, 'running');
++  assert.equal(api.state.pendingTurn, true);
++  await api.unarchiveSession('idle');
++  assert.equal(fetchCalls[1], '/api/sessions/idle/unarchive');
++  assert.equal(api.state.pendingTurn, true);
++});
++
++test('archive dialog resolves a current session outside the visible session page', async () => {
++  const { api } = await loadAppHarness();
++  api.state.currentSession = { id: 'off_page', preview: 'Retained current session', settings: { metadata: {} } };
++  api.state.sessionId = 'off_page';
++  api.state.sessions = [];
++  api.requestArchiveSession('off_page');
++  assert.match(api.renderArchiveConfirmModal(), /data-session-archive-confirm-id="off_page"/u);
++});
++
++test('archive controls protect the target active turn without blocking unrelated targets', async () => {
++  const fetchCalls = [];
++  const { api } = await loadAppHarness({ fetch: async (path) => { fetchCalls.push(path); throw new Error('Must not archive running target'); } });
++  api.state.sessionId = 'current';
++  api.state.pendingTurn = true;
++  api.state.sessions = [
++    { id: 'current', settings: { metadata: {} } },
++    { id: 'background', activeTurnId: 'background_turn', activityState: 'running', settings: { metadata: {} } },
++    { id: 'approval', activityState: 'waiting_approval', settings: { metadata: {} } },
++  ];
++  for (const id of ['current', 'background', 'approval']) {
++    api.requestArchiveSession(id);
++    assert.equal(api.state.archiveConfirmSessionId, null);
++    await api.archiveSession(id);
++  }
++  api.state.pendingTurn = false;
++  for (const id of ['background', 'approval']) {
++    api.requestArchiveSession(id);
++    assert.equal(api.state.archiveConfirmSessionId, null);
++    await api.archiveSession(id);
++  }
++  assert.deepEqual(fetchCalls, []);
+ });
+ 
+ test('archive action requires a confirmation dialog before deleting a session', async () => {
+@@ -18670,6 +18729,12 @@
+ ${timelineReconciliation}
+ ${app}
+ globalThis.__codexWebTest = {
++  createComposerSubmission,
++  completeDeliveredSubmission,
++  normalizeSessionsForScope,
++  serializeSessionSummaryForCache,
++  normalizeSubmissionOutboxEntry,
++
+   state,
+   get draftSessionActive() {
+     return state.draftSessionActive;
+@@ -18773,6 +18838,8 @@
+   currentProjectScopeTitle: typeof currentProjectScopeTitle === 'function' ? currentProjectScopeTitle : null,
+   toggleProjectFavorite: typeof toggleProjectFavorite === 'function' ? toggleProjectFavorite : null,
+   toggleSessionFavorite: typeof toggleSessionFavorite === 'function' ? toggleSessionFavorite : null,
++  requestArchiveSession,
++  renderArchiveConfirmModal,
+   archiveSession: typeof archiveSession === 'function' ? archiveSession : null,
+   unarchiveSession: typeof unarchiveSession === 'function' ? unarchiveSession : null,
+   reloadRuntime: typeof reloadRuntime === 'function' ? reloadRuntime : null,
+@@ -18887,3 +18954,201 @@
+   assert.equal(streamReads, 2);
+   assert.equal(api.state.pendingTurn, true);
+ });
++
++test('stable session order survives concurrent output and status changes in all and favorites', async () => {
++  const { api } = await loadAppHarness();
++  api.state.sessions = [
++    { id: 'a', listOrderAt: 300, updatedAt: 300, favorite: true },
++    { id: 'b', listOrderAt: 200, updatedAt: 200, favorite: true },
++    { id: 'c', listOrderAt: 100, updatedAt: 100, favorite: true },
++  ];
++  for (const mode of ['time', 'favorites']) {
++    api.state.sortMode = mode;
++    for (const activityState of ['running', 'waiting_approval', 'failed', 'stale', null]) {
++      api.upsertSession({ id: 'c', activityState, activeTurnId: null, updatedAt: 9000, lastInputAt: 8000 });
++      api.upsertSession({ id: 'b', activityState, activeTurnId: null, updatedAt: 10000 });
++      assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["a","b","c"]');
++    }
++  }
++  api.upsertSession({ id: 'c', listOrderAt: 400 });
++  api.upsertSession({ id: 'c', listOrderAt: 100, updatedAt: 20000 });
++  assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["c","a","b"]');
++  const cached = api.serializeSessionSummaryForCache(api.state.sessions.find(item => item.id === 'c'));
++  assert.equal(cached.listOrderAt, 400);
++  assert.equal(api.normalizeSessionsForScope({ items: [{ id: 'c', listOrderAt: 100 }] }, 'all')[0].listOrderAt, 400);
++  api.state.sessions = [{ id: 'z', updatedAt: 999 }, { id: 'a', updatedAt: 1 }];
++  api.state.sortMode = 'time';
++  assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["a","z"]');
++});
++
++test('explicit send promotes immediately with skewed clocks and canonical delivery replaces its provisional marker', async () => {
++  for (const clockNow of [50, 10000]) {
++  class SlowClock extends Date { static now() { return clockNow; } }
++  const { api } = await loadAppHarness({ Date: SlowClock });
++  api.state.authSession = { id: 'auth' };
++  api.state.sortMode = 'time';
++  api.state.sessions = [
++    { id: 'a', cwd: '/repo', listOrderAt: 300 },
++    { id: 'b', cwd: '/repo', listOrderAt: 200 },
++  ];
++  api.state.sessionId = 'b';
++  api.state.currentSession = api.state.sessions[1];
++  api.state.cwd = '/repo';
++  const entry = api.createComposerSubmission('Next instruction');
++  assert.equal(entry.createdAt, clockNow);
++  assert.equal(entry.listOrderAt, Math.max(301, clockNow));
++  assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["b","a"]');
++  const restored = api.normalizeSubmissionOutboxEntry({ ...entry, updatedAt: 99999, status: 'sending' }, { restore: true });
++  assert.equal(restored.listOrderAt, Math.max(301, clockNow));
++  assert.equal(restored.createdAt, clockNow);
++  api.state.submissionOutbox.set(entry.id, restored);
++  api.state.sessionId = null;
++  api.completeDeliveredSubmission(restored, { sessionId: 'b', session: { id: 'b', cwd: '/repo', listOrderAt: 400 } }, {});
++  assert.equal(api.state.submissionOutbox.size, 0);
++  assert.equal(api.state.sessions.find(item => item.id === 'b').listOrderAt, 400);
++  api.upsertSession({ id: 'b', listOrderAt: 200 });
++  assert.equal(api.state.sessions.find(item => item.id === 'b').listOrderAt, 400);
++  }
++});
++
++test('pending new-session retries keep the original place and creation time', async () => {
++  const { api } = await loadAppHarness();
++  api.state.authSession = { id: 'auth' };
++  api.state.sortMode = 'time';
++  api.state.submissionOutbox.set('older', { id: 'older', ownerKey: 'single', cwd: '/repo', text: 'Older', createdAt: 100, updatedAt: 9000, listOrderAt: 100, status: 'outcome_unknown' });
++  api.state.submissionOutbox.set('newer', { id: 'newer', ownerKey: 'single', cwd: '/repo', text: 'Newer', createdAt: 200, updatedAt: 200, listOrderAt: 200, status: 'pending' });
++  const sessions = api.sortedSessions();
++  assert.equal(JSON.stringify(sessions.map(item => item.submissionId)), '["newer","older"]');
++  assert.equal(sessions[1].lastInputAt, 100);
++});
++
++test('session range refresh revalidates all loaded pages without retaining revoked rows', async () => {
++  const calls = [];
++  const { api } = await loadAppHarness({ fetch: async path => {
++    calls.push(path);
++    return { ok: true, status: 200, json: async () => path.includes('cursor=')
++      ? { items: [{ id: 'c', listOrderAt: 100 }], nextCursor: null }
++      : { items: [{ id: 'a', listOrderAt: 300 }], nextCursor: 'next' } };
++  } });
++  api.state.authSession = { id: 'auth' };
++  api.state.token = 'token';
++  api.state.sortMode = 'time';
++  api.state.sessionsLoadedByScope.all = true;
++  api.state.sessionsQueryByScope.all = '/api/sessions';
++  api.state.sessionsByScope.all = [{ id: 'a' }, { id: 'revoked' }, { id: 'c' }];
++  await api.refreshSessionsList({ scope: 'all', renderAfter: false });
++  assert.deepEqual(calls, ['/api/sessions', '/api/sessions?cursor=next']);
++  assert.equal(JSON.stringify(api.state.sessions.map(item => item.id)), '["a","c"]');
++  assert.equal(api.state.sessionsNextCursorByScope.all, null);
++});
++
++test('invalid session cursor reloads once and preserves request guards', async () => {
++  const calls = [];
++  const { api } = await loadAppHarness({ fetch: async path => {
++    calls.push(path);
++    return path.includes('cursor=')
++      ? { ok: false, status: 400, json: async () => ({ error: 'invalid_cursor' }) }
++      : { ok: true, status: 200, json: async () => ({ items: [{ id: 'fresh', listOrderAt: 200 }], nextCursor: null }) };
++  } });
++  api.state.authSession = { id: 'auth' };
++  api.state.token = 'token';
++  api.state.sortMode = 'time';
++  api.state.sessionsLoadedByScope.all = true;
++  api.state.sessionsQueryByScope.all = '/api/sessions';
++  api.state.sessionsByScope.all = [{ id: 'old' }];
++  api.state.sessionsNextCursorByScope.all = 'v1';
++  await api.loadMoreSessions();
++  assert.deepEqual(calls, ['/api/sessions?cursor=v1', '/api/sessions']);
++  assert.equal(api.state.sessions[0].id, 'fresh');
++  assert.equal(api.state.sessionsLoadingMore, false);
++});
++
++test('loaded range refresh discards delayed pages after switching project in foreground and background', async () => {
++  for (const background of [false, true]) {
++    let finishPage;
++    const { api } = await loadAppHarness({ fetch: async path => {
++      if (path.includes('cursor=')) return new Promise(resolve => { finishPage = resolve; });
++      return { ok: true, status: 200, json: async () => ({ items: [{ id: 'a', listOrderAt: 200 }], nextCursor: 'next' }) };
++    } });
++    api.state.authSession = { id: 'auth' };
++    api.state.token = 'token';
++    api.state.sortMode = 'time';
++    api.state.sessionsLoadedByScope.all = true;
++    api.state.sessionsQueryByScope.all = '/api/sessions';
++    api.state.sessionsByScope.all = [{ id: 'original_a' }, { id: 'original_b' }];
++    const refresh = api.refreshSessionsList({ scope: 'all', renderAfter: false, background });
++    await flushMicrotasks();
++    assert.equal(typeof finishPage, 'function');
++    api.state.selectedProjectId = 'other';
++    finishPage({ ok: true, status: 200, json: async () => ({ items: [{ id: 'late' }], nextCursor: null }) });
++    await refresh;
++    assert.equal(JSON.stringify(api.state.sessionsByScope.all.map(item => item.id)), '["original_a","original_b"]');
++  }
++});
++
++test('cached session opens without a transient history banner while compact data reconciles', async () => {
++  let finishStatus;
++  let finishHistory;
++  const { api, context } = await loadAppHarness({ fetch: path => new Promise(resolve => {
++    if (path.endsWith('/status')) finishStatus = resolve;
++    else if (path.endsWith('/timeline?limit=50')) finishHistory = resolve;
++    else throw new Error(`unexpected fetch ${path}`);
++  }) });
++  const session = { id: 'cached_quiet', cwd: '/repo', updatedAt: 2 };
++  const timeline = [{ id: 'cached_answer', kind: 'message', role: 'assistant', text: 'Cached answer remains visible' }];
++  api.state.token = 'token';
++  api.state.authSession = { id: 'auth' };
++  api.state.sessions = [session];
++  api.state.timelineCache.set(session.id, {
++    savedAt: Date.now(), validatedAt: 1, sessionUpdatedAt: 1,
++    timeline, history: timeline, historyComplete: true, batches: new Map(), approvals: new Map(),
++  });
++  const opening = api.selectSession(session.id);
++  const html = () => context.document.querySelector('#app').innerHTML;
++  assert.equal(api.state.sessionHistoryPending, true);
++  assert.match(html(), /Cached answer remains visible/u);
++  assert.doesNotMatch(html(), /history-load-pending/u);
++  api.state.prompt = 'Keep this draft';
++  await flushMicrotasks();
++  finishStatus({ ok: true, status: 200, json: async () => ({ session }) });
++  await flushMicrotasks();
++  assert.equal(api.state.sessionHistoryPending, true);
++  assert.match(html(), /Cached answer remains visible/u);
++  assert.doesNotMatch(html(), /history-load-pending/u);
++  finishHistory({ ok: true, status: 200, json: async () => ({ items: timeline, hasMore: false, nextBefore: null }) });
++  await opening;
++  assert.equal(api.state.sessionHistoryPending, false);
++  assert.match(html(), /Cached answer remains visible/u);
++  assert.doesNotMatch(html(), /history-load-pending/u);
++  assert.equal(api.state.prompt, 'Keep this draft');
++});
++
++test('history rendering retains empty loading feedback, visible errors, and explicit older-page progress', async () => {
++  let finishOlder;
++  const { api } = await loadAppHarness({ fetch: () => new Promise(resolve => { finishOlder = resolve; }) });
++  api.state.sessionHistoryPending = true;
++  assert.match(api.renderTimeline(), /history-load-pending[\s\S]*Loading history/u);
++  api.state.timeline = [{ id: 'hidden_work', kind: 'work', batches: [] }];
++  assert.match(api.renderTimeline(), /history-load-pending/u);
++  api.state.sessionHistoryPending = false;
++  api.state.sessionStatusPending = true;
++  assert.match(api.renderTimeline(), /history-load-pending[\s\S]*Refreshing execution status/u);
++  api.state.timeline = [{ id: 'visible', kind: 'message', role: 'assistant', text: 'Usable history' }];
++  assert.doesNotMatch(api.renderTimeline(), /history-load-pending/u);
++  api.state.sessionHistoryError = 'History could not be synchronized. Cached messages are shown.';
++  api.state.sessionStatusError = 'Execution status could not be refreshed.';
++  assert.match(api.renderTimeline(), /history-load-error[\s\S]*Cached messages are shown.[\s\S]*Execution status could not be refreshed.[\s\S]*retry-session-history/u);
++  assert.match(api.renderTimeline(), /Usable history/u);
++  api.state.sessionHistoryError = '';
++  api.state.sessionStatusError = '';
++  api.state.sessionStatusPending = false;
++  api.state.token = 'token';
++  api.state.authSession = { id: 'auth' };
++  api.state.sessionId = 'paged';
++  api.state.currentSession = { id: 'paged', timelineComplete: false, timelineNextBefore: 'older' };
++  const loading = api.loadOlderSessionTimelinePage();
++  await flushMicrotasks();
++  assert.match(api.renderTimeline(), /timeline-window-control[^>]*disabled aria-busy="true"[^>]*>Loading history/u);
++  finishOlder({ ok: true, status: 200, json: async () => ({ items: [], hasMore: false, nextBefore: null }) });
++  await loading;
++});
+diff --git a/packages/codex-web/test/runtime.test.ts b/packages/codex-web/test/runtime.test.ts
+--- a/packages/codex-web/test/runtime.test.ts
++++ b/packages/codex-web/test/runtime.test.ts
+@@ -1225,11 +1225,13 @@
+   assert.equal(updated?.settings.model, 'gpt-5');
+   assert.equal(updated?.settings.reasoningEffort, 'high');
+   assert.equal(writes.length, 0);
+-  assert.equal(storedSettings.length, 1);
++  assert.equal(storedSettings.length, 2); // Explicit settings update followed by the legacy order bootstrap.
+   assert.equal(storedSettings[0]?.sessionId, 'thread_profile_config');
+   assert.equal(storedSettings[0]?.settings.model, 'gpt-5');
+   assert.equal(storedSettings[0]?.settings.reasoningEffort, 'high');
+   assert.deepEqual(storedSettings[0]?.settings.metadata, { codexWebModelDefaultsVersion: 2 });
++  assert.equal(storedSettings[1]?.settings.listOrderAt, 1);
++  assert.equal(storedSettings[1]?.settings.model, 'gpt-5');
+ });
+ 
+ test('runtime switches session models without writing legacy Codex profiles config', async () => {
+@@ -2521,7 +2523,9 @@
+     eventBus: new CodexWebEventBus(),
+   });
+ 
++  const beforeOrder = (await runtime.readSession('thread_help'))?.listOrderAt;
+   const result = await runtime.startTurn('thread_help', { text: '/help' });
++  assert.ok((await runtime.readSession('thread_help'))!.listOrderAt! > beforeOrder!);
+ 
+   assert.equal((result as any).type, 'command');
+   assert.equal((result as any).command.name, 'help');
+@@ -3386,7 +3390,7 @@
+   const session = await runtime.unarchiveSession('thread_archived');
+ 
+   assert.equal(session?.id, 'thread_archived');
+-  assert.deepEqual(calls, ['unarchive:thread_archived', 'read:thread_archived']);
++  assert.deepEqual(calls, ['read:thread_archived', 'unarchive:thread_archived', 'read:thread_archived']);
+ });
+ 
+ test('runtime emits normalized turn and approval events and maps approval decisions', async () => {
+@@ -4475,6 +4479,7 @@
+   }, 'webhook:delivery_1');
+ 
+   assert.deepEqual(result, { turnId: 'turn_steer' });
++  assert.ok((await runtime.readSession('thread_steer'))!.listOrderAt! > 1);
+   assert.equal(steerCalls.length, 1);
+   assert.equal(steerCalls[0]?.threadId, 'thread_steer');
+   assert.equal(steerCalls[0]?.expectedTurnId, 'turn_steer');
+@@ -4794,3 +4799,108 @@
+   await assert.rejects(runtime.resolveApproval('expired', 'accept'), { code: 'approval_not_found', message: 'Unknown approval: expired' });
+   assert.equal(sends, 0);
+ });
++
++test('session list order survives status changes and restart, advances only for accepted instructions', async (t) => {
++  const { FileSessionSettingsStore } = await import('../src/session_settings_store.js');
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-runtime-order-'));
++  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
++  const settingsPath = path.join(dir, 'settings.json');
++  let updatedAt = 123;
++  let rejected = false;
++  let historyReads = 0;
++  const client = createThreadListClient(async () => ({ items: [{ ...createThread(), updatedAt }], nextCursor: null }));
++  client.readThread = async (_id, options) => {
++    if (options) historyReads += 1;
++    return { ...createThread(), updatedAt };
++  };
++  client.startTurn = async () => {
++    if (rejected) throw new Error('provider rejected input');
++    return { turnId: 'turn_order', threadId: 'thread_1', status: 'completed', outputText: 'done' };
++  };
++  const makeRuntime = () => new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client,
++    eventBus: new CodexWebEventBus(), settingsStore: new FileSessionSettingsStore({ settingsPath }) });
++  const first = makeRuntime();
++  assert.equal((await first.listSessions())[0]?.listOrderAt, 123);
++  assert.equal(historyReads, 0, 'bootstrap does not read complete history');
++  updatedAt = 999;
++  const restarted = makeRuntime();
++  assert.equal((await restarted.readSession('thread_1'))?.listOrderAt, 123);
++  rejected = true;
++  await assert.rejects(restarted.startTurn('thread_1', { text: 'rejected' }), /provider rejected/);
++  assert.equal((await restarted.readSession('thread_1'))?.listOrderAt, 123);
++  rejected = false;
++  await restarted.startTurn('thread_1', { text: 'accepted' });
++  const acceptedOrder = (await restarted.readSession('thread_1'))?.listOrderAt;
++  assert.ok(acceptedOrder! > 123);
++  updatedAt = Date.now() + 100_000;
++  const again = makeRuntime();
++  assert.equal((await again.readSession('thread_1'))?.listOrderAt, acceptedOrder);
++  assert.equal((await again.readSession('thread_1'))?.updatedAt, updatedAt);
++});
++
++test('accepted turn remains accepted when persisting its list order fails', async () => {
++  const settings = new Map<string, any>();
++  const warnings: string[] = [];
++  const client = createThreadListClient(async () => ({ items: [createThread()], nextCursor: null }));
++  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client,
++    eventBus: new CodexWebEventBus(), logger: { warn: (message) => warnings.push(message) },
++    settingsStore: {
++      get: (id) => settings.get(id) ?? null,
++      set: (id, value) => { settings.set(id, value); },
++      delete: (id) => { settings.delete(id); },
++      updateListOrder: async (id, value, at, initializeOnly) => {
++        if (!initializeOnly) throw new Error('disk full');
++        const stored = { ...value, listOrderAt: at };
++        settings.set(id, stored);
++        return stored;
++      },
++    } });
++  const result = await runtime.startTurn('thread_1', { text: 'accepted once' });
++  assert.equal(result.turnId, 'turn_1');
++  assert.ok(warnings.some((message) => message.includes('ordering could not be persisted')));
++});
++
++test('legacy session with no timestamp keeps a zero order while recovered automatic turns change status', async () => {
++  let thread: ProviderThreadSummary = { ...createThread(), updatedAt: null };
++  const client = createThreadListClient(async () => ({ items: [thread], nextCursor: null }));
++  client.readThread = async () => thread;
++  const runtime = new CodexWebRuntime({ client });
++  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 0);
++  thread = { ...thread, updatedAt: Date.now(), runtimeStatus: { type: 'active', activeFlags: [] },
++    turns: [{ id: 'automatic_goal_turn', status: 'in_progress', error: null, items: [] }] };
++  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 0);
++  thread = { ...thread, runtimeStatus: { type: 'idle', activeFlags: [] },
++    turns: [{ id: 'automatic_goal_turn', status: 'completed', error: null,
++      items: [{ type: 'message', role: 'assistant', phase: 'final_answer', text: 'Automatic continuation completed' }] }] };
++  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 0);
++});
++
++test('bootstrap persistence failure keeps lists readable and their in-memory order stable', async () => {
++  let updatedAt = 12;
++  const warnings: string[] = [];
++  const client = createThreadListClient(async () => ({ items: [{ ...createThread(), updatedAt }], nextCursor: null }));
++  client.readThread = async () => ({ ...createThread(), updatedAt });
++  const runtime = new CodexWebRuntime({ client, logger: { warn: (message) => warnings.push(message) },
++    settingsStore: { get: () => null, list: () => [], revision: async () => String(updatedAt),
++      set: () => { throw new Error('disk full'); }, delete: () => {} } });
++  const [listed, read] = await Promise.all([runtime.listSessions(), runtime.readSession('thread_1')]);
++  assert.equal(listed[0]?.listOrderAt, 12);
++  assert.equal(read?.listOrderAt, 12);
++  updatedAt = 99;
++  assert.equal((await runtime.listSessions())[0]?.listOrderAt, 12);
++  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 12);
++  assert.ok(warnings.some((warning) => warning.includes('bootstrap could not be persisted')));
++});
++
++test('archive and restore retain order even when native operations update timestamps', async () => {
++  let updatedAt = 12;
++  const client = createThreadListClient(async () => ({ items: [{ ...createThread(), updatedAt }], nextCursor: null }));
++  client.readThread = async () => ({ ...createThread(), updatedAt });
++  client.archiveThread = async () => { updatedAt = 99; };
++  client.unarchiveThread = async () => { updatedAt += 100; };
++  const runtime = new CodexWebRuntime({ client });
++  await runtime.archiveSession('thread_1');
++  assert.equal((await runtime.unarchiveSession('thread_1'))?.listOrderAt, 12);
++  const coldRuntime = new CodexWebRuntime({ client });
++  assert.equal((await coldRuntime.unarchiveSession('thread_1'))?.listOrderAt, 199);
++});
+diff --git a/packages/codex-web/test/server_auth.test.ts b/packages/codex-web/test/server_auth.test.ts
+--- a/packages/codex-web/test/server_auth.test.ts
++++ b/packages/codex-web/test/server_auth.test.ts
+@@ -2004,6 +2004,53 @@
+   }
+ });
+ 
++test('session list API preserves order across output and status changes, including favorites and cursor pages', async () => {
++  const sessions = Array.from({ length: 35 }, (_, index) => ({
++    id: `thread_order_${String(index).padStart(2, '0')}`,
++    listOrderAt: index,
++    updatedAt: index,
++    lastInputAt: index,
++    activityState: 'running',
++    favorite: true,
++  }));
++  const server = createCodexWebServer({
++    auth: createAcceptingAuth(),
++    runtime: {
++      ...createRuntimeStub(),
++      listSessions: async () => sessions,
++    } as any,
++    config: createConfig(),
++  });
++  await server.start();
++  const headers = { Authorization: 'Bearer cw_token' };
++  try {
++    const first = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true`, { headers })).json();
++    assert.equal(first.items[0].id, 'thread_order_34');
++    assert.equal(first.items[0].listOrderAt, 34);
++    assert.equal(first.items.length, 30);
++    for (const [index, session] of sessions.entries()) {
++      session.updatedAt = 10_000 - index;
++      session.lastInputAt = session.updatedAt;
++      session.activityState = index % 2 ? 'waiting_approval' : 'failed';
++    }
++    const next = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true&cursor=${encodeURIComponent(first.nextCursor)}`, { headers })).json();
++    assert.deepEqual([...first.items, ...next.items].map(item => item.id), [...sessions].reverse().map(item => item.id));
++    const refreshed = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true`, { headers })).json();
++    assert.deepEqual(refreshed.items.map(item => item.id), first.items.map(item => item.id));
++    assert.equal(refreshed.items[1].activityState, 'waiting_approval');
++    sessions[0]!.listOrderAt = 100;
++    const sent = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true`, { headers })).json();
++    assert.equal(sent.items[0].id, 'thread_order_00');
++    const parsed = JSON.parse(Buffer.from(first.nextCursor, 'base64url').toString('utf8'));
++    const oldCursor = Buffer.from(JSON.stringify({ ...parsed, version: 1, priority: 2, updatedAt: 4 })).toString('base64url');
++    const obsolete = await fetch(`${server.baseUrl}/api/sessions?favorite=true&cursor=${oldCursor}`, { headers });
++    assert.equal(obsolete.status, 400);
++    assert.equal((await obsolete.json()).error, 'invalid_cursor');
++  } finally {
++    await server.stop();
++  }
++});
++
+ test('single-user project session pages retain counts for the complete workspace', async () => {
+   const alpha = Array.from({ length: 40 }, (_, index) => ({
+     id: `alpha_${String(index).padStart(2, '0')}`,
+diff --git a/packages/codex-web/test/server_multi_user.test.ts b/packages/codex-web/test/server_multi_user.test.ts
+--- a/packages/codex-web/test/server_multi_user.test.ts
++++ b/packages/codex-web/test/server_multi_user.test.ts
+@@ -409,6 +409,7 @@
+         cwd: '/secret/path',
+         projectName: 'secret/path',
+         updatedAt: session.updatedAt,
++        listOrderAt: session.updatedAt,
+         firstUserInput: `Alice session ${session.id}`,
+         settings: {},
+         thread: { turns: [] },
+@@ -419,6 +420,7 @@
+         cwd: '/secondary/path',
+         projectName: 'secondary/path',
+         updatedAt: secondarySession.updatedAt,
++        listOrderAt: secondarySession.updatedAt,
+         firstUserInput: 'Secondary project session',
+         settings: {},
+         thread: { turns: [] },
+@@ -442,6 +444,8 @@
+     assert.equal(firstResponse.status, 200);
+     const first = await firstResponse.json();
+     assert.equal(first.items.length, 30);
++    assert.equal(first.items[0]?.id, 'app_alice_34');
++    assert.equal(first.items[0]?.listOrderAt, 35);
+     assert.equal(typeof first.nextCursor, 'string');
+     assert.equal(first.totalCount, 36);
+     assert.deepEqual(first.projectCounts.map((project: any) => ({
+@@ -458,6 +462,7 @@
+     assert.equal(secondResponse.status, 200);
+     const second = await secondResponse.json();
+     assert.equal(second.items.length, 6);
++    assert.equal(second.items.at(-1)?.id, 'app_alice_secondary');
+     assert.equal(second.nextCursor, null);
+ 
+     const combined = [...first.items, ...second.items];
+diff --git a/packages/codex-web/test/session_list_page.test.ts b/packages/codex-web/test/session_list_page.test.ts
+--- a/packages/codex-web/test/session_list_page.test.ts
++++ b/packages/codex-web/test/session_list_page.test.ts
+@@ -8,7 +8,7 @@
+ test('session list pagination sorts before applying the page limit', () => {
+   const input = Array.from({ length: 35 }, (_, index) => ({
+     id: `session_${String(index).padStart(2, '0')}`,
+-    updatedAt: index,
++    listOrderAt: index,
+   }));
+ 
+   const first = paginateSessionList(input, {
+@@ -29,23 +29,24 @@
+   assert.equal(second.nextCursor, null);
+ });
+ 
+-test('session list pagination keeps attention states ahead of recency', () => {
++test('session list order follows explicit input, independent of output and attention states', () => {
+   const page = paginateSessionList([
+-    { id: 'new_idle', updatedAt: 30 },
+-    { id: 'old_running', updatedAt: 10, activityState: 'running' },
+-    { id: 'old_waiting', updatedAt: 5, activityState: 'waiting_approval' },
++    { id: 'new_idle', listOrderAt: 30, updatedAt: 30 },
++    { id: 'old_running', listOrderAt: 10, updatedAt: 100, activityState: 'running' },
++    { id: 'old_waiting', listOrderAt: 5, updatedAt: 200, activityState: 'waiting_approval' },
+   ], {
+     scope: 'active:all',
+     principalId: 'user_alice',
+   });
+ 
+-  assert.deepEqual(page.items.map((item) => item.id), ['old_waiting', 'old_running', 'new_idle']);
++  assert.deepEqual(page.items.map((item) => item.id), ['new_idle', 'old_running', 'old_waiting']);
++  assert.equal(page.items[2]?.activityState, 'waiting_approval');
+ });
+ 
+ test('session list cursors cannot be reused for another user or filter', () => {
+   const first = paginateSessionList([
+-    { id: 'session_2', updatedAt: 2 },
+-    { id: 'session_1', updatedAt: 1 },
++    { id: 'session_2', listOrderAt: 2 },
++    { id: 'session_1', listOrderAt: 1 },
+   ], {
+     scope: 'active:project_a',
+     principalId: 'user_alice',
+@@ -65,11 +66,61 @@
+ });
+ 
+ test('mutable callers cannot reuse a stale sorted cursor index', () => {
+-  const items = [{ id: 'old', updatedAt: 1 }, { id: 'new', updatedAt: 2 }];
++  const items = [{ id: 'old', listOrderAt: 1 }, { id: 'new', listOrderAt: 2 }];
+   const options = { scope: 'all', principalId: 'user', limit: 1 };
+   assert.equal(paginateSessionList(items, options).items[0]?.id, 'new');
+-  items[0]!.updatedAt = 3;
++  items[0]!.listOrderAt = 3;
+   assert.equal(paginateSessionList(items, options).items[0]?.id, 'old');
+-  items.push({ id: 'newest', updatedAt: 4 });
++  items.push({ id: 'newest', listOrderAt: 4 });
+   assert.equal(paginateSessionList(items, options).items[0]?.id, 'newest');
+ });
++
++test('output and terminal state changes between pages cannot omit or duplicate sessions', () => {
++  const items = Array.from({ length: 45 }, (_, index) => ({
++    id: `session_${String(index).padStart(2, '0')}`,
++    listOrderAt: index,
++    updatedAt: index,
++    lastInputAt: index,
++    activityState: 'running',
++    activeTurnId: `turn_${index}`,
++  }));
++  const options = { scope: 'active:favorites', principalId: 'user_alice', limit: 30 };
++  const first = paginateSessionList(items, options);
++  for (const [index, item] of items.entries()) {
++    item.updatedAt = 10_000 - index;
++    item.lastInputAt = item.updatedAt;
++    item.activityState = index % 2 ? 'waiting_approval' : 'failed';
++    item.activeTurnId = '';
++  }
++  const second = paginateSessionList(items, { ...options, cursor: first.nextCursor });
++  const ids = [...first.items, ...second.items].map(item => item.id);
++  assert.deepEqual(ids, [...items].reverse().map(item => item.id));
++  assert.equal(new Set(ids).size, items.length);
++  assert.equal(second.nextCursor, null);
++});
++
++test('equal and unavailable order markers have deterministic ties without an output timestamp fallback', () => {
++  const input = [
++    { id: 'b', listOrderAt: 2, updatedAt: 500 },
++    { id: 'a', listOrderAt: 2, updatedAt: 1 },
++    { id: 'd', updatedAt: 999 },
++    { id: 'c', listOrderAt: Number.NaN, updatedAt: 9999 },
++  ];
++  const options = { scope: 'archived', principalId: 'user', limit: 1 };
++  let cursor: string | null = null;
++  const ids: string[] = [];
++  do {
++    const page = paginateSessionList(input, { ...options, cursor });
++    ids.push(...page.items.map(item => item.id));
++    cursor = page.nextCursor;
++  } while (cursor);
++  assert.deepEqual(ids, ['a', 'b', 'c', 'd']);
++});
++
++test('obsolete activity-order cursors are rejected rather than interpreted with different ordering', () => {
++  const options = { scope: 'active:all', principalId: 'user_alice' };
++  const cursor = Buffer.from(JSON.stringify({
++    ...options, version: 1, priority: 2, updatedAt: 50, id: 'session_old',
++  })).toString('base64url');
++  assert.throws(() => paginateSessionList([], { ...options, cursor }), InvalidSessionListCursorError);
++});
+diff --git a/packages/codex-web/test/session_settings_store.test.ts b/packages/codex-web/test/session_settings_store.test.ts
+--- a/packages/codex-web/test/session_settings_store.test.ts
++++ b/packages/codex-web/test/session_settings_store.test.ts
+@@ -151,3 +151,53 @@
+     });
+   });
+ }
++
++test('list order initializes once and survives concurrent bootstrap and stale settings writes', async (t) => {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-order-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const settingsPath = path.join(dir, 'settings.json');
++  const first = new FileSessionSettingsStore({ settingsPath });
++  const second = new FileSessionSettingsStore({ settingsPath });
++  const settings = createSettings('thread', 1);
++  await first.updateListOrder('thread', settings, 10, true);
++  await Promise.all([
++    first.updateListOrder('thread', settings, 20, false),
++    second.updateListOrder('thread', settings, 999, true),
++    second.set('thread', { ...settings, favorite: true }),
++  ]);
++  assert.equal((await second.get('thread'))?.listOrderAt, 20);
++  await first.set('thread', { ...settings, listOrderAt: 1 });
++  const restarted = new FileSessionSettingsStore({ settingsPath });
++  assert.equal((await restarted.get('thread'))?.listOrderAt, 20);
++});
++
++test('concurrent marker bootstrap drains its local mutation queue and persists every entry', async (t) => {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-order-queue-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const settingsPath = path.join(dir, 'settings.json');
++  const store = new FileSessionSettingsStore({ settingsPath });
++  await Promise.all(Array.from({ length: 100 }, (_, index) => {
++    const id = `thread_${index}`;
++    return store.updateListOrder(id, createSettings(id, index), index, true);
++  }));
++  await store.dispose();
++  assert.equal((store as any).mutationTail, null);
++  const restarted = new FileSessionSettingsStore({ settingsPath });
++  const entries = await restarted.list();
++  assert.equal(entries.length, 100);
++  for (const [id, settings] of entries) assert.equal(settings.listOrderAt, Number(id.slice('thread_'.length)));
++  await restarted.dispose();
++});
++
++test('a rejected mutation does not block subsequent settings writes', async (t) => {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-order-queue-retry-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const settingsPath = path.join(dir, 'settings.json');
++  await fs.writeFile(settingsPath, 'invalid json');
++  const store = new FileSessionSettingsStore({ settingsPath });
++  await assert.rejects(store.set('first', createSettings('first', 1)), SyntaxError);
++  await fs.unlink(settingsPath);
++  await store.updateListOrder('second', createSettings('second', 2), 2, true);
++  assert.equal((await store.get('second'))?.listOrderAt, 2);
++  await store.dispose();
++});

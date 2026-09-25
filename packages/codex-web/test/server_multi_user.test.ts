@@ -409,6 +409,7 @@ test('multi-user session pagination is applied after ownership filtering', async
         cwd: '/secret/path',
         projectName: 'secret/path',
         updatedAt: session.updatedAt,
+        listOrderAt: session.updatedAt,
         firstUserInput: `Alice session ${session.id}`,
         settings: {},
         thread: { turns: [] },
@@ -419,6 +420,7 @@ test('multi-user session pagination is applied after ownership filtering', async
         cwd: '/secondary/path',
         projectName: 'secondary/path',
         updatedAt: secondarySession.updatedAt,
+        listOrderAt: secondarySession.updatedAt,
         firstUserInput: 'Secondary project session',
         settings: {},
         thread: { turns: [] },
@@ -442,6 +444,8 @@ test('multi-user session pagination is applied after ownership filtering', async
     assert.equal(firstResponse.status, 200);
     const first = await firstResponse.json();
     assert.equal(first.items.length, 30);
+    assert.equal(first.items[0]?.id, 'app_alice_34');
+    assert.equal(first.items[0]?.listOrderAt, 35);
     assert.equal(typeof first.nextCursor, 'string');
     assert.equal(first.totalCount, 36);
     assert.deepEqual(first.projectCounts.map((project: any) => ({
@@ -458,6 +462,7 @@ test('multi-user session pagination is applied after ownership filtering', async
     assert.equal(secondResponse.status, 200);
     const second = await secondResponse.json();
     assert.equal(second.items.length, 6);
+    assert.equal(second.items.at(-1)?.id, 'app_alice_secondary');
     assert.equal(second.nextCursor, null);
 
     const combined = [...first.items, ...second.items];

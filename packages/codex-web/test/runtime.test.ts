@@ -1225,11 +1225,13 @@ test('runtime persists updated session settings locally without touching legacy 
   assert.equal(updated?.settings.model, 'gpt-5');
   assert.equal(updated?.settings.reasoningEffort, 'high');
   assert.equal(writes.length, 0);
-  assert.equal(storedSettings.length, 1);
+  assert.equal(storedSettings.length, 2); // Explicit settings update followed by the legacy order bootstrap.
   assert.equal(storedSettings[0]?.sessionId, 'thread_profile_config');
   assert.equal(storedSettings[0]?.settings.model, 'gpt-5');
   assert.equal(storedSettings[0]?.settings.reasoningEffort, 'high');
   assert.deepEqual(storedSettings[0]?.settings.metadata, { codexWebModelDefaultsVersion: 2 });
+  assert.equal(storedSettings[1]?.settings.listOrderAt, 1);
+  assert.equal(storedSettings[1]?.settings.model, 'gpt-5');
 });
 
 test('runtime switches session models without writing legacy Codex profiles config', async () => {
@@ -2521,7 +2523,9 @@ test('runtime handles help slash command without starting a native turn', async 
     eventBus: new CodexWebEventBus(),
   });
 
+  const beforeOrder = (await runtime.readSession('thread_help'))?.listOrderAt;
   const result = await runtime.startTurn('thread_help', { text: '/help' });
+  assert.ok((await runtime.readSession('thread_help'))!.listOrderAt! > beforeOrder!);
 
   assert.equal((result as any).type, 'command');
   assert.equal((result as any).command.name, 'help');
@@ -3386,7 +3390,7 @@ test('runtime unarchives an archived session through the native client', async (
   const session = await runtime.unarchiveSession('thread_archived');
 
   assert.equal(session?.id, 'thread_archived');
-  assert.deepEqual(calls, ['unarchive:thread_archived', 'read:thread_archived']);
+  assert.deepEqual(calls, ['read:thread_archived', 'unarchive:thread_archived', 'read:thread_archived']);
 });
 
 test('runtime emits normalized turn and approval events and maps approval decisions', async () => {
@@ -4475,6 +4479,7 @@ test('runtime steers text and attachment input through the owning active turn', 
   }, 'webhook:delivery_1');
 
   assert.deepEqual(result, { turnId: 'turn_steer' });
+  assert.ok((await runtime.readSession('thread_steer'))!.listOrderAt! > 1);
   assert.equal(steerCalls.length, 1);
   assert.equal(steerCalls[0]?.threadId, 'thread_steer');
   assert.equal(steerCalls[0]?.expectedTurnId, 'turn_steer');
@@ -4793,4 +4798,109 @@ test('expired approval identity reports a typed missing result without sending a
   const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
   await assert.rejects(runtime.resolveApproval('expired', 'accept'), { code: 'approval_not_found', message: 'Unknown approval: expired' });
   assert.equal(sends, 0);
+});
+
+test('session list order survives status changes and restart, advances only for accepted instructions', async (t) => {
+  const { FileSessionSettingsStore } = await import('../src/session_settings_store.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-runtime-order-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const settingsPath = path.join(dir, 'settings.json');
+  let updatedAt = 123;
+  let rejected = false;
+  let historyReads = 0;
+  const client = createThreadListClient(async () => ({ items: [{ ...createThread(), updatedAt }], nextCursor: null }));
+  client.readThread = async (_id, options) => {
+    if (options) historyReads += 1;
+    return { ...createThread(), updatedAt };
+  };
+  client.startTurn = async () => {
+    if (rejected) throw new Error('provider rejected input');
+    return { turnId: 'turn_order', threadId: 'thread_1', status: 'completed', outputText: 'done' };
+  };
+  const makeRuntime = () => new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client,
+    eventBus: new CodexWebEventBus(), settingsStore: new FileSessionSettingsStore({ settingsPath }) });
+  const first = makeRuntime();
+  assert.equal((await first.listSessions())[0]?.listOrderAt, 123);
+  assert.equal(historyReads, 0, 'bootstrap does not read complete history');
+  updatedAt = 999;
+  const restarted = makeRuntime();
+  assert.equal((await restarted.readSession('thread_1'))?.listOrderAt, 123);
+  rejected = true;
+  await assert.rejects(restarted.startTurn('thread_1', { text: 'rejected' }), /provider rejected/);
+  assert.equal((await restarted.readSession('thread_1'))?.listOrderAt, 123);
+  rejected = false;
+  await restarted.startTurn('thread_1', { text: 'accepted' });
+  const acceptedOrder = (await restarted.readSession('thread_1'))?.listOrderAt;
+  assert.ok(acceptedOrder! > 123);
+  updatedAt = Date.now() + 100_000;
+  const again = makeRuntime();
+  assert.equal((await again.readSession('thread_1'))?.listOrderAt, acceptedOrder);
+  assert.equal((await again.readSession('thread_1'))?.updatedAt, updatedAt);
+});
+
+test('accepted turn remains accepted when persisting its list order fails', async () => {
+  const settings = new Map<string, any>();
+  const warnings: string[] = [];
+  const client = createThreadListClient(async () => ({ items: [createThread()], nextCursor: null }));
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client,
+    eventBus: new CodexWebEventBus(), logger: { warn: (message) => warnings.push(message) },
+    settingsStore: {
+      get: (id) => settings.get(id) ?? null,
+      set: (id, value) => { settings.set(id, value); },
+      delete: (id) => { settings.delete(id); },
+      updateListOrder: async (id, value, at, initializeOnly) => {
+        if (!initializeOnly) throw new Error('disk full');
+        const stored = { ...value, listOrderAt: at };
+        settings.set(id, stored);
+        return stored;
+      },
+    } });
+  const result = await runtime.startTurn('thread_1', { text: 'accepted once' });
+  assert.equal(result.turnId, 'turn_1');
+  assert.ok(warnings.some((message) => message.includes('ordering could not be persisted')));
+});
+
+test('legacy session with no timestamp keeps a zero order while recovered automatic turns change status', async () => {
+  let thread: ProviderThreadSummary = { ...createThread(), updatedAt: null };
+  const client = createThreadListClient(async () => ({ items: [thread], nextCursor: null }));
+  client.readThread = async () => thread;
+  const runtime = new CodexWebRuntime({ client });
+  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 0);
+  thread = { ...thread, updatedAt: Date.now(), runtimeStatus: { type: 'active', activeFlags: [] },
+    turns: [{ id: 'automatic_goal_turn', status: 'in_progress', error: null, items: [] }] };
+  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 0);
+  thread = { ...thread, runtimeStatus: { type: 'idle', activeFlags: [] },
+    turns: [{ id: 'automatic_goal_turn', status: 'completed', error: null,
+      items: [{ type: 'message', role: 'assistant', phase: 'final_answer', text: 'Automatic continuation completed' }] }] };
+  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 0);
+});
+
+test('bootstrap persistence failure keeps lists readable and their in-memory order stable', async () => {
+  let updatedAt = 12;
+  const warnings: string[] = [];
+  const client = createThreadListClient(async () => ({ items: [{ ...createThread(), updatedAt }], nextCursor: null }));
+  client.readThread = async () => ({ ...createThread(), updatedAt });
+  const runtime = new CodexWebRuntime({ client, logger: { warn: (message) => warnings.push(message) },
+    settingsStore: { get: () => null, list: () => [], revision: async () => String(updatedAt),
+      set: () => { throw new Error('disk full'); }, delete: () => {} } });
+  const [listed, read] = await Promise.all([runtime.listSessions(), runtime.readSession('thread_1')]);
+  assert.equal(listed[0]?.listOrderAt, 12);
+  assert.equal(read?.listOrderAt, 12);
+  updatedAt = 99;
+  assert.equal((await runtime.listSessions())[0]?.listOrderAt, 12);
+  assert.equal((await runtime.readSession('thread_1'))?.listOrderAt, 12);
+  assert.ok(warnings.some((warning) => warning.includes('bootstrap could not be persisted')));
+});
+
+test('archive and restore retain order even when native operations update timestamps', async () => {
+  let updatedAt = 12;
+  const client = createThreadListClient(async () => ({ items: [{ ...createThread(), updatedAt }], nextCursor: null }));
+  client.readThread = async () => ({ ...createThread(), updatedAt });
+  client.archiveThread = async () => { updatedAt = 99; };
+  client.unarchiveThread = async () => { updatedAt += 100; };
+  const runtime = new CodexWebRuntime({ client });
+  await runtime.archiveSession('thread_1');
+  assert.equal((await runtime.unarchiveSession('thread_1'))?.listOrderAt, 12);
+  const coldRuntime = new CodexWebRuntime({ client });
+  assert.equal((await coldRuntime.unarchiveSession('thread_1'))?.listOrderAt, 199);
 });

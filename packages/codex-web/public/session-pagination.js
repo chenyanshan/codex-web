@@ -145,54 +145,59 @@
         return [...(state.sessionsByScope[normalizedScope] || [])];
       }
       const path = listPath(normalizedScope, { cursor: pageCursor });
-      if (background) {
+      // Revalidate the visible range atomically; never retain an unchecked archived or revoked tail.
+      const rangeTarget = !append && queryMatches ? (state.sessionsByScope[normalizedScope] || []).length : 0;
+      const requestId = state.sessionsRequestId + (background ? 0 : 1);
+      const currentRequest = () => isAuthRequestCurrent(requestGeneration)
+        && expectedQuery === queryKey(normalizedScope) && requestId === state.sessionsRequestId;
+      const fetchRange = async () => {
         const payload = await (request || apiFetch(path));
-        if (!isAuthRequestCurrent(requestGeneration) || expectedQuery !== queryKey(normalizedScope)) {
-          return [];
+        let items = Array.isArray(payload?.items) ? payload.items : [];
+        let nextCursor = normalizeCursor(payload?.nextCursor);
+        const seen = new Set();
+        while (items.length < rangeTarget && seen.size < rangeTarget && nextCursor && payload?.directoryComplete !== false && currentRequest()) {
+          if (seen.has(nextCursor)) break;
+          seen.add(nextCursor);
+          const page = await apiFetch(listPath(normalizedScope, { cursor: nextCursor }));
+          if (!currentRequest()) return payload;
+          items = mergePage(items, Array.isArray(page?.items) ? page.items : []);
+          nextCursor = normalizeCursor(page?.nextCursor);
+          if (page?.directoryComplete === false) break;
         }
-        const sessions = normalizeSessionsForScope(payload, normalizedScope);
-        state.sessionsByScope[normalizedScope] = sessions;
-        state.sessionsLoadedByScope[normalizedScope] = true;
-        state.sessionsNextCursorByScope[normalizedScope] = normalizeCursor(payload?.nextCursor);
-        state.sessionsQueryByScope[normalizedScope] = expectedQuery;
-        applyStats(normalizedScope, payload);
-        discardSupersededFailedSubmissions(sessions);
-        syncCurrentWorkDetailsAccessFromSessions(sessions);
-        enforceKnownWorkDetailsAccess();
-        persistSessionsCache();
-        return sessions;
-      }
-      const requestId = state.sessionsRequestId + 1;
+        return { ...payload, items, nextCursor };
+      };
       state.sessionsRequestId = requestId;
-      if (append) {
-        state.sessionsLoadingMore = true;
-        state.sessionsLoadingMoreScope = normalizedScope;
-      } else {
-        state.sessionsLoading = true;
-        state.sessionsLoadingScope = normalizedScope;
-      }
-      state.sessionsError = '';
-      state.sessionsErrorMode = '';
-      if (!append && !queryMatches) {
-        resetScope(normalizedScope, { preserveItems: true });
-      }
-      if (!append) {
-        restoreSessionsFromCacheForScope(normalizedScope, expectedQuery);
-      }
-      state.sessionsScope = normalizedScope;
-      state.sessions = normalizedScope === currentSessionScope()
-        ? [...(state.sessionsByScope[normalizedScope] || [])]
-        : [];
-      if (renderAfter) {
-        render();
+      if (!background) {
+        if (append) {
+          state.sessionsLoadingMore = true;
+          state.sessionsLoadingMoreScope = normalizedScope;
+        } else {
+          state.sessionsLoading = true;
+          state.sessionsLoadingScope = normalizedScope;
+        }
+        state.sessionsError = '';
+        state.sessionsErrorMode = '';
+        if (!append && !queryMatches) {
+          resetScope(normalizedScope, { preserveItems: true });
+        }
+        if (!append) {
+          restoreSessionsFromCacheForScope(normalizedScope, expectedQuery);
+        }
+        state.sessionsScope = normalizedScope;
+        state.sessions = normalizedScope === currentSessionScope()
+          ? [...(state.sessionsByScope[normalizedScope] || [])]
+          : [];
+        if (renderAfter) {
+          render();
+        }
       }
       try {
-        const payload = await (request || apiFetch(path));
+        const payload = await fetchRange();
         if (!isAuthRequestCurrent(requestGeneration)) {
           return [];
         }
         const pageSessions = normalizeSessionsForScope(payload, normalizedScope);
-        if (requestId !== state.sessionsRequestId || expectedQuery !== queryKey(normalizedScope)) {
+        if (!currentRequest()) {
           return pageSessions;
         }
         const sessions = append
@@ -208,9 +213,9 @@
         enforceKnownWorkDetailsAccess();
         persistSessionsCache();
         if (
-          requestId !== state.sessionsRequestId
+          background
+          || !currentRequest()
           || normalizedScope !== currentSessionScope()
-          || expectedQuery !== queryKey(normalizedScope)
         ) {
           return sessions;
         }
@@ -229,17 +234,21 @@
         syncCurrentSessionFromList();
         return state.sessions;
       } catch (error) {
+        if (append && error?.status === 400 && error?.payload?.error === 'invalid_cursor' && currentRequest()) {
+          state.sessionsLoadingMore = false;
+          state.sessionsLoadingMoreScope = null;
+          return refreshSessionsList({ renderAfter, scope: normalizedScope });
+        }
         if (
-          requestId === state.sessionsRequestId
+          !background && currentRequest()
           && normalizedScope === currentSessionScope()
-          && isAuthRequestCurrent(requestGeneration)
         ) {
           state.sessionsError = append ? 'Could not load older sessions.' : 'Could not update sessions.';
           state.sessionsErrorMode = append ? 'more' : 'refresh';
         }
         throw error;
       } finally {
-        if (requestId === state.sessionsRequestId) {
+        if (!background && requestId === state.sessionsRequestId) {
           if (append) {
             state.sessionsLoadingMore = false;
             state.sessionsLoadingMoreScope = null;
@@ -248,7 +257,7 @@
             state.sessionsLoadingScope = null;
           }
         }
-        if (renderAfter && isAuthRequestCurrent(requestGeneration)) {
+        if (!background && renderAfter && isAuthRequestCurrent(requestGeneration)) {
           render();
         }
       }

@@ -8,6 +8,7 @@ test('admin pagination has stable ISO timestamp ordering, bounds, no duplicates 
   const options = { principalId: 'a', scope: 'admin:all', limit: 30 };
   const first = paginateAdminSessions(items, options);
   assert.equal(first.items.length, 30); assert.equal(first.hasMore, true); assert.ok(first.items[0]!.title.startsWith('Native'));
+  assert.equal(first.items[0]!.updatedAt, new Date(20_000).toISOString());
   const all = [...first.items]; let cursor = first.nextCursor;
   while (cursor) { const page = paginateAdminSessions(items, { ...options, cursor }); all.push(...page.items); cursor = page.nextCursor; }
   assert.equal(all.length, 105); assert.equal(new Set(all.map(item => item.id)).size, 105);

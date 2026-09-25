@@ -9849,18 +9849,18 @@ test('native names and unnamed fallbacks stay consistent across cards and chat w
   }
 });
 
-test('session cards surface lightweight activity states and prioritize approvals', async () => {
+test('session cards surface lightweight activity states without reordering for approvals', async () => {
   const { api } = await loadAppHarness();
   api.state.sortMode = 'time';
   api.state.sessions = [
-    { id: 'session_recent', firstUserInput: 'Recent idle task', updatedAt: 300, settings: { metadata: {} } },
-    { id: 'session_running', firstUserInput: 'Background task', updatedAt: 100, activityState: 'running', settings: { metadata: {} } },
-    { id: 'session_approval', firstUserInput: 'Approval task', updatedAt: 50, activityState: 'waiting_approval', settings: { metadata: {} } },
+    { id: 'session_recent', firstUserInput: 'Recent idle task', listOrderAt: 300, updatedAt: 300, settings: { metadata: {} } },
+    { id: 'session_running', firstUserInput: 'Background task', listOrderAt: 100, updatedAt: 100, activityState: 'running', settings: { metadata: {} } },
+    { id: 'session_approval', firstUserInput: 'Approval task', listOrderAt: 50, updatedAt: 50, activityState: 'waiting_approval', settings: { metadata: {} } },
   ];
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(api.sortedSessions().map((session) => session.id))),
-    ['session_approval', 'session_running', 'session_recent'],
+    ['session_recent', 'session_running', 'session_approval'],
   );
   const html = api.renderSessionCards();
   assert.match(html, /data-activity-state="waiting_approval"[\s\S]*data-state="waiting_approval"[^>]*aria-label="Needs approval"/u);
@@ -13460,7 +13460,7 @@ test('desktop project selection filters sessions and opens the newest session fo
   assert.doesNotMatch(api.context.document.querySelector('#app').innerHTML, /Beta work/u);
 });
 
-test('desktop project selection prefers a running session over a newer completed session in the same project', async () => {
+test('desktop project selection opens the most recently instructed session despite newer completed output in the same project', async () => {
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     viewportWidth: 1280,
@@ -13480,7 +13480,7 @@ test('desktop project selection prefers a running session over a newer completed
                 cwd: '/repo/a',
                 firstUserInput: 'Completed newer',
                 lastUserInput: 'Completed newer',
-                updatedAt: 100,
+                listOrderAt: 10, updatedAt: 100,
                 settings: { metadata: {} },
               },
               {
@@ -13490,7 +13490,7 @@ test('desktop project selection prefers a running session over a newer completed
                 cwd: '/repo/a',
                 firstUserInput: 'Running older',
                 lastUserInput: 'Running older',
-                updatedAt: 50,
+                listOrderAt: 50, updatedAt: 50,
                 activeTurnId: 'turn_active',
                 activityState: 'running',
                 settings: { metadata: {} },
@@ -13556,7 +13556,7 @@ test('desktop project selection prefers a running session over a newer completed
       cwd: '/repo/a',
       firstUserInput: 'Completed newer',
       lastUserInput: 'Completed newer',
-      updatedAt: 100,
+      listOrderAt: 10, updatedAt: 100,
       settings: { metadata: {} },
       thread: { turns: [{ id: 'turn_done', status: 'completed' }] },
     },
@@ -13567,7 +13567,7 @@ test('desktop project selection prefers a running session over a newer completed
       cwd: '/repo/a',
       firstUserInput: 'Running older',
       lastUserInput: 'Running older',
-      updatedAt: 50,
+      listOrderAt: 50, updatedAt: 50,
       activeTurnId: 'turn_active',
       settings: { metadata: {} },
       thread: { turns: [{ id: 'turn_active', status: 'in_progress' }] },
@@ -14975,9 +14975,9 @@ test('favorite filter shows only favorite sessions and all shows every session',
   const { api } = await loadAppHarness();
 
   api.state.sessions = [
-    { id: 'old', updatedAt: 10, settings: { metadata: {} } },
-    { id: 'older_favorite', favorite: true, favoriteOrder: 1, updatedAt: 20, settings: { favoriteOrder: 1, metadata: {} } },
-    { id: 'newer_favorite', favorite: true, favoriteOrder: 99, updatedAt: 40, settings: { favoriteOrder: 99, metadata: {} } },
+    { id: 'old', listOrderAt: 10, updatedAt: 10, settings: { metadata: {} } },
+    { id: 'older_favorite', favorite: true, favoriteOrder: 1, listOrderAt: 20, updatedAt: 20, settings: { favoriteOrder: 1, metadata: {} } },
+    { id: 'newer_favorite', favorite: true, favoriteOrder: 99, listOrderAt: 40, updatedAt: 40, settings: { favoriteOrder: 99, metadata: {} } },
   ];
 
   api.state.sortMode = 'favorites';
@@ -15201,8 +15201,8 @@ test('canceled session opening cannot reorder the list after returning to it', a
   api.state.sessionsScope = 'all';
   api.state.sessionsLoadedByScope.all = true;
   api.state.sessions = [
-    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, updatedAt: 200, settings: { metadata: {} } },
-    { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, updatedAt: 100, settings: { metadata: {} } },
+    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, listOrderAt: 200, updatedAt: 200, settings: { metadata: {} } },
+    { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, listOrderAt: 100, updatedAt: 100, settings: { metadata: {} } },
   ];
   api.state.sessionsByScope.all = [...api.state.sessions];
 
@@ -15222,7 +15222,7 @@ test('canceled session opening cannot reorder the list after returning to it', a
         cwd: '/repo/recent',
         lastUserInput: 'Newest prompt',
         lastInputAt: 300,
-        updatedAt: 300,
+        listOrderAt: 300, updatedAt: 300,
         settings: { metadata: {} },
         thread: { turns: [] },
       },
@@ -15236,7 +15236,7 @@ test('canceled session opening cannot reorder the list after returning to it', a
   assert.equal(api.state.sessionId, null);
 });
 
-test('all tab rerenders in time order when background session refresh finishes after returning to list', async () => {
+test('all tab preserves order when background output refresh finishes after returning to list', async () => {
   let resolveSessionRefresh: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
@@ -15259,9 +15259,9 @@ test('all tab rerenders in time order when background session refresh finishes a
   api.state.sessionsScope = 'all';
   api.state.sessionsLoadedByScope.all = true;
   api.state.sessionId = 'session_recent';
-  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, updatedAt: 100, settings: { metadata: {} } };
+  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, listOrderAt: 100, updatedAt: 100, settings: { metadata: {} } };
   api.state.sessions = [
-    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, updatedAt: 200, settings: { metadata: {} } },
+    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, listOrderAt: 200, updatedAt: 200, settings: { metadata: {} } },
     api.state.currentSession,
   ];
   api.state.sessionsByScope.all = [...api.state.sessions];
@@ -15285,7 +15285,7 @@ test('all tab rerenders in time order when background session refresh finishes a
         cwd: '/repo/recent',
         lastUserInput: 'Newest prompt',
         lastInputAt: 300,
-        updatedAt: 300,
+        listOrderAt: 100, updatedAt: 300,
         settings: { metadata: {} },
         thread: { turns: [] },
       },
@@ -15295,10 +15295,10 @@ test('all tab rerenders in time order when background session refresh finishes a
   await flushMicrotasks();
 
   assert.equal(api.state.view, 'sessions');
-  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"'));
+  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"'));
 });
 
-test('all tab uses newer updatedAt when refreshed session omits lastInputAt', async () => {
+test('all tab ignores newer updatedAt when refreshed session omits lastInputAt', async () => {
   let resolveSessionRefresh: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | null = null;
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
@@ -15321,9 +15321,9 @@ test('all tab uses newer updatedAt when refreshed session omits lastInputAt', as
   api.state.sessionsScope = 'all';
   api.state.sessionsLoadedByScope.all = true;
   api.state.sessionId = 'session_recent';
-  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, updatedAt: 100, settings: { metadata: {} } };
+  api.state.currentSession = { id: 'session_recent', cwd: '/repo/recent', firstUserInput: 'Old first', lastUserInput: 'Old prompt', lastInputAt: 100, listOrderAt: 100, updatedAt: 100, settings: { metadata: {} } };
   api.state.sessions = [
-    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, updatedAt: 200, settings: { metadata: {} } },
+    { id: 'session_other', cwd: '/repo/other', firstUserInput: 'Other first', lastUserInput: 'Other prompt', lastInputAt: 200, listOrderAt: 200, updatedAt: 200, settings: { metadata: {} } },
     api.state.currentSession,
   ];
   api.state.sessionsByScope.all = [...api.state.sessions];
@@ -15346,7 +15346,7 @@ test('all tab uses newer updatedAt when refreshed session omits lastInputAt', as
         id: 'session_recent',
         cwd: '/repo/recent',
         lastUserInput: 'Newest prompt',
-        updatedAt: 300,
+        listOrderAt: 100, updatedAt: 300,
         settings: { metadata: {} },
         thread: { turns: [] },
       },
@@ -15356,7 +15356,7 @@ test('all tab uses newer updatedAt when refreshed session omits lastInputAt', as
   await flushMicrotasks();
 
   assert.equal(api.state.view, 'sessions');
-  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"'));
+  assert.ok(context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_other"') < context.document.querySelector('#app').innerHTML.indexOf('data-session-id="session_recent"'));
 });
 
 test('favorites tab never renders manual ordering controls', async () => {
@@ -15364,8 +15364,8 @@ test('favorites tab never renders manual ordering controls', async () => {
 
   api.state.sortMode = 'favorites';
   api.state.sessions = [
-    { id: 'session_old', favorite: true, favoriteOrder: 1, updatedAt: 10, settings: { favoriteOrder: 1, metadata: {} } },
-    { id: 'session_new', favorite: true, favoriteOrder: 99, updatedAt: 30, settings: { favoriteOrder: 99, metadata: {} } },
+    { id: 'session_old', favorite: true, favoriteOrder: 1, listOrderAt: 10, updatedAt: 10, settings: { favoriteOrder: 1, metadata: {} } },
+    { id: 'session_new', favorite: true, favoriteOrder: 99, listOrderAt: 30, updatedAt: 30, settings: { favoriteOrder: 99, metadata: {} } },
   ];
 
   const html = api.renderSessionCards();
@@ -16070,6 +16070,65 @@ test('favorite action patches session favorite state without opening the session
     favorite: true,
   });
   assert.equal(api.state.sessions[0]?.favorite, true);
+});
+
+test('archive controls allow an idle target while another session is running', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({
+    fetch: async (path) => {
+      fetchCalls.push(path);
+      return { ok: true, status: 200, json: async () => ({ ok: true, session: { id: 'idle', archived: false, settings: { metadata: {} } } }) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_archive' };
+  api.state.sessionId = 'running';
+  api.state.currentSession = { id: 'running', activeTurnId: 'turn_running', settings: { metadata: {} } };
+  api.state.pendingTurn = true;
+  api.state.sessions = [{ id: 'idle', settings: { metadata: {} } }];
+  api.requestArchiveSession('idle');
+  assert.equal(api.state.archiveConfirmSessionId, 'idle');
+  assert.match(api.renderArchiveConfirmModal(), /data-session-archive-confirm-id="idle"/u);
+  await api.archiveSession('idle');
+  assert.equal(fetchCalls[0], '/api/sessions/idle/archive');
+  assert.equal(api.state.sessionId, 'running');
+  assert.equal(api.state.pendingTurn, true);
+  await api.unarchiveSession('idle');
+  assert.equal(fetchCalls[1], '/api/sessions/idle/unarchive');
+  assert.equal(api.state.pendingTurn, true);
+});
+
+test('archive dialog resolves a current session outside the visible session page', async () => {
+  const { api } = await loadAppHarness();
+  api.state.currentSession = { id: 'off_page', preview: 'Retained current session', settings: { metadata: {} } };
+  api.state.sessionId = 'off_page';
+  api.state.sessions = [];
+  api.requestArchiveSession('off_page');
+  assert.match(api.renderArchiveConfirmModal(), /data-session-archive-confirm-id="off_page"/u);
+});
+
+test('archive controls protect the target active turn without blocking unrelated targets', async () => {
+  const fetchCalls = [];
+  const { api } = await loadAppHarness({ fetch: async (path) => { fetchCalls.push(path); throw new Error('Must not archive running target'); } });
+  api.state.sessionId = 'current';
+  api.state.pendingTurn = true;
+  api.state.sessions = [
+    { id: 'current', settings: { metadata: {} } },
+    { id: 'background', activeTurnId: 'background_turn', activityState: 'running', settings: { metadata: {} } },
+    { id: 'approval', activityState: 'waiting_approval', settings: { metadata: {} } },
+  ];
+  for (const id of ['current', 'background', 'approval']) {
+    api.requestArchiveSession(id);
+    assert.equal(api.state.archiveConfirmSessionId, null);
+    await api.archiveSession(id);
+  }
+  api.state.pendingTurn = false;
+  for (const id of ['background', 'approval']) {
+    api.requestArchiveSession(id);
+    assert.equal(api.state.archiveConfirmSessionId, null);
+    await api.archiveSession(id);
+  }
+  assert.deepEqual(fetchCalls, []);
 });
 
 test('archive action requires a confirmation dialog before deleting a session', async () => {
@@ -18670,6 +18729,12 @@ ${attachmentUpload}
 ${timelineReconciliation}
 ${app}
 globalThis.__codexWebTest = {
+  createComposerSubmission,
+  completeDeliveredSubmission,
+  normalizeSessionsForScope,
+  serializeSessionSummaryForCache,
+  normalizeSubmissionOutboxEntry,
+
   state,
   get draftSessionActive() {
     return state.draftSessionActive;
@@ -18773,6 +18838,8 @@ globalThis.__codexWebTest = {
   currentProjectScopeTitle: typeof currentProjectScopeTitle === 'function' ? currentProjectScopeTitle : null,
   toggleProjectFavorite: typeof toggleProjectFavorite === 'function' ? toggleProjectFavorite : null,
   toggleSessionFavorite: typeof toggleSessionFavorite === 'function' ? toggleSessionFavorite : null,
+  requestArchiveSession,
+  renderArchiveConfirmModal,
   archiveSession: typeof archiveSession === 'function' ? archiveSession : null,
   unarchiveSession: typeof unarchiveSession === 'function' ? unarchiveSession : null,
   reloadRuntime: typeof reloadRuntime === 'function' ? reloadRuntime : null,
@@ -18886,4 +18953,202 @@ test('the passive stream watchdog respects an already scheduled retry deadline',
   await flushMicrotasks();
   assert.equal(streamReads, 2);
   assert.equal(api.state.pendingTurn, true);
+});
+
+test('stable session order survives concurrent output and status changes in all and favorites', async () => {
+  const { api } = await loadAppHarness();
+  api.state.sessions = [
+    { id: 'a', listOrderAt: 300, updatedAt: 300, favorite: true },
+    { id: 'b', listOrderAt: 200, updatedAt: 200, favorite: true },
+    { id: 'c', listOrderAt: 100, updatedAt: 100, favorite: true },
+  ];
+  for (const mode of ['time', 'favorites']) {
+    api.state.sortMode = mode;
+    for (const activityState of ['running', 'waiting_approval', 'failed', 'stale', null]) {
+      api.upsertSession({ id: 'c', activityState, activeTurnId: null, updatedAt: 9000, lastInputAt: 8000 });
+      api.upsertSession({ id: 'b', activityState, activeTurnId: null, updatedAt: 10000 });
+      assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["a","b","c"]');
+    }
+  }
+  api.upsertSession({ id: 'c', listOrderAt: 400 });
+  api.upsertSession({ id: 'c', listOrderAt: 100, updatedAt: 20000 });
+  assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["c","a","b"]');
+  const cached = api.serializeSessionSummaryForCache(api.state.sessions.find(item => item.id === 'c'));
+  assert.equal(cached.listOrderAt, 400);
+  assert.equal(api.normalizeSessionsForScope({ items: [{ id: 'c', listOrderAt: 100 }] }, 'all')[0].listOrderAt, 400);
+  api.state.sessions = [{ id: 'z', updatedAt: 999 }, { id: 'a', updatedAt: 1 }];
+  api.state.sortMode = 'time';
+  assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["a","z"]');
+});
+
+test('explicit send promotes immediately with skewed clocks and canonical delivery replaces its provisional marker', async () => {
+  for (const clockNow of [50, 10000]) {
+  class SlowClock extends Date { static now() { return clockNow; } }
+  const { api } = await loadAppHarness({ Date: SlowClock });
+  api.state.authSession = { id: 'auth' };
+  api.state.sortMode = 'time';
+  api.state.sessions = [
+    { id: 'a', cwd: '/repo', listOrderAt: 300 },
+    { id: 'b', cwd: '/repo', listOrderAt: 200 },
+  ];
+  api.state.sessionId = 'b';
+  api.state.currentSession = api.state.sessions[1];
+  api.state.cwd = '/repo';
+  const entry = api.createComposerSubmission('Next instruction');
+  assert.equal(entry.createdAt, clockNow);
+  assert.equal(entry.listOrderAt, Math.max(301, clockNow));
+  assert.equal(JSON.stringify(api.sortedSessions().map(item => item.id)), '["b","a"]');
+  const restored = api.normalizeSubmissionOutboxEntry({ ...entry, updatedAt: 99999, status: 'sending' }, { restore: true });
+  assert.equal(restored.listOrderAt, Math.max(301, clockNow));
+  assert.equal(restored.createdAt, clockNow);
+  api.state.submissionOutbox.set(entry.id, restored);
+  api.state.sessionId = null;
+  api.completeDeliveredSubmission(restored, { sessionId: 'b', session: { id: 'b', cwd: '/repo', listOrderAt: 400 } }, {});
+  assert.equal(api.state.submissionOutbox.size, 0);
+  assert.equal(api.state.sessions.find(item => item.id === 'b').listOrderAt, 400);
+  api.upsertSession({ id: 'b', listOrderAt: 200 });
+  assert.equal(api.state.sessions.find(item => item.id === 'b').listOrderAt, 400);
+  }
+});
+
+test('pending new-session retries keep the original place and creation time', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth' };
+  api.state.sortMode = 'time';
+  api.state.submissionOutbox.set('older', { id: 'older', ownerKey: 'single', cwd: '/repo', text: 'Older', createdAt: 100, updatedAt: 9000, listOrderAt: 100, status: 'outcome_unknown' });
+  api.state.submissionOutbox.set('newer', { id: 'newer', ownerKey: 'single', cwd: '/repo', text: 'Newer', createdAt: 200, updatedAt: 200, listOrderAt: 200, status: 'pending' });
+  const sessions = api.sortedSessions();
+  assert.equal(JSON.stringify(sessions.map(item => item.submissionId)), '["newer","older"]');
+  assert.equal(sessions[1].lastInputAt, 100);
+});
+
+test('session range refresh revalidates all loaded pages without retaining revoked rows', async () => {
+  const calls = [];
+  const { api } = await loadAppHarness({ fetch: async path => {
+    calls.push(path);
+    return { ok: true, status: 200, json: async () => path.includes('cursor=')
+      ? { items: [{ id: 'c', listOrderAt: 100 }], nextCursor: null }
+      : { items: [{ id: 'a', listOrderAt: 300 }], nextCursor: 'next' } };
+  } });
+  api.state.authSession = { id: 'auth' };
+  api.state.token = 'token';
+  api.state.sortMode = 'time';
+  api.state.sessionsLoadedByScope.all = true;
+  api.state.sessionsQueryByScope.all = '/api/sessions';
+  api.state.sessionsByScope.all = [{ id: 'a' }, { id: 'revoked' }, { id: 'c' }];
+  await api.refreshSessionsList({ scope: 'all', renderAfter: false });
+  assert.deepEqual(calls, ['/api/sessions', '/api/sessions?cursor=next']);
+  assert.equal(JSON.stringify(api.state.sessions.map(item => item.id)), '["a","c"]');
+  assert.equal(api.state.sessionsNextCursorByScope.all, null);
+});
+
+test('invalid session cursor reloads once and preserves request guards', async () => {
+  const calls = [];
+  const { api } = await loadAppHarness({ fetch: async path => {
+    calls.push(path);
+    return path.includes('cursor=')
+      ? { ok: false, status: 400, json: async () => ({ error: 'invalid_cursor' }) }
+      : { ok: true, status: 200, json: async () => ({ items: [{ id: 'fresh', listOrderAt: 200 }], nextCursor: null }) };
+  } });
+  api.state.authSession = { id: 'auth' };
+  api.state.token = 'token';
+  api.state.sortMode = 'time';
+  api.state.sessionsLoadedByScope.all = true;
+  api.state.sessionsQueryByScope.all = '/api/sessions';
+  api.state.sessionsByScope.all = [{ id: 'old' }];
+  api.state.sessionsNextCursorByScope.all = 'v1';
+  await api.loadMoreSessions();
+  assert.deepEqual(calls, ['/api/sessions?cursor=v1', '/api/sessions']);
+  assert.equal(api.state.sessions[0].id, 'fresh');
+  assert.equal(api.state.sessionsLoadingMore, false);
+});
+
+test('loaded range refresh discards delayed pages after switching project in foreground and background', async () => {
+  for (const background of [false, true]) {
+    let finishPage;
+    const { api } = await loadAppHarness({ fetch: async path => {
+      if (path.includes('cursor=')) return new Promise(resolve => { finishPage = resolve; });
+      return { ok: true, status: 200, json: async () => ({ items: [{ id: 'a', listOrderAt: 200 }], nextCursor: 'next' }) };
+    } });
+    api.state.authSession = { id: 'auth' };
+    api.state.token = 'token';
+    api.state.sortMode = 'time';
+    api.state.sessionsLoadedByScope.all = true;
+    api.state.sessionsQueryByScope.all = '/api/sessions';
+    api.state.sessionsByScope.all = [{ id: 'original_a' }, { id: 'original_b' }];
+    const refresh = api.refreshSessionsList({ scope: 'all', renderAfter: false, background });
+    await flushMicrotasks();
+    assert.equal(typeof finishPage, 'function');
+    api.state.selectedProjectId = 'other';
+    finishPage({ ok: true, status: 200, json: async () => ({ items: [{ id: 'late' }], nextCursor: null }) });
+    await refresh;
+    assert.equal(JSON.stringify(api.state.sessionsByScope.all.map(item => item.id)), '["original_a","original_b"]');
+  }
+});
+
+test('cached session opens without a transient history banner while compact data reconciles', async () => {
+  let finishStatus;
+  let finishHistory;
+  const { api, context } = await loadAppHarness({ fetch: path => new Promise(resolve => {
+    if (path.endsWith('/status')) finishStatus = resolve;
+    else if (path.endsWith('/timeline?limit=50')) finishHistory = resolve;
+    else throw new Error(`unexpected fetch ${path}`);
+  }) });
+  const session = { id: 'cached_quiet', cwd: '/repo', updatedAt: 2 };
+  const timeline = [{ id: 'cached_answer', kind: 'message', role: 'assistant', text: 'Cached answer remains visible' }];
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth' };
+  api.state.sessions = [session];
+  api.state.timelineCache.set(session.id, {
+    savedAt: Date.now(), validatedAt: 1, sessionUpdatedAt: 1,
+    timeline, history: timeline, historyComplete: true, batches: new Map(), approvals: new Map(),
+  });
+  const opening = api.selectSession(session.id);
+  const html = () => context.document.querySelector('#app').innerHTML;
+  assert.equal(api.state.sessionHistoryPending, true);
+  assert.match(html(), /Cached answer remains visible/u);
+  assert.doesNotMatch(html(), /history-load-pending/u);
+  api.state.prompt = 'Keep this draft';
+  await flushMicrotasks();
+  finishStatus({ ok: true, status: 200, json: async () => ({ session }) });
+  await flushMicrotasks();
+  assert.equal(api.state.sessionHistoryPending, true);
+  assert.match(html(), /Cached answer remains visible/u);
+  assert.doesNotMatch(html(), /history-load-pending/u);
+  finishHistory({ ok: true, status: 200, json: async () => ({ items: timeline, hasMore: false, nextBefore: null }) });
+  await opening;
+  assert.equal(api.state.sessionHistoryPending, false);
+  assert.match(html(), /Cached answer remains visible/u);
+  assert.doesNotMatch(html(), /history-load-pending/u);
+  assert.equal(api.state.prompt, 'Keep this draft');
+});
+
+test('history rendering retains empty loading feedback, visible errors, and explicit older-page progress', async () => {
+  let finishOlder;
+  const { api } = await loadAppHarness({ fetch: () => new Promise(resolve => { finishOlder = resolve; }) });
+  api.state.sessionHistoryPending = true;
+  assert.match(api.renderTimeline(), /history-load-pending[\s\S]*Loading history/u);
+  api.state.timeline = [{ id: 'hidden_work', kind: 'work', batches: [] }];
+  assert.match(api.renderTimeline(), /history-load-pending/u);
+  api.state.sessionHistoryPending = false;
+  api.state.sessionStatusPending = true;
+  assert.match(api.renderTimeline(), /history-load-pending[\s\S]*Refreshing execution status/u);
+  api.state.timeline = [{ id: 'visible', kind: 'message', role: 'assistant', text: 'Usable history' }];
+  assert.doesNotMatch(api.renderTimeline(), /history-load-pending/u);
+  api.state.sessionHistoryError = 'History could not be synchronized. Cached messages are shown.';
+  api.state.sessionStatusError = 'Execution status could not be refreshed.';
+  assert.match(api.renderTimeline(), /history-load-error[\s\S]*Cached messages are shown.[\s\S]*Execution status could not be refreshed.[\s\S]*retry-session-history/u);
+  assert.match(api.renderTimeline(), /Usable history/u);
+  api.state.sessionHistoryError = '';
+  api.state.sessionStatusError = '';
+  api.state.sessionStatusPending = false;
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth' };
+  api.state.sessionId = 'paged';
+  api.state.currentSession = { id: 'paged', timelineComplete: false, timelineNextBefore: 'older' };
+  const loading = api.loadOlderSessionTimelinePage();
+  await flushMicrotasks();
+  assert.match(api.renderTimeline(), /timeline-window-control[^>]*disabled aria-busy="true"[^>]*>Loading history/u);
+  finishOlder({ ok: true, status: 200, json: async () => ({ items: [], hasMore: false, nextBefore: null }) });
+  await loading;
 });

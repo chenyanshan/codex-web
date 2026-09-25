@@ -2004,6 +2004,53 @@ test('GET /api/sessions?state=archived lists archived sessions in single-user mo
   }
 });
 
+test('session list API preserves order across output and status changes, including favorites and cursor pages', async () => {
+  const sessions = Array.from({ length: 35 }, (_, index) => ({
+    id: `thread_order_${String(index).padStart(2, '0')}`,
+    listOrderAt: index,
+    updatedAt: index,
+    lastInputAt: index,
+    activityState: 'running',
+    favorite: true,
+  }));
+  const server = createCodexWebServer({
+    auth: createAcceptingAuth(),
+    runtime: {
+      ...createRuntimeStub(),
+      listSessions: async () => sessions,
+    } as any,
+    config: createConfig(),
+  });
+  await server.start();
+  const headers = { Authorization: 'Bearer cw_token' };
+  try {
+    const first = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true`, { headers })).json();
+    assert.equal(first.items[0].id, 'thread_order_34');
+    assert.equal(first.items[0].listOrderAt, 34);
+    assert.equal(first.items.length, 30);
+    for (const [index, session] of sessions.entries()) {
+      session.updatedAt = 10_000 - index;
+      session.lastInputAt = session.updatedAt;
+      session.activityState = index % 2 ? 'waiting_approval' : 'failed';
+    }
+    const next = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true&cursor=${encodeURIComponent(first.nextCursor)}`, { headers })).json();
+    assert.deepEqual([...first.items, ...next.items].map(item => item.id), [...sessions].reverse().map(item => item.id));
+    const refreshed = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true`, { headers })).json();
+    assert.deepEqual(refreshed.items.map(item => item.id), first.items.map(item => item.id));
+    assert.equal(refreshed.items[1].activityState, 'waiting_approval');
+    sessions[0]!.listOrderAt = 100;
+    const sent = await (await fetch(`${server.baseUrl}/api/sessions?favorite=true`, { headers })).json();
+    assert.equal(sent.items[0].id, 'thread_order_00');
+    const parsed = JSON.parse(Buffer.from(first.nextCursor, 'base64url').toString('utf8'));
+    const oldCursor = Buffer.from(JSON.stringify({ ...parsed, version: 1, priority: 2, updatedAt: 4 })).toString('base64url');
+    const obsolete = await fetch(`${server.baseUrl}/api/sessions?favorite=true&cursor=${oldCursor}`, { headers });
+    assert.equal(obsolete.status, 400);
+    assert.equal((await obsolete.json()).error, 'invalid_cursor');
+  } finally {
+    await server.stop();
+  }
+});
+
 test('single-user project session pages retain counts for the complete workspace', async () => {
   const alpha = Array.from({ length: 40 }, (_, index) => ({
     id: `alpha_${String(index).padStart(2, '0')}`,

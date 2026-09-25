@@ -23,6 +23,7 @@ const fixtureSession = {
   firstUserInput: 'Verify the mobile workspace',
   lastUserInput: 'Verify the mobile workspace',
   lastInputAt: Date.parse('2026-07-15T08:00:00.000Z'),
+  listOrderAt: Date.parse('2026-07-15T08:00:00.000Z'),
   updatedAt: Date.parse('2026-07-15T08:01:00.000Z'),
   archived: false,
   favorite: true,
@@ -57,6 +58,7 @@ const fixtureIdleSession = {
   firstUserInput: 'Archive an idle session',
   lastUserInput: 'Archive an idle session',
   lastInputAt: Date.parse('2026-07-15T07:00:00.000Z'),
+  listOrderAt: Date.parse('2026-07-15T07:00:00.000Z'),
   updatedAt: Date.parse('2026-07-15T07:01:00.000Z'),
   archived: false,
   favorite: false,
@@ -101,6 +103,7 @@ const fixtureOlderSession = {
   firstUserInput: 'Load an older session page',
   lastUserInput: 'Load an older session page',
   lastInputAt: Date.parse('2026-07-14T06:00:00.000Z'),
+  listOrderAt: Date.parse('2026-07-14T06:00:00.000Z'),
   updatedAt: Date.parse('2026-07-14T06:01:00.000Z'),
   thread: {
     id: 'session_browser_older',
@@ -212,6 +215,7 @@ const fixtureFileSession = {
   firstUserInput: 'Open generated files and retained attachments',
   lastUserInput: 'This image was uploaded in an earlier turn.',
   lastInputAt: Date.parse('2026-07-15T07:30:00.000Z'),
+  listOrderAt: Date.parse('2026-07-15T07:30:00.000Z'),
   updatedAt: Date.parse('2026-07-15T07:31:00.000Z'),
   timeline: fixtureFileTimeline,
   thread: {

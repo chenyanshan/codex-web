@@ -40,7 +40,8 @@ for (const delayed of ['status', 'timeline']) {
     if (delayed === 'status') await expect(page.locator('#timeline')).toContainText('Latest browser answer');
     else await expect.poll(() => page.evaluate(() => globalThis.__weakNet.state.sessionStatusPending)).toBe(false);
     await expect(page.locator('.history-load-error')).toHaveCount(0);
-    await expect(page.locator('.history-load-pending')).toBeVisible();
+    if (delayed === 'timeline') await expect(page.locator('#timeline')).toContainText('Oldest browser question');
+    await expect(page.locator('.history-load-pending')).toHaveCount(0);
     await page.locator('#prompt-input').fill('Keep staged draft');
     release();
     await expect(page.locator('.history-load-pending')).toHaveCount(0);

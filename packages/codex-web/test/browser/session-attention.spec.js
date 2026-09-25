@@ -20,7 +20,7 @@ test('session dots distinguish running, unread, approval and failure without gro
     { id: ids[1], title: '已完成的排查结果，还没有查看', activityState: null, activeTurnId: null, latestTurn: { id: 'turn_unread', status: 'completed' } },
     { id: ids[2], title: '等待确认的文件修改', activityState: 'waiting_approval', activeTurnId: 'turn_approval' },
     { id: ids[3], title: '执行失败的任务，需要重试', activityState: 'failed', activeTurnId: null, latestTurn: { id: 'turn_failed', status: 'failed' } },
-  ].map(session => ({ ...session, cwd: '/Users/test/work', settings: {}, updatedAt: 1000 }));
+  ].map((session, index) => ({ ...session, cwd: '/Users/test/work', settings: {}, listOrderAt: 1000 - index, updatedAt: 1000 }));
   await page.route(/\/api\/sessions(?:\?|$)/u, route => route.fulfill({ json: { items: sessions, directoryComplete: true } }));
   for (const session of sessions) {
     await page.route(new RegExp(`/api/sessions/${session.id}(?:[/?]|$)`), route => {

@@ -1,13 +1,12 @@
 const DEFAULT_SESSION_LIST_PAGE_SIZE = 30;
 const MAX_SESSION_LIST_PAGE_SIZE = 100;
-const SESSION_LIST_CURSOR_VERSION = 1;
+const SESSION_LIST_CURSOR_VERSION = 2;
 
 interface SessionListCursor {
   version: number;
   scope: string;
   principalId: string;
-  priority: number;
-  updatedAt: number;
+  listOrderAt: number;
   id: string;
 }
 
@@ -80,8 +79,7 @@ export function compareSessionListItems(
 ): number {
   const leftKey = sessionListSortKey(left);
   const rightKey = sessionListSortKey(right);
-  return rightKey.priority - leftKey.priority
-    || rightKey.updatedAt - leftKey.updatedAt
+  return rightKey.listOrderAt - leftKey.listOrderAt
     || leftKey.id.localeCompare(rightKey.id);
 }
 
@@ -93,27 +91,15 @@ function normalizeSessionListLimit(value: string | number | null | undefined): n
   return Math.min(MAX_SESSION_LIST_PAGE_SIZE, Math.floor(parsed));
 }
 
-function sessionListSortKey(item: Record<string, unknown>): Pick<SessionListCursor, 'priority' | 'updatedAt' | 'id'> {
+function sessionListSortKey(item: Record<string, unknown>): Pick<SessionListCursor, 'listOrderAt' | 'id'> {
   return {
-    priority: sessionListActivityPriority(item),
-    updatedAt: Math.max(normalizeTimestamp(item.updatedAt), normalizeTimestamp(item.lastInputAt)),
+    listOrderAt: normalizeTimestamp(item.listOrderAt),
     id: sessionListItemId(item),
   };
 }
 
 function sessionListItemId(item: Record<string, unknown>): string {
   return typeof item.id === 'string' ? item.id : '';
-}
-
-function sessionListActivityPriority(item: Record<string, unknown>): number {
-  if (item.activityState === 'waiting_approval') {
-    return 3;
-  }
-  if (item.activityState === 'running' || item.activityState === 'stale' || (typeof item.activeTurnId === 'string' && item.activeTurnId)) {
-    return 2;
-  }
-  if (item.activityState === 'failed') return 1;
-  return 0;
 }
 
 function normalizeTimestamp(value: unknown): number {
@@ -150,10 +136,8 @@ function decodeSessionListCursor(
       parsed.version !== SESSION_LIST_CURSOR_VERSION
       || parsed.scope !== options.scope
       || parsed.principalId !== options.principalId
-      || typeof parsed.priority !== 'number'
-      || !Number.isFinite(parsed.priority)
-      || typeof parsed.updatedAt !== 'number'
-      || !Number.isFinite(parsed.updatedAt)
+      || typeof parsed.listOrderAt !== 'number'
+      || !Number.isFinite(parsed.listOrderAt)
       || typeof parsed.id !== 'string'
       || !parsed.id
     ) {
@@ -170,11 +154,8 @@ function decodeSessionListCursor(
 
 function isSessionListItemAfterCursor(item: Record<string, unknown>, cursor: SessionListCursor): boolean {
   const key = sessionListSortKey(item);
-  if (key.priority !== cursor.priority) {
-    return key.priority < cursor.priority;
-  }
-  if (key.updatedAt !== cursor.updatedAt) {
-    return key.updatedAt < cursor.updatedAt;
+  if (key.listOrderAt !== cursor.listOrderAt) {
+    return key.listOrderAt < cursor.listOrderAt;
   }
   return key.id.localeCompare(cursor.id) > 0;
 }

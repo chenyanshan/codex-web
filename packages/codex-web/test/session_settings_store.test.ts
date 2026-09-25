@@ -151,3 +151,53 @@ function runSettingsWorker(settingsPath: string, prefix: string, count: number):
     });
   });
 }
+
+test('list order initializes once and survives concurrent bootstrap and stale settings writes', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-order-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const settingsPath = path.join(dir, 'settings.json');
+  const first = new FileSessionSettingsStore({ settingsPath });
+  const second = new FileSessionSettingsStore({ settingsPath });
+  const settings = createSettings('thread', 1);
+  await first.updateListOrder('thread', settings, 10, true);
+  await Promise.all([
+    first.updateListOrder('thread', settings, 20, false),
+    second.updateListOrder('thread', settings, 999, true),
+    second.set('thread', { ...settings, favorite: true }),
+  ]);
+  assert.equal((await second.get('thread'))?.listOrderAt, 20);
+  await first.set('thread', { ...settings, listOrderAt: 1 });
+  const restarted = new FileSessionSettingsStore({ settingsPath });
+  assert.equal((await restarted.get('thread'))?.listOrderAt, 20);
+});
+
+test('concurrent marker bootstrap drains its local mutation queue and persists every entry', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-order-queue-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const settingsPath = path.join(dir, 'settings.json');
+  const store = new FileSessionSettingsStore({ settingsPath });
+  await Promise.all(Array.from({ length: 100 }, (_, index) => {
+    const id = `thread_${index}`;
+    return store.updateListOrder(id, createSettings(id, index), index, true);
+  }));
+  await store.dispose();
+  assert.equal((store as any).mutationTail, null);
+  const restarted = new FileSessionSettingsStore({ settingsPath });
+  const entries = await restarted.list();
+  assert.equal(entries.length, 100);
+  for (const [id, settings] of entries) assert.equal(settings.listOrderAt, Number(id.slice('thread_'.length)));
+  await restarted.dispose();
+});
+
+test('a rejected mutation does not block subsequent settings writes', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-order-queue-retry-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const settingsPath = path.join(dir, 'settings.json');
+  await fs.writeFile(settingsPath, 'invalid json');
+  const store = new FileSessionSettingsStore({ settingsPath });
+  await assert.rejects(store.set('first', createSettings('first', 1)), SyntaxError);
+  await fs.unlink(settingsPath);
+  await store.updateListOrder('second', createSettings('second', 2), 2, true);
+  assert.equal((await store.get('second'))?.listOrderAt, 2);
+  await store.dispose();
+});
