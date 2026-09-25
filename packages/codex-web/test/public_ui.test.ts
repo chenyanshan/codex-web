@@ -3,6 +3,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
+function observerTimelinePage(payload) {
+  const { timeline = [], ...session } = payload.session;
+  return { session, items: timeline, total: timeline.length, hasMore: false, nextBefore: null, hasNewer: false, nextAfter: timeline.length };
+}
+
 const stylesUrl = new URL('../public/styles.css', import.meta.url);
 const appUrl = new URL('../public/app.js', import.meta.url);
 const indexUrl = new URL('../public/index.html', import.meta.url);
@@ -1575,15 +1580,15 @@ test('admin console opens entity editors on demand with RBAC controls', async ()
 
   assert.match(html, /id="admin-project-form"/u);
   assert.doesNotMatch(html, /Project ID/u);
-  assert.match(html, /<th>CWD<\/th>/u);
+  assert.match(html, /class="admin-record-path" data-i18n-skip>\/repo\/a<\/span>/u);
   assert.doesNotMatch(html, /<th>Internal Name<\/th>/u);
-  assert.match(html, /<th>Display Name<\/th>/u);
-  assert.match(html, /<th>Work details<\/th>/u);
+  assert.match(html, /class="admin-row-main" data-i18n-skip>a<\/span>/u);
+  assert.match(html, /<dt>Work details<\/dt>/u);
   assert.match(html, /name="cwd"/u);
   assert.match(html, /name="showWorkDetailsToMembers" type="checkbox" checked/u);
   assert.match(html, /Members can view work details/u);
-  assert.match(html, /<td data-label="Display Name" data-i18n-skip><strong>a<\/strong><\/td>/u);
-  assert.match(html, /<td data-label="Work details">Members<\/td>/u);
+  assert.match(html, /class="admin-row admin-project-row"/u);
+  assert.match(html, /<dt>Work details<\/dt><dd>Members<\/dd>/u);
   assert.match(html, /data-admin-edit-project="project_a"/u);
 
   api.state.admin.editingProjectId = 'project_a';
@@ -2096,14 +2101,127 @@ test('admin session audit project filter includes projects discovered from sessi
   assert.match(html, /<option value="project_legacy" data-i18n-skip>Legacy Repo<\/option>/u);
 });
 
+test('admin observer history pages forward with bounded rendering and shared request deduplication', async () => {
+  const items = Array.from({ length: 155 }, (_, index) => ({
+    id: `observed-${index}`, kind: 'message', role: index % 2 ? 'assistant' : 'user',
+    label: 'History', text: `Observed message ${index}`,
+  }));
+  const calls = [];
+  let releasePage;
+  const pageGate = new Promise(resolve => { releasePage = resolve; });
+  const { api } = await loadAppHarness({ fetch: async path => {
+    calls.push(path);
+    const url = new URL(String(path), 'https://codex.test');
+    assert.equal(url.pathname, '/api/admin/sessions/session_observed/timeline');
+    assert.equal(url.searchParams.get('limit'), '50');
+    const start = Number(url.searchParams.get('after'));
+    if (start === 50) await pageGate;
+    const end = Math.min(items.length, start + 50);
+    return { ok: true, status: 200, json: async () => ({
+      session: { id: 'session_observed', mode: 'observer', readOnly: true },
+      items: items.slice(start, end), total: items.length,
+      nextBefore: start > 0 ? start : null, hasMore: start > 0,
+      nextAfter: end, hasNewer: end < items.length,
+    }) };
+  } });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1', principal: { userId: 'admin', isAdmin: true } };
+  await api.openAdminObservedSession('session_observed');
+  assert.equal(api.state.timeline.length, 50);
+  assert.equal(api.state.currentSession.timelineHasNewer, true);
+  assert.equal(api.state.currentSession.timelineNextBefore, null);
+  assert.equal(api.state.timeline[0].id, 'observed-0');
+  const first = api.loadOlderSessionTimelinePage('after');
+  const duplicate = api.loadOlderSessionTimelinePage('after');
+  assert.equal(first, duplicate);
+  releasePage();
+  assert.equal(await first, true);
+  assert.equal(api.state.timeline.length, 100);
+  assert.ok((api.renderChat().innerHTML.match(/data-timeline-id=/gu) || []).length <= 80);
+  await api.loadOlderSessionTimelinePage('after');
+  await api.loadOlderSessionTimelinePage('after');
+  assert.deepEqual(Array.from(api.state.timeline, item => item.id), items.map(item => item.id));
+  assert.equal(api.state.currentSession.timelineHasNewer, false);
+  assert.deepEqual(calls.map(path => new URL(String(path), 'https://codex.test').searchParams.get('after')), ['0', '50', '100', '150']);
+});
+
+test('observer refresh uses bounded anchored pages and preserves newer reading input', async () => {
+  const { context } = await loadAppHarness();
+  const observer = context.CodexWebAdminUi;
+  const items = Array.from({ length: 100 }, (_, index) => ({ id: `m${index}`, kind: 'message', role: 'assistant', text: `Message ${index}` }));
+  const started = { anchors: [{ id: 'm20' }], shouldFollowLatest: false };
+  const moved = { anchors: [{ id: 'm90' }], shouldFollowLatest: false };
+  let userMoved = false;
+  let restored;
+  const requests = [];
+  const state = {
+    sessionId: 'observed', admin: {}, turnId: null,
+    currentSession: { id: 'observed', mode: 'observer', timeline: items, timelineComplete: true, timelineNextBefore: null, timelineNextAfter: 100, timelineHasNewer: true },
+  };
+  const options = {
+    state, owns: () => true,
+    apiFetch: async path => {
+      requests.push(path);
+      return { session: { id: 'observed' }, items: items.slice(10, 60), hasMore: true, nextBefore: 10, hasNewer: true, nextAfter: 60 };
+    },
+    captureTimelineViewport: () => userMoved ? moved : started,
+    SESSION_READING: { isCurrent: snapshot => snapshot !== started || !userMoved },
+    applySessionSettings: () => {}, restoreTimelineForSession: () => {},
+    syncRuntimeStatusFromSession: () => ({}),
+    setTimelineOpenPositionForSession: (_session, snapshot) => { restored = snapshot; },
+    renderChatWithTimelineRestored: () => {},
+  };
+  await observer.refreshObserver(options, { viewportSnapshot: started });
+  assert.equal(requests[0], '/api/admin/sessions/observed/timeline?limit=50&anchor=m20');
+  assert.equal(state.currentSession.timeline.length, 50);
+  assert.equal(state.currentSession.timelineNextBefore, 10);
+  assert.equal(restored, started);
+  state.currentSession = { ...state.currentSession, timeline: items, timelineNextAfter: 100 };
+  userMoved = true;
+  await observer.refreshObserver(options, { viewportSnapshot: started });
+  assert.equal(state.currentSession.timeline, items);
+  assert.equal(state.currentSession.timelineNextAfter, 100);
+  assert.equal(restored, moved);
+  const current = state.currentSession;
+  const result = await observer.refreshObserver(options, { viewportSnapshot: started, latest: true });
+  assert.equal(result, null, 'late jump-to-latest must not overwrite user movement');
+  assert.equal(state.currentSession, current);
+  assert.equal(requests[2], '/api/admin/sessions/observed/timeline?limit=50');
+});
+
+test('observer automatic paging consumes input once and stops after errors', async () => {
+  const { context } = await loadAppHarness();
+  const observer = context.CodexWebAdminUi;
+  const state = { sessionId: 'observed', sessionHistoryError: '' };
+  const timeline = { scrollHeight: 1000, clientHeight: 500, scrollTop: 490 };
+  let moves = 0;
+  const options = { state, timeline, busy: false, moveTimelineWindow: () => { moves++; } };
+  observer.observerScroll(options);
+  assert.equal(moves, 0);
+  observer.observerInput({ type: 'wheel', deltaY: 100 }, 'observed');
+  observer.observerScroll({ ...options, busy: true });
+  assert.equal(moves, 0);
+  observer.observerScroll(options);
+  observer.observerScroll(options);
+  assert.equal(moves, 1);
+  state.sessionHistoryError = 'failed';
+  observer.observerInput({ type: 'touchstart' }, 'observed');
+  observer.observerScroll(options);
+  assert.equal(moves, 1);
+  state.sessionHistoryError = '';
+  state.sessionId = 'different';
+  observer.observerScroll(options);
+  assert.equal(moves, 1);
+});
+
 test('admin observed sessions open read-only history at the beginning', async () => {
   const { api, context } = await loadAppHarness({
     fetch: async (path) => {
-      if (path === '/api/admin/sessions/session_observed') {
+      if (String(path).startsWith('/api/admin/sessions/session_observed/timeline?')) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          json: async () => observerTimelinePage({
             mode: 'observer',
             session: {
               id: 'session_observed',
@@ -2144,13 +2262,13 @@ test('admin observed sessions stay selected when a running turn completes and me
   const { api } = await loadAppHarness({
     fetch: async (path) => {
       fetchCalls.push(path);
-      if (path === '/api/admin/sessions/session_observed') {
+      if (String(path).startsWith('/api/admin/sessions/session_observed/timeline?')) {
         observedReadCount += 1;
         const running = observedReadCount === 1;
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          json: async () => observerTimelinePage({
             mode: 'observer',
             session: {
               id: 'session_observed',
@@ -2196,8 +2314,8 @@ test('admin observed sessions stay selected when a running turn completes and me
   await api.refreshCurrentSessionMetadata();
 
   assert.deepEqual(fetchCalls, [
-    '/api/admin/sessions/session_observed',
-    '/api/admin/sessions/session_observed',
+    '/api/admin/sessions/session_observed/timeline?limit=50&after=0',
+    '/api/admin/sessions/session_observed/timeline?limit=50',
   ]);
   assert.equal(api.state.view, 'chat');
   assert.equal(api.state.sessionId, 'session_observed');
@@ -2247,11 +2365,11 @@ test('admin observed sessions stream turns through the scoped observer endpoint'
 test('returning from an admin observed session restores the session audit page', async () => {
   const { api } = await loadAppHarness({
     fetch: async (path) => {
-      if (path === '/api/admin/sessions/session_observed') {
+      if (String(path).startsWith('/api/admin/sessions/session_observed/timeline?')) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          json: async () => observerTimelinePage({
             mode: 'observer',
             session: {
               id: 'session_observed',
@@ -2289,11 +2407,11 @@ test('desktop admin observed sessions do not open inside the normal workspace se
     viewportWidth: 1280,
     desktopPointer: true,
     fetch: async (path) => {
-      if (path === '/api/admin/sessions/session_observed') {
+      if (String(path).startsWith('/api/admin/sessions/session_observed/timeline?')) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          json: async () => observerTimelinePage({
             mode: 'observer',
             session: {
               id: 'session_observed',
@@ -2780,9 +2898,10 @@ test('share routes render the full shared session context', async () => {
 });
 
 test('admin console uses dense mobile-safe management rows', async () => {
-  const [adminUi, styles] = await Promise.all([
+  const [adminUi, styles, adminStyles] = await Promise.all([
     readFile(adminUiUrl, 'utf8'),
     readFile(stylesUrl, 'utf8'),
+    readFile(new URL('../public/admin-ui.css', import.meta.url), 'utf8'),
   ]);
 
   assert.match(styles, /\.admin-console-screen\s*\{[^}]*overflow-y:\s*auto;/su);
@@ -2808,10 +2927,13 @@ test('admin console uses dense mobile-safe management rows', async () => {
   assert.match(styles, /\.admin-session-row \.admin-row-main\s*\{[^}]*text-overflow:\s*ellipsis;/su);
   assert.match(styles, /\.admin-session-open\s*\{[^}]*text-align:\s*left;/su);
   assert.match(styles, /\.admin-console-page \.danger,[\s\S]*\.admin-console-page \.danger:focus-visible:not\(:disabled\)\s*\{[^}]*color:\s*var\(--danger\);/su);
-  assert.match(adminUi, /class="admin-table admin-project-table"/u);
-  assert.match(adminUi, /<td data-label="\$\{a\(t\('CWD'\)\)\}"/u);
-  assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*\.admin-project-table thead\s*\{[^}]*display:\s*none;/u);
-  assert.match(styles, /\.admin-project-table td:first-child\s*\{[^}]*grid-column:\s*1 \/ -1;/su);
+  assert.match(adminUi, /class="admin-row admin-project-row"/u);
+  assert.match(adminUi, /class="admin-record-path" data-i18n-skip/u);
+  assert.match(adminUi, /class="admin-record-facts"/u);
+  // The project columns now apply at every width, without a duplicate mobile rule.
+  const baseAdminStyles = adminStyles.slice(0, adminStyles.indexOf('@media'));
+  assert.match(baseAdminStyles, /\.admin-console-page \.admin-project-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto;/u);
+  assert.match(adminStyles, /\.admin-record-path\s*\{[^}]*overflow-wrap:\s*anywhere;/u);
 });
 
 
@@ -3007,10 +3129,14 @@ test('app settings render per-user webhook controls on mobile and desktop settin
   const advancedIndex = mobileHtml.indexOf('>Advanced<');
 
   assert.ok(defaultsIndex >= 0 && defaultsIndex < webhookIndex);
-  assert.ok(webhookIndex < advancedIndex);
+  const accountIndex = mobileHtml.indexOf('id="settings-group-account"');
+  assert.ok(advancedIndex >= 0 && advancedIndex < accountIndex);
+  assert.ok(accountIndex < webhookIndex, 'per-user webhook belongs to Account, not shared server settings');
   assert.match(mobileHtml, /id="webhook-enabled-toggle" type="checkbox" checked/u);
   assert.match(mobileHtml, /id="webhook-endpoint-input"[^>]*value="https:\/\/codex\.example\/api\/webhook"/u);
   assert.match(mobileHtml, /id="webhook-key-input"[^>]*value="cwwh_render_secret"/u);
+  assert.match(mobileHtml, /id="webhook-key-input"[^>]*type="password"/u);
+  assert.match(mobileHtml, /id="webhook-reveal-key-button"[^>]*aria-pressed="false"/u);
   assert.match(mobileHtml, /id="webhook-copy-endpoint-button"/u);
   assert.match(mobileHtml, /id="webhook-copy-key-button"[^>]*>Copy key<\/button>/u);
   assert.match(mobileHtml, /id="webhook-rotate-key-button"/u);
@@ -3132,6 +3258,33 @@ test('webhook settings keep the recoverable key in memory across refresh without
 test('webhook endpoint and persistent key copy through the shared clipboard helper', async () => {
   const clipboardWrites = [];
   const { api, context } = await loadAppHarness();
+  // This harness normally creates only HTML string containers. Model the
+  // short-lived clipboard textarea's DOM lifecycle for both clipboard paths.
+  const createElement = context.document.createElement;
+  const buffers = [];
+  let restoredFocus = 0;
+  const copyButton = {
+    id: 'webhook-copy-key-button', isConnected: true,
+    focus() { active = copyButton; restoredFocus += 1; },
+  };
+  let active = copyButton;
+  Object.defineProperty(context.document, 'activeElement', { configurable: true, get: () => active });
+  context.document.createElement = (tagName) => {
+    if (tagName !== 'textarea') return createElement(tagName);
+    const buffer = {
+      style: {}, value: '', id: '', isConnected: false, selected: false,
+      focus() { active = buffer; },
+      select() { buffer.selected = true; },
+      setSelectionRange(start, end) { buffer.selection = [start, end]; },
+      remove() { buffer.isConnected = false; context.__elements.delete(`#${buffer.id}`); },
+    };
+    buffers.push(buffer);
+    return buffer;
+  };
+  context.document.body.appendChild = (buffer) => {
+    buffer.isConnected = true;
+    context.__elements.set(`#${buffer.id}`, buffer);
+  };
   context.window.location.origin = 'https://codex.example';
   context.navigator.clipboard = {
     writeText: async (value) => {
@@ -3159,7 +3312,36 @@ test('webhook endpoint and persistent key copy through the shared clipboard help
     'https://codex.example/api/webhook',
     'cwwh_copy_secret',
   ]);
+  assert.equal(buffers.length, 1);
+  assert.equal(buffers[0].isConnected, false);
+  assert.equal(context.document.querySelector('#webhook-key-copy-buffer'), null);
+  assert.equal(context.document.activeElement, copyButton);
+  assert.equal(restoredFocus, 1);
 
+  context.navigator.clipboard = undefined;
+  context.document.execCommand = (command) => {
+    assert.equal(command, 'copy');
+    assert.equal(active, buffers[1]);
+    assert.equal(active.isConnected, true);
+    assert.equal(active.selected, true);
+    assert.deepEqual(active.selection, [0, 'cwwh_copy_secret'.length]);
+    clipboardWrites.push(active.value);
+    return true;
+  };
+  assert.equal(await api.copyWebhookKey(), true);
+  assert.equal(clipboardWrites[2], 'cwwh_copy_secret');
+  assert.equal(buffers[1].isConnected, false);
+  assert.equal(context.document.querySelector('#webhook-key-copy-buffer'), null);
+  assert.equal(context.document.activeElement, copyButton);
+  assert.equal(restoredFocus, 2);
+
+  context.document.execCommand = () => { throw new Error('Clipboard unavailable'); };
+  assert.equal(await api.copyWebhookKey(), false);
+  assert.equal(api.state.webhook.error, 'Could not copy webhook key.');
+  assert.equal(buffers[2].isConnected, false);
+  assert.equal(context.document.querySelector('#webhook-key-copy-buffer'), null);
+  assert.equal(context.document.activeElement, copyButton);
+  assert.equal(restoredFocus, 3);
 });
 
 test('reasoning options follow the selected model metadata', async () => {
@@ -3627,11 +3809,11 @@ test('Chinese language localization leaves dynamic names and drafts untouched', 
   assert.doesNotMatch(sessionListHtml, /<span class="session-title">发送<\/span>/u);
 
   const chatHtml = api.renderChat().innerHTML;
-  assert.match(chatHtml, /<span>Goal active<\/span>/u);
+  assert.match(chatHtml, /<span>目标进行中<\/span>/u);
   assert.match(chatHtml, /<span class="goal-objective">Send<\/span>/u);
   assert.match(chatHtml, /<span class="queued-message-text" data-i18n-skip>Send<\/span>/u);
   assert.match(chatHtml, /aria-label="删除排队消息"/u);
-  assert.doesNotMatch(chatHtml, /目标进行中/u);
+  assert.doesNotMatch(chatHtml, /<span>Goal active<\/span>/u);
   assert.doesNotMatch(chatHtml, /<span class="goal-objective">发送<\/span>/u);
   assert.doesNotMatch(chatHtml, /<span class="queued-message-text">发送<\/span>/u);
 
@@ -3917,7 +4099,7 @@ test('new session path entry and primary submit buttons are readable on mobile',
 
   assert.match(app, /<textarea id="new-cwd-input"[^>]*name="cwd"[^>]*rows="3"/u);
   assert.doesNotMatch(app, /<input id="new-cwd-input"[^>]*type="text"/u);
-  assert.match(app, /<h1 class="new-session-heading" data-i18n-skip>开启新会话<\/h1>/u);
+  assert.match(app, /<h1 class="new-session-heading" data-i18n-skip>\$\{escapeHtml\(t\('Start a new session'\)\)\}<\/h1>/u);
   assert.match(app, /class="panel stack new-session-card bg-shared ring-theme"/u);
   assert.match(styles, /\.new-session-page\s*\{[^}]*align-items:\s*center;/su);
   assert.match(styles, /\.new-session-page\s*\{[^}]*justify-content:\s*center;/su);
@@ -9215,6 +9397,79 @@ test('opening a source link strips its line location before resolving the file',
   assert.equal(JSON.parse(calls[0]?.options.body).path, '/repo/packages/codex-web/public/app.js');
 });
 
+test('document file links resolve against their parent without changing chat or absolute paths', async () => {
+  const paths = [];
+  const { api } = await loadAppHarness({
+    fetch: async (_path, options = {}) => {
+      paths.push(JSON.parse(options.body).path);
+      return { ok: false, status: 404, json: async () => ({ error: 'file_not_found' }) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+
+  await api.openSessionFileByPath('docs/audit.md');
+  await api.openSessionFileByPath('nested/notes.md', { basePath: api.state.currentSessionFilePath });
+  assert.equal(api.state.currentSessionFilePath, 'docs/nested/notes.md');
+  await api.openSessionFileByPath('../evidence/a.png', { basePath: api.state.currentSessionFilePath });
+  await api.openSessionFileByPath('/repo/absolute.png', { basePath: 'docs/audit.md' });
+  await api.openSessionFileByPath('chat-attachment.png');
+  await api.openSessionFileByPath('./download.csv', { basePath: '/repo/docs/audit.md' });
+  assert.deepEqual(paths, [
+    'docs/audit.md', 'docs/nested/notes.md', 'docs/nested/../evidence/a.png',
+    '/repo/absolute.png', 'chat-attachment.png', '/repo/docs/./download.csv',
+  ]);
+});
+
+test('document file links decode once and retries preserve resolved percent and fragment characters', async () => {
+  const paths = [];
+  const { api } = await loadAppHarness({
+    fetch: async (_path, options = {}) => {
+      paths.push(JSON.parse(options.body).path);
+      return { ok: false, status: 404, json: async () => ({ error: 'file_not_found' }) };
+    },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+
+  await api.openSessionFileByPath('docs%2520%23/audit.md');
+  await api.openSessionFileByPath('monthly%20report%2520%23.csv:12#L12', { basePath: api.state.currentSessionFilePath });
+  const expected = 'docs%20#/monthly report%20#.csv';
+  assert.equal(api.state.currentSessionFilePath, expected);
+  await api.openSessionFileByPath(api.state.currentSessionFilePath, { preserveSnapshot: true, resolved: true });
+  await api.openSessionFileByPath(api.state.currentSessionFilePath, { preserveSnapshot: true, resolved: true });
+  assert.deepEqual(paths, ['docs%20#/audit.md', expected, expected, expected]);
+});
+
+test('closing nested document previews restores the original chat reading position', async () => {
+  const { api, context } = await loadAppHarness({
+    fetch: async (path) => path.endsWith('/resolve')
+      ? { ok: true, status: 200, json: async () => ({ file: { id: 'file_a', name: 'a.md', kind: 'markdown', contentUrl: '/api/sessions/session_1/files/a/content' } }) }
+      : { ok: true, status: 200, text: async () => '# A' },
+  });
+  api.state.token = 'token';
+  api.state.authSession = { id: 'auth_1' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_1';
+  api.state.currentSession = { id: 'session_1', cwd: '/repo', settings: { metadata: {} } };
+  api.state.timeline = [{ id: 'm1', kind: 'message', role: 'assistant', text: 'hello' }];
+  api.render();
+  const timeline = context.document.querySelector('#timeline');
+  timeline.scrollHeight = 1400;
+  timeline.clientHeight = 400;
+  timeline.scrollTop = 640;
+  api.updateTimelineFollowState();
+
+  await api.openSessionFileByPath('docs/audit.md');
+  await api.openSessionFileByPath('nested/notes.md', { basePath: api.state.currentSessionFilePath });
+  api.closeSessionFileViewer();
+  assert.equal(context.document.querySelector('#timeline').scrollTop, 640);
+});
+
 test('closing a session file aborts late content and clears viewer state', async () => {
   let releaseText: ((value: string) => void) | null = null;
   let contentSignal: AbortSignal | null = null;
@@ -10007,11 +10262,11 @@ test('missing observer turn streams reconcile the existing session without showi
           }),
         };
       }
-      if (path === '/api/admin/sessions/session_observed') {
+      if (String(path).startsWith('/api/admin/sessions/session_observed/timeline?')) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          json: async () => observerTimelinePage({
             mode: 'observer',
             session: {
               id: 'session_observed',
@@ -10051,7 +10306,7 @@ test('missing observer turn streams reconcile the existing session without showi
 
   assert.deepEqual(fetchCalls, [
     '/api/admin/sessions/session_observed/turns/turn_stale/events',
-    '/api/admin/sessions/session_observed',
+    '/api/admin/sessions/session_observed/timeline?limit=50',
   ]);
   assert.equal(api.state.sessionId, 'session_observed');
   assert.equal(api.state.pendingTurn, false);
@@ -18013,7 +18268,7 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 }
 
 async function loadAppHarness(overrides = {}) {
-  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, submissionDelivery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView, sessionAttention] = await Promise.all([
+  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, submissionDelivery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView, sessionAttention, approvalUi, settingsUi] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(uiCopyUrl, 'utf8'),
     readFile(uiKitUrl, 'utf8'),
@@ -18037,6 +18292,8 @@ async function loadAppHarness(overrides = {}) {
     readFile(new URL('../public/timeline-reconciliation.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/work-details-view.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/session-attention.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/approval-ui.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/settings-ui.js', import.meta.url), 'utf8'),
   ]);
   const storage = overrides.storage instanceof Map
     ? overrides.storage
@@ -18401,6 +18658,8 @@ ${workView}
 ${webhookSettings}
 ${sessionRename}
 ${sessionAttention}
+${approvalUi}
+${settingsUi}
 ${networkRecovery}
 ${submissionDelivery}
 ${sessionLoader}

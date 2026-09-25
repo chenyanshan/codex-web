@@ -1,0 +1,38 @@
+[
+  {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "overflow": false,
+    "navHeight": 681,
+    "errors": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "overflow": false,
+    "navHeight": 61,
+    "errors": []
+  },
+  {
+    "viewport": {
+      "width": 320,
+      "height": 568
+    },
+    "overflow": false,
+    "navHeight": 61,
+    "errors": []
+  },
+  {
+    "viewport": {
+      "width": 844,
+      "height": 390
+    },
+    "overflow": false,
+    "navHeight": 49,
+    "errors": []
+  }
+]

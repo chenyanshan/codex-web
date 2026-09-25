@@ -105,7 +105,7 @@
       return editorForm('user', entity, draft, `
           <div class="admin-form-grid">
             <label class="field"><span>Username</span><input name="username" autocomplete="username" placeholder="writer" value="${a(user.username)}" required${entity ? ' readonly' : ''}></label>
-            <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" placeholder="writer@example.com" value="${a(user.email)}"></label>
+            <label class="field"><span>${h(t('Email'))}</span><input name="email" type="email" autocomplete="email" placeholder="writer@example.com" value="${a(user.email)}"></label>
             ${entity ? '' : `<label class="field"><span>Password</span><input name="password" type="password" autocomplete="new-password" placeholder="At least 8 chars" minlength="8" value="${a(user.password)}" required></label>`}
           </div>
           <label class="admin-check-row"><input name="enabled" type="checkbox"${user.enabled ? ' checked' : ''}><span>Enabled</span></label>
@@ -115,27 +115,23 @@
     function renderProjects() {
       const projects = state().admin.projects;
       if (!projects.length) return `<div class="meta">${h(t('No projects configured.'))}</div>`;
-      return `<table class="admin-table admin-project-table"><thead><tr>
-        <th>${h(t('Display Name'))}</th><th>${h(t('CWD'))}</th><th>${h(t('Status'))}</th><th>${h(t('Active session limit'))}</th><th>${h(t('Work details'))}</th><th>${h(t('Action'))}</th>
-        </tr></thead><tbody>${projects.map((project) => `<tr>
-          <td data-label="${a(t('Display Name'))}" data-i18n-skip><strong>${h(context.adminProjectVisibleName(project))}</strong></td>
-          <td data-label="${a(t('CWD'))}" data-i18n-skip>${h(project.cwd || project.id || '')}</td>
-          <td data-label="${a(t('Status'))}"><span class="admin-status-badge" data-tone="${project.enabled === false ? 'muted' : 'success'}">${h(t(project.enabled === false ? 'Disabled' : 'Active'))}</span></td>
-          <td data-label="${a(t('Active session limit'))}" data-i18n-skip>${h(String(project.activeSessionLimit ?? 30))}</td>
-          <td data-label="${a(t('Work details'))}">${h(t(project.showWorkDetailsToMembers === false ? 'Admin only' : 'Members'))}</td>
-          <td data-label="${a(t('Action'))}"><button class="ghost compact-button" type="button" data-admin-edit-project="${a(project.id || '')}">${h(t('Edit'))}</button></td>
-        </tr>`).join('')}</tbody></table>`;
+      return projects.map(project => `<article class="admin-row admin-project-row"><div class="admin-record-content">
+        <div class="admin-row-title-line"><span class="admin-row-main" data-i18n-skip>${h(context.adminProjectVisibleName(project))}</span><span class="admin-status-badge" data-tone="${project.enabled === false ? 'muted' : 'success'}">${h(t(project.enabled === false ? 'Disabled' : 'Active'))}</span></div>
+        <span class="admin-record-path" data-i18n-skip>${h(project.cwd || project.id || '')}</span>
+        <dl class="admin-record-facts"><div><dt>${h(t('Active session limit'))}</dt><dd>${h(String(project.activeSessionLimit ?? 30))}</dd></div><div><dt>${h(t('Work details'))}</dt><dd>${h(t(project.showWorkDetailsToMembers === false ? 'Admin only' : 'Members'))}</dd></div></dl>
+        </div><button class="ghost compact-button" type="button" data-admin-edit-project="${a(project.id || '')}">${h(t('Edit'))}</button></article>`).join('');
     }
 
     function renderUsers() {
       const users = state().admin.users;
       if (!users.length) return `<div class="meta">${h(t('No users configured.'))}</div>`;
       return users.map((user) => {
+        const role = state().admin.roles.find(item => item.id === context.adminUserRoleId(user));
         const currentAccount = String(state().authSession?.principal?.userId || '') === String(user?.id || '');
         const draft = context.editors.get('user', user.id, { username: user.username || '', email: user.email || '', password: '', enabled: user.enabled !== false, roleId: context.adminUserRoleId(user) });
         return `<article class="admin-row admin-user-row"><div class="admin-user-identity">
           <div class="admin-row-title-line"><span class="admin-row-main" data-i18n-skip>${h(user.username || user.id)}</span><span class="admin-status-badge" data-tone="${user.enabled === false ? 'muted' : 'success'}">${h(t(user.enabled === false ? 'Disabled' : 'Active'))}</span>${currentAccount ? `<span class="admin-status-badge">${h(t('Current account'))}</span>` : ''}</div>
-          <span class="admin-row-meta" data-i18n-skip>${h(context.adminUserMeta(user))}</span></div>
+          <span class="admin-row-meta" data-i18n-skip>${h(user.email || '')}</span><span class="admin-role-projects">${h(t('Role'))}: <span data-i18n-skip>${h(role?.name || role?.id || context.adminUserRoleId(user) || t('No role'))}</span></span><details class="admin-record-identifiers"><summary>${h(t('Account details'))}</summary><span data-i18n-skip>${h(user.id || '')}<br>${h(context.adminUserRoleId(user) || '')}</span></details></div>
           <div class="admin-user-action-row"><button class="ghost compact-button" type="button" data-admin-edit-user="${a(user.id || '')}">${h(t('Edit'))}</button><details class="admin-row-more"><summary>${h(t('More'))}</summary><div class="admin-row-secondary"><button class="ghost compact-button" type="button" data-admin-toggle-user-id="${a(user.id || '')}" data-admin-toggle-user-enabled="${user.enabled === false ? 'true' : 'false'}"${currentAccount || draft.saving ? ' disabled' : ''}>${h(t(draft.saving ? 'Saving...' : user.enabled === false ? 'Enable' : 'Disable'))}</button><button class="danger compact-button" type="button" data-admin-delete-user-id="${a(user.id || '')}"${currentAccount || draft.saving ? ' disabled' : ''}>${h(t('Delete'))}</button></div></details></div>
           ${draft.error ? `<div class="admin-editor-error" role="alert" data-i18n-skip>${h(draft.error)}</div>` : ''}
         </article>`;
@@ -146,8 +142,12 @@
       const roles = state().admin.roles;
       if (!roles.length) return `<div class="meta">${h(t('No roles configured.'))}</div>`;
       return roles.map((role) => {
-        const projectNames = context.adminRoleProjectIds(role).map((projectId) => context.adminProjectNameById(projectId, projectId));
-        return `<article class="admin-row admin-role-row"><div><div class="admin-row-title-line"><span class="admin-row-main" data-i18n-skip>${h(role.name || role.id)}</span>${role.isAdmin ? `<span class="admin-status-badge">${h(t('admin'))}</span>` : ''}</div><span class="admin-row-meta" data-i18n-skip>${h(role.id || '')}</span>${projectNames.length ? `<span class="admin-role-projects" data-i18n-skip>${h(projectNames.join(' · '))}</span>` : ''}</div><button class="ghost compact-button" type="button" data-admin-edit-role="${a(role.id || '')}">${h(t('Edit'))}</button></article>`;
+        const projectNames = context.adminRoleProjectIds(role).map((projectId) => {
+          const grant = role.projectGrants?.find(item => item.projectId === projectId);
+          const permissions = [[grant?.canRead, 'Read'], [grant?.canCreate, 'Create sessions'], [grant?.canWrite, 'Write']].filter(([enabled]) => enabled).map(([, label]) => t(label));
+          return { name: context.adminProjectNameById(projectId, projectId), permissions };
+        });
+        return `<article class="admin-row admin-role-row"><div><div class="admin-row-title-line"><span class="admin-row-main" data-i18n-skip>${h(role.name || role.id)}</span>${role.isAdmin ? `<span class="admin-status-badge">${h(t('admin'))}</span>` : ''}</div><span class="admin-row-meta" data-i18n-skip>${h(role.id || '')}</span><span class="admin-role-projects">${h(t(role.isAdmin ? 'Administrative access' : 'Project access'))}</span>${projectNames.length ? `<ul class="admin-project-access">${projectNames.map(name => `<li data-i18n-skip>${h(name.name)}${name.permissions.length ? ` <span class="admin-row-meta">(${h(name.permissions.join(', '))})</span>` : ''}</li>`).join('')}</ul>` : role.isAdmin ? '' : `<span class="admin-row-meta">${h(t('No projects assigned'))}</span>`}</div><button class="ghost compact-button" type="button" data-admin-edit-role="${a(role.id || '')}">${h(t('Edit'))}</button></article>`;
       }).join('');
     }
 
@@ -219,9 +219,9 @@
       const labels = { sessions: 'Sessions', status: 'Execution status', history: 'History', admin: 'Administration', upload: 'Uploads', report: 'Reports', files: 'File transfers', events: 'Event connection', auth: 'Authentication', api: 'Other API', static: 'Static files', health: 'Health checks', other: 'Other' };
       return `<section class="admin-system-page"><div class="admin-audit-heading"><h2>${h(t('System'))}</h2><button class="ghost compact-button" type="button" id="admin-system-refresh"${admin.loading ? ' disabled' : ''}>${h(t('Refresh'))}</button></div>
         ${['version', 'metrics', 'devices', 'settings'].map(resourceFeedback).join('')}
-        <dl class="admin-system-facts">${row('Build', admin.version?.buildId || '—')}${row('Uptime (seconds)', number(http?.uptimeSeconds))}${row('API P95 (ms)', http?.samples ? number(http.requestP95Ms) : '—')}${row('Active event connections', number(http?.activeStreams))}${row('Stream recoveries / resets', http ? `${number(http.sseReplays)} / ${number(http.sseResets)}` : '—')}${row('Managed storage limit', bytes(storage?.managedStorageMaxBytes))}${row('Project upload limit', bytes(storage?.projectUploadMaxBytes))}${row('Storage cleanup failures', number(storage?.backgroundFailures))}</dl>
-        ${http?.routes ? `<h3>${h(t('Service metrics'))}</h3><p class="meta">${h(t('P95 uses recent completed requests; event connections measure the handshake.'))}</p><div class="admin-metrics-scroll" role="region" aria-label="${h(t('Service metrics'))}" tabindex="0"><table class="admin-table"><thead><tr>${['Request type', 'Requests', 'Errors (5xx)', 'Client errors (4xx)', 'P95 (ms)'].map(label => `<th>${h(t(label))}</th>`).join('')}</tr></thead><tbody>${Object.entries(http.routes).map(([name, value]) => `<tr><td>${h(t(labels[name] || name))}</td><td>${number(value.requests)}</td><td>${number(value.errors)}</td><td>${number(value.clientErrors)}</td><td>${value.samples ? number(value.requestP95Ms) : '—'}</td></tr>`).join('')}</tbody></table></div>` : ''}
-        <h3>${h(t('Signed-in devices'))}</h3><ul class="auth-devices">${(admin.devices || []).map(device => `<li><span data-i18n-skip>${h(device.deviceName || t('Device'))}${device.current ? ` · ${h(t('This device'))}` : ''}<small>${h(context.formatShortDateTime(device.lastSeenAt))}</small></span></li>`).join('')}</ul>
+        <section class="admin-system-section"><h3>${h(t('Service overview'))}</h3><dl class="admin-system-facts">${row('Build', admin.version?.buildId || '—')}${row('Uptime', Number.isFinite(http?.uptimeSeconds) ? `${Math.floor(http.uptimeSeconds / 86400)}d ${Math.floor(http.uptimeSeconds % 86400 / 3600)}h ${Math.floor(http.uptimeSeconds % 3600 / 60)}m (${number(http.uptimeSeconds)} s)` : '—')}${row('API P95 (ms)', http?.samples ? number(http.requestP95Ms) : '—')}${row('Active event connections', number(http?.activeStreams))}${row('Stream recoveries / resets', http ? `${number(http.sseReplays)} / ${number(http.sseResets)}` : '—')}</dl></section><section class="admin-system-section"><h3>${h(t('Managed storage'))}</h3><dl class="admin-system-facts">${row('Managed storage limit', bytes(storage?.managedStorageMaxBytes))}${row('Project upload limit', bytes(storage?.projectUploadMaxBytes))}${row('Storage cleanup failures', number(storage?.backgroundFailures))}</dl></section>
+        ${http?.routes ? `<section class="admin-system-section"><h3>${h(t('Service metrics'))}</h3><p class="meta">${h(t('P95 uses recent completed requests; event connections measure the handshake.'))}</p><div class="admin-metrics-scroll" role="region" aria-label="${h(t('Service metrics'))}" tabindex="0"><table class="admin-table"><thead><tr>${['Request type', 'Requests', 'Errors (5xx)', 'Client errors (4xx)', 'P95 (ms)'].map(label => `<th>${h(t(label))}</th>`).join('')}</tr></thead><tbody>${Object.entries(http.routes).map(([name, value]) => `<tr><td>${h(t(labels[name] || name))}</td><td>${number(value.requests)}</td><td>${number(value.errors)}</td><td>${number(value.clientErrors)}</td><td>${value.samples ? number(value.requestP95Ms) : '—'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
+        <section class="admin-system-section"><h3>${h(t('Signed-in devices'))}</h3><ul class="auth-devices">${(admin.devices || []).map(device => `<li><span data-i18n-skip>${h(device.deviceName || t('Device'))}${device.current ? ` · ${h(t('This device'))}` : ''}<small>${h(context.formatShortDateTime(device.lastSeenAt))}</small></span></li>`).join('')}</ul></section>
         ${context.renderAdminSettingsSection({ showLoadingNote: true })}
       </section>`;
     }
@@ -230,7 +230,7 @@
       const admin = state().admin;
       if (context.currentAdminPage() !== 'sessions' || !context.isDesktopLayout()) return '';
       if (admin.observedSessionLoading) return `<section class="admin-observed-panel" aria-label="${a(t('Session detail'))}" aria-busy="true"><div class="empty-state">${h(t('Loading session'))}</div></section>`;
-      if (!admin.observedSession) return `<section class="admin-observed-panel is-empty" aria-label="${a(t('Session detail'))}"><header class="admin-observed-placeholder-header"><strong>${h(t('Session detail'))}</strong><span class="admin-status-badge">${h(t('Read only'))}</span></header><div class="empty-state">${h(t('No session selected'))}</div></section>`;
+      if (!admin.observedSession) return `<section class="admin-observed-panel is-empty" aria-label="${a(t('Session detail'))}"><header class="admin-observed-placeholder-header"><strong>${h(t('Session detail'))}</strong><span class="admin-status-badge">${h(t('Read only'))}</span></header><div class="empty-state"><div><h3>${h(t('Choose a session to review'))}</h3><p>${h(t('View recorded messages and work details in read-only mode.'))}</p></div></div></section>`;
       return `<section class="admin-observed-panel" aria-label="${a(t('Session detail'))}" data-i18n-skip>${context.renderChatContent({ desktop: true })}</section>`;
     }
 
@@ -249,5 +249,101 @@
     return Object.freeze({ renderAdminConsole });
   }
 
-  globalObject.CodexWebAdminUi = Object.freeze({ createRenderer });
+  function confirmAction({ title, description, confirmLabel, cancelLabel, valid = () => true }) {
+    const document = globalObject.document;
+    if (!valid() || document.querySelector('.admin-confirm-dialog')) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'admin-confirm-dialog';
+      dialog.setAttribute('aria-labelledby', 'admin-confirm-title');
+      dialog.setAttribute('aria-describedby', 'admin-confirm-description');
+      const heading = document.createElement('h2'); heading.id = 'admin-confirm-title'; heading.textContent = title;
+      const copy = document.createElement('p'); copy.id = 'admin-confirm-description'; copy.textContent = description;
+      const actions = document.createElement('div'); actions.className = 'admin-form-actions';
+      const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'ghost'; cancel.textContent = cancelLabel; cancel.autofocus = true;
+      const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'danger'; confirm.textContent = confirmLabel;
+      let settled = false;
+      const finish = value => { if (settled) return; settled = true; observer.disconnect(); dialog.close(); dialog.remove(); resolve(value && valid()); };
+      cancel.addEventListener('click', () => finish(false));
+      confirm.addEventListener('click', () => finish(true));
+      dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false); });
+      dialog.addEventListener('keydown', event => event.stopPropagation());
+      const observer = new MutationObserver(() => { if (!valid()) finish(false); });
+      actions.append(cancel, confirm); dialog.append(heading, copy, actions); document.body.append(dialog);
+      observer.observe(document.body, { childList: true, subtree: true });
+      dialog.showModal(); cancel.focus();
+    });
+  }
+
+  // Observer history uses the same cursor contract as ordinary sessions. This
+  // module is lazy so the administrative reader adds no startup transport cost.
+  async function loadObserverPage(apiFetch, id, { signal, first = false, anchors = [] } = {}) {
+    const query = first ? '&after=0' : anchors.slice(0, 3).map(anchor => `&anchor=${encodeURIComponent(anchor.id)}`).join('');
+    const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(id)}/timeline?limit=50${query}`, { signal });
+    if (!Array.isArray(payload?.items) || !payload.session) throw new Error('History could not be loaded. Retry to recover your messages.');
+    return { ...payload, session: {
+      ...payload.session, mode: 'observer', readOnly: true, timeline: payload.items,
+      timelineComplete: payload.hasMore !== true, timelineNextBefore: payload.nextBefore ?? null,
+      timelineHasNewer: payload.hasNewer === true, timelineNextAfter: payload.nextAfter ?? null,
+    } };
+  }
+
+  async function refreshObserver(context, { viewportSnapshot = null, signal = null, latest = false } = {}) {
+    const { state, SESSION_READING } = context;
+    const sessionId = state.sessionId;
+    if (!context.owns()) return null;
+    const startedViewport = viewportSnapshot || context.captureTimelineViewport();
+    try {
+      const payload = await loadObserverPage(context.apiFetch, sessionId, {
+        signal, anchors: !latest && !startedViewport.shouldFollowLatest ? startedViewport.anchors : [],
+      });
+      if (!context.owns() || latest && !SESSION_READING.isCurrent(startedViewport)) return null;
+      const snapshot = SESSION_READING.isCurrent(startedViewport) ? startedViewport : context.captureTimelineViewport();
+      const session = payload.session;
+      // Input during a refresh wins: keep its loaded page if the response no
+      // longer contains the currently visible reading anchors.
+      if (!latest && !snapshot.shouldFollowLatest && snapshot.anchors.length
+        && !snapshot.anchors.some(anchor => session.timeline.some(item => item.id === anchor.id))) {
+        for (const key of ['timeline', 'timelineComplete', 'timelineNextBefore', 'timelineNextAfter', 'timelineHasNewer']) session[key] = state.currentSession[key];
+      }
+      state.sessionHistoryError = ''; state.sessionStatusError = '';
+      state.admin.observedSession = session;
+      state.currentSession = session;
+      state.cwd = session.cwd || '';
+      context.applySessionSettings(session);
+      context.restoreTimelineForSession(session, { fullHistory: true });
+      const runtimeStatus = context.syncRuntimeStatusFromSession(session);
+      if (runtimeStatus.activeTurnId && state.turnId) context.restoreTurnEventCursor(sessionId, state.turnId, { onlyIfUnset: true });
+      context.setTimelineOpenPositionForSession(session, snapshot);
+      context.renderChatWithTimelineRestored(() => {});
+      return session;
+    } catch (error) {
+      if (!context.owns()) return null;
+      if ([401, 403].includes(error?.status)) context.handleApiError(error);
+      else if (context.isMissingSessionError(error)) context.handleMissingSession(error, '');
+      else if (error?.name !== 'AbortError') {
+        state.sessionHistoryError = error?.message || 'Request failed';
+        state.sessionStatusError = state.sessionHistoryError;
+        context.renderChatWithTimelineRestored(() => {});
+      }
+      return null;
+    }
+  }
+
+  let observerScrollIntent = '';
+  function observerInput(event, sessionId) {
+    const downward = event.type === 'wheel' ? event.deltaY > 0
+      : event.type !== 'keydown' || ['ArrowDown', 'PageDown', 'End', ' '].includes(event.key);
+    observerScrollIntent = downward ? sessionId : '';
+  }
+  function observerScroll({ state, timeline, busy, moveTimelineWindow }) {
+    if (observerScrollIntent !== state.sessionId || busy || state.sessionHistoryError
+      || timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop > 120) return;
+    // Consume once per user gesture. Restoring an anchor or a failed request
+    // cannot recursively fetch the remainder of a large history.
+    observerScrollIntent = '';
+    moveTimelineWindow(1);
+  }
+
+  globalObject.CodexWebAdminUi = Object.freeze({ createRenderer, confirmAction, loadObserverPage, refreshObserver, observerInput, observerScroll });
 })(globalThis);

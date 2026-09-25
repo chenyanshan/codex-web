@@ -1,0 +1,65 @@
+{
+  "startedAt": "2026-09-24T17:12:10.676Z",
+  "binarySha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+  "nodeVersion": "v24.16.0",
+  "isolation": {
+    "temporaryHome": true,
+    "temporaryProject": true,
+    "loopbackEphemeralPort": true,
+    "copiedCredentials": false
+  },
+  "inference": {
+    "requested": true,
+    "model": "gpt-6-astra",
+    "credentials": "explicit environment variable",
+    "quotaImpact": "one real model turn"
+  },
+  "checks": [
+    {
+      "name": "stable schema required methods",
+      "status": "passed"
+    },
+    {
+      "name": "initialize real loopback app-server",
+      "status": "passed"
+    },
+    {
+      "name": "thread/start",
+      "status": "passed"
+    },
+    {
+      "name": "thread/read loaded snapshot",
+      "status": "passed"
+    },
+    {
+      "name": "thread/list",
+      "status": "passed"
+    },
+    {
+      "name": "config/read",
+      "status": "passed"
+    },
+    {
+      "name": "skills/list",
+      "status": "passed"
+    },
+    {
+      "name": "mcpServerStatus/list",
+      "status": "passed"
+    },
+    {
+      "name": "real model turn + official persisted history",
+      "status": "passed"
+    },
+    {
+      "name": "thread/unsubscribe",
+      "status": "passed"
+    }
+  ],
+  "version": "codex-cli 0.153.4",
+  "status": "passed",
+  "finishedAt": "2026-09-24T17:12:15.592Z",
+  "binaryKind": "npm JavaScript launcher",
+  "binaryPathRedacted": true,
+  "sourceReportSha256": "8fc8b5c78b6d36fcba58a3d698c6269a4b9ea3830ab8862bb599be58eb7a08f1"
+}

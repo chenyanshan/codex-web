@@ -7,6 +7,7 @@ import type {
 } from '@codex-mobile-web-app/codex-native-api';
 
 export type CodexWebEvent =
+  | { id: string; type: 'turn.observation_interrupted'; turnId: string; threadId: string; raw?: unknown }
   | { id: string; type: 'turn.started'; turnId: string; threadId: string; raw?: unknown }
   | {
     id: string;
@@ -53,6 +54,7 @@ export function presentCodexWebEvent(
     turnId: event.turnId,
   };
   switch (event.type) {
+    case 'turn.observation_interrupted':
     case 'turn.started':
       return base;
     case 'assistant.delta':

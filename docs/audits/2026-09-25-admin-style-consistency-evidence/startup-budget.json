@@ -1,0 +1,160 @@
+{
+  "criticalGzipBytes": 143035,
+  "limitBytes": 143360,
+  "indexGzipBytes": 895,
+  "sourceAppBytes": 498694,
+  "priorGzipBytes": 143168,
+  "changeBytes": -133,
+  "assets": [
+    {
+      "name": "boot-recovery.js",
+      "bytes": 1251,
+      "gzip": 700
+    },
+    {
+      "name": "theme-init.js",
+      "bytes": 525,
+      "gzip": 335
+    },
+    {
+      "name": "styles.css",
+      "bytes": 108411,
+      "gzip": 18821
+    },
+    {
+      "name": "approval-ui.css",
+      "bytes": 2354,
+      "gzip": 795
+    },
+    {
+      "name": "settings-ui.css",
+      "bytes": 3963,
+      "gzip": 1137
+    },
+    {
+      "name": "admin-ui.css",
+      "bytes": 6926,
+      "gzip": 1641
+    },
+    {
+      "name": "pwa-pull-refresh.js",
+      "bytes": 1863,
+      "gzip": 845
+    },
+    {
+      "name": "ui-copy.js",
+      "bytes": 19262,
+      "gzip": 7743
+    },
+    {
+      "name": "ui-kit.js",
+      "bytes": 14062,
+      "gzip": 4401
+    },
+    {
+      "name": "attachment-upload.js",
+      "bytes": 3632,
+      "gzip": 1644
+    },
+    {
+      "name": "attachment-utils.js",
+      "bytes": 2351,
+      "gzip": 1067
+    },
+    {
+      "name": "markdown-renderer.js",
+      "bytes": 6222,
+      "gzip": 2983
+    },
+    {
+      "name": "ui-localization.js",
+      "bytes": 3851,
+      "gzip": 1921
+    },
+    {
+      "name": "session-file-viewer.js",
+      "bytes": 6823,
+      "gzip": 2480
+    },
+    {
+      "name": "webhook-settings.js",
+      "bytes": 8363,
+      "gzip": 2605
+    },
+    {
+      "name": "admin-data.js",
+      "bytes": 3110,
+      "gzip": 1432
+    },
+    {
+      "name": "admin-editor.js",
+      "bytes": 2102,
+      "gzip": 1017
+    },
+    {
+      "name": "request-context.js",
+      "bytes": 335,
+      "gzip": 238
+    },
+    {
+      "name": "session-reading.js",
+      "bytes": 3170,
+      "gzip": 1337
+    },
+    {
+      "name": "timeline-reconciliation.js",
+      "bytes": 1669,
+      "gzip": 748
+    },
+    {
+      "name": "session-loader.js",
+      "bytes": 2845,
+      "gzip": 1457
+    },
+    {
+      "name": "network-recovery.js",
+      "bytes": 6646,
+      "gzip": 3070
+    },
+    {
+      "name": "submission-delivery.js",
+      "bytes": 3833,
+      "gzip": 1636
+    },
+    {
+      "name": "session-rename.js",
+      "bytes": 3621,
+      "gzip": 1695
+    },
+    {
+      "name": "session-attention.js",
+      "bytes": 1312,
+      "gzip": 654
+    },
+    {
+      "name": "draft-store.js",
+      "bytes": 1610,
+      "gzip": 799
+    },
+    {
+      "name": "session-pagination.js",
+      "bytes": 9311,
+      "gzip": 3431
+    },
+    {
+      "name": "approval-ui.js",
+      "bytes": 4030,
+      "gzip": 1619
+    },
+    {
+      "name": "settings-ui.js",
+      "bytes": 1010,
+      "gzip": 515
+    },
+    {
+      "name": "app.js",
+      "bytes": 259073,
+      "gzip": 73374
+    }
+  ]
+}

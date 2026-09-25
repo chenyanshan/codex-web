@@ -70,12 +70,21 @@ test('work details show actual progress, readable output and numbered diffs with
   const region = edit.locator('.work-diff');
   await region.focus();
   if (await region.evaluate(el => el.scrollWidth > el.clientWidth)) {
+    await region.evaluate(el => {
+      el.__keyboardScrollEnded = new Promise(resolve => el.addEventListener('scrollend', resolve, { once: true }));
+    });
     await page.keyboard.press('ArrowRight');
     await expect.poll(() => region.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+    await region.evaluate(async el => { await el.__keyboardScrollEnded; delete el.__keyboardScrollEnded; });
   }
-  // Read a chosen horizontal position while the event stream updates.
-  await region.evaluate(el => { el.scrollLeft = 24; });
-  const horizontal = await region.evaluate(el => el.scrollLeft);
+  // Wait for the actual keyboard scroll to finish before testing event-update
+  // preservation. Otherwise Chromium can continue moving after this assignment.
+  const horizontal = await region.evaluate(el => {
+    const target = Math.min(24, el.scrollWidth - el.clientWidth);
+    el.scrollTo({ left: target, top: el.scrollTop, behavior: 'instant' });
+    return target;
+  });
+  await expect.poll(() => region.evaluate(el => el.scrollLeft)).toBe(horizontal);
   await emit(page, { type: 'batch.completed', batchId: 'batch_browser_edit', status: 'completed' });
   await expect(dialog.locator('.work-progress-count')).toHaveText('已完成 3 / 3 项活动');
   await expect(region).toBeFocused();

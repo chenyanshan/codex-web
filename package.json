@@ -12,9 +12,12 @@
     "codex-web": "node --conditions=development --import tsx packages/codex-web/src/cli.ts",
     "lint": "eslint .",
     "serve": "npm run serve --workspace packages/codex-web",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
-    "test:browser": "playwright test"
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p scripts/app-server/tsconfig.json",
+    "test": "npm run test --workspaces --if-present && npm run app-server:test",
+    "test:browser": "playwright test",
+    "app-server:check": "node --conditions=development --import tsx scripts/app-server/compatibility.ts",
+    "app-server:generate": "node scripts/app-server/generate-protocol.mjs",
+    "app-server:test": "node --import tsx --test scripts/app-server/*.test.ts"
   },
   "overrides": {
     "esbuild": "0.28.1"

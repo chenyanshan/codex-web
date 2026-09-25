@@ -1,0 +1,148 @@
+{
+  "checkedAt": "2026-09-24T18:22:32.828Z",
+  "status": "web_restored",
+  "cause": "systemd ExecStartPre rejected stale gateway contract source verification",
+  "contractVerification": {
+    "gatewayTests": 433,
+    "aiopsContractTests": 96,
+    "failed": 0,
+    "skipped": 0,
+    "format": "passed",
+    "lint": "passed",
+    "types": "passed",
+    "snapshotCheck": "passed"
+  },
+  "http": [
+    {
+      "origin": "http://127.0.0.1:43210",
+      "checks": [
+        {
+          "path": "/",
+          "status": 200
+        },
+        {
+          "path": "/version.json",
+          "status": 200
+        },
+        {
+          "path": "/app.js",
+          "status": 200
+        },
+        {
+          "path": "/ui-copy.js",
+          "status": 200
+        },
+        {
+          "path": "/service-worker.js",
+          "status": 200
+        },
+        {
+          "path": "/api/models",
+          "status": 401
+        },
+        {
+          "path": "/api/metrics",
+          "status": 401
+        },
+        {
+          "path": "/api/sessions",
+          "status": 401
+        },
+        {
+          "path": "/api/events",
+          "status": 401
+        }
+      ]
+    },
+    {
+      "origin": "https://aiops.orvibo.com",
+      "checks": [
+        {
+          "path": "/",
+          "status": 200
+        },
+        {
+          "path": "/version.json",
+          "status": 200
+        },
+        {
+          "path": "/app.js",
+          "status": 200
+        },
+        {
+          "path": "/ui-copy.js",
+          "status": 200
+        },
+        {
+          "path": "/service-worker.js",
+          "status": 200
+        },
+        {
+          "path": "/api/models",
+          "status": 401
+        },
+        {
+          "path": "/api/metrics",
+          "status": 401
+        },
+        {
+          "path": "/api/sessions",
+          "status": 401
+        },
+        {
+          "path": "/api/events",
+          "status": 401
+        }
+      ]
+    }
+  ],
+  "browser": [
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 200,
+      "passwordLoginVisible": true,
+      "pageErrors": 0
+    },
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "status": 200,
+      "passwordLoginVisible": true,
+      "pageErrors": 0
+    }
+  ],
+  "runtime": {
+    "status": "passed",
+    "runningVersion": "0.156.1",
+    "existingConversationReadable": true,
+    "modelTurn": "passed",
+    "modelSmoke": {
+      "model": "gpt-6-astra",
+      "status": "completed",
+      "expectedReply": "CODEX_RECOVERY_OK",
+      "ephemeral": true,
+      "sandbox": "read-only",
+      "checkedAt": "2026-09-24T18:25:53.445Z"
+    }
+  },
+  "dataRestoredFromBackup": false,
+  "startupGuardDisabled": false,
+  "service": {
+    "MainPID": "3048220",
+    "NRestarts": "438",
+    "ActiveState": "active",
+    "SubState": "running",
+    "ActiveEnterTimestamp": "Fri 2026-09-25 02:18:16 CST"
+  },
+  "installedCli": "codex-cli 0.156.1",
+  "webBuildId": "81b582c9a575ae1cd3ce",
+  "limitations": [
+    "Authenticated conversation UI, SSE recovery, approvals and attachments were not exercised by this unauthenticated browser check."
+  ],
+  "finishedAt": "2026-09-24T18:25:53.458Z"
+}

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installAdminFixture, openAdminConsole, returnToAdminList, navigateAdmin, projects, sessions } from './helpers/admin-fixture.js';
+import { installAdminFixture, openAdminConsole, returnToAdminList, navigateAdmin, adminTimelinePage, projects, sessions } from './helpers/admin-fixture.js';
 
 test.use({ serviceWorkers: 'block' });
 test.beforeEach(async ({ page }, info) => {
@@ -82,20 +82,20 @@ test('system resources load independently, show actual metrics, and preserve a f
   await expect(page.locator('.admin-system-page')).toContainText('Test phone');
   await expect(page.locator('.admin-resource-error')).toContainText('Metrics temporarily unavailable');
   failure = false; await page.locator('[data-admin-retry="metrics"]').click();
-  await expect(page.locator('.admin-system-facts')).toContainText('2048 MiB');
+  await expect(page.locator('.admin-system-page')).toContainText('2048 MiB');
   await expect(page.locator('.admin-metrics-scroll')).toContainText('82');
   const bounds = await page.locator('.admin-system-page').evaluate(el => ({ right: el.getBoundingClientRect().right, width: innerWidth, scrollWidth: document.documentElement.scrollWidth }));
   expect(bounds.right).toBeLessThanOrEqual(bounds.width);
   expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.width);
-  await page.screenshot({ path: `docs/audits/2026-09-19-second-remediation-evidence/admin-system-${info.project.name}.png`, animations: 'disabled' });
+  await page.screenshot({ path: `docs/audits/2026-09-25-admin-redesign-evidence/admin-system-${info.project.name}.png`, animations: 'disabled' });
   const metricsRegion = page.getByRole('region', { name: 'Service metrics' });
   if (await metricsRegion.evaluate(el => el.scrollWidth > el.clientWidth)) {
     await metricsRegion.focus();
     await page.keyboard.press('ArrowRight');
     await expect.poll(() => metricsRegion.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
   }
-  page.once('dialog', dialog => dialog.accept());
   await page.locator('#admin-multi-user-toggle').click();
+  await page.locator('.admin-confirm-dialog').getByRole('button', { name: 'Disable', exact: true }).click();
   await expect(page.locator('.admin-editor-error')).toContainText('Mode cannot be changed yet');
   await expect(page.locator('#admin-multi-user-toggle')).toBeChecked();
   expect(calls).toBe(2);
@@ -103,8 +103,8 @@ test('system resources load independently, show actual metrics, and preserve a f
 
 test('observer navigation belongs to the latest selection and exit invalidates pending details', async ({ page }, info) => {
   let release; const delayed = new Promise(resolve => { release = resolve; });
-  await page.route(`**/api/admin/sessions/${sessions[0].id}`, async route => { await delayed; await route.fulfill({ json: { mode: 'observer', session: { ...sessions[0], timeline: [{ id: 'a', kind: 'message', role: 'assistant', text: 'Old observer response' }] } } }).catch(() => {}); });
-  await page.route(`**/api/admin/sessions/${sessions[1].id}`, route => route.fulfill({ json: { mode: 'observer', session: { ...sessions[1], timeline: [{ id: 'b', kind: 'message', role: 'assistant', text: 'Latest observer response' }] } } }));
+  await page.route(`**/api/admin/sessions/${sessions[0].id}/timeline?*`, async route => { await delayed; await route.fulfill({ json: adminTimelinePage(sessions[0], [{ id: 'a', kind: 'message', role: 'assistant', text: 'Old observer response' }], route.request().url()) }).catch(() => {}); });
+  await page.route(`**/api/admin/sessions/${sessions[1].id}/timeline?*`, route => route.fulfill({ json: adminTimelinePage(sessions[1], [{ id: 'b', kind: 'message', role: 'assistant', text: 'Latest observer response' }], route.request().url()) }));
   await openAdminConsole(page, info.project.name);
   await page.locator(`[data-admin-session-id="${sessions[0].id}"]`).click();
   await page.locator(`[data-admin-session-id="${sessions[1].id}"]`).click();

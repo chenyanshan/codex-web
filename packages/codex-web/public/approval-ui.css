@@ -1,0 +1,31 @@
+.approval-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: max(14px, var(--message-font-size));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.approval-card .approval-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 16px; }
+.approval-card .approval-heading h3 { flex: 1 1 auto; margin: 0; font-size: 1em; line-height: 1.4; font-weight: 650; }
+.approval-card .approval-state { color: var(--muted); font-size: .8125em; }
+.approval-card .approval-reason { margin: 0 0 16px; }
+.approval-card .approval-field-label { display: block; color: var(--muted); font-size: .8125em; margin-bottom: 5px; }
+.approval-card .approval-operation { min-width: 0; margin: 14px 0; }
+.approval-card pre { max-width: 100%; margin: 0; padding: 14px; overflow: auto; max-height: 280px; background: var(--code-bg); color: var(--code-text); border: 1px solid var(--code-border); border-radius: 9px; text-align: left; white-space: pre; font-size: .875em; line-height: 1.6; }
+.approval-card code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: inherit; background: transparent; }
+.approval-card .approval-field { margin: 12px 0; font-size: .875em; }
+.approval-card .approval-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.approval-card .approval-actions button, .approval-card .approval-scope button { flex: 0 1 auto; max-width: 100%; min-width: 0; min-height: 44px; padding: 10px 16px; white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.4; font-size: .875em; text-align: center; }
+.approval-card .approval-scope { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 18px; }
+.approval-card .approval-scope p { margin: 0 0 12px; font-size: .875em; }
+.approval-card .approval-scope .approval-operation { margin-top: 0; }
+.approval-card .approval-feedback { padding: 12px; border-left: 3px solid var(--warn); background: var(--panel-2); font-size: .875em; }
+.approval-card.is-uncertain .approval-state, .approval-card.is-expired .approval-state { color: var(--warn); }
+.approval-card.is-resolved .approval-heading, .approval-card.is-expired .approval-heading { margin-bottom: 8px; }
+.approval-card .approval-review summary { cursor: pointer; font-size: .875em; color: var(--muted); padding: 6px 0; }
+.approval-card :is(button, pre, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+@media (max-width: 480px) { .approval-card { padding: 16px; border-radius: 14px; } }

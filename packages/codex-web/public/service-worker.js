@@ -3,8 +3,14 @@ const STATIC_CACHE_PREFIX = 'codex-web-static-';
 const STATIC_CACHE = 'codex-web-static-__CODEX_WEB_BUILD_ID__';
 const APP_SHELL_URL = '/';
 const VERSIONED_STATIC_ASSET_PATHS = new Set([
+  '/boot-recovery.js',
   '/theme-init.js',
   '/styles.css',
+  '/approval-ui.css',
+  '/settings-ui.css',
+  '/admin-ui.css',
+  '/approval-ui.js',
+  '/settings-ui.js',
   '/pwa-pull-refresh.js',
   '/ui-copy.js',
   '/ui-kit.js',
@@ -39,8 +45,14 @@ const versionedUrl = (pathname) => `${pathname}?v=${encodeURIComponent(BUILD_ID)
 const CRITICAL_STATIC_ASSETS = [
   APP_SHELL_URL,
   ...[
+    '/boot-recovery.js',
     '/theme-init.js',
     '/styles.css',
+    '/approval-ui.css',
+    '/settings-ui.css',
+    '/admin-ui.css',
+    '/approval-ui.js',
+    '/settings-ui.js',
     '/pwa-pull-refresh.js',
     '/ui-copy.js',
     '/ui-kit.js',

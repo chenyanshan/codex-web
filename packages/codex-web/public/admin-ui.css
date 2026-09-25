@@ -1,0 +1,93 @@
+/* Use the session list's surfaces, type scale and spacing throughout administration. */
+.admin-console-page { background: var(--bg); }
+.admin-console-page .admin-sidebar { padding: 0; gap: 8px; border: 0; background: transparent; box-shadow: none; }
+.admin-console-page .admin-sidebar-button { min-height: 44px; font-size: 12px; border-radius: 12px; box-shadow: none; }
+.admin-console-page .admin-sidebar-button[aria-pressed="true"] { border-color: transparent; border-left: 4px solid var(--accent); }
+.admin-console-page .admin-nav-count { padding-inline: 2px; border: 0; background: transparent; }
+.admin-console-page .admin-page-heading { flex-wrap: wrap; justify-content: flex-start; gap: 8px 12px; }
+.admin-console-page .admin-page-heading h2,
+.admin-console-page .admin-system-page h2 { font-size: 14px; line-height: 1.4; font-weight: 600; }
+.admin-console-page .admin-section-heading h3,
+.admin-console-page .admin-editor-panel h3,
+.admin-console-page .admin-system-section h3,
+.admin-console-page .settings-section-title { margin: 0; font-size: 13px; line-height: 1.4; font-weight: 500; }
+.admin-console-page .admin-management-page,
+.admin-console-page .admin-audit-page,
+.admin-console-page .admin-management-grid { gap: 12px; }
+.admin-console-page .admin-collection-panel { padding: 0; gap: 8px; border: 0; background: transparent; box-shadow: none; }
+.admin-console-page .admin-section-heading { min-height: 28px; padding-inline: 12px; }
+.admin-console-page .admin-list { gap: 8px; }
+.admin-console-page .admin-row,
+.admin-console-page .admin-editor-panel,
+.admin-console-page .admin-system-section,
+.admin-console-page .admin-system-page > .settings-section { padding: 12px; gap: 7px 8px; border: 1px solid transparent; border-radius: 12px; background: var(--panel); box-shadow: 0 1px 4px color-mix(in srgb, var(--overlay) 7%, transparent); }
+.admin-console-page .admin-row:hover { border-color: transparent; }
+.admin-console-page .admin-row-main { font-size: 13px; font-weight: 500; line-height: var(--session-summary-line-height); }
+.admin-console-page .admin-row-meta,
+.admin-console-page .admin-role-projects { font-size: 12px; color: var(--muted); }
+.admin-console-page .admin-project-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.admin-record-content { min-width: 0; display: grid; gap: 6px; }
+.admin-record-path { overflow-wrap: anywhere; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.admin-record-facts { display: flex; flex-wrap: wrap; gap: 5px 16px; margin: 0; font-size: 12px; }
+.admin-record-facts > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.admin-record-facts dt { color: var(--muted); }
+.admin-record-facts dd { margin: 0; }
+.admin-record-identifiers { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.admin-record-identifiers summary { cursor: pointer; min-height: 32px; padding: 8px 0; }
+.admin-project-access { margin: 6px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.5; }
+.admin-console-page .admin-user-row,
+.admin-console-page .admin-user-action-row { align-items: start; }
+.admin-console-page .compact-button,
+.admin-console-page .admin-row-more summary { min-height: 44px; padding: 10px 12px; font-size: 12px; line-height: 1.4; border-radius: 10px; white-space: normal; box-shadow: none; }
+.admin-console-page .admin-row .compact-button:not(.danger),
+.admin-console-page .admin-row-more summary { border-color: transparent; background: transparent; }
+.admin-console-page .admin-row .compact-button:hover:not(:disabled),
+.admin-console-page .admin-row-more summary:hover { background: var(--panel-2); }
+.admin-console-page .admin-editor-panel { gap: 12px; }
+.admin-console-page .field > span { font-size: 12px; line-height: 1.4; font-weight: 500; }
+.admin-console-page .field { gap: 6px; }
+.admin-console-page :where(input:not([type="checkbox"]), select) { min-height: 44px; font-size: 16px; }
+.admin-console-page .admin-check-row { min-height: 40px; line-height: 1.4; color: var(--text); }
+.admin-console-page input[type="checkbox"] { accent-color: var(--accent); }
+.admin-console-page .auth-devices { font-size: 13px; }
+.admin-console-page .admin-check-row input { flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--accent); }
+.admin-console-page .admin-filter-row { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.admin-console-page .admin-session-list { padding: 0; }
+.admin-console-page .admin-session-row { padding: 0; }
+.admin-console-page .admin-session-row[data-selected="true"] { border-left: 4px solid var(--accent); background: var(--bg-user-shared); }
+.admin-console-page .admin-session-summary { font-size: 12px; line-height: 1.4; color: var(--muted); }
+.admin-console-page .admin-session-footer { flex-wrap: wrap; row-gap: 4px; }
+.admin-console-page .admin-observed-panel.is-empty { height: auto; min-height: 160px; align-self: start; border-color: transparent; }
+.admin-console-page .admin-observed-panel.is-empty .empty-state { padding: 12px; place-items: start; text-align: left; }
+.admin-console-page .admin-observed-panel.is-empty h3 { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--text); }
+.admin-console-page .admin-observed-panel.is-empty p { max-width: 50ch; margin: 0; font-size: 12px; line-height: 1.5; }
+.admin-console-page .admin-system-section,
+.admin-console-page .admin-system-page > .settings-section { margin-top: 8px; }
+.admin-console-page .admin-system-facts { margin: 12px 0 0; gap: 12px 24px; }
+.admin-console-page .admin-system-facts dd { font-size: 13px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.admin-console-page .admin-system-facts > :first-child { grid-column: 1 / -1; }
+.admin-console-page .admin-system-section .meta,
+.admin-console-page .admin-system-page .settings-action-row .meta { font-size: 12px; line-height: 1.5; }
+.admin-console-page .admin-table { font-size: 12px; font-variant-numeric: tabular-nums; }
+.admin-console-page .admin-table th,
+.admin-console-page .admin-table td { padding: 10px; }
+.admin-console-page .admin-metrics-scroll { margin-bottom: 0; }
+.admin-console-page .admin-system-page > .admin-resource-error { margin-top: 8px; }
+.admin-confirm-dialog { width: min(460px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); margin: auto; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); font: inherit; overflow: auto; box-shadow: 0 16px 48px color-mix(in srgb, var(--overlay) 24%, transparent); }
+.admin-confirm-dialog::backdrop { background: color-mix(in srgb, var(--overlay) 45%, transparent); }
+.admin-confirm-dialog h2 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.admin-confirm-dialog p { margin: 12px 0 16px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.admin-confirm-dialog button { min-height: 44px; padding: 10px 14px; font-size: 12px; }
+.admin-confirm-dialog button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+@media (max-width: 1199px) {
+  .admin-console-page .admin-management-grid.has-editor .admin-editor-panel { width: 100%; }
+}
+@media (max-width: 719px) {
+  .admin-console-page .admin-mobile-navigation { gap: 8px; font-size: 12px; }
+  .admin-console-page .admin-mobile-navigation select { font-size: 16px; }
+  .admin-console-page .admin-record-facts { display: grid; gap: 5px; }
+  .admin-console-page .admin-form-actions { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .admin-console-page .admin-form-actions > button { flex: 1; }
+  .admin-console-page .admin-system-facts { grid-template-columns: minmax(0, 1fr); }
+  .admin-record-identifiers summary { min-height: 44px; padding-block: 12px; }
+}

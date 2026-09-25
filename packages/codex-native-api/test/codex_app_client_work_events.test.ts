@@ -2304,40 +2304,18 @@ test('app client retries transient rollout materialization read errors after tur
   assert.equal(result.outputText, 'Recovered after materialization.');
 });
 
-test('app client fails open turns from Codex stderr runtime errors', async () => {
-  const message = 'unexpected status 403 Forbidden: {"code":"FORBIDDEN","message":"Forbidden"}, url: https://allinai7.cloud/v1/responses, request id: req_forbidden';
-  let now = 0;
-  const client = new CodexAppClient({
-    codexCliBin: 'codex',
-    turnPollNow: () => now,
-    turnPollSleep: async (ms) => {
-      now += ms;
-    },
-  });
-  (client as any).childStderrSequence += 1;
-  (client as any).childStderrTail.push({
-    sequence: (client as any).childStderrSequence,
-    text: `■ ${message}`,
-  });
-
-  client.readThread = async () => ({
-    threadId: 'thread_1',
-    path: null,
-    turns: [{
-      id: 'turn_stderr_failure',
-      status: 'running',
-      items: [],
-    }],
-  } as any);
-
-  await assert.rejects(
-    client.waitForTurnResult({
-      threadId: 'thread_1',
-      turnId: 'turn_stderr_failure',
-      timeoutMs: 1000,
-    }),
-    /403 Forbidden/u,
-  );
+test('process stderr cannot fail a turn; only the matching official error does', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex', turnPollSleep: async () => {} });
+  client.childStderrTail.push({ sequence: 1, text: 'unexpected status 403 Forbidden from another task' });
+  let reads = 0;
+  client.readThread = async () => {
+    reads += 1;
+    client.emit('notification', { method: 'turn/completed', params: { threadId: 'other-thread', turn: { id: 'same-turn', status: 'failed', error: { message: 'wrong task' }, items: [] } } });
+    if (reads === 2) client.emit('notification', { method: 'turn/completed', params: { threadId: 'thread_1', turn: { id: 'same-turn', status: 'failed', error: { message: 'matching provider failure' }, items: [] } } });
+    return { threadId: 'thread_1', turns: [{ id: 'same-turn', status: 'inProgress', items: [] }] } as any;
+  };
+  await assert.rejects(client.waitForTurnResult({ threadId: 'thread_1', turnId: 'same-turn', timeoutMs: 1000 }), /matching provider failure/);
+  assert.equal(reads, 2);
 });
 
 test('app client ignores background MCP transport failures while the turn keeps running', async () => {

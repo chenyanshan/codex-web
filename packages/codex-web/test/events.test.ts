@@ -427,3 +427,11 @@ test('share event DTOs suppress non-final assistant commentary', () => {
 
   assert.equal(commentary, null);
 });
+
+test('observation interruption is a nonterminal public signal without diagnostics or host paths', () => {
+  for (const audience of ['workspace', 'workspace_summary', 'share'] as const) {
+    assert.deepEqual(presentCodexWebEvent({ id: 'lost', type: 'turn.observation_interrupted', turnId: 'turn_1', threadId: 'thread_private', raw: { binary: '/private/codex' } }, audience), {
+      id: 'lost', type: 'turn.observation_interrupted', turnId: 'turn_1',
+    });
+  }
+});

@@ -33,9 +33,10 @@ function renderWebhookSettingsSection() {
               </div>
               <div class="settings-field webhook-settings-field">
                 <label class="settings-field-label" for="webhook-key-input">Webhook key</label>
-                <div class="webhook-value-row">
-                  <input id="webhook-key-input" class="webhook-value-input webhook-secret-input" type="text" readonly autocomplete="off" spellcheck="false" value="${escapeAttribute(keyValue)}" data-i18n-skip>
+                <div class="webhook-value-row webhook-key-value-row">
+                  <input id="webhook-key-input" class="webhook-value-input webhook-secret-input" type="${webhook.key && !webhook.keyVisible ? 'password' : 'text'}" readonly autocomplete="off" spellcheck="false" value="${escapeAttribute(keyValue)}" data-i18n-skip>
                   <div class="webhook-key-actions">
+                    <button class="ghost compact-button" type="button" id="webhook-reveal-key-button" aria-pressed="${String(webhook.keyVisible === true)}"${!webhook.key || busy ? ' disabled' : ''}>${webhook.keyVisible ? 'Hide key' : 'Show key'}</button>
                     <button class="ghost compact-button" type="button" id="webhook-copy-key-button"${!webhook.key || busy ? ' disabled' : ''}>${webhook.keyCopied ? 'Copied' : 'Copy key'}</button>
                     <button class="ghost compact-button" type="button" id="webhook-rotate-key-button"${busy ? ' disabled' : ''}>Regenerate key</button>
                   </div>
@@ -279,6 +280,7 @@ async function rotateWebhookKey() {
       return null;
     }
     const webhook = applyWebhookSettingsPayload(payload);
+    requestFocusRestore();
     state.webhookRotateConfirmOpen = false;
     if (!webhook.key) {
       requestFocusRestore();
@@ -318,7 +320,22 @@ async function copyWebhookKey() {
   if (!key) {
     return false;
   }
-  const copied = await copyTextToClipboard(key, '#webhook-key-input');
+  // A password input cannot be copied by the legacy clipboard API. Keep the
+  // visible key masked while providing an off-screen, short-lived text field.
+  const copyField = document.createElement('textarea');
+  copyField.id = 'webhook-key-copy-buffer';
+  copyField.value = key;
+  copyField.readOnly = true;
+  copyField.style.cssText = 'position:fixed;left:-9999px;top:0;';
+  const previousFocus = document.activeElement;
+  (document.querySelector('.webhook-settings-section') || document.body).appendChild(copyField);
+  let copied = false;
+  try {
+    copied = await copyTextToClipboard(key, '#webhook-key-copy-buffer');
+  } finally {
+    copyField.remove();
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+  }
   if (state.webhook.key !== key) {
     return copied;
   }

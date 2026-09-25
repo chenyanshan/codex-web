@@ -1,0 +1,64 @@
+{
+  "startedAt": "2026-09-24T17:04:04.653Z",
+  "binarySha256": "0b2e9301d6100dddda3b9d5c80ebaeaa3a2f1962388f2f36f6b96a9f08b1f33f",
+  "nodeVersion": "v24.16.0",
+  "isolation": {
+    "temporaryHome": true,
+    "temporaryProject": true,
+    "loopbackEphemeralPort": true,
+    "copiedCredentials": false
+  },
+  "inference": {
+    "requested": false,
+    "status": "not-run"
+  },
+  "checks": [
+    {
+      "name": "stable schema required methods",
+      "status": "passed"
+    },
+    {
+      "name": "initialize real loopback app-server",
+      "status": "passed"
+    },
+    {
+      "name": "thread/start",
+      "status": "passed"
+    },
+    {
+      "name": "thread/read loaded snapshot",
+      "status": "passed"
+    },
+    {
+      "name": "thread/resume persisted history",
+      "status": "not-run",
+      "detail": "New threads have no persisted history until a turn; exercised by explicit model smoke."
+    },
+    {
+      "name": "thread/list",
+      "status": "passed"
+    },
+    {
+      "name": "config/read",
+      "status": "passed"
+    },
+    {
+      "name": "skills/list",
+      "status": "passed"
+    },
+    {
+      "name": "mcpServerStatus/list",
+      "status": "passed"
+    },
+    {
+      "name": "thread/unsubscribe",
+      "status": "passed"
+    }
+  ],
+  "version": "codex-cli 0.156.1",
+  "status": "passed",
+  "finishedAt": "2026-09-24T17:04:06.294Z",
+  "binaryKind": "native executable",
+  "binaryPathRedacted": true,
+  "sourceReportSha256": "bd72cd08a459f37465a20d632fac81b72ecf2163bbf7e0c1e648510b3a02ecea"
+}

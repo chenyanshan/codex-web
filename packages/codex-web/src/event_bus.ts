@@ -382,6 +382,8 @@ function normalizeSequence(value: string | number | null | undefined): number | 
 
 function projectionKey(event: CodexWebEvent): string {
   switch (event.type) {
+    case 'turn.observation_interrupted':
+      return 'turn:observation';
     case 'turn.started':
       return 'turn:started';
     case 'assistant.delta':

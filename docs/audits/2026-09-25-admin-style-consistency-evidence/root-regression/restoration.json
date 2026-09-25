@@ -1,0 +1,45 @@
+{
+  "restored": [
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/admin-observer-1200.png",
+      "originalSha256": "7e00c0ec456ec08af94b697d31bee3f5477f318a78c80b78653dbaffdd167e67",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/admin-observer-1200.png"
+    },
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/admin-observer-1440.png",
+      "originalSha256": "284c4351d0da137e8880684108127cf0ffee46c86db884c88fe0abeb7f8e0048",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/admin-observer-1440.png"
+    },
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/admin-observer-768.png",
+      "originalSha256": "72b31b62c06cbda5464c62e1a34d537fdf73a0fe4d8c621b64e5b0d05f6aa677",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/admin-observer-768.png"
+    },
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/admin-observer-980.png",
+      "originalSha256": "be2d613b6a1f30d7cbdacc7a77f1114a3384fe526307227be26633fc2eedbba8",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/admin-observer-980.png"
+    },
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/admin-users-1440.png",
+      "originalSha256": "a1d18a47743b951e4dfffcdac3fbfd9a116f3a350cf79d47860da0ce0984c8e8",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/admin-users-1440.png"
+    },
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/admin-users-320.png",
+      "originalSha256": "936d3b762171732f338b04ab5ed70b6e95292c10119d571f9fd4f52d790db87d",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/admin-users-320.png"
+    },
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/admin-users-390.png",
+      "originalSha256": "d3dc646c70bfd98ef5b6f71755c8d31fe24b0366ec8d988fdb6544e8ade271d5",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/admin-users-390.png"
+    },
+    {
+      "path": "docs/audits/2026-09-19-second-remediation-evidence/visual-checks.json",
+      "originalSha256": "ef67a1df8b654a25c503f05979b3e827faf53047dc43482b45ed3902db98ab2a",
+      "newCapture": "docs/audits/2026-09-25-admin-style-consistency-evidence/root-regression/2026-09-19-second-remediation-evidence/visual-checks.json"
+    }
+  ],
+  "oldEvidenceByteEquality": "verified"
+}

@@ -1,0 +1,160 @@
+{
+  "baseCommit": "6a5733d81bea4931eacda94a3e793fe9b2eb353e",
+  "sourceFiles": [
+    {
+      "path": "package.json",
+      "sha256": "a38dadfe46b423a2fae5e9f9c4d1cd0a52022b1f63f8ed231a0a79bb07a23968"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/capabilities.ts",
+      "sha256": "21f5d5a5c949a6dcf90c3daac9ee5b8459fa88460560c192014a986f3ed9848f"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/client.ts",
+      "sha256": "75a848d9c7ad7c9c091e9154dd790b6ab0094c6a3339c70fa69e5b003ffbec0a"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/compat/README.md",
+      "sha256": "a6a9353e6b77177f6174c32943543d6d981b73f923b3ded1268ae30b0ded5c20"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/compat/policy.ts",
+      "sha256": "d59b9dd44cac6a11ba3bdc7dab9ec3c7eb469a9ef7806815afc1d7267a4dbfab"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/compat/request_params.ts",
+      "sha256": "f239383425416fad418070899b8642182d2585a51454700def84a786988761bb"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/compat/rollout.ts",
+      "sha256": "28c6b7e79faa77c79132d90b5fe84dce8e37d5a0690ccb973afe4013af41e514"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/lifecycle.ts",
+      "sha256": "6051f4cabdd53e136a153392d3f87cca1e67f858845821ba3d197aa9e61f08ee"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/projection.ts",
+      "sha256": "4db5ecaf43d2c682c3c27573246c85412cb125544ed0d13a0e8ef82c5c5868a5"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/response_items.ts",
+      "sha256": "29a229857f7e9dba475c093a6fe201ee9ec272317a459de610569e86b9fb598d"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/transport.ts",
+      "sha256": "c27b0fc6178786127ee2b436e6fd059a3bf776e1858557e0e78afa8e381dc2ab"
+    },
+    {
+      "path": "packages/codex-native-api/src/app_server/turn_observer.ts",
+      "sha256": "a29339ed12a016f01a6aff233d996b6424a2442f1c10e62d8e0d71ca4577fb4c"
+    },
+    {
+      "path": "packages/codex-native-api/src/codex_app_client.ts",
+      "sha256": "53df4c131d6ea325c4b3d0bf73eb18478759978e2c8ae5902b514a37ada185b7"
+    },
+    {
+      "path": "packages/codex-native-api/test/app_server_transport.test.ts",
+      "sha256": "e21d7b8f2351b8d1f0d35fd80f4309dbb3d841d830f191d1ad7b844831fafc8b"
+    },
+    {
+      "path": "packages/codex-native-api/test/codex_app_client_work_events.test.ts",
+      "sha256": "ea5444f12ea8245c03182253b54c432c1707b99e2eb0961eb6f3e5004df70c7f"
+    },
+    {
+      "path": "packages/codex-native-api/test/fixtures/app_server/0.156.1-official-turn.json",
+      "sha256": "eda967c7b58fa16bb50ff2a59ea5dbcfac16109b9bbf62a1249ad5d1ea6c3269"
+    },
+    {
+      "path": "packages/codex-web/public/app.js",
+      "sha256": "cdddf43b974ddf73c32fb31d7a1ea0c0dcf349ab49df79bc87a7753a2e2056f2"
+    },
+    {
+      "path": "packages/codex-web/public/ui-copy.js",
+      "sha256": "cb4683ecc4382ed591c4d11c4a88a51b57c2f18b157175dc8ba7adc068ffae04"
+    },
+    {
+      "path": "packages/codex-web/scripts/build-public.mjs",
+      "sha256": "04ecf65b9955bf0069aae04314a81acb95869dbcba15015489ee8b7944de17d2"
+    },
+    {
+      "path": "packages/codex-web/src/compat/rollout_turn_snapshot.ts",
+      "sha256": "71a2d9ca041a32d661b96316193a4a2dbf43c96fa8b459a851e85f47fab3547c"
+    },
+    {
+      "path": "packages/codex-web/src/event_bus.ts",
+      "sha256": "30cd5d9ea8998b5e914d19b2efef976ef6e6b1fc119a931ce7c9ec16bfb223ea"
+    },
+    {
+      "path": "packages/codex-web/src/event_model.ts",
+      "sha256": "b8db953b1af44deefd8359c4e794a94ed77a5bdc524b5c4c8380d19473ddca0b"
+    },
+    {
+      "path": "packages/codex-web/src/file_version_cache.ts",
+      "sha256": "f8b147cfc45b7cfbe98331f8e16d73f9983ebf527462554203c24b8b2618dec6"
+    },
+    {
+      "path": "packages/codex-web/src/runtime.ts",
+      "sha256": "e0490d9e5cb46460aee64dbf29ce5072b9b923428720cdf7cca4fb8d77e26d3f"
+    },
+    {
+      "path": "packages/codex-web/src/server.ts",
+      "sha256": "0c65ce14e5eec49e217a3e09394225670d4b318dfb995fea4ae5604e0427ae28"
+    },
+    {
+      "path": "packages/codex-web/test/browser/approval-delivery.spec.js",
+      "sha256": "26b707ccd160567cc579b4016686f88e8f75319a096fda8b4f59cc95acaeae87"
+    },
+    {
+      "path": "packages/codex-web/test/browser/workspace.spec.js",
+      "sha256": "b0c4b21044a1e444517ff926fe624e9cc588c90c9070590507a8dc5097106bec"
+    },
+    {
+      "path": "packages/codex-web/test/events.test.ts",
+      "sha256": "5897a95edc161a31b81fb274c988e4c3aae585464acd8711c4f0602d254212c2"
+    },
+    {
+      "path": "packages/codex-web/test/file_version_cache.test.ts",
+      "sha256": "222992ac7102c51105ad27066bd0ec25d4e78d26d411e8a3b636c95373b12ee5"
+    },
+    {
+      "path": "packages/codex-web/test/runtime.test.ts",
+      "sha256": "f6fb0581f77b1540c8c3469aa86a1fedf1df766c3b32d5390af575462baf3827"
+    },
+    {
+      "path": "packages/codex-web/test/server_auth.test.ts",
+      "sha256": "cf6291a8ad189672d32f8519c36380edd373cce3eaff545a90bb028fae155d41"
+    },
+    {
+      "path": "packages/codex-web/test/server_session_submission.test.ts",
+      "sha256": "e0bc0cb729c3c1ed491f8249f9eac1247eb63d4653fa90f48801f93ff6f5befe"
+    },
+    {
+      "path": "scripts/app-server/compatibility.ts",
+      "sha256": "f6747b0d08d3dd379ea2fd4af78a50e8813bd2dae02192939be9854b53a34181"
+    },
+    {
+      "path": "scripts/app-server/generate-protocol.mjs",
+      "sha256": "bbdffbb3794afc89ceb92ebe0ebbcc023470401bba184691d1cc314efbc80a43"
+    },
+    {
+      "path": "scripts/app-server/generated.test.ts",
+      "sha256": "296c3ea112e771adc8a9d5e38c3429287ba1817d1cf519718d24279cecdab020"
+    },
+    {
+      "path": "scripts/app-server/support.test.ts",
+      "sha256": "e1580f4edd0d5a285fff64106de0aa6cd68e650749d975f4b1446e141ef708e7"
+    },
+    {
+      "path": "scripts/app-server/support.ts",
+      "sha256": "ec824ddb86cd313d2368d63035e4fff69fe6e85f46106c2bfa4dfeb9e048fdf8"
+    },
+    {
+      "path": "scripts/app-server/tsconfig.json",
+      "sha256": "01f365dde439b85192dc77b93c91b80cf4994c7607c915b2aa7dc1d27efe8416"
+    }
+  ],
+  "generatedFiles": 1597,
+  "generatedAggregateSha256": "a35d821c39b34ddda0d9a6041040f0d04a326f0aec8fa298221d58f22f2a5f0a",
+  "note": "Uncommitted worktree source including preserved preexisting runtime fix. Does not include docs, runtime data, or secrets."
+}

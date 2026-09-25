@@ -1,0 +1,121 @@
+[
+  {
+    "name": "work-dialog-focus",
+    "inspected": {
+      "summaries": [
+        {
+          "text": "审批\nnpm test\n等待处理",
+          "visible": true
+        },
+        {
+          "text": "运行\nnpm test\n完成",
+          "visible": true
+        },
+        {
+          "text": "编辑\npackages/codex-web/public/styles.css +1\n进行中",
+          "visible": true
+        }
+      ],
+      "candidates": [
+        {
+          "tag": "BUTTON",
+          "id": "close-work-details-button",
+          "visible": true,
+          "text": ""
+        },
+        {
+          "tag": "PRE",
+          "id": "",
+          "visible": false,
+          "text": ""
+        },
+        {
+          "tag": "PRE",
+          "id": "",
+          "visible": false,
+          "text": ""
+        },
+        {
+          "tag": "PRE",
+          "id": "",
+          "visible": false,
+          "text": ""
+        }
+      ]
+    },
+    "focus": [
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "text": "审批\nnpm test\n等待处理",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "text": "",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "text": "审批\nnpm test\n等待处理",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "text": "",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "text": "审批\nnpm test\n等待处理",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "text": "",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "text": "审批\nnpm test\n等待处理",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "text": "",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "text": "审批\nnpm test\n等待处理",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "text": "",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "text": "审批\nnpm test\n等待处理",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "text": "",
+        "inDialog": true
+      }
+    ]
+  }
+]

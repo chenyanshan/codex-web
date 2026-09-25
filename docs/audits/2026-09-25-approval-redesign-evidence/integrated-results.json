@@ -1,0 +1,2162 @@
+[
+  {
+    "width": 320,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "retro",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "retro",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "retro",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "retro",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "retro",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "retro",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "retro",
+    "layout": "current",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "retro",
+    "layout": "console",
+    "language": "en",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "Allow once",
+        "width": 100,
+        "scroll": 100,
+        "height": 44
+      },
+      {
+        "label": "Cancel turn",
+        "width": 104,
+        "scroll": 104,
+        "height": 44
+      },
+      {
+        "label": "Allow with command rule",
+        "width": 187,
+        "scroll": 187,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "retro",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 320,
+    "theme": "retro",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "retro",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "theme": "retro",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "retro",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 844,
+    "theme": "retro",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "fresh-light",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "fresh-light",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "terminal",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "terminal",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "dark-gold",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "dark-gold",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "oled-black",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "oled-black",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "retro",
+    "layout": "current",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "theme": "retro",
+    "layout": "console",
+    "language": "zh-CN",
+    "overflow": false,
+    "buttons": [
+      {
+        "label": "允许本次",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "取消任务",
+        "width": 88,
+        "scroll": 88,
+        "height": 44
+      },
+      {
+        "label": "按命令规则允许",
+        "width": 130,
+        "scroll": 130,
+        "height": 44
+      }
+    ]
+  }
+]

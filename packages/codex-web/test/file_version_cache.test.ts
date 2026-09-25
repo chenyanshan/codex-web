@@ -51,3 +51,40 @@ test('report store sees externally replaced index and removed metadata without r
   assert.equal((await store.listReports())[0]!.title, 'Other'); assert.equal((await store.readReport('one.md'))!.favorite, true);
   await fs.rm(indexPath); assert.equal((await store.readReport('one.md'))!.title, 'one');
 });
+
+test('same-tick metadata collisions refresh values and versions without reparsing unchanged content', async t => {
+  const dir = await directory(t), file = path.join(dir, 'collision.json');
+  await fs.writeFile(file, '{"enabled":true }');
+  const metadata = await fs.stat(file, { bigint: true });
+  // Hold every metadata field constant, reproducing a real filesystem clock tick.
+  // Keep the wall clock deterministic; no sleeping or timestamp-dependent luck.
+  t.mock.method(Date, 'now', () => Number(metadata.ctimeNs / 1_000_000n));
+  const open = fs.open.bind(fs);
+  t.mock.method(fs, 'stat', async () => metadata);
+  let opens = 0, parses = 0;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+    opens++;
+    const handle = await open(...args);
+    t.mock.method(handle, 'stat', async () => metadata);
+    return handle;
+  });
+  const cache = new FileVersionCache(file, raw => { parses++; return JSON.parse(raw); }, () => ({}));
+  const original = await cache.read();
+  assert.equal((await cache.read()).value, original.value);
+  assert.equal(parses, 1);
+  assert.equal(opens, 2, 'recent identical metadata rechecks bytes');
+  await fs.writeFile(file, '{"enabled":false}');
+  const revoked = await cache.read();
+  assert.equal(revoked.value.enabled, false);
+  assert.notEqual(revoked.version, original.version, 'downstream version caches observe same-metadata changes');
+  assert.equal(parses, 2);
+  assert.equal((await cache.read()).value, revoked.value);
+  assert.equal(parses, 2);
+  // Once the metadata is older than the coarse-timestamp safety window,
+  // unchanged files again avoid opening/reading their contents.
+  t.mock.method(Date, 'now', () => Number(metadata.ctimeNs / 1_000_000n) + 3_000);
+  const beforeColdReads = opens;
+  for (let i = 0; i < 10; i++) assert.equal((await cache.read()).value, revoked.value);
+  assert.equal(opens, beforeColdReads);
+  assert.equal(parses, 2);
+});

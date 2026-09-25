@@ -1,24 +1,35 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import type { BigIntStats } from 'node:fs';
 
 export interface FileSnapshot<T> { version: string; value: T }
 
-/** No TTL: every read checks the path's inode, size and nanosecond modification metadata. */
+// Filesystems may report identical ns-shaped timestamps for successive writes in
+// one clock tick. Revalidate bytes while metadata is recent (also covers coarse
+// 1–2 second timestamp precision); cold unchanged files retain the stat-only path.
+const RECENT_WRITE_WINDOW_NS = 2_000_000_000n;
+
+/** Every read checks metadata; recent writes additionally verify content identity. */
 export class FileVersionCache<T> {
   private cached: FileSnapshot<T> | null = null;
+  private cachedMetadata: string | null = null;
   constructor(private readonly filePath: string, private readonly parse: (raw: string) => T, private readonly missing: () => T) {}
-  invalidate() { this.cached = null; }
+  invalidate() { this.cached = null; this.cachedMetadata = null; }
 
   async read(): Promise<FileSnapshot<T>> {
     for (let attempt = 0; attempt < 3; attempt++) {
       let version: string;
-      try { version = fileVersion(await fs.stat(this.filePath, { bigint: true })); }
+      let stat: BigIntStats;
+      try { stat = await fs.stat(this.filePath, { bigint: true }); version = fileVersion(stat); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        this.cachedMetadata = null;
         this.cached = { version: 'missing', value: freezeDeep(this.missing()) };
         return this.cached;
       }
-      if (this.cached?.version === version) return this.cached;
+      const latestWrite = stat.mtimeNs > stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs;
+      const recentWrite = BigInt(Date.now()) * 1_000_000n - latestWrite <= RECENT_WRITE_WINDOW_NS;
+      if (this.cached && this.cachedMetadata === version && !recentWrite) return this.cached;
       const handle = await fs.open(this.filePath, 'r').catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return null;
         throw error;
@@ -33,7 +44,10 @@ export class FileVersionCache<T> {
           throw error;
         });
         if (!current || fileVersion(current) !== version) continue;
-        this.cached = { version, value: freezeDeep(this.parse(raw)) };
+        const contentVersion = `${version}:${createHash('sha256').update(raw).digest('hex')}`;
+        if (this.cached?.version === contentVersion) return this.cached;
+        this.cached = { version: contentVersion, value: freezeDeep(this.parse(raw)) };
+        this.cachedMetadata = version;
         return this.cached;
       } finally { await handle.close(); }
     }

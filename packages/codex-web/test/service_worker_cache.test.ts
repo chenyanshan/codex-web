@@ -47,6 +47,9 @@ test('service worker independently precaches only critical shell assets', async 
   assert.ok(precached.includes('/'));
   assert.ok(precached.includes(`/app.js?v=${buildId}`));
   assert.ok(precached.includes(`/styles.css?v=${buildId}`));
+  for (const asset of ['boot-recovery.js', 'approval-ui.js', 'approval-ui.css', 'settings-ui.js', 'settings-ui.css', 'admin-ui.css']) {
+    assert.ok(precached.includes(`/${asset}?v=${buildId}`), `${asset} must participate in complete-shell updates`);
+  }
   assert.ok(precached.includes(`/ui-kit.js?v=${buildId}`));
   assert.ok(precached.includes(`/ui-copy.js?v=${buildId}`));
   assert.ok(precached.includes(`/attachment-utils.js?v=${buildId}`));

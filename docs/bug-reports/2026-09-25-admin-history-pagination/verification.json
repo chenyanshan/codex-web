@@ -1,0 +1,88 @@
+{
+  "recordedAt": "2026-09-25T01:10:26.480087+00:00",
+  "implementation": "verified",
+  "deployment": "passed",
+  "checks": {
+    "markdownBrowser": 10,
+    "adminBrowser": 34,
+    "ordinaryReadingBrowser": 13,
+    "uiUnit": {
+      "fullSuite": 463,
+      "additionalRefreshRegression": 1
+    },
+    "backendAndFocusedUnit": 110,
+    "budgetAndPwa": 7,
+    "typecheck": "passed",
+    "lint": "passed",
+    "build": "passed",
+    "builtHttpAndBrowserSmoke": "passed",
+    "diffCheck": "passed",
+    "sessionStyleRollbackPatch": "passed"
+  },
+  "limits": {
+    "frontendPage": 50,
+    "backendPageMax": 100,
+    "mountedTimelineItemsMax": 80,
+    "providerColdReadStillFullHistory": true,
+    "realIosDeviceTested": false
+  },
+  "sourceHashes": {
+    "packages/codex-web/public/app.js": "2d0312cac5d2ddd34c0cd7cae43d4979c023852f1d7eebc6f5e6a0cb1e9cd71f",
+    "packages/codex-web/public/admin-ui.js": "bc3dc07fe021af82d4f3c63368936848b7c95b896394754400a38f3e4e85f0fa",
+    "packages/codex-web/src/server.ts": "b57fd161cc3b935d13df1af9b2a8308e1937ee86891ba7d19f14219279b8d305",
+    "packages/codex-web/test/public_ui.test.ts": "bc6487a20425f2c47a7a9c4e917a54479c9cf3eb81d388a166e71668a7f4c9b6",
+    "packages/codex-web/test/server_multi_user.test.ts": "4bcd46297512094ba20d31054a8685d5a156320c649b436d04d906a80293cb29",
+    "packages/codex-web/test/browser/admin-history.spec.js": "1578c2e0889ec8e145b34b72b2eed3bb666d5527dcd6df2dc5fccfca7ad00a2f",
+    "packages/codex-web/test/browser/markdown-file-links.spec.js": "d0ac86242cc5184b7174f87d37c681cbeaa85cef189396b01803736f6092bf82"
+  },
+  "activation": {
+    "directory": "/home/ubuntu/.codex-web/source-checkpoints/history-links-activation-20260925T011004Z",
+    "statusFile": "/home/ubuntu/.codex-web/source-checkpoints/history-links-activation-20260925T011004Z/status.json",
+    "unit": "codex-web-history-links-activate-20260925t011004z",
+    "expectedBuildId": "cb1ab18dc763971712e5",
+    "queuedAt": "2026-09-25T01:10:35.352Z",
+    "restartRequested": true,
+    "mainPid": 3760441,
+    "finishedAt": "2026-09-25T01:11:06.597Z"
+  },
+  "optimizations": [
+    "OPT-01",
+    "OPT-06",
+    "OPT-08",
+    "OPT-09",
+    "OPT-10",
+    "OPT-11",
+    "OPT-13",
+    "OPT-14",
+    "OPT-15",
+    "OPT-17",
+    "OPT-18",
+    "OPT-19",
+    "OPT-20",
+    "OPT-21"
+  ],
+  "liveVerification": {
+    "checkedAt": "2026-09-25T01:13:55.186599+00:00",
+    "buildId": "cb1ab18dc763971712e5",
+    "checks": [
+      {
+        "base": "http://127.0.0.1:43210",
+        "html": 200,
+        "reviewedAssets": [
+          "app.js",
+          "admin-ui.js"
+        ],
+        "unauthenticatedHistory": 401
+      },
+      {
+        "base": "https://aiops.orvibo.com",
+        "html": 200,
+        "reviewedAssets": [
+          "app.js",
+          "admin-ui.js"
+        ],
+        "unauthenticatedHistory": 401
+      }
+    ]
+  }
+}

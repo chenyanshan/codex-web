@@ -1,0 +1,33 @@
+{
+  "startedAt": "2026-09-24T17:51:26.311Z",
+  "status": "failed",
+  "targetVersion": "0.156.1",
+  "checks": [
+    {
+      "name": "tested source and installed native binary match",
+      "status": "passed"
+    },
+    {
+      "name": "expected service and no scheduled Codex jobs",
+      "status": "passed"
+    },
+    {
+      "name": "tested source and installed native binary match",
+      "status": "passed"
+    },
+    {
+      "name": "expected service and no scheduled Codex jobs",
+      "status": "passed"
+    }
+  ],
+  "serviceRestarted": false,
+  "updatedAt": "2026-09-24T17:52:43.951Z",
+  "stateSnapshot": {
+    "status": "passed",
+    "serviceStopped": true,
+    "automaticRestore": false
+  },
+  "failedPhase": "starting_new_service",
+  "failureType": "Error",
+  "failureCode": null
+}

@@ -1,0 +1,4974 @@
+{
+  "fixture": "http://127.0.0.1:41759",
+  "capturedAt": "2026-09-24T18:43:45.330Z",
+  "scenarios": [
+    {
+      "name": "mobile-login",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "Codex Web"
+      ],
+      "text": "Codex Web\n\n使用密码登录此设备。\n\n用户名\n密码\n登录",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "mobile-setup",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "需要初始化"
+      ],
+      "text": "需要初始化\n\n尚未配置密码。\n\ncodex-web auth set-password",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "mobile-sessions",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "mobile-new",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "开启新会话"
+      ],
+      "text": "新会话\n开启新会话\n项目路径\nyanshan_quant\n/Users/test/yanshan_quant\n返回\n开始",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "mobile-approval",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\n已连接 · 已运行 0s · 最近工作事件 0s\n已到会话开头\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\n工作中 · 等待审批\n›\n发送",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 788,
+          "contentHeight": 872
+        }
+      ],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 27,
+            "y": 566.734375,
+            "width": 106.65625,
+            "height": 44,
+            "right": 133.65625,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 141.65625,
+            "y": 566.734375,
+            "width": 106.671875,
+            "height": 44,
+            "right": 248.328125,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 256.328125,
+            "y": 566.734375,
+            "width": 106.671875,
+            "height": 44,
+            "right": 363,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 784,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 785
+        }
+      ]
+    },
+    {
+      "name": "mobile-session-settings",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\n已连接 · 已运行 0s · 最近工作事件 0s\n已到会话开头\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\n工作中 · 等待审批\n›\n当前会话\n当前会话正在运行\n停止\n分享\n分享\n公开分享尚未启用\n会话\n刷新\n重命名\n归档\n模型与推理\n模型\n跟随 Codex 配置\nGPT-5.6-Sol\n推理\n跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra\n行为与权限\n模式\n默认\n计划\n权限\n只读\n修改前询问\n完全访问\n发送",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 788,
+          "contentHeight": 872
+        },
+        {
+          "tag": "DIV",
+          "class": "settings-drawer",
+          "id": "",
+          "height": 652,
+          "contentHeight": 701
+        }
+      ],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 27,
+            "y": 566.734375,
+            "width": 106.65625,
+            "height": 44,
+            "right": 133.65625,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 141.65625,
+            "y": 566.734375,
+            "width": 106.671875,
+            "height": 44,
+            "right": 248.328125,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 256.328125,
+            "y": 566.734375,
+            "width": 106.671875,
+            "height": 44,
+            "right": 363,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 784,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 785
+        }
+      ]
+    },
+    {
+      "name": "mobile-work-details",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "本轮活动"
+      ],
+      "text": "Quality gate fixture\nyanshan_quant\n已连接 · 已运行 0s · 最近工作事件 0s\n已到会话开头\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\n工作中 · 等待审批\n›\n发送\n本轮活动\n\n当前正在进行 · 审批\n\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\n\n已完成 1 / 3 项活动\n\n执行 1 · 修改 2 个文件 · 审批 1\n\n进行中\n审批\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\n等待处理\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n目录\n/home/ubuntu/workspace/codex-mobile-web-app\n原始数据\n运行\nnpm test\n完成\n编辑\npackages/codex-web/public/styles.css +1\n进行中",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 788,
+          "contentHeight": 872
+        },
+        {
+          "tag": "DIV",
+          "class": "work-details-list",
+          "id": "",
+          "height": 689,
+          "contentHeight": 709
+        }
+      ],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 27,
+            "y": 566.734375,
+            "width": 106.65625,
+            "height": 44,
+            "right": 133.65625,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 141.65625,
+            "y": 566.734375,
+            "width": 106.671875,
+            "height": 44,
+            "right": 248.328125,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 256.328125,
+            "y": 566.734375,
+            "width": 106.671875,
+            "height": 44,
+            "right": 363,
+            "bottom": 610.734375
+          },
+          "clientWidth": 105,
+          "scrollWidth": 105,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 784,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 785
+        }
+      ]
+    },
+    {
+      "name": "mobile-file",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "Browser Session Guide"
+      ],
+      "text": "browser-session-guide.md\nBrowser Session Guide\n\nThis Markdown file was resolved from the current project.\n\nSession scoped\nMobile ready",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "mobile-app-settings-top",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "网站标题",
+        "外观",
+        "此设备的新会话",
+        "Webhook",
+        "高级",
+        "账户"
+      ],
+      "text": "设置\n网站标题\n浏览器标题\n外观\n语言\nEnglish\n中文\n主题\n复古黄\n黑金\n纯粹黑\n清新白\n终端青\n会话界面\n当前\n控制台\n消息字号\n小\n中\n大\n此设备的新会话\n模型\n跟随 Codex 配置\nGPT-5.6-Sol\n推理\n跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra\n模式\n默认\n计划\n权限\n只读\n修改前询问\n完全访问\nWebhook\n启用 Webhook\nWebhook 已停用。\n高级\n运行时\n重载\n账户\n已登录设备\n退出登录",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "app-settings-page",
+          "id": "",
+          "height": 777,
+          "contentHeight": 1474
+        }
+      ],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "site-title-input",
+          "x": 16,
+          "y": 133,
+          "width": 358,
+          "height": 36,
+          "right": 374,
+          "bottom": 169
+        },
+        {
+          "text": "跟随 Codex 配置\nGPT-5.6-Sol",
+          "x": 16,
+          "y": 816,
+          "width": 358,
+          "height": 36,
+          "right": 374,
+          "bottom": 852
+        },
+        {
+          "text": "跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra",
+          "x": 16,
+          "y": 882,
+          "width": 358,
+          "height": 36,
+          "right": 374,
+          "bottom": 918
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-sessions",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "会话审计"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n会话审计\n2 个会话\n刷新\n用户\n所有用户\nadmin\nwriter\ndisabled-user\n项目\n所有项目\nAlpha Console\nBeta Automation\n会话\n所有会话\n活动会话\n已归档会话\nDeployment checks and release report\n观察模式\nReview the deployment checks and update the release report.\nwriter · Alpha Console\nJul 31, 06:20 PM\nScheduled task failure investigation\n只读\nTrace the failed scheduled task without changing project files.\nadmin · Beta Automation\nJul 30, 03:15 PM",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        },
+        {
+          "text": "所有用户\nadmin\nwriter\ndisabled-user",
+          "x": 25,
+          "y": 234,
+          "width": 340,
+          "height": 43,
+          "right": 365,
+          "bottom": 277
+        },
+        {
+          "text": "所有项目\nAlpha Console\nBeta Automation",
+          "x": 25,
+          "y": 314,
+          "width": 340,
+          "height": 43,
+          "right": 365,
+          "bottom": 357
+        },
+        {
+          "text": "所有会话\n活动会话\n已归档会话",
+          "x": 25,
+          "y": 394,
+          "width": 340,
+          "height": 43,
+          "right": 365,
+          "bottom": 437
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-projects",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "项目管理",
+        "已配置项目"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n项目管理\n2 个项目\n添加项目\n已配置项目\nAlpha Console\n/Users/test/workspaces/alpha-console\n活动中\n24\n普通成员\n编辑\nBeta Automation\n/Users/test/workspaces/beta-automation\n已停用\n8\n仅管理员\n编辑",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-project-editor-before-scroll",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "项目管理",
+        "添加项目"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n项目管理\n2 个项目\n添加项目\n显示名称\nCWD\n活动会话\n启用\n普通成员可查看工作详情\n保存项目\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 240,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 282
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 314,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 356
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 391,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 433
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-project-editor",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "项目管理",
+        "添加项目"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n项目管理\n2 个项目\n添加项目\n显示名称\nCWD\n活动会话\n启用\n普通成员可查看工作详情\n保存项目\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 240,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 282
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 314,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 356
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 391,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 433
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-roles",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "角色管理",
+        "已配置角色"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n角色管理\n2 个角色\n添加角色\n已配置角色\nAdmin\n管理员\nrole_admin\n编辑\nWriter\nrole_writer\nAlpha Console\n编辑",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-role-editor-before-scroll",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "角色管理",
+        "添加角色"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n角色管理\n2 个角色\n添加角色\n角色 ID\n名称\n项目\nAlpha Console\nBeta Automation\n保存角色\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 240,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 282
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 317,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 359
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-role-editor",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "角色管理",
+        "添加角色"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n角色管理\n2 个角色\n添加角色\n角色 ID\n名称\n项目\nAlpha Console\nBeta Automation\n保存角色\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 240,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 282
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 317,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 359
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-users",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "用户管理",
+        "团队成员"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n用户管理\n3 个用户\n添加用户\n团队成员\nadmin\n活动中\n当前账号\nuser_admin · admin@example.com · role_admin\n编辑\n更多\nwriter\n活动中\nuser_writer · writer@example.com · role_writer\n编辑\n更多\ndisabled-user\n已停用\ndisabled · disabled@example.com\n编辑\n更多",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-user-editor-before-scroll",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "用户管理",
+        "添加用户"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n用户管理\n3 个用户\n添加用户\n用户名\nEmail\n密码\n启用\n角色\n无角色\nAdmin\nWriter\n保存用户\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 240,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 282
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 314,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 356
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 391,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 433
+        },
+        {
+          "text": "无角色\nAdmin\nWriter",
+          "x": 27,
+          "y": 503,
+          "width": 336,
+          "height": 43,
+          "right": 363,
+          "bottom": 546
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-user-editor",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "用户管理",
+        "添加用户"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n用户管理\n3 个用户\n添加用户\n用户名\nEmail\n密码\n启用\n角色\n无角色\nAdmin\nWriter\n保存用户\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 240,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 282
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 314,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 356
+        },
+        {
+          "text": "",
+          "x": 27,
+          "y": 391,
+          "width": 336,
+          "height": 42,
+          "right": 363,
+          "bottom": 433
+        },
+        {
+          "text": "无角色\nAdmin\nWriter",
+          "x": 27,
+          "y": 503,
+          "width": 336,
+          "height": 43,
+          "right": 363,
+          "bottom": 546
+        }
+      ]
+    },
+    {
+      "name": "mobile-admin-system",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [
+        "系统",
+        "服务指标",
+        "已登录设备",
+        "系统"
+      ],
+      "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n系统\n刷新\n构建版本\n__CODEX_WEB_BUILD_ID__\n运行时长（秒）\n86435\nAPI P95（毫秒）\n248\n当前事件连接\n4\n事件重放 / 重置\n16 / 2\n托管存储上限\n1024 MiB\n项目上传上限\n100 MiB\n存储清理失败次数\n0\n服务指标\n\nP95 统计最近完成的请求；事件连接统计握手耗时。\n\n请求类型\t请求数\t服务错误（5xx）\t请求错误（4xx）\tP95（毫秒）\n会话\t120\t2\t1\t248\n事件连接\t36\t0\t0\t60\n已登录设备\nChrome / Audit fixture · 本设备\nSep 25, 08:00 AM\nSafari / iPhone fixture\nSep 24, 05:00 PM\n系统\n多用户模式\n可信团队模式",
+      "scrollRegions": [
+        {
+          "tag": "DIV",
+          "class": "screen page-screen admin-console-screen",
+          "id": "",
+          "height": 844,
+          "contentHeight": 936
+        }
+      ],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "会话审计\n项目管理\n角色管理\n用户管理\n系统",
+          "x": 88,
+          "y": 79,
+          "width": 290,
+          "height": 43,
+          "right": 378,
+          "bottom": 122
+        }
+      ]
+    },
+    {
+      "name": "desktop-login",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "Codex Web"
+      ],
+      "text": "Codex Web\n\n使用密码登录此设备。\n\n用户名\n密码\n登录",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "desktop-setup",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "需要初始化"
+      ],
+      "text": "需要初始化\n\n尚未配置密码。\n\ncodex-web auth set-password",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "desktop-sessions",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nQuality gate fixture\nyanshan_quant\n正在重连\n\nVerify the mobile workspace\n\n工作中\n刷新\n发送",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        },
+        {
+          "text": "停止",
+          "x": 1336,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1374,
+          "bottom": 46
+        },
+        {
+          "text": "会话菜单",
+          "x": 1380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1418,
+          "bottom": 46
+        },
+        {
+          "text": "Upload files",
+          "x": 507.5,
+          "y": 736,
+          "width": 1,
+          "height": 1,
+          "right": 508.5,
+          "bottom": 737
+        },
+        {
+          "text": "刷新",
+          "x": 1271.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 1309.5,
+          "bottom": 874
+        },
+        {
+          "text": "发送",
+          "x": 1315.5,
+          "y": 836,
+          "width": 42,
+          "height": 38,
+          "right": 1357.5,
+          "bottom": 874
+        }
+      ]
+    },
+    {
+      "name": "desktop-new",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "开启新会话"
+      ],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\n新会话\n所有会话\n开启新会话\n项目路径\nyanshan_quant\n/Users/test/yanshan_quant\n返回\n开始",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        }
+      ]
+    },
+    {
+      "name": "desktop-approval",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nQuality gate fixture\nyanshan_quant\n已连接 · 已运行 0s · 最近工作事件 0s\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\n工作中 · 等待审批\n›\n刷新\n发送",
+      "scrollRegions": [],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 540.5,
+            "y": 534.96875,
+            "width": 259.328125,
+            "height": 38,
+            "right": 799.828125,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 807.828125,
+            "y": 534.96875,
+            "width": 259.34375,
+            "height": 38,
+            "right": 1067.171875,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 1075.171875,
+            "y": 534.96875,
+            "width": 259.328125,
+            "height": 38,
+            "right": 1334.5,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        },
+        {
+          "text": "停止",
+          "x": 1336,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1374,
+          "bottom": 46
+        },
+        {
+          "text": "会话菜单",
+          "x": 1380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1418,
+          "bottom": 46
+        },
+        {
+          "text": "接受",
+          "x": 540.5,
+          "y": 534.96875,
+          "width": 259.328125,
+          "height": 38,
+          "right": 799.828125,
+          "bottom": 572.96875
+        },
+        {
+          "text": "本会话允许",
+          "x": 807.828125,
+          "y": 534.96875,
+          "width": 259.34375,
+          "height": 38,
+          "right": 1067.171875,
+          "bottom": 572.96875
+        },
+        {
+          "text": "拒绝",
+          "x": 1075.171875,
+          "y": 534.96875,
+          "width": 259.328125,
+          "height": 38,
+          "right": 1334.5,
+          "bottom": 572.96875
+        },
+        {
+          "text": "Upload files",
+          "x": 507.5,
+          "y": 736,
+          "width": 1,
+          "height": 1,
+          "right": 508.5,
+          "bottom": 737
+        },
+        {
+          "text": "刷新",
+          "x": 1271.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 1309.5,
+          "bottom": 874
+        },
+        {
+          "text": "发送",
+          "x": 1315.5,
+          "y": 836,
+          "width": 42,
+          "height": 38,
+          "right": 1357.5,
+          "bottom": 874
+        }
+      ]
+    },
+    {
+      "name": "desktop-session-settings",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nQuality gate fixture\nyanshan_quant\n已连接 · 已运行 0s · 最近工作事件 0s\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\n工作中 · 等待审批\n›\n当前会话\n当前会话正在运行\n停止\n分享\n分享\n公开分享尚未启用\n会话\n刷新\n重命名\n归档\n模型与推理\n模型\n跟随 Codex 配置\nGPT-5.6-Sol\n推理\n跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra\n行为与权限\n模式\n默认\n计划\n权限\n只读\n修改前询问\n完全访问\n刷新\n发送",
+      "scrollRegions": [],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 540.5,
+            "y": 534.96875,
+            "width": 259.328125,
+            "height": 38,
+            "right": 799.828125,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 807.828125,
+            "y": 534.96875,
+            "width": 259.34375,
+            "height": 38,
+            "right": 1067.171875,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 1075.171875,
+            "y": 534.96875,
+            "width": 259.328125,
+            "height": 38,
+            "right": 1334.5,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        },
+        {
+          "text": "停止",
+          "x": 1336,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1374,
+          "bottom": 46
+        },
+        {
+          "text": "会话菜单",
+          "x": 1380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1418,
+          "bottom": 46
+        },
+        {
+          "text": "接受",
+          "x": 540.5,
+          "y": 534.96875,
+          "width": 259.328125,
+          "height": 38,
+          "right": 799.828125,
+          "bottom": 572.96875
+        },
+        {
+          "text": "本会话允许",
+          "x": 807.828125,
+          "y": 534.96875,
+          "width": 259.34375,
+          "height": 38,
+          "right": 1067.171875,
+          "bottom": 572.96875
+        },
+        {
+          "text": "拒绝",
+          "x": 1075.171875,
+          "y": 534.96875,
+          "width": 259.328125,
+          "height": 38,
+          "right": 1334.5,
+          "bottom": 572.96875
+        },
+        {
+          "text": "关闭会话菜单",
+          "x": 1318.5,
+          "y": 165,
+          "width": 36,
+          "height": 36,
+          "right": 1354.5,
+          "bottom": 201
+        },
+        {
+          "text": "停止",
+          "x": 1275.5,
+          "y": 225,
+          "width": 64,
+          "height": 36,
+          "right": 1339.5,
+          "bottom": 261
+        },
+        {
+          "text": "刷新",
+          "x": 758.171875,
+          "y": 355.5,
+          "width": 64,
+          "height": 36,
+          "right": 822.171875,
+          "bottom": 391.5
+        },
+        {
+          "text": "重命名",
+          "x": 1016.828125,
+          "y": 355.5,
+          "width": 64,
+          "height": 36,
+          "right": 1080.828125,
+          "bottom": 391.5
+        },
+        {
+          "text": "默认",
+          "x": 639.5,
+          "y": 613,
+          "width": 346,
+          "height": 36,
+          "right": 985.5,
+          "bottom": 649
+        },
+        {
+          "text": "计划",
+          "x": 989.5,
+          "y": 613,
+          "width": 346,
+          "height": 36,
+          "right": 1335.5,
+          "bottom": 649
+        },
+        {
+          "text": "只读",
+          "x": 639.5,
+          "y": 671,
+          "width": 229.328125,
+          "height": 36,
+          "right": 868.828125,
+          "bottom": 707
+        },
+        {
+          "text": "修改前询问",
+          "x": 872.828125,
+          "y": 671,
+          "width": 229.328125,
+          "height": 36,
+          "right": 1102.15625,
+          "bottom": 707
+        },
+        {
+          "text": "完全访问",
+          "x": 1106.15625,
+          "y": 671,
+          "width": 229.328125,
+          "height": 36,
+          "right": 1335.484375,
+          "bottom": 707
+        },
+        {
+          "text": "Upload files",
+          "x": 507.5,
+          "y": 736,
+          "width": 1,
+          "height": 1,
+          "right": 508.5,
+          "bottom": 737
+        },
+        {
+          "text": "刷新",
+          "x": 1271.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 1309.5,
+          "bottom": 874
+        },
+        {
+          "text": "发送",
+          "x": 1315.5,
+          "y": 836,
+          "width": 42,
+          "height": 38,
+          "right": 1357.5,
+          "bottom": 874
+        }
+      ]
+    },
+    {
+      "name": "desktop-work-details",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "本轮活动"
+      ],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nQuality gate fixture\nyanshan_quant\n已连接 · 已运行 0s · 最近工作事件 0s\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\n工作中 · 等待审批\n›\n刷新\n发送\n本轮活动\n\n当前正在进行 · 审批\n\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\n\n已完成 1 / 3 项活动\n\n执行 1 · 修改 2 个文件 · 审批 1\n\n进行中\n审批\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\n等待处理\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n目录\n/home/ubuntu/workspace/codex-mobile-web-app\n原始数据\n运行\nnpm test\n完成\n编辑\npackages/codex-web/public/styles.css +1\n进行中",
+      "scrollRegions": [],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 540.5,
+            "y": 534.96875,
+            "width": 259.328125,
+            "height": 38,
+            "right": 799.828125,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 807.828125,
+            "y": 534.96875,
+            "width": 259.34375,
+            "height": 38,
+            "right": 1067.171875,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 1075.171875,
+            "y": 534.96875,
+            "width": 259.328125,
+            "height": 38,
+            "right": 1334.5,
+            "bottom": 572.96875
+          },
+          "clientWidth": 257,
+          "scrollWidth": 257,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        },
+        {
+          "text": "停止",
+          "x": 1336,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1374,
+          "bottom": 46
+        },
+        {
+          "text": "会话菜单",
+          "x": 1380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1418,
+          "bottom": 46
+        },
+        {
+          "text": "接受",
+          "x": 540.5,
+          "y": 534.96875,
+          "width": 259.328125,
+          "height": 38,
+          "right": 799.828125,
+          "bottom": 572.96875
+        },
+        {
+          "text": "本会话允许",
+          "x": 807.828125,
+          "y": 534.96875,
+          "width": 259.34375,
+          "height": 38,
+          "right": 1067.171875,
+          "bottom": 572.96875
+        },
+        {
+          "text": "拒绝",
+          "x": 1075.171875,
+          "y": 534.96875,
+          "width": 259.328125,
+          "height": 38,
+          "right": 1334.5,
+          "bottom": 572.96875
+        },
+        {
+          "text": "Upload files",
+          "x": 507.5,
+          "y": 736,
+          "width": 1,
+          "height": 1,
+          "right": 508.5,
+          "bottom": 737
+        },
+        {
+          "text": "刷新",
+          "x": 1271.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 1309.5,
+          "bottom": 874
+        },
+        {
+          "text": "发送",
+          "x": 1315.5,
+          "y": 836,
+          "width": 42,
+          "height": 38,
+          "right": 1357.5,
+          "bottom": 874
+        }
+      ]
+    },
+    {
+      "name": "desktop-file",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "Browser Session Guide"
+      ],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nSession file viewer fixture\nyanshan_quant\n本轮已结束\n查看更早消息\n\nEarlier file viewer question 6\n\nEarlier file viewer answer 6\n\nThis image was uploaded in an earlier turn.\n\n图片\nhistory-image.png\n46 KB · image/png\n›\n\nGenerated Browser session guide, sandboxed HTML preview, and download the deduplicated XLSX file in this project.\n\n就绪\n刷新\n发送\nbrowser-session-guide.md\nBrowser Session Guide\n\nThis Markdown file was resolved from the current project.\n\nSession scoped\nMobile ready",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        },
+        {
+          "text": "会话菜单",
+          "x": 1380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1418,
+          "bottom": 46
+        },
+        {
+          "text": "查看更早消息",
+          "x": 889.5,
+          "y": 84,
+          "width": 96,
+          "height": 32,
+          "right": 985.5,
+          "bottom": 116
+        },
+        {
+          "text": "Upload files",
+          "x": 507.5,
+          "y": 736,
+          "width": 1,
+          "height": 1,
+          "right": 508.5,
+          "bottom": 737
+        },
+        {
+          "text": "添加文件",
+          "x": 517.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 555.5,
+          "bottom": 874
+        },
+        {
+          "text": "刷新",
+          "x": 1271.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 1309.5,
+          "bottom": 874
+        },
+        {
+          "text": "发送",
+          "x": 1315.5,
+          "y": 836,
+          "width": 42,
+          "height": 38,
+          "right": 1357.5,
+          "bottom": 874
+        }
+      ]
+    },
+    {
+      "name": "desktop-app-settings-top",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "设置",
+        "网站标题",
+        "外观",
+        "此设备的新会话",
+        "Webhook",
+        "高级",
+        "账户"
+      ],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nSession file viewer fixture\nyanshan_quant\n本轮已结束\n查看更早消息\n\nEarlier file viewer question 6\n\nEarlier file viewer answer 6\n\nThis image was uploaded in an earlier turn.\n\n图片\nhistory-image.png\n46 KB · image/png\n›\n\nGenerated Browser session guide, sandboxed HTML preview, and download the deduplicated XLSX file in this project.\n\n就绪\n刷新\n发送\n设置\n关闭\n网站标题\n浏览器标题\n外观\n语言\nEnglish\n中文\n主题\n复古黄\n黑金\n纯粹黑\n清新白\n终端青\n会话界面\n当前\n控制台\n消息字号\n小\n中\n大\n此设备的新会话\n模型\n跟随 Codex 配置\nGPT-5.6-Sol\n推理\n跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra\n模式\n默认\n计划\n权限\n只读\n修改前询问\n完全访问\nWebhook\n启用 Webhook\nWebhook 已停用。\n高级\n运行时\n重载\n账户\n已登录设备\n退出登录",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "app-settings-page desktop-settings-body",
+          "id": "",
+          "height": 801,
+          "contentHeight": 1277
+        }
+      ],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        },
+        {
+          "text": "会话菜单",
+          "x": 1380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1418,
+          "bottom": 46
+        },
+        {
+          "text": "查看更早消息",
+          "x": 889.5,
+          "y": 84,
+          "width": 96,
+          "height": 32,
+          "right": 985.5,
+          "bottom": 116
+        },
+        {
+          "text": "Upload files",
+          "x": 507.5,
+          "y": 736,
+          "width": 1,
+          "height": 1,
+          "right": 508.5,
+          "bottom": 737
+        },
+        {
+          "text": "添加文件",
+          "x": 517.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 555.5,
+          "bottom": 874
+        },
+        {
+          "text": "刷新",
+          "x": 1271.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 1309.5,
+          "bottom": 874
+        },
+        {
+          "text": "发送",
+          "x": 1315.5,
+          "y": 836,
+          "width": 42,
+          "height": 38,
+          "right": 1357.5,
+          "bottom": 874
+        },
+        {
+          "text": "关闭",
+          "x": 850,
+          "y": 31,
+          "width": 50,
+          "height": 36,
+          "right": 900,
+          "bottom": 67
+        },
+        {
+          "text": "site-title-input",
+          "x": 470,
+          "y": 146,
+          "width": 426,
+          "height": 36,
+          "right": 896,
+          "bottom": 182
+        },
+        {
+          "text": "English",
+          "x": 475,
+          "y": 269,
+          "width": 206,
+          "height": 36,
+          "right": 681,
+          "bottom": 305
+        },
+        {
+          "text": "中文",
+          "x": 685,
+          "y": 269,
+          "width": 206,
+          "height": 36,
+          "right": 891,
+          "bottom": 305
+        },
+        {
+          "text": "当前",
+          "x": 475,
+          "y": 527,
+          "width": 206,
+          "height": 36,
+          "right": 681,
+          "bottom": 563
+        },
+        {
+          "text": "控制台",
+          "x": 685,
+          "y": 527,
+          "width": 206,
+          "height": 36,
+          "right": 891,
+          "bottom": 563
+        },
+        {
+          "text": "小",
+          "x": 475,
+          "y": 619,
+          "width": 136,
+          "height": 36,
+          "right": 611,
+          "bottom": 655
+        },
+        {
+          "text": "中",
+          "x": 615,
+          "y": 619,
+          "width": 136,
+          "height": 36,
+          "right": 751,
+          "bottom": 655
+        },
+        {
+          "text": "大",
+          "x": 755,
+          "y": 619,
+          "width": 136,
+          "height": 36,
+          "right": 891,
+          "bottom": 655
+        },
+        {
+          "text": "跟随 Codex 配置\nGPT-5.6-Sol",
+          "x": 470,
+          "y": 741,
+          "width": 208,
+          "height": 36,
+          "right": 678,
+          "bottom": 777
+        },
+        {
+          "text": "跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra",
+          "x": 688,
+          "y": 741,
+          "width": 208,
+          "height": 36,
+          "right": 896,
+          "bottom": 777
+        },
+        {
+          "text": "默认",
+          "x": 475,
+          "y": 812,
+          "width": 206,
+          "height": 36,
+          "right": 681,
+          "bottom": 848
+        },
+        {
+          "text": "计划",
+          "x": 685,
+          "y": 812,
+          "width": 206,
+          "height": 36,
+          "right": 891,
+          "bottom": 848
+        },
+        {
+          "text": "只读",
+          "x": 475,
+          "y": 888,
+          "width": 136,
+          "height": 36,
+          "right": 611,
+          "bottom": 924
+        },
+        {
+          "text": "修改前询问",
+          "x": 615,
+          "y": 888,
+          "width": 136,
+          "height": 36,
+          "right": 751,
+          "bottom": 924
+        },
+        {
+          "text": "完全访问",
+          "x": 755,
+          "y": 888,
+          "width": 136,
+          "height": 36,
+          "right": 891,
+          "bottom": 924
+        },
+        {
+          "text": "重载",
+          "x": 832,
+          "y": 1147.84375,
+          "width": 64,
+          "height": 36,
+          "right": 896,
+          "bottom": 1183.84375
+        },
+        {
+          "text": "已登录设备",
+          "x": 470,
+          "y": 1255.84375,
+          "width": 426,
+          "height": 25,
+          "right": 896,
+          "bottom": 1280.84375
+        },
+        {
+          "text": "退出登录",
+          "x": 470,
+          "y": 1292.84375,
+          "width": 426,
+          "height": 36,
+          "right": 896,
+          "bottom": 1328.84375
+        }
+      ]
+    },
+    {
+      "name": "desktop-app-settings-bottom",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "设置",
+        "网站标题",
+        "外观",
+        "此设备的新会话",
+        "Webhook",
+        "高级",
+        "账户"
+      ],
+      "text": "C\n所\nY\n收藏\n最近\nQuality gate fixture\nVerify the mobile workspace\nyanshan_quant\n·\nJul 15, 04:01 PM\n★\nSession file viewer fixture\nThis image was uploaded in an earlier turn.\nyanshan_quant\n·\nJul 15, 03:31 PM\n☆\nIdle quality gate fixture\nArchive an idle session\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\nHistory scroll fixture\nLatest browser question\nyanshan_quant\n·\nJul 15, 03:01 PM\n☆\n加载更早的会话\nSession file viewer fixture\nyanshan_quant\n本轮已结束\n查看更早消息\n\nEarlier file viewer question 6\n\nEarlier file viewer answer 6\n\nThis image was uploaded in an earlier turn.\n\n图片\nhistory-image.png\n46 KB · image/png\n›\n\nGenerated Browser session guide, sandboxed HTML preview, and download the deduplicated XLSX file in this project.\n\n就绪\n刷新\n发送\n设置\n关闭\n网站标题\n浏览器标题\n外观\n语言\nEnglish\n中文\n主题\n复古黄\n黑金\n纯粹黑\n清新白\n终端青\n会话界面\n当前\n控制台\n消息字号\n小\n中\n大\n此设备的新会话\n模型\n跟随 Codex 配置\nGPT-5.6-Sol\n推理\n跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra\n模式\n默认\n计划\n权限\n只读\n修改前询问\n完全访问\nWebhook\n启用 Webhook\nWebhook 已停用。\n高级\n运行时\n重载\n账户\n已登录设备\nChrome / Audit fixture · 本设备\nSep 25, 08:00 AM\nSafari / iPhone fixture\nSep 24, 05:00 PM\n退出登录\n退出其他设备\n退出登录",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "app-settings-page desktop-settings-body",
+          "id": "",
+          "height": 801,
+          "contentHeight": 1429
+        }
+      ],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "open-app-settings-button",
+          "x": 8,
+          "y": 806,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 844
+        },
+        {
+          "text": "展开侧边栏",
+          "x": 8,
+          "y": 852,
+          "width": 55,
+          "height": 38,
+          "right": 63,
+          "bottom": 890
+        },
+        {
+          "text": "收藏",
+          "x": 91,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 205,
+          "bottom": 45
+        },
+        {
+          "text": "最近",
+          "x": 209,
+          "y": 9,
+          "width": 114,
+          "height": 36,
+          "right": 323,
+          "bottom": 45
+        },
+        {
+          "text": "已归档会话",
+          "x": 327,
+          "y": 9,
+          "width": 40,
+          "height": 36,
+          "right": 367,
+          "bottom": 45
+        },
+        {
+          "text": "New session",
+          "x": 380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 418,
+          "bottom": 46
+        },
+        {
+          "text": "★",
+          "x": 335,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 176.296875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 142.296875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 176.296875
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 305.59375
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 271.59375,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 305.59375
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 434.890625
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 400.890625,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 434.890625
+        },
+        {
+          "text": "☆",
+          "x": 335,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 369,
+          "bottom": 564.1875
+        },
+        {
+          "text": "归档",
+          "x": 375,
+          "y": 530.1875,
+          "width": 34,
+          "height": 34,
+          "right": 409,
+          "bottom": 564.1875
+        },
+        {
+          "text": "会话菜单",
+          "x": 1380,
+          "y": 8,
+          "width": 38,
+          "height": 38,
+          "right": 1418,
+          "bottom": 46
+        },
+        {
+          "text": "查看更早消息",
+          "x": 889.5,
+          "y": 84,
+          "width": 96,
+          "height": 32,
+          "right": 985.5,
+          "bottom": 116
+        },
+        {
+          "text": "Upload files",
+          "x": 507.5,
+          "y": 736,
+          "width": 1,
+          "height": 1,
+          "right": 508.5,
+          "bottom": 737
+        },
+        {
+          "text": "添加文件",
+          "x": 517.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 555.5,
+          "bottom": 874
+        },
+        {
+          "text": "刷新",
+          "x": 1271.5,
+          "y": 836,
+          "width": 38,
+          "height": 38,
+          "right": 1309.5,
+          "bottom": 874
+        },
+        {
+          "text": "发送",
+          "x": 1315.5,
+          "y": 836,
+          "width": 42,
+          "height": 38,
+          "right": 1357.5,
+          "bottom": 874
+        },
+        {
+          "text": "关闭",
+          "x": 850,
+          "y": 31,
+          "width": 50,
+          "height": 36,
+          "right": 900,
+          "bottom": 67
+        },
+        {
+          "text": "site-title-input",
+          "x": 470,
+          "y": -482,
+          "width": 426,
+          "height": 36,
+          "right": 896,
+          "bottom": -446
+        },
+        {
+          "text": "English",
+          "x": 475,
+          "y": -359,
+          "width": 206,
+          "height": 36,
+          "right": 681,
+          "bottom": -323
+        },
+        {
+          "text": "中文",
+          "x": 685,
+          "y": -359,
+          "width": 206,
+          "height": 36,
+          "right": 891,
+          "bottom": -323
+        },
+        {
+          "text": "当前",
+          "x": 475,
+          "y": -101,
+          "width": 206,
+          "height": 36,
+          "right": 681,
+          "bottom": -65
+        },
+        {
+          "text": "控制台",
+          "x": 685,
+          "y": -101,
+          "width": 206,
+          "height": 36,
+          "right": 891,
+          "bottom": -65
+        },
+        {
+          "text": "小",
+          "x": 475,
+          "y": -9,
+          "width": 136,
+          "height": 36,
+          "right": 611,
+          "bottom": 27
+        },
+        {
+          "text": "中",
+          "x": 615,
+          "y": -9,
+          "width": 136,
+          "height": 36,
+          "right": 751,
+          "bottom": 27
+        },
+        {
+          "text": "大",
+          "x": 755,
+          "y": -9,
+          "width": 136,
+          "height": 36,
+          "right": 891,
+          "bottom": 27
+        },
+        {
+          "text": "跟随 Codex 配置\nGPT-5.6-Sol",
+          "x": 470,
+          "y": 113,
+          "width": 208,
+          "height": 36,
+          "right": 678,
+          "bottom": 149
+        },
+        {
+          "text": "跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra",
+          "x": 688,
+          "y": 113,
+          "width": 208,
+          "height": 36,
+          "right": 896,
+          "bottom": 149
+        },
+        {
+          "text": "默认",
+          "x": 475,
+          "y": 184,
+          "width": 206,
+          "height": 36,
+          "right": 681,
+          "bottom": 220
+        },
+        {
+          "text": "计划",
+          "x": 685,
+          "y": 184,
+          "width": 206,
+          "height": 36,
+          "right": 891,
+          "bottom": 220
+        },
+        {
+          "text": "只读",
+          "x": 475,
+          "y": 260,
+          "width": 136,
+          "height": 36,
+          "right": 611,
+          "bottom": 296
+        },
+        {
+          "text": "修改前询问",
+          "x": 615,
+          "y": 260,
+          "width": 136,
+          "height": 36,
+          "right": 751,
+          "bottom": 296
+        },
+        {
+          "text": "完全访问",
+          "x": 755,
+          "y": 260,
+          "width": 136,
+          "height": 36,
+          "right": 891,
+          "bottom": 296
+        },
+        {
+          "text": "重载",
+          "x": 832,
+          "y": 519.84375,
+          "width": 64,
+          "height": 36,
+          "right": 896,
+          "bottom": 555.84375
+        },
+        {
+          "text": "已登录设备",
+          "x": 470,
+          "y": 627.84375,
+          "width": 426,
+          "height": 25,
+          "right": 896,
+          "bottom": 652.84375
+        },
+        {
+          "text": "退出登录",
+          "x": 818,
+          "y": 725.84375,
+          "width": 78,
+          "height": 33,
+          "right": 896,
+          "bottom": 758.84375
+        },
+        {
+          "text": "退出其他设备",
+          "x": 470,
+          "y": 779.84375,
+          "width": 426,
+          "height": 25,
+          "right": 896,
+          "bottom": 804.84375
+        },
+        {
+          "text": "退出登录",
+          "x": 470,
+          "y": 816.84375,
+          "width": 426,
+          "height": 36,
+          "right": 896,
+          "bottom": 852.84375
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-sessions",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "会话审计"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n—\n用户管理\n3\n系统\n会话审计\n2 个会话\n刷新\n用户\n所有用户\nadmin\nwriter\ndisabled-user\n项目\n所有项目\nAlpha Console\nBeta Automation\n会话\n所有会话\n活动会话\n已归档会话\nDeployment checks and release report\n观察模式\nReview the deployment checks and update the release report.\nwriter · Alpha Console\nJul 31, 06:20 PM\nScheduled task failure investigation\n只读\nTrace the failed scheduled task without changing project files.\nadmin · Beta Automation\nJul 30, 03:15 PM\n会话详情\n只读\n未选择会话",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "刷新",
+          "x": 518,
+          "y": 75,
+          "width": 50,
+          "height": 36,
+          "right": 568,
+          "bottom": 111
+        },
+        {
+          "text": "所有用户\nadmin\nwriter\ndisabled-user",
+          "x": 223,
+          "y": 165,
+          "width": 161,
+          "height": 43,
+          "right": 384,
+          "bottom": 208
+        },
+        {
+          "text": "所有项目\nAlpha Console\nBeta Automation",
+          "x": 394,
+          "y": 165,
+          "width": 161,
+          "height": 43,
+          "right": 555,
+          "bottom": 208
+        },
+        {
+          "text": "所有会话\n活动会话\n已归档会话",
+          "x": 223,
+          "y": 245,
+          "width": 332,
+          "height": 43,
+          "right": 555,
+          "bottom": 288
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-projects",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "项目管理",
+        "已配置项目"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n—\n用户管理\n3\n系统\n项目管理\n2 个项目\n添加项目\n已配置项目\n显示名称\tCWD\t状态\t活动会话上限\t工作详情\t操作\nAlpha Console\t/Users/test/workspaces/alpha-console\t活动中\t24\t普通成员\t编辑\nBeta Automation\t/Users/test/workspaces/beta-automation\t已停用\t8\t仅管理员\t编辑",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "添加项目",
+          "x": 1350,
+          "y": 75,
+          "width": 74,
+          "height": 36,
+          "right": 1424,
+          "bottom": 111
+        },
+        {
+          "text": "编辑",
+          "x": 1345,
+          "y": 212,
+          "width": 56,
+          "height": 36,
+          "right": 1401,
+          "bottom": 248
+        },
+        {
+          "text": "编辑",
+          "x": 1345,
+          "y": 265,
+          "width": 56,
+          "height": 36,
+          "right": 1401,
+          "bottom": 301
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-project-editor-before-scroll",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "项目管理",
+        "已配置项目",
+        "添加项目"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n—\n用户管理\n3\n系统\n项目管理\n2 个项目\n已配置项目\n显示名称\tCWD\t状态\t活动会话上限\t工作详情\t操作\nAlpha Console\t/Users/test/workspaces/alpha-console\t活动中\t24\t普通成员\t编辑\nBeta Automation\t/Users/test/workspaces/beta-automation\t已停用\t8\t仅管理员\t编辑\n添加项目\n显示名称\nCWD\n活动会话\n启用\n普通成员可查看工作详情\n保存项目\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "编辑",
+          "x": 971,
+          "y": 194,
+          "width": 56,
+          "height": 36,
+          "right": 1027,
+          "bottom": 230
+        },
+        {
+          "text": "编辑",
+          "x": 971,
+          "y": 247,
+          "width": 56,
+          "height": 36,
+          "right": 1027,
+          "bottom": 283
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 179,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 221
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 253,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 295
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 330,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 372
+        },
+        {
+          "text": "保存项目",
+          "x": 1079,
+          "y": 446,
+          "width": 74,
+          "height": 36,
+          "right": 1153,
+          "bottom": 482
+        },
+        {
+          "text": "取消",
+          "x": 1161,
+          "y": 446,
+          "width": 50,
+          "height": 36,
+          "right": 1211,
+          "bottom": 482
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-project-editor",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "项目管理",
+        "已配置项目",
+        "添加项目"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n—\n用户管理\n3\n系统\n项目管理\n2 个项目\n已配置项目\n显示名称\tCWD\t状态\t活动会话上限\t工作详情\t操作\nAlpha Console\t/Users/test/workspaces/alpha-console\t活动中\t24\t普通成员\t编辑\nBeta Automation\t/Users/test/workspaces/beta-automation\t已停用\t8\t仅管理员\t编辑\n添加项目\n显示名称\nCWD\n活动会话\n启用\n普通成员可查看工作详情\n保存项目\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "编辑",
+          "x": 971,
+          "y": 194,
+          "width": 56,
+          "height": 36,
+          "right": 1027,
+          "bottom": 230
+        },
+        {
+          "text": "编辑",
+          "x": 971,
+          "y": 247,
+          "width": 56,
+          "height": 36,
+          "right": 1027,
+          "bottom": 283
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 179,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 221
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 253,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 295
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 330,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 372
+        },
+        {
+          "text": "保存项目",
+          "x": 1079,
+          "y": 446,
+          "width": 74,
+          "height": 36,
+          "right": 1153,
+          "bottom": 482
+        },
+        {
+          "text": "取消",
+          "x": 1161,
+          "y": 446,
+          "width": 50,
+          "height": 36,
+          "right": 1211,
+          "bottom": 482
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-roles",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "角色管理",
+        "已配置角色"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n2\n用户管理\n3\n系统\n角色管理\n2 个角色\n添加角色\n已配置角色\nAdmin\n管理员\nrole_admin\n编辑\nWriter\nrole_writer\nAlpha Console\n编辑",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "添加角色",
+          "x": 1350,
+          "y": 75,
+          "width": 74,
+          "height": 36,
+          "right": 1424,
+          "bottom": 111
+        },
+        {
+          "text": "编辑",
+          "x": 1346,
+          "y": 185.09375,
+          "width": 50,
+          "height": 36,
+          "right": 1396,
+          "bottom": 221.09375
+        },
+        {
+          "text": "编辑",
+          "x": 1346,
+          "y": 266.6875,
+          "width": 50,
+          "height": 36,
+          "right": 1396,
+          "bottom": 302.6875
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-role-editor-before-scroll",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "角色管理",
+        "已配置角色",
+        "添加角色"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n2\n用户管理\n3\n系统\n角色管理\n2 个角色\n已配置角色\nAdmin\n管理员\nrole_admin\n编辑\nWriter\nrole_writer\nAlpha Console\n编辑\n添加角色\n角色 ID\n名称\n项目\nAlpha Console\nBeta Automation\n保存角色\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "编辑",
+          "x": 972,
+          "y": 167.09375,
+          "width": 50,
+          "height": 36,
+          "right": 1022,
+          "bottom": 203.09375
+        },
+        {
+          "text": "编辑",
+          "x": 972,
+          "y": 248.6875,
+          "width": 50,
+          "height": 36,
+          "right": 1022,
+          "bottom": 284.6875
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 179,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 221
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 256,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 298
+        },
+        {
+          "text": "保存角色",
+          "x": 1079,
+          "y": 379,
+          "width": 74,
+          "height": 36,
+          "right": 1153,
+          "bottom": 415
+        },
+        {
+          "text": "取消",
+          "x": 1161,
+          "y": 379,
+          "width": 50,
+          "height": 36,
+          "right": 1211,
+          "bottom": 415
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-role-editor",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "角色管理",
+        "已配置角色",
+        "添加角色"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n2\n用户管理\n3\n系统\n角色管理\n2 个角色\n已配置角色\nAdmin\n管理员\nrole_admin\n编辑\nWriter\nrole_writer\nAlpha Console\n编辑\n添加角色\n角色 ID\n名称\n项目\nAlpha Console\nBeta Automation\n保存角色\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "编辑",
+          "x": 972,
+          "y": 167.09375,
+          "width": 50,
+          "height": 36,
+          "right": 1022,
+          "bottom": 203.09375
+        },
+        {
+          "text": "编辑",
+          "x": 972,
+          "y": 248.6875,
+          "width": 50,
+          "height": 36,
+          "right": 1022,
+          "bottom": 284.6875
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 179,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 221
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 256,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 298
+        },
+        {
+          "text": "保存角色",
+          "x": 1079,
+          "y": 379,
+          "width": 74,
+          "height": 36,
+          "right": 1153,
+          "bottom": 415
+        },
+        {
+          "text": "取消",
+          "x": 1161,
+          "y": 379,
+          "width": 50,
+          "height": 36,
+          "right": 1211,
+          "bottom": 415
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-users",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "用户管理",
+        "团队成员"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n2\n用户管理\n3\n系统\n用户管理\n3 个用户\n添加用户\n团队成员\nadmin\n活动中\n当前账号\nuser_admin · admin@example.com · role_admin\n编辑\n更多\nwriter\n活动中\nuser_writer · writer@example.com · role_writer\n编辑\n更多\ndisabled-user\n已停用\ndisabled · disabled@example.com\n编辑\n更多",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "添加用户",
+          "x": 1350,
+          "y": 75,
+          "width": 74,
+          "height": 36,
+          "right": 1424,
+          "bottom": 111
+        },
+        {
+          "text": "编辑",
+          "x": 1280.234375,
+          "y": 185.09375,
+          "width": 50,
+          "height": 36,
+          "right": 1330.234375,
+          "bottom": 221.09375
+        },
+        {
+          "text": "编辑",
+          "x": 1280.234375,
+          "y": 261.28125,
+          "width": 50,
+          "height": 36,
+          "right": 1330.234375,
+          "bottom": 297.28125
+        },
+        {
+          "text": "编辑",
+          "x": 1280.234375,
+          "y": 337.46875,
+          "width": 50,
+          "height": 36,
+          "right": 1330.234375,
+          "bottom": 373.46875
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-user-editor-before-scroll",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "用户管理",
+        "团队成员",
+        "添加用户"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n2\n用户管理\n3\n系统\n用户管理\n3 个用户\n团队成员\nadmin\n活动中\n当前账号\nuser_admin · admin@example.com · role_admin\n编辑\n更多\nwriter\n活动中\nuser_writer · writer@example.com · role_writer\n编辑\n更多\ndisabled-user\n已停用\ndisabled · disabled@example.com\n编辑\n更多\n添加用户\n用户名\nEmail\n密码\n启用\n角色\n无角色\nAdmin\nWriter\n保存用户\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "编辑",
+          "x": 906.234375,
+          "y": 167.09375,
+          "width": 50,
+          "height": 36,
+          "right": 956.234375,
+          "bottom": 203.09375
+        },
+        {
+          "text": "编辑",
+          "x": 906.234375,
+          "y": 243.28125,
+          "width": 50,
+          "height": 36,
+          "right": 956.234375,
+          "bottom": 279.28125
+        },
+        {
+          "text": "编辑",
+          "x": 906.234375,
+          "y": 319.46875,
+          "width": 50,
+          "height": 36,
+          "right": 956.234375,
+          "bottom": 355.46875
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 179,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 221
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 253,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 295
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 330,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 372
+        },
+        {
+          "text": "无角色\nAdmin\nWriter",
+          "x": 1079,
+          "y": 442,
+          "width": 330,
+          "height": 43,
+          "right": 1409,
+          "bottom": 485
+        },
+        {
+          "text": "保存用户",
+          "x": 1079,
+          "y": 497,
+          "width": 74,
+          "height": 36,
+          "right": 1153,
+          "bottom": 533
+        },
+        {
+          "text": "取消",
+          "x": 1161,
+          "y": 497,
+          "width": 50,
+          "height": 36,
+          "right": 1211,
+          "bottom": 533
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-user-editor",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "用户管理",
+        "团队成员",
+        "添加用户"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n2\n用户管理\n3\n系统\n用户管理\n3 个用户\n团队成员\nadmin\n活动中\n当前账号\nuser_admin · admin@example.com · role_admin\n编辑\n更多\nwriter\n活动中\nuser_writer · writer@example.com · role_writer\n编辑\n更多\ndisabled-user\n已停用\ndisabled · disabled@example.com\n编辑\n更多\n添加用户\n用户名\nEmail\n密码\n启用\n角色\n无角色\nAdmin\nWriter\n保存用户\n取消",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "编辑",
+          "x": 906.234375,
+          "y": 167.09375,
+          "width": 50,
+          "height": 36,
+          "right": 956.234375,
+          "bottom": 203.09375
+        },
+        {
+          "text": "编辑",
+          "x": 906.234375,
+          "y": 243.28125,
+          "width": 50,
+          "height": 36,
+          "right": 956.234375,
+          "bottom": 279.28125
+        },
+        {
+          "text": "编辑",
+          "x": 906.234375,
+          "y": 319.46875,
+          "width": 50,
+          "height": 36,
+          "right": 956.234375,
+          "bottom": 355.46875
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 179,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 221
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 253,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 295
+        },
+        {
+          "text": "",
+          "x": 1079,
+          "y": 330,
+          "width": 330,
+          "height": 42,
+          "right": 1409,
+          "bottom": 372
+        },
+        {
+          "text": "无角色\nAdmin\nWriter",
+          "x": 1079,
+          "y": 442,
+          "width": 330,
+          "height": 43,
+          "right": 1409,
+          "bottom": 485
+        },
+        {
+          "text": "保存用户",
+          "x": 1079,
+          "y": 497,
+          "width": 74,
+          "height": 36,
+          "right": 1153,
+          "bottom": 533
+        },
+        {
+          "text": "取消",
+          "x": 1161,
+          "y": 497,
+          "width": 50,
+          "height": 36,
+          "right": 1211,
+          "bottom": 533
+        }
+      ]
+    },
+    {
+      "name": "desktop-admin-system",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pageWidth": 1440,
+      "headings": [
+        "系统",
+        "服务指标",
+        "已登录设备",
+        "系统"
+      ],
+      "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n2\n用户管理\n3\n系统\n系统\n刷新\n构建版本\n__CODEX_WEB_BUILD_ID__\n运行时长（秒）\n86435\nAPI P95（毫秒）\n248\n当前事件连接\n4\n事件重放 / 重置\n16 / 2\n托管存储上限\n1024 MiB\n项目上传上限\n100 MiB\n存储清理失败次数\n0\n服务指标\n\nP95 统计最近完成的请求；事件连接统计握手耗时。\n\n请求类型\t请求数\t服务错误（5xx）\t请求错误（4xx）\tP95（毫秒）\n会话\t120\t2\t1\t248\n事件连接\t36\t0\t0\t60\n已登录设备\nChrome / Audit fixture · 本设备\nSep 25, 08:00 AM\nSafari / iPhone fixture\nSep 24, 05:00 PM\n系统\n多用户模式\n可信团队模式",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [
+        {
+          "text": "返回",
+          "x": 18,
+          "y": 12,
+          "width": 38,
+          "height": 38,
+          "right": 56,
+          "bottom": 50
+        },
+        {
+          "text": "刷新",
+          "x": 1374,
+          "y": 75,
+          "width": 50,
+          "height": 36,
+          "right": 1424,
+          "bottom": 111
+        }
+      ]
+    },
+    {
+      "name": "compact-new-english",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [
+        "开启新会话"
+      ],
+      "text": "New Session\n开启新会话\nProject path\nyanshan_quant\n/Users/test/yanshan_quant\nBack\nStart",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "compact-approval-fresh-light-current",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 512,
+          "contentHeight": 911
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 27,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 110.328125,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 118.328125,
+            "y": 290.734375,
+            "width": 83.34375,
+            "height": 44,
+            "right": 201.671875,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 209.671875,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 293,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 508,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 509
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-fresh-light-console",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\ngpt-5.6-sol · ultra\n·\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 513,
+          "contentHeight": 862
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 21,
+            "y": 291.328125,
+            "width": 87.65625,
+            "height": 44,
+            "right": 108.65625,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 116.65625,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 204.328125,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 212.328125,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 300,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": -1,
+          "y": 471,
+          "width": 1,
+          "height": 1,
+          "right": 0,
+          "bottom": 472
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-retro-current",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 512,
+          "contentHeight": 911
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 27,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 110.328125,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 118.328125,
+            "y": 290.734375,
+            "width": 83.34375,
+            "height": 44,
+            "right": 201.671875,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 209.671875,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 293,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 508,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 509
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-retro-console",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\ngpt-5.6-sol · ultra\n·\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 513,
+          "contentHeight": 862
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 21,
+            "y": 291.328125,
+            "width": 87.65625,
+            "height": 44,
+            "right": 108.65625,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 116.65625,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 204.328125,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 212.328125,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 300,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": -1,
+          "y": 471,
+          "width": 1,
+          "height": 1,
+          "right": 0,
+          "bottom": 472
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-terminal-current",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 512,
+          "contentHeight": 911
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 27,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 110.328125,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 118.328125,
+            "y": 290.734375,
+            "width": 83.34375,
+            "height": 44,
+            "right": 201.671875,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 209.671875,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 293,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 508,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 509
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-terminal-console",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\ngpt-5.6-sol · ultra\n·\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 513,
+          "contentHeight": 862
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 21,
+            "y": 291.328125,
+            "width": 87.65625,
+            "height": 44,
+            "right": 108.65625,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 116.65625,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 204.328125,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 212.328125,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 300,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": -1,
+          "y": 471,
+          "width": 1,
+          "height": 1,
+          "right": 0,
+          "bottom": 472
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-dark-gold-current",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 512,
+          "contentHeight": 911
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 27,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 110.328125,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 118.328125,
+            "y": 290.734375,
+            "width": 83.34375,
+            "height": 44,
+            "right": 201.671875,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 209.671875,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 293,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 508,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 509
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-dark-gold-console",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\ngpt-5.6-sol · ultra\n·\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 513,
+          "contentHeight": 862
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 21,
+            "y": 291.328125,
+            "width": 87.65625,
+            "height": 44,
+            "right": 108.65625,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 116.65625,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 204.328125,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 212.328125,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 300,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": -1,
+          "y": 471,
+          "width": 1,
+          "height": 1,
+          "right": 0,
+          "bottom": 472
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-oled-black-current",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 0s · Last work activity 0s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 512,
+          "contentHeight": 911
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 27,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 110.328125,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 118.328125,
+            "y": 290.734375,
+            "width": 83.34375,
+            "height": 44,
+            "right": 201.671875,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 209.671875,
+            "y": 290.734375,
+            "width": 83.328125,
+            "height": 44,
+            "right": 293,
+            "bottom": 334.734375
+          },
+          "clientWidth": 81,
+          "scrollWidth": 81,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": 8,
+          "y": 508,
+          "width": 1,
+          "height": 1,
+          "right": 9,
+          "bottom": 509
+        }
+      ]
+    },
+    {
+      "name": "compact-approval-oled-black-console",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "pageWidth": 320,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\nConnected · Elapsed 1s · Last work activity 1s\nBeginning of conversation\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\nApproval requested\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\nCommand\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\nAccept\nAllow for this session\nDeny\ngpt-5.6-sol · ultra\n·\nWorking · Needs approval\n›\nSend",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 513,
+          "contentHeight": 862
+        }
+      ],
+      "approval": [
+        {
+          "text": "Accept",
+          "rect": {
+            "x": 21,
+            "y": 291.328125,
+            "width": 87.65625,
+            "height": 44,
+            "right": 108.65625,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Allow for this session",
+          "rect": {
+            "x": 116.65625,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 204.328125,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 137,
+          "font": "14px",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "rect": {
+            "x": 212.328125,
+            "y": 291.328125,
+            "width": 87.671875,
+            "height": 44,
+            "right": 300,
+            "bottom": 335.328125
+          },
+          "clientWidth": 86,
+          "scrollWidth": 86,
+          "font": "14px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": -1,
+          "y": 471,
+          "width": 1,
+          "height": 1,
+          "right": 0,
+          "bottom": 472
+        }
+      ]
+    },
+    {
+      "name": "approval-boundary-844",
+      "viewport": {
+        "width": 844,
+        "height": 390
+      },
+      "pageWidth": 844,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\n已连接 · 已运行 1s · 最近工作事件 1s\n已到会话开头\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\ngpt-5.6-sol · ultra\n·\n工作中 · 等待审批\n›\n/Users/test/yanshan_quant\n发送",
+      "scrollRegions": [
+        {
+          "tag": "MAIN",
+          "class": "timeline",
+          "id": "timeline",
+          "height": 334,
+          "contentHeight": 741
+        }
+      ],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 24,
+            "y": 113.359375,
+            "width": 260.328125,
+            "height": 44,
+            "right": 284.328125,
+            "bottom": 157.359375
+          },
+          "clientWidth": 258,
+          "scrollWidth": 258,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 292.328125,
+            "y": 113.359375,
+            "width": 260.34375,
+            "height": 44,
+            "right": 552.671875,
+            "bottom": 157.359375
+          },
+          "clientWidth": 258,
+          "scrollWidth": 258,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 560.671875,
+            "y": 113.359375,
+            "width": 260.328125,
+            "height": 44,
+            "right": 821,
+            "bottom": 157.359375
+          },
+          "clientWidth": 258,
+          "scrollWidth": 258,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "Upload files",
+          "x": -1,
+          "y": 293,
+          "width": 1,
+          "height": 1,
+          "right": 0,
+          "bottom": 294
+        }
+      ]
+    },
+    {
+      "name": "approval-boundary-980",
+      "viewport": {
+        "width": 980,
+        "height": 900
+      },
+      "pageWidth": 980,
+      "headings": [],
+      "text": "Quality gate fixture\nyanshan_quant\n已连接 · 已运行 1s · 最近工作事件 1s\n\nVerify the mobile workspace\n\nChecking the event stream and replay state.\n\nCommand output is complete; reviewing the file update.\n\n请求审批\nCOMMAND\nReason\n为检查手机与桌面页面，需要启动一个隔离的浏览器测试站点。\n命令\n/bin/bash -lc \"/home/ubuntu/workspace/.local/node-v24.16.0/bin/node packages/codex-web/test/browser/fixture-server.mjs --port=41759\"\nCwd\n/home/ubuntu/workspace/codex-mobile-web-app\nAvailable Decision Keys\naccept, acceptWithExecpolicyAmendment, cancel\nExec Policy Amendment\n/home/ubuntu/workspace/.local/node-v24.16.0/bin/node, packages/codex-web/test/browser/fixture-server.mjs\n接受\n本会话允许\n拒绝\ngpt-5.6-sol · ultra\n·\n工作中 · 等待审批\n›\n/Users/test/yanshan_quant\n发送",
+      "scrollRegions": [],
+      "approval": [
+        {
+          "text": "接受",
+          "rect": {
+            "x": 24,
+            "y": 468.96875,
+            "width": 305.65625,
+            "height": 44,
+            "right": 329.65625,
+            "bottom": 512.96875
+          },
+          "clientWidth": 304,
+          "scrollWidth": 304,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "本会话允许",
+          "rect": {
+            "x": 337.65625,
+            "y": 468.96875,
+            "width": 305.671875,
+            "height": 44,
+            "right": 643.328125,
+            "bottom": 512.96875
+          },
+          "clientWidth": 304,
+          "scrollWidth": 304,
+          "font": "16px",
+          "disabled": false
+        },
+        {
+          "text": "拒绝",
+          "rect": {
+            "x": 651.328125,
+            "y": 468.96875,
+            "width": 305.671875,
+            "height": 44,
+            "right": 957,
+            "bottom": 512.96875
+          },
+          "clientWidth": 304,
+          "scrollWidth": 304,
+          "font": "16px",
+          "disabled": false
+        }
+      ],
+      "smallTouchControls": [
+        {
+          "text": "会话",
+          "x": 18,
+          "y": 8,
+          "width": 44,
+          "height": 38,
+          "right": 62,
+          "bottom": 46
+        },
+        {
+          "text": "Upload files",
+          "x": -1,
+          "y": 803,
+          "width": 1,
+          "height": 1,
+          "right": 0,
+          "bottom": 804
+        },
+        {
+          "text": "发送",
+          "x": 934,
+          "y": 818,
+          "width": 42,
+          "height": 38,
+          "right": 976,
+          "bottom": 856
+        }
+      ]
+    },
+    {
+      "name": "boot-failure-app-js",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "Codex",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [],
+      "errors": [],
+      "failureInjection": "app.js"
+    },
+    {
+      "name": "boot-failure-admin-data-js",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "Codex",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [],
+      "errors": [
+        "Cannot destructure property 'adminSessionsPath' of 'globalThis.CodexWebAdminData' as it is undefined."
+      ],
+      "failureInjection": "admin-data.js"
+    },
+    {
+      "name": "boot-failure-storage",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "Codex",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": [],
+      "errors": [
+        "Audit: browser storage denied"
+      ],
+      "failureInjection": "storage"
+    },
+    {
+      "name": "mobile-share",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "请检查审批请求的界面。\n\n审批请求需要清楚说明执行内容、授权范围与可选操作。",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    },
+    {
+      "name": "mobile-share-expired",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pageWidth": 390,
+      "headings": [],
+      "text": "Share expired",
+      "scrollRegions": [],
+      "approval": [],
+      "smallTouchControls": []
+    }
+  ],
+  "probes": [
+    {
+      "name": "mobile-app-settings",
+      "error": "locator.scrollIntoViewIfNeeded: Element is not attached to the DOM\nCall log:\n\u001b[2m  - attempting scroll into view action\u001b[22m\n\u001b[2m    - waiting for element to be stable\u001b[22m\n\u001b[2m    - element is not stable\u001b[22m\n\u001b[2m  - retrying scroll into view action\u001b[22m\n\u001b[2m    - waiting for element to be stable\u001b[22m\n"
+    },
+    {
+      "name": "mobile-page-errors",
+      "errors": []
+    },
+    {
+      "name": "mobile-project-editor-focus",
+      "focused": {
+        "tag": "INPUT",
+        "id": "",
+        "name": "displayName"
+      }
+    },
+    {
+      "name": "mobile-role-editor-focus",
+      "focused": {
+        "tag": "INPUT",
+        "id": "",
+        "name": "id"
+      }
+    },
+    {
+      "name": "mobile-user-editor-focus",
+      "focused": {
+        "tag": "INPUT",
+        "id": "",
+        "name": "username"
+      }
+    },
+    {
+      "name": "mobile-admin-page-errors",
+      "errors": []
+    },
+    {
+      "name": "desktop-page-errors",
+      "errors": []
+    },
+    {
+      "name": "desktop-project-editor-focus",
+      "focused": {
+        "tag": "INPUT",
+        "id": "",
+        "name": "displayName"
+      }
+    },
+    {
+      "name": "desktop-role-editor-focus",
+      "focused": {
+        "tag": "INPUT",
+        "id": "",
+        "name": "id"
+      }
+    },
+    {
+      "name": "desktop-user-editor-focus",
+      "focused": {
+        "tag": "INPUT",
+        "id": "",
+        "name": "username"
+      }
+    },
+    {
+      "name": "desktop-admin-page-errors",
+      "errors": []
+    }
+  ]
+}

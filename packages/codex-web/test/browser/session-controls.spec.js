@@ -44,7 +44,7 @@ test('compact running header and circular latest control remain usable with long
     expect(arrow.y + arrow.height).toBeLessThanOrEqual(composer.y);
     if (info.project.name.startsWith('mobile')) expect((await stop.boundingBox()).height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    await page.screenshot({ path: `docs/audits/2026-09-19-second-remediation-evidence/session-controls-${info.project.name}-${width}.png` });
+    await page.screenshot({ path: `docs/audits/2026-09-25-session-polish-evidence/session-controls-${info.project.name}-${width}.png` });
   }
   await latest.focus(); await page.keyboard.press('Enter');
   await expect.poll(() => page.locator('#timeline').evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2);

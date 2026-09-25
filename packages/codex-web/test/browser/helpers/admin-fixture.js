@@ -57,6 +57,29 @@ export const sessions = [
   },
 ];
 
+export function adminTimelinePage(session, timeline, requestUrl) {
+  const url = new URL(requestUrl);
+  const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+  const anchor = url.searchParams.getAll('anchor').map(id => timeline.findIndex(item => item.id === id)).find(index => index >= 0);
+  let end = url.searchParams.has('before') ? Math.min(timeline.length, Number(url.searchParams.get('before'))) : timeline.length;
+  let start = Math.max(0, end - limit);
+  if (url.searchParams.has('after')) {
+    start = Math.min(timeline.length, Number(url.searchParams.get('after')));
+    end = Math.min(timeline.length, start + limit);
+  } else if (anchor !== undefined) {
+    start = Math.max(0, anchor - Math.floor(limit / 3));
+    end = Math.min(timeline.length, start + limit);
+    start = Math.max(0, end - limit);
+  }
+  return {
+    mode: 'observer', session: { ...session, mode: 'observer', readOnly: true, canViewWorkDetails: true },
+    items: timeline.slice(start, end), total: timeline.length,
+    hasMore: start > 0, nextBefore: start > 0 ? String(start) : null,
+    hasNewer: end < timeline.length, nextAfter: end < timeline.length ? String(end) : null,
+    ...(url.searchParams.has('anchor') ? { anchorFound: anchor !== undefined } : {}),
+  };
+}
+
 export async function installAdminFixture(page) {
   await page.addInitScript(() => {
     window.localStorage.setItem('codexWebToken', 'admin-browser-token');
@@ -100,6 +123,9 @@ export async function installAdminFixture(page) {
       },
     };
     let payload = payloadByPath[url.pathname];
+    if (url.pathname === '/api/admin/sessions/session_admin_fixture_1/timeline') {
+      payload = adminTimelinePage(sessions[0], payloadByPath['/api/admin/sessions/session_admin_fixture_1'].session.timeline, url);
+    }
     if (url.pathname === '/api/admin/sessions') {
       const mode = url.searchParams.get('state') || 'active';
       payload = { items: sessions.filter(s => mode === 'all' || (mode === 'archived') === Boolean(s.archived)), nextCursor: null, hasMore: false };

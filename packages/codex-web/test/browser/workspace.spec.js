@@ -270,7 +270,7 @@ test('failed session messages can be dismissed without leaving a stuck list badg
 
   await page.goto('/');
   const sessionButton = page.locator('button[data-session-id="session_browser_fixture"]');
-  await expect(sessionButton).toContainText('Send failed');
+  await expect(sessionButton.getByRole('img', { name: 'Send failed', exact: true })).toBeVisible();
   const statusResponse = page.waitForResponse((response) => (
     new URL(response.url()).pathname === '/api/sessions/session_browser_fixture/status'
   ));
@@ -322,7 +322,7 @@ test('failed session messages can be dismissed without leaving a stuck list badg
   if (testInfo.project.name !== 'desktop') {
     await page.getByRole('button', { name: 'Sessions' }).click();
   }
-  await expect(page.locator('button[data-session-id="session_browser_fixture"]')).not.toContainText('Send failed');
+  await expect(page.locator('button[data-session-id="session_browser_fixture"]').getByRole('img', { name: 'Send failed', exact: true })).toHaveCount(0);
 });
 
 test('workspace is usable without overflow and exposes work and status semantics', async ({ page }, testInfo) => {
@@ -366,7 +366,7 @@ test('workspace is usable without overflow and exposes work and status semantics
   const sessionButton = page.locator('button[data-session-id="session_browser_fixture"]');
   await expect(sessionButton).toBeVisible();
   await expect(sessionButton).toContainText('yanshan_quant');
-  await expect(sessionButton).toContainText('Active');
+  await expect(sessionButton.getByRole('img', { name: /^(Running|Needs approval)$/ })).toBeVisible();
   await expect(sessionButton.locator('.session-title')).toHaveCSS('font-weight', '500');
   await expect(sessionButton.locator('.session-project')).toHaveCSS('font-weight', '650');
   const projectFavoriteButton = page.locator('[data-project-favorite-id="project_browser_fixture"]');
@@ -525,7 +525,7 @@ test('workspace is usable without overflow and exposes work and status semantics
     expect(promptBox.height).toBeGreaterThanOrEqual(92);
   }
   if (testInfo.project.name === 'desktop') {
-    await expect(sessionButton).toContainText('Needs approval');
+    await expect(sessionButton.getByRole('img', { name: 'Needs approval', exact: true })).toBeVisible();
   }
   if (testInfo.project.name.startsWith('mobile-')) {
     for (const locator of [
@@ -962,7 +962,7 @@ test('lost new-session responses query the original receipt after reload without
   }), { timeout: 10000 }).toBe(0);
   if (testInfo.project.name !== 'desktop') await page.getByRole('button', { name: 'Sessions', exact: true }).click();
   await expect(page.locator('button[data-session-id="session_browser_recovered"]')).toHaveCount(1);
-  await expect(page.locator('button[data-session-id="session_browser_recovered"]')).not.toContainText('Send failed');
+  await expect(page.locator('button[data-session-id="session_browser_recovered"]').getByRole('img', { name: 'Send failed', exact: true })).toHaveCount(0);
   expect(submissionIds).toEqual([acceptedSubmissionId]);
   expect(receiptQueries.length).toBeGreaterThanOrEqual(2);
   expect(receiptQueries.every(path => path === `/api/session-submissions/${acceptedSubmissionId}`)).toBe(true);
@@ -1091,10 +1091,12 @@ test('sandboxed HTML preview blocks scripts, remote assets, and refresh navigati
   const previewRequests = [];
   const deliveredRequests = [];
   await page.route('**/html-probe*', (route) => { deliveredRequests.push(route.request().url()); return route.abort(); });
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Network.enable');
+  // Sandboxed srcdoc can run in another renderer target. Main-page CDP
+  // Network.loadingFailed misses those blocks; console includes frame CSP errors.
   const blocked = [];
-  cdp.on('Network.loadingFailed', (event) => { if (event.blockedReason) blocked.push(event.blockedReason); });
+  page.on('console', message => {
+    if (message.type() === 'error' && message.text().includes('Content Security Policy')) blocked.push(message.text());
+  });
   page.on('response', (response) => {
     const pathname = new URL(response.url()).pathname;
     if (pathname.startsWith('/html-probe') || pathname === '/html-refresh-target') {
@@ -1124,7 +1126,8 @@ test('sandboxed HTML preview blocks scripts, remote assets, and refresh navigati
   expect(previewRequests).toEqual([]);
   expect(deliveredRequests).toEqual([]);
   expect(new URL(page.url()).pathname).toBe('/');
-  expect(blocked.filter((reason) => reason === 'csp').length).toBeGreaterThanOrEqual(2);
+  expect(blocked.some(message => message.includes('/html-probe.css') && message.includes('style-src'))).toBe(true);
+  expect(blocked.some(message => message.includes('/html-probe.png') && message.includes('img-src'))).toBe(true);
   const previewFrame = page.frames().find((frame) => frame.parentFrame() === page.mainFrame());
   expect(previewFrame?.url() || '').not.toContain('/html-refresh-target');
   await page.keyboard.press('Escape');
@@ -1442,7 +1445,7 @@ test('console session layout keeps Codex controls usable in a compact transcript
   await expect(page.locator('.console-composer-status')).toBeVisible();
   await expect(page.locator('.console-status-model')).toContainText('gpt-5.6-sol');
   if (testInfo.project.name === 'mobile-portrait') {
-    await expect(page.getByRole('button', { name: 'Accept' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Allow once', exact: true })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
 
@@ -1502,7 +1505,7 @@ test('five themes keep canvas and chat surfaces aligned', async ({ page }, testI
     await expect(page.locator('.session-list').first()).toBeVisible();
 
     await page.locator('#open-new-session-button').click();
-    await expect(page.getByRole('heading', { name: '开启新会话' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Start a new session' })).toBeVisible();
     await expect(page.locator('#new-session-form')).toBeVisible();
     const newSessionSurfaces = await page.evaluate(() => {
       const root = getComputedStyle(document.documentElement);
@@ -1851,7 +1854,7 @@ test('repeated chat renders release detached DOM and listeners', async ({ page, 
 
   await page.goto('/');
   await page.locator('button[data-session-id="session_browser_fixture"]').click();
-  await expect(page.getByText('Approval requested', { exact: true })).toBeVisible();
+  await expect(page.locator('.approval-card .approval-heading h3')).toHaveText('Run a command');
   const settingsButton = page.locator('#settings-toggle');
   await expect(settingsButton).toBeVisible();
   const bounds = await settingsButton.boundingBox();

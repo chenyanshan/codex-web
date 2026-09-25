@@ -1,0 +1,131 @@
+{
+  "date": "2026-09-25",
+  "recordedAt": "2026-09-24T19:43:40.860383+00:00",
+  "sourceBuildId": "d4ce3d6ba8e28ce0b570",
+  "checks": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "command": "npm run lint",
+      "exitCode": 0
+    },
+    "unit": {
+      "command": "npm test",
+      "exitCode": 0,
+      "passed": 1099,
+      "failed": 0,
+      "skipped": 0,
+      "groups": {
+        "native": 75,
+        "web": 1019,
+        "upgradeTool": 5
+      }
+    },
+    "build": {
+      "command": "npm run build",
+      "exitCode": 0,
+      "assets": 39,
+      "bytes": 766070
+    },
+    "builtHttpAndBrowserSmoke": {
+      "command": "npm run test:built-public --workspace @codex-mobile-web-app/codex-web",
+      "exitCode": 0,
+      "scripts": 27,
+      "verifiedNewAssets": [
+        "boot-recovery.js",
+        "approval-ui.js",
+        "approval-ui.css",
+        "settings-ui.js",
+        "settings-ui.css",
+        "admin-ui.css"
+      ],
+      "emittedAppBytes": 259073,
+      "browserErrors": []
+    }
+  },
+  "browser": {
+    "initialFullRun": {
+      "combinations": 645,
+      "passed": 293,
+      "failed": 3,
+      "skipped": 349,
+      "failures": [
+        "mobile-portrait work-details: keyboard scrolling still active at baseline capture",
+        "mobile-portrait console layout: old Accept label",
+        "desktop repeated render memory: old Approval requested heading"
+      ]
+    },
+    "afterMobileHeader": {
+      "command": "playwright test session-reading session-output-recovery work-details workspace weak-network session-polish --workers=3",
+      "combinations": 340,
+      "passed": 137,
+      "failed": 0,
+      "skipped": 203,
+      "initialFailuresCoveredAndPassed": 3
+    },
+    "finalHeaderControlsAndConnection": {
+      "command": "playwright test mobile-session-header session-controls connection-status --workers=3",
+      "combinations": 15,
+      "passed": 8,
+      "failed": 0,
+      "skipped": 7,
+      "nestedMobileGeometryCombinations": 60
+    },
+    "scrollRaceDiagnosis": {
+      "originalRepetitions": 8,
+      "originalFailures": 3,
+      "synchronizedRepetitions": 18,
+      "synchronizedFailures": 0,
+      "synchronization": "Wait for actual scrollend, then instant position and exact pre-event/post-event assertions",
+      "viewports": [
+        320,
+        390,
+        844,
+        1440
+      ]
+    },
+    "unresolvedFailures": 0,
+    "countingNote": "Runs overlap; do not add totals as unique cases. Skips retain prior viewport applicability."
+  },
+  "testOnlyCorrections": [
+    "Approval label expectations follow the new UI; repeated-render memory assertions unchanged.",
+    "Horizontal reading baseline waits for browser keyboard scrolling to finish; precise position, focus and open-state assertions retained.",
+    "Chinese static goal status now expects its translation; dynamic project/title/goal/draft non-translation assertions retained.",
+    "Browser test uses explicit globalThis references; no lint suppression."
+  ],
+  "preservation": {
+    "baseline": "../../architecture/2026-09-25-existing-optimizations-baseline.zh-CN.md",
+    "mappedCapabilities": 21,
+    "budget": "startup-budget.json",
+    "rollback": "session-rollback-verification.json",
+    "historicalEvidence": "historical-evidence-restoration.json"
+  },
+  "limitations": [
+    "Chromium 149 viewport/touch emulation; no physical iPhone Safari or VoiceOver verification.",
+    "Network, keyboard available-height and approval execution coverage here uses fixtures; no new real online approval execution claim.",
+    "Browser storage denial cannot guarantee persistence.",
+    "Old cached approvals cannot prove whether historical summaries were truncated."
+  ],
+  "production": {
+    "state": "passed",
+    "activationDirectory": "/home/ubuntu/.codex-web/source-checkpoints/frontend-activation",
+    "readOnlyProtocolInspection": "passed",
+    "reloadRequiresServiceRestart": true,
+    "currentSessionRunsInsideProductionService": true,
+    "activationObserved": true,
+    "queuedAt": "2026-09-24T19:44:42.380Z",
+    "transientUnit": "codex-web-frontend-activate-20260925.service",
+    "independentServiceCgroupVerified": true,
+    "gatewayAndSourcePreflight": "passed",
+    "expectedBuildId": "d4ce3d6ba8e28ce0b570",
+    "restartRequestedAtObservation": true,
+    "statusFile": "/home/ubuntu/.codex-web/source-checkpoints/frontend-activation/status.json",
+    "finishedAt": "2026-09-24T19:45:59.854Z",
+    "recheckedAt": "2026-09-25T00:20:26.555894+00:00",
+    "serviceStatus": "active/running",
+    "localAndPublicHomeAndVersion": "200; expected build verified",
+    "automaticPostRestartChecks": "passed"
+  }
+}

@@ -232,12 +232,18 @@ const DEFAULT_STATIC_SOURCE_FILES = [
   'app.js',
   'styles.css',
   'theme-init.js',
+  'boot-recovery.js',
   'pwa-pull-refresh.js',
   'ui-copy.js',
   'ui-kit.js',
   'attachment-utils.js',
   'markdown-renderer.js',
   'admin-ui.js',
+  'admin-ui.css',
+  'approval-ui.js',
+  'approval-ui.css',
+  'settings-ui.js',
+  'settings-ui.css',
   'work-details-view.js',
   'session-pagination.js',
   'request-context.js',
@@ -549,7 +555,10 @@ function loadDefaultStaticFiles(): StaticFilesRecord {
   // Keep the allowed source manifest and public routes in sync as controllers
   // are extracted. App/service-worker retain their specialized build injection.
   for (const name of DEFAULT_STATIC_SOURCE_FILES) {
-    if (name.endsWith('.js') && !files[`/${name}`]) files[`/${name}`] = versionedAsset(readText(name), 'application/javascript; charset=utf-8');
+    if (files[`/${name}`]) continue;
+    const contentType = name.endsWith('.js') ? 'application/javascript; charset=utf-8'
+      : name.endsWith('.css') ? 'text/css; charset=utf-8' : null;
+    if (contentType) files[`/${name}`] = versionedAsset(readText(name), contentType);
   }
   for (const [route, entry] of Object.entries(files)) {
     const asset = typeof entry === 'function' ? entry() : entry;
@@ -3018,6 +3027,7 @@ async function advanceSessionSubmission({
     if (stored && stored.status !== 'submitted' && !isSubmissionAuthorizationError(normalizedError)) {
       const retryable = isRetryableSubmissionError(normalizedError);
       const outcomeUnknown = stored.status === 'outcome_unknown'
+        || normalizedError.code === 'app_server_response_uncertain'
         || (isUncertainSubmissionStartError(normalizedError) && Array.isArray(stored.turnBaseline));
       current = await store.update(stored.ownerUserId, stored.id, (value) => value.status === 'submitted' ? value : ({
         ...value,
@@ -3650,6 +3660,13 @@ function normalizeSubmissionExecutionError(error: unknown): HttpError {
   if (isHttpError(error)) {
     return error;
   }
+  if (error instanceof Error && 'code' in error && error.code === 'app_server_response_uncertain') {
+    return createHttpError(
+      503,
+      'app_server_response_uncertain',
+      'Codex may have received this request. Its result must be confirmed before retrying.',
+    );
+  }
   if (isSessionNotFoundError(error)) {
     return createHttpError(404, 'session_not_found', error instanceof Error ? error.message : 'Session was not found.');
   }
@@ -3678,6 +3695,7 @@ function normalizeSubmissionExecutionError(error: unknown): HttpError {
 }
 
 function isRetryableSubmissionError(error: HttpError): boolean {
+  if (error.code === 'app_server_response_uncertain') return false;
   return error.statusCode >= 500
     || error.code === 'turn_conflict'
     || error.code === 'session_busy'
@@ -4174,6 +4192,7 @@ async function handleMultiUserRequest({
   }
 
   const adminSessionsMatch = pathname.match(/^\/api\/admin\/sessions(?:\/([^/]+))?$/u);
+  const adminSessionTimelineMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/timeline$/u);
   const adminSessionEventsMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/turns\/([^/]+)\/events$/u);
   const adminSessionFileResolveMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/files\/resolve$/u);
   const adminSessionFileContentMatch = pathname.match(/^\/api\/admin\/sessions\/([^/]+)\/files\/([^/]+)\/content$/u);
@@ -4262,6 +4281,49 @@ async function handleMultiUserRequest({
       });
       return true;
     }
+  }
+
+  if (adminSessionTimelineMatch && method === 'GET') {
+    const adminIdentityState = await ensureAdminLegacySessionMappings({
+      identityStore,
+      identityState,
+      runtime,
+      principal,
+    });
+    const sessionId = decodeURIComponent(adminSessionTimelineMatch[1]!);
+    const appSession = adminIdentityState.sessions.find((session) => session.id === sessionId);
+    if (!appSession) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const runtimeSession = await (runtime.readSessionTimeline ?? runtime.readSession).call(runtime, appSession.codexThreadId);
+    if (!runtimeSession) {
+      writeSessionNotFound(response);
+      return true;
+    }
+    const page = paginateSessionTimeline(
+      visibleSessionTimeline(runtimeSession.timeline, runtimeSession.thread, true),
+      url,
+      (items) => presentSessionTimeline(items, runtimeSession.thread, true),
+    );
+    responseMetrics.get(response)?.historyPage(page.items.length);
+    page.items = await repairAttachmentHistory(page.items, { stateDir: config.stateDir, sessionId: appSession.codexThreadId });
+    writeJson(response, 200, {
+      ...page,
+      mode: 'observer',
+      session: presentSessionForUser({
+        runtimeSession,
+        appSession,
+        project: findProject(adminIdentityState, appSession.projectId),
+        observer: true,
+        includeDetails: false,
+        includeWorkDetails: true,
+      }),
+      ...(shouldIncludeTimelineTurnSnapshot(request, url)
+        ? { turnSnapshot: presentActiveTurnSnapshot(runtime, runtimeSession.activeTurnId, 'workspace') }
+        : {}),
+    });
+    return true;
   }
 
   if (adminSessionEventsMatch && method === 'GET') {
@@ -8170,6 +8232,9 @@ function writeErrorResponse({
   error: unknown;
 }): void {
   if (error instanceof LastAdministratorError) error = createHttpError(409, error.code, error.message);
+  if (error instanceof Error && 'code' in error && error.code === 'approval_not_found') {
+    error = createHttpError(404, 'approval_not_found', 'This approval is no longer available. Refresh the session.');
+  }
   if (response.headersSent) {
     response.destroy(error instanceof Error ? error : undefined);
     return;

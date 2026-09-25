@@ -22,7 +22,7 @@ let browser;
 try {
   await server.start();
   const url = server.baseUrl;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const failures = [];
   page.on('pageerror', (error) => failures.push(error.message));
@@ -43,6 +43,36 @@ try {
   const emitted = await fs.readFile(new URL('../dist/public/app.js', import.meta.url), 'utf8');
   const appScript = await page.locator('script[src*="/app.js"]').getAttribute('src');
   const buildId = new URL(appScript, url).searchParams.get('v');
+  const addedAssets = ['boot-recovery.js', 'approval-ui.js', 'approval-ui.css', 'settings-ui.js', 'settings-ui.css', 'admin-ui.css'];
+  for (const name of addedAssets) {
+    const assetUrl = `${url}/${name}`;
+    const unversioned = await fetch(assetUrl);
+    assert.equal(unversioned.status, 200, name);
+    assert.equal(unversioned.headers.get('cache-control'), 'no-cache', name);
+    const body = await unversioned.text();
+    const emittedAsset = await fs.readFile(new URL(`../dist/public/${name}`, import.meta.url), 'utf8');
+    assert.equal(body, emittedAsset.replaceAll('__CODEX_WEB_BUILD_ID__', buildId), `${name} must come from dist/public`);
+    assert.equal(await page.locator(`[src="/${name}?v=${buildId}"], [href="/${name}?v=${buildId}"]`).count(), 1, name);
+    for (const encoding of ['br', 'gzip']) {
+      const headers = { 'Accept-Encoding': encoding };
+      const asset = await fetch(`${assetUrl}?v=${buildId}`, { headers });
+      assert.equal(asset.status, 200, name);
+      assert.equal(asset.headers.get('content-type'), name.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8', name);
+      assert.equal(asset.headers.get('cache-control'), 'public, max-age=31536000, immutable', name);
+      // Minification can put a controller below the existing 1 KiB compression cutoff.
+      assert.equal(asset.headers.get('content-encoding'), Buffer.byteLength(body) >= 1024 ? encoding : null, name);
+      assert.match(asset.headers.get('vary') ?? '', /Accept-Encoding/iu);
+      assert.equal(await asset.text(), body, name);
+      const etag = asset.headers.get('etag');
+      assert.ok(etag, name);
+      const unchanged = await fetch(`${assetUrl}?v=${buildId}`, { headers: { ...headers, 'If-None-Match': etag } });
+      assert.equal(unchanged.status, 304, name);
+      assert.equal(await unchanged.text(), '', name);
+    }
+    const staleVersion = await fetch(`${assetUrl}?v=old-build`);
+    assert.equal(staleVersion.headers.get('cache-control'), 'no-cache', name);
+    await staleVersion.arrayBuffer();
+  }
   const lazyWork = await page.evaluate(async buildId => {
     await import(`/work-details-view.js?v=${encodeURIComponent(buildId)}`);
     return typeof globalThis.CodexWebWorkView?.createRenderer;
@@ -52,7 +82,7 @@ try {
   assert.ok(scripts.every(script => script.status === 200));
   assert.equal(served, emitted.replaceAll('__CODEX_WEB_BUILD_ID__', buildId));
   assert.ok(served.length < (await fs.readFile(new URL('../public/app.js', import.meta.url), 'utf8')).length * 0.85);
-  process.stdout.write(JSON.stringify({ servedUrl: url, scripts: scripts.length, emittedAppBytes: Buffer.byteLength(emitted), browserErrors: failures }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ servedUrl: url, scripts: scripts.length, verifiedAssets: addedAssets, emittedAppBytes: Buffer.byteLength(emitted), browserErrors: failures }, null, 2) + '\n');
 } finally {
   await browser?.close();
   await server.stop().catch(() => {});

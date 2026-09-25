@@ -1,0 +1,15 @@
+{
+  "checkedDateAsiaShanghai": "2026-09-25",
+  "github": {
+    "url": "https://github.com/openai/codex/releases/tag/rust-v0.156.1",
+    "tag": "rust-v0.156.1",
+    "publishedAt": "2026-09-23T02:41:36Z",
+    "commit": "b412ff32c417f855c2b2d1581b77058eed87c84b"
+  },
+  "npm": {
+    "version": "0.156.1",
+    "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.156.1.tgz",
+    "integrity": "sha512-nI1iVl/n2SO2lSvlwEsJx63zdSI4C4Me2gR7AG0OWMJiGSakz2tY2hx43E39Zq5aEoeB5bZjJXzp5Sqhog6vyA=="
+  },
+  "acquisition": "Explicit npm install --prefix isolated temporary directory --ignore-scripts @openai/codex@0.156.1; no global upgrade"
+}

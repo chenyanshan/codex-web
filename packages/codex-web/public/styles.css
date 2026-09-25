@@ -383,6 +383,13 @@ button:disabled {
   letter-spacing: 0;
 }
 
+.boot-help { max-width: 340px; text-align: center; font-size: 14px; line-height: 1.6; }
+.boot-help summary { color: var(--muted); cursor: pointer; padding: 10px 0; }
+.boot-help p { margin: 8px 0 16px; }
+.boot-reload { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 20px; border: 1px solid var(--control-border); border-radius: 10px; color: var(--text); text-decoration: none; }
+.boot-help summary:focus-visible, .boot-reload:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.boot-progress[hidden] { display: none; }
+
 .boot-progress {
   width: 64px;
   height: 2px;
@@ -960,6 +967,11 @@ button:disabled {
   place-items: center;
   padding: 24px;
 }
+
+.shared-session-error { width: min(100%, 420px); text-align: center; }
+.shared-session-error h1 { margin: 0 0 12px; font-size: 22px; line-height: 1.35; }
+.shared-session-error p { margin: 0 0 24px; color: var(--muted); line-height: 1.6; }
+.shared-session-error button { min-height: 44px; padding-inline: 24px; }
 
 .session-list,
 .new-session-page,
@@ -3364,7 +3376,7 @@ button:disabled {
   padding: 4px 4px 4px 9px;
   flex: 0 1 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 28px;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
   align-items: center;
   gap: 7px;
   border: 1px solid var(--border);
@@ -3378,7 +3390,13 @@ button:disabled {
 
 .attachment-chip.is-failed {
   border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
+  grid-template-areas: "file file remove" "status retry retry";
 }
+
+.attachment-chip.is-failed .attachment-main { grid-area: file; }
+.attachment-chip.is-failed .attachment-status { grid-area: status; }
+.attachment-chip.is-failed .attachment-remove { grid-area: remove; }
+.attachment-chip.is-failed .attachment-retry { grid-area: retry; justify-self: end; min-height: 44px; min-width: 64px; padding: 8px 14px; white-space: normal; line-height: 1.4; }
 
 .attachment-main {
   min-width: 0;
@@ -3430,9 +3448,9 @@ button:disabled {
 }
 
 .attachment-remove {
-  width: 28px;
-  min-width: 28px;
-  min-height: 28px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   color: var(--muted);
 }
@@ -5850,7 +5868,6 @@ pre.command {
 .session-preview, .session-card-meta, .path-choice small { color: var(--muted); font-size: 12px; }
 .composer-status-action { min-height: 44px; min-width: 44px; padding: 8px 4px; }
 .chat-project-context { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-title-stack { min-width: 0; }
 .chat-title-stack .project-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-load-error { padding: 12px; color: var(--warn); border: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .timeline-window-control {
@@ -5903,6 +5920,12 @@ pre.command {
 .chat-context-row .runtime-feedback { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-context-row .goal-status { flex-shrink: 0; font-size: 12px; line-height: 18px; }
 .desktop-chat-topbar .chat-context-row { justify-content: flex-start; }
+.chat-topbar:not(.desktop-chat-topbar) :is(.chat-project-context, .goal-status, .runtime-timing) { display: none; }
+.chat-topbar:not(.desktop-chat-topbar) .runtime-feedback { white-space: normal; overflow-wrap: anywhere; }
+.session-context { display: grid; gap: 8px; padding: 12px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.session-context strong { color: var(--text); }
+.session-context summary { min-height: 44px; padding-block: 12px; cursor: pointer; }
+.session-context .goal-objective { display: block; }
 .chat-stop-button { width: 38px; min-width: 38px; height: 38px; padding: 0; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; }
 .chat-stop-button .button-icon { width: 18px; height: 18px; }
 .chat-stop-button rect { fill: currentColor; stroke: none; }

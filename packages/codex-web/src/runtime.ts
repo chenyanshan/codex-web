@@ -1,3 +1,4 @@
+import { readRolloutTurnSnapshot, normalizeTurnSnapshotOutputTextContent, needsRolloutFinal } from './compat/rollout_turn_snapshot.js';
 import { normalizeSessionName } from './session_name.js';
 import crypto from 'node:crypto';
 import { SessionDirectory } from './session_directory.js';
@@ -117,6 +118,7 @@ export interface CodexWebRuntimeClient {
   listModels(): Promise<ProviderModelInfo[]>;
   readConfigDefaults?(args?: { cwd?: string | null }): Promise<ProviderConfigDefaults>;
   readUsage(): Promise<ProviderUsageReport | null>;
+  diagnostics?(): Record<string, unknown>;
   listThreads(args?: {
     limit?: number;
     cursor?: string | null;
@@ -341,7 +343,7 @@ export class CodexWebRuntime {
   private readonly cacheMetrics = { historyBuilds: 0, historyHits: 0 };
 
   diagnostics(): Record<string, unknown> {
-    return { directory: this.directory.diagnostics(), history: { ...this.cacheMetrics, retainedSessions: this.timelineProjections.size } };
+    return { appServer: this.client.diagnostics?.() ?? null, directory: this.directory.diagnostics(), history: { ...this.cacheMetrics, retainedSessions: this.timelineProjections.size } };
   }
 
   private readonly timelineProjections = new Map<string, { version: string; session: CodexWebSession; bytes: number }>();
@@ -356,7 +358,7 @@ export class CodexWebRuntime {
 
   private readonly timelineReads = new Map<string, Promise<CodexWebSession | null>>();
 
-  private readonly businessActivity = new Map<string, { at: number; failed: boolean; startedAt?: number; latestTurn?: { id: string; status: string } }>();
+  private readonly businessActivity = new Map<string, { at: number; failed: boolean; interrupted?: boolean; startedAt?: number; latestTurn?: { id: string; status: string } }>();
 
   private readonly defaultCwd: string;
 
@@ -383,6 +385,8 @@ export class CodexWebRuntime {
   private readonly activeTurnByThread = new Map<string, string>();
 
   private readonly approvalToTurn = new Map<string, string>();
+
+  private readonly approvalDecisions = new Map<string, { decision: string; promise: Promise<void> }>();
 
   private readonly approvalToBatch = new Map<string, string>();
 
@@ -755,11 +759,14 @@ export class CodexWebRuntime {
   async readTurnSnapshot(sessionId: string, turnId: string): Promise<CodexWebTurnSnapshot | null> {
     const thread = await this.readProviderThread(sessionId, true);
     const turn = thread?.turns?.find((item) => item.id === turnId);
+    const legacyRecovery = this.client.diagnostics?.().legacyRolloutRecovery !== false;
     if (!turn) {
-      return readRolloutTurnSnapshot(thread?.path, turnId);
+      return legacyRecovery ? readRolloutTurnSnapshot(thread?.path, turnId) : null;
     }
     const items = (Array.isArray(turn.items) ? turn.items : []).map(normalizeTurnSnapshotItem);
-    if (!items.some(turnSnapshotItemHasFinalOutputText)) {
+    // Empty or legacy response-item projections may need a final-answer repair.
+    // Official item snapshots, including tool-only turns, are authoritative.
+    if (legacyRecovery && needsRolloutFinal(items)) {
       const rolloutFinal = (await readRolloutTurnSnapshot(thread?.path, turnId))?.items.at(-1);
       if (rolloutFinal) {
         items.push(rolloutFinal);
@@ -1162,6 +1169,11 @@ export class CodexWebRuntime {
       }
       return result;
     }).catch(async (error: unknown) => {
+      if (isObservationInterruptedError(error)) {
+        if (startedTurnId) this.appendObservationInterrupted(sessionId, startedTurnId);
+        else { rejectStarted?.(error); this.scheduleThreadSubscriptionRelease(sessionId); }
+        throw error;
+      }
       if (!startedTurnId) {
         rejectStarted?.(error);
         this.scheduleThreadSubscriptionRelease(sessionId);
@@ -1410,13 +1422,27 @@ export class CodexWebRuntime {
     }
   }
 
-  async resolveApproval(
+  resolveApproval(
+    approvalId: string,
+    decision: 'accept' | 'accept_for_session' | 'deny',
+  ): Promise<void> {
+    const pending = this.approvalDecisions.get(approvalId);
+    if (pending) {
+      return pending.decision === decision ? pending.promise : Promise.reject(new Error('Approval decision is already being sent.'));
+    }
+    const promise = this.sendApprovalDecision(approvalId, decision);
+    this.approvalDecisions.set(approvalId, { decision, promise });
+    void promise.finally(() => this.approvalDecisions.delete(approvalId)).catch(() => {});
+    return promise;
+  }
+
+  private async sendApprovalDecision(
     approvalId: string,
     decision: 'accept' | 'accept_for_session' | 'deny',
   ): Promise<void> {
     const turnId = this.approvalToTurn.get(approvalId);
     if (!turnId) {
-      throw new Error(`Unknown approval: ${approvalId}`);
+      throw Object.assign(new Error(`Unknown approval: ${approvalId}`), { code: 'approval_not_found' });
     }
     const option = mapApprovalDecision(decision);
     await this.client.respondToApproval({ requestId: approvalId, option });
@@ -1549,10 +1575,12 @@ export class CodexWebRuntime {
 
   private observeRecoveredTurn(session: CodexWebSession): void {
     const turnId = session.activeTurnId;
+    const activity = this.businessActivity.get(session.id);
     if (
       !turnId
       || threadRuntimeStatusType(session.thread) !== 'active'
       || this.activeTurns.has(turnId)
+      || (activity?.interrupted && Date.now() - activity.at < 5_000)
       || typeof this.client.waitForTurnResult !== 'function'
     ) {
       return;
@@ -1594,6 +1622,10 @@ export class CodexWebRuntime {
         this.cleanupFinishedTurn(turnId);
       }
     }).catch((error: unknown) => {
+      if (isObservationInterruptedError(error)) {
+        this.appendObservationInterrupted(session.id, turnId);
+        return;
+      }
       const failureMessage = publicRuntimeTurnFailureMessage(error);
       this.append(turnId, normalizeTurnFailedEvent({
         turnId,
@@ -1606,6 +1638,10 @@ export class CodexWebRuntime {
         this.activeTurns.delete(turnId);
       }
     });
+  }
+
+  private appendObservationInterrupted(threadId: string, turnId: string): void {
+    this.append(turnId, { id: crypto.randomUUID(), type: 'turn.observation_interrupted', threadId, turnId });
   }
 
   private append(turnId: string, event: CodexWebEvent): void {
@@ -1628,6 +1664,7 @@ export class CodexWebRuntime {
       if (event.type.startsWith('turn.') || event.type.startsWith('approval.') || (previousActivity && Date.now() - previousActivity.at > 120_000)) this.activityRevision += 1;
       this.businessActivity.set(businessThreadId, {
         at: Date.now(),
+        interrupted: event.type === 'turn.observation_interrupted',
         failed: event.type === 'turn.failed' || (!['turn.started', 'turn.completed'].includes(event.type) && previousActivity?.failed === true),
         startedAt: event.type === 'turn.started' ? Date.now() : previousActivity?.startedAt,
         latestTurn: event.type === 'turn.completed' ? { id: turnId, status: event.status || 'completed' }
@@ -2995,7 +3032,7 @@ function sessionActivityState(
   thread: ProviderThreadSummary,
   activeTurnId: string | null,
   hasPendingApproval: boolean,
-  activity?: { at: number; failed: boolean; latestTurn?: { id: string; status: string } },
+  activity?: { at: number; failed: boolean; interrupted?: boolean; latestTurn?: { id: string; status: string } },
 ): CodexWebSessionActivityState {
   const updatedAt = Number(thread.updatedAt) || 0;
   const updatedMs = updatedAt < 1e12 ? updatedAt * 1000 : updatedAt;
@@ -3009,7 +3046,7 @@ function sessionActivityState(
     return 'waiting_approval';
   }
   if (activeTurnId || normalizeTurnStatus(threadRuntimeStatusType(thread)) === 'active') {
-    return activity && Date.now() - activity.at > 120_000 ? 'stale' : 'running';
+    return activity && (activity.interrupted || Date.now() - activity.at > 120_000) ? 'stale' : 'running';
   }
   if (activity?.failed || normalizeTurnStatus(thread.turns?.at(-1)?.status) === 'failed') return 'failed';
   return null;
@@ -3489,7 +3526,7 @@ function normalizeTurnSnapshotItem(item: ProviderThreadTurnItem): CodexWebTurnSn
   const rawContent = isArchivedRecord(item.raw) ? item.raw.content : undefined;
   const content = normalizeTurnSnapshotOutputTextContent(rawContent);
   const type = normalizeString(item.type).replace(/[^a-z]/giu, '').toLowerCase();
-  const role = normalizeString(item.role).toLowerCase();
+  const role = normalizeString(item.role).toLowerCase() || (type === 'agentmessage' ? 'assistant' : '');
   const phase = normalizeString(item.phase).toLowerCase().replace(/[\s-]+/gu, '_');
   const explicitFinal = ['message', 'agentmessage', 'assistantmessage'].includes(type)
     && role === 'assistant'
@@ -3505,134 +3542,6 @@ function normalizeTurnSnapshotItem(item: ProviderThreadTurnItem): CodexWebTurnSn
     ...(explicitFinal ? { type: 'message', role: 'assistant', phase: 'final_answer' } : {}),
     ...(finalContent.length > 0 ? { content: finalContent } : {}),
   };
-}
-
-function turnSnapshotItemHasFinalOutputText(item: CodexWebTurnSnapshotItem): boolean {
-  return normalizeString(item.type).toLowerCase() === 'message'
-    && normalizeString(item.role).toLowerCase() === 'assistant'
-    && normalizeString(item.phase).toLowerCase().replace(/[\s-]+/gu, '_') === 'final_answer'
-    && Array.isArray(item.content)
-    && item.content.some((part) => part.type === 'output_text' && Boolean(part.text.trim()));
-}
-
-async function readRolloutTurnSnapshot(
-  rolloutPath: string | null | undefined,
-  turnId: string,
-): Promise<CodexWebTurnSnapshot | null> {
-  const normalizedPath = normalizeString(rolloutPath);
-  const normalizedTurnId = normalizeString(turnId);
-  if (!normalizedPath || !normalizedTurnId) {
-    return null;
-  }
-  let lines: string[];
-  try {
-    lines = (await fs.readFile(normalizedPath, 'utf8')).split('\n');
-  } catch {
-    return null;
-  }
-  let currentTurnId = '';
-  let matchedTurn = false;
-  let status: string | null = null;
-  let finalItem: CodexWebTurnSnapshotItem | null = null;
-  for (const line of lines) {
-    const entry = parseArchivedSessionLine(line);
-    if (!entry) {
-      continue;
-    }
-    const payload = isArchivedRecord(entry.payload) ? entry.payload : null;
-    if (!payload) {
-      continue;
-    }
-    const boundaryTurnId = rolloutTurnStartId(entry.type, payload);
-    if (boundaryTurnId) {
-      currentTurnId = boundaryTurnId;
-      if (boundaryTurnId === normalizedTurnId) {
-        matchedTurn = true;
-        if (entry.type === 'event_msg' && payload.type === 'task_started') {
-          status = 'running';
-        }
-      }
-      continue;
-    }
-    if (entry.type === 'event_msg' && payload.type === 'task_complete') {
-      const completedTurnId = normalizeString(payload.turn_id) || currentTurnId;
-      if (completedTurnId === normalizedTurnId) {
-        matchedTurn = true;
-        status = 'completed';
-      }
-      continue;
-    }
-    if (entry.type !== 'response_item') {
-      continue;
-    }
-    const itemTurnId = rolloutResponseItemTurnId(payload) || currentTurnId;
-    if (itemTurnId !== normalizedTurnId) {
-      continue;
-    }
-    matchedTurn = true;
-    if (normalizeString(payload.type).toLowerCase() !== 'message'
-      || normalizeString(payload.role).toLowerCase() !== 'assistant'
-      || normalizeString(payload.phase).toLowerCase().replace(/[\s-]+/gu, '_') !== 'final_answer') {
-      continue;
-    }
-    const content = normalizeTurnSnapshotOutputTextContent(payload.content);
-    if (!content.length) {
-      continue;
-    }
-    finalItem = {
-      id: normalizeString(payload.id) || null,
-      type: 'message',
-      role: 'assistant',
-      phase: 'final_answer',
-      text: content.map((part) => part.text).join('\n\n'),
-      content,
-    };
-  }
-  return matchedTurn
-    ? {
-        id: normalizedTurnId,
-        status,
-        error: null,
-        items: finalItem ? [finalItem] : [],
-      }
-    : null;
-}
-
-function rolloutTurnStartId(type: unknown, payload: Record<string, unknown>): string {
-  if (type === 'turn_context') {
-    return normalizeString(payload.turn_id);
-  }
-  return type === 'event_msg' && payload.type === 'task_started'
-    ? normalizeString(payload.turn_id)
-    : '';
-}
-
-function rolloutResponseItemTurnId(payload: Record<string, unknown>): string {
-  const metadata = isArchivedRecord(payload.internal_chat_message_metadata_passthrough)
-    ? payload.internal_chat_message_metadata_passthrough
-    : isArchivedRecord(payload.internalChatMessageMetadataPassthrough)
-      ? payload.internalChatMessageMetadataPassthrough
-      : null;
-  return normalizeString(metadata?.turn_id)
-    || normalizeString(metadata?.turnId)
-    || normalizeString(payload.turn_id)
-    || normalizeString(payload.turnId);
-}
-
-function normalizeTurnSnapshotOutputTextContent(value: unknown): Array<{
-  type: string;
-  text: string;
-}> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((part) => {
-    if (!isArchivedRecord(part) || normalizeString(part.type).toLowerCase() !== 'output_text') {
-      return [];
-    }
-    const text = normalizeString(part.text);
-    return text ? [{ type: 'output_text', text }] : [];
-  });
 }
 
 async function readArchivedThreadFromFile(filePath: string, threadId: string): Promise<ProviderThreadSummary | null> {
@@ -3811,4 +3720,9 @@ function parseArchivedTimestamp(value: unknown): number | null {
 
 function isArchivedRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isObservationInterruptedError(error: unknown): boolean {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : null;
+  return code === 'app_server_observation_interrupted' || code === 'app_server_response_uncertain';
 }

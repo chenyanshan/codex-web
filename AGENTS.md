@@ -8,7 +8,8 @@ default; optional multi-user mode is only for fully trusted users sharing that
 host account and is not a tenant-isolation boundary.
 
 The phone is only a remote UI. The backend owns Codex access, local filesystem
-access, shell execution, authentication, session state, and service lifecycle.
+access, shell execution, authentication, account/session state, and service
+lifecycle.
 
 ## Current Baseline
 
@@ -45,6 +46,7 @@ Do:
 - Require password login for remote access.
 - Store browser session tokens per device so returning devices stay logged in.
 - Provide launchd startup support on macOS.
+- Provide systemd user-service startup support on Linux.
 - Keep tunnel/reverse-proxy setup outside this project.
 - Reuse `codex-native-api` and `CodexAppClient` rather than reimplementing Codex
   JSON-RPC.
@@ -102,8 +104,7 @@ serving private Codex or local-machine state.
 
 Authentication model:
 
-- password is configured once
-- password is hashed with a salt
+- each user has a username, role, and salted password hash
 - session tokens are random and stored hashed on the backend
 - browser stores only the opaque session token
 - all API and event-stream routes require a valid bearer token, except the
@@ -112,6 +113,8 @@ Authentication model:
   `CODEX_WEB_PUBLIC_SHARES_ENABLED=true`, and authenticate with a random URL
   capability token that is stored hashed, expires by TTL, can be revoked, and
   becomes invalid when multi-user mode is disabled
+- non-admin users can only see their own sessions, turns, approvals, and reports
+- admins can manage users and inspect the aggregate chat prompt log
 
 State should live outside the repo:
 
@@ -135,6 +138,23 @@ Service env should live outside the repo:
 - Run focused tests for changed modules before claiming behavior is working.
 - Do not commit generated secrets, runtime state, logs, or local env files.
 
+## Preserve Existing Optimizations
+
+The user requires the 21 existing optimization capabilities in
+[the preservation baseline](docs/architecture/2026-09-25-existing-optimizations-baseline.zh-CN.md)
+to survive future changes, including the app-server refactor.
+
+- Read the baseline before changes to runtime/protocol integration, networking,
+  caching, rendering, attachments, storage, or service lifecycle.
+- Preserve user-visible behavior, failure handling, resource bounds, and access
+  controls. Internal implementations may be replaced with verified equivalents.
+- Map affected changes to `OPT-01` through `OPT-21` and run relevant regression
+  checks. Report unverified cases; do not remove safeguards or weaken assertions
+  merely to simplify code or make a refactor pass.
+- For frontend work, use the project `frontend-design` skill, retain the current
+  visual style, and improve usability where justified without losing weak-network,
+  draft, reading-position, or recovery behavior.
+
 ## Useful Commands
 
 Install:
@@ -154,3 +174,48 @@ Run imported core tests:
 ```bash
 npm test
 ```
+
+## Current Linux Host Deployment
+
+This checkout is installed on the Linux host at:
+
+```text
+/home/ubuntu/workspace/codex-mobile-web-app
+```
+
+The persistent service config is:
+
+```text
+/home/ubuntu/.config/codex-web/service.env
+```
+
+Runtime state and logs live under:
+
+```text
+/home/ubuntu/.codex-web/
+```
+
+Linux should run Codex Web through the user `systemd` service:
+
+```bash
+scripts/service/install-codex-web-systemd-user.sh
+scripts/service/status-codex-web-systemd-user.sh
+scripts/service/restart-codex-web-systemd-user.sh
+scripts/service/logs-codex-web-systemd-user.sh
+```
+
+This host has Node 24 installed at:
+
+```text
+/home/ubuntu/workspace/.local/node-v24.16.0/bin/node
+```
+
+The `codex-web.service` unit must keep that directory at the front of `PATH`.
+Using `/usr/bin/node` currently resolves to Node 20, which does not provide the
+global WebSocket API needed by `CodexAppClient` to connect to `codex
+app-server`.
+
+If a future session finds `systemctl --user status codex-web.service` missing
+but `pgrep -a -f "npm run serve|src/cli.ts serve"` shows Codex Web running, that
+is an old manual process. Stop it and install the systemd service instead of
+starting another manual `nohup npm run serve`.

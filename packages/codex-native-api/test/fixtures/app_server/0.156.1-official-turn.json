@@ -1,0 +1,12 @@
+{
+  "source": "Synthetic, sanitized fixture shaped against codex-cli 0.156.1 generated stable protocol; not a production conversation capture",
+  "events": [
+    { "method": "thread/started", "params": { "thread": { "id": "fixture-thread" } } },
+    { "method": "turn/started", "params": { "threadId": "fixture-thread", "turn": { "id": "fixture-turn", "status": "inProgress", "items": [] } } },
+    { "method": "item/started", "params": { "threadId": "fixture-thread", "turnId": "fixture-turn", "item": { "id": "fixture-command", "type": "commandExecution", "command": "printf fixture", "cwd": "/fixture/project", "status": "inProgress", "aggregatedOutput": null } } },
+    { "method": "item/completed", "params": { "threadId": "fixture-thread", "turnId": "fixture-turn", "item": { "id": "fixture-command", "type": "commandExecution", "command": "printf fixture", "cwd": "/fixture/project", "status": "completed", "aggregatedOutput": "fixture", "exitCode": 0 } } },
+    { "method": "item/agentMessage/delta", "params": { "threadId": "fixture-thread", "turnId": "fixture-turn", "itemId": "fixture-message", "delta": "Done" } },
+    { "method": "item/completed", "params": { "threadId": "fixture-thread", "turnId": "fixture-turn", "item": { "id": "fixture-message", "type": "agentMessage", "phase": "final_answer", "text": "Done" } } },
+    { "method": "turn/completed", "params": { "threadId": "fixture-thread", "turn": { "id": "fixture-turn", "status": "completed", "items": [], "error": null } } }
+  ]
+}

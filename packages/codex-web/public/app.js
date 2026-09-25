@@ -127,10 +127,10 @@ const NON_RUNTIME_STATUS_LABELS = new Set([
 ]);
 const UI_TRANSLATIONS = globalThis.CodexWebCopy;
 
-const INITIAL_SITE_TITLE = normalizeSiteTitle(readBootstrapSiteTitle() || localStorage.getItem(SITE_TITLE_KEY));
+const INITIAL_SITE_TITLE = normalizeSiteTitle(readBootstrapSiteTitle() || readOptionalStoredValue(SITE_TITLE_KEY));
 
 const state = {
-  token: localStorage.getItem(TOKEN_KEY) || '',
+  token: readOptionalStoredValue(TOKEN_KEY) || '',
   authSession: null,
   models: [],
   codexConfigDefaults: { model: '', reasoningEffort: '' },
@@ -184,7 +184,7 @@ const state = {
   desktopSidebarExpanded: UI.readStoredBoolean?.(DESKTOP_SIDEBAR_KEY) ?? null,
   desktopSettingsOpen: false,
   desktopOverlay: null,
-  theme: normalizeTheme(localStorage.getItem(THEME_KEY)),
+  theme: normalizeTheme(readOptionalStoredValue(THEME_KEY)),
   sessionLayout: UI.readSessionLayout(),
   siteTitle: INITIAL_SITE_TITLE,
   globalSettings: {
@@ -195,8 +195,8 @@ const state = {
   },
   webhook: createWebhookSettingsState(),
   webhookRotateConfirmOpen: false,
-  messageFontSize: normalizeMessageFontSize(localStorage.getItem(MESSAGE_FONT_SIZE_KEY)),
-  language: normalizeLanguage(localStorage.getItem(LANGUAGE_KEY)),
+  messageFontSize: normalizeMessageFontSize(readOptionalStoredValue(MESSAGE_FONT_SIZE_KEY)),
+  language: normalizeLanguage(readOptionalStoredValue(LANGUAGE_KEY)),
   defaultThreadSettings: loadDefaultThreadSettings(),
   sortMode: 'time',
   sessionsScope: 'all',
@@ -209,6 +209,7 @@ const state = {
   setupRequired: false,
   setupMessage: '',
   loginError: '',
+  sharedSessionErrorKind: '',
   error: '',
   status: 'Checking auth',
   statusTone: 'warn',
@@ -442,11 +443,19 @@ let sessionFileLoadAbortController = null;
 let sessionTimelinePageRequest = null;
 let renderEventController = null;
 let timelineEventController = null;
+const pendingApprovalDecisions = new Set();
 let authRequestGeneration = 0;
 let sessionNavigationGeneration = 0;
 const adminObservedRequests = globalThis.CodexWebRequestContext.createRequestContext();
 const sessionOpenRequests = globalThis.CodexWebRequestContext.createRequestContext();
-const promptDraftStore = globalThis.CodexWebDrafts.createStore(localStorage);
+// Delay the storage getter until a controller's guarded operation. Failures
+// still reach its normal persistence checks, including unsaved-draft feedback.
+const browserStorage = {
+  getItem: (key) => localStorage.getItem(key),
+  setItem: (key, value) => localStorage.setItem(key, value),
+  removeItem: (key) => localStorage.removeItem(key),
+};
+const promptDraftStore = globalThis.CodexWebDrafts.createStore(browserStorage);
 const SESSION_READING = globalThis.CodexWebSessionReading.createController({
   getSessionId: () => state.sessionId || '', getOwner: currentDraftOwnerKey,
   getTimeline: () => {
@@ -456,7 +465,7 @@ const SESSION_READING = globalThis.CodexWebSessionReading.createController({
   getFollowing: () => state.timelineShouldFollowLatest,
   setFollowing: (following) => { state.timelineShouldFollowLatest = following; syncReadingControls(); },
   isLatestWindow: () => state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer !== true,
-  storage: localStorage,
+  storage: browserStorage,
 });
 function cancelSessionOpen() { sessionNavigationGeneration++; SESSION_READING.flush(); sessionOpenRequests.cancel(); adminObservedRequests.cancel(); state.admin.observedSessionLoading = false; SESSION_RENAME.invalidate(); state.sessionHistoryPending = false; state.sessionStatusPending = false; }
 
@@ -513,7 +522,7 @@ const SESSION_RENAME = globalThis.CodexWebSessionRename.createController({
   },
 });
 
-const SESSION_ATTENTION = globalThis.CodexWebSessionAttention.createController({ storage: localStorage, owner: currentDraftOwnerKey });
+const SESSION_ATTENTION = globalThis.CodexWebSessionAttention.createController({ storage: browserStorage, owner: currentDraftOwnerKey });
 
 const loadSessionOpenData = globalThis.CodexWebSessionLoader.createLoader({
   state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, mergeLatestTimelineHistory,
@@ -571,6 +580,17 @@ window.addEventListener('online', onNetworkOnline);
 window.addEventListener('storage', onSubmissionStorageChange);
 window.addEventListener('pagehide', flushScheduledTimelineSave);
 window.addEventListener('pagehide', () => savePromptDraftForCurrentSession());
+globalThis.CodexWebBoot?.ready();
+
+// Optional UI state must not prevent the login screen from loading. Outbox
+// writes keep their own strict failure handling; these helpers never write it.
+function readOptionalStoredValue(key) {
+  try { return localStorage.getItem(key); } catch (_error) { return null; }
+}
+
+function removeOptionalStoredValue(key) {
+  try { localStorage.removeItem(key); } catch (_error) { /* Storage may be denied. */ }
+}
 
 function bootstrap() {
   if (isShareRoute()) {
@@ -603,14 +623,17 @@ function isShareRoute() {
 
 function shareTokenFromLocation() {
   const match = String(window.location?.pathname || '').match(/^\/share\/([^/]+)$/u);
-  return match?.[1] ? decodeURIComponent(match[1]) : '';
+  try { return match?.[1] ? decodeURIComponent(match[1]) : ''; } catch (_error) { return ''; }
 }
 
 async function loadSharedSessionFromLocation() {
   if (sharedSessionLoadPromise) {
     return sharedSessionLoadPromise;
   }
-  sharedSessionLoadPromise = loadSharedSessionFromLocationOnce().catch((error) => {
+  sharedSessionLoadPromise = loadSharedSessionFromLocationOnce().then((session) => {
+    if (!session) sharedSessionLoadPromise = null;
+    return session;
+  }).catch((error) => {
     sharedSessionLoadPromise = null;
     throw error;
   });
@@ -635,6 +658,8 @@ async function loadSharedSessionFromLocationOnce() {
   };
   state.status = 'Loading session';
   state.statusTone = 'warn';
+  state.sharedSessionErrorKind = '';
+  state.error = '';
   state.view = 'chat';
   state.chatReturnView = 'sessions';
   render();
@@ -663,8 +688,14 @@ async function loadSharedSessionFromLocationOnce() {
   } catch (error) {
     state.currentSession = null;
     state.sessionId = null;
-    state.error = error?.payload?.message || error?.message || 'Shared session not found';
-    state.status = 'Shared session not found';
+    state.timeline = [];
+    state.timelineCache = new Map();
+    state.reports = [];
+    state.cwd = '';
+    clearSessionFileState();
+    state.sharedSessionErrorKind = [401, 403, 404, 410].includes(error?.status) ? 'unavailable' : 'temporary';
+    state.error = state.sharedSessionErrorKind === 'unavailable' ? 'Share link unavailable' : 'Shared session could not load';
+    state.status = state.error;
     state.statusTone = 'danger';
     render();
     return null;
@@ -691,7 +722,7 @@ function readWorkspaceState() {
       draft: parsed?.draft && parsed?.owner === currentDraftOwnerKey() ? parsed.draft : null,
     };
   } catch (_error) {
-    localStorage.removeItem(WORKSPACE_STATE_KEY);
+    removeOptionalStoredValue(WORKSPACE_STATE_KEY);
     return { view: 'sessions', sessionId: '' };
   }
 }
@@ -755,7 +786,7 @@ function persistWorkspaceState({ view = state.view, sessionId = state.sessionId 
 }
 
 function clearWorkspaceState() {
-  localStorage.removeItem(WORKSPACE_STATE_KEY);
+  removeOptionalStoredValue(WORKSPACE_STATE_KEY);
 }
 
 function setLoggedOut(message = '') {
@@ -780,8 +811,8 @@ function setLoggedOut(message = '') {
   cancelSessionFileLoad();
   clearSessionFileState();
   clearScheduledTimelineSave();
-  localStorage.removeItem(SESSIONS_CACHE_KEY);
-  localStorage.removeItem(TIMELINE_CACHE_KEY);
+  removeOptionalStoredValue(SESSIONS_CACHE_KEY);
+  removeOptionalStoredValue(TIMELINE_CACHE_KEY);
   clearWorkspaceState();
   state.authSession = null;
   SESSION_PAGINATION.resetAllState({ incrementRequestId: true });
@@ -869,7 +900,7 @@ function isAuthRequestCurrent(requestGeneration) {
 }
 
 function timelineFingerprint() {
-  return JSON.stringify([state.sessionId, state.language, state.sessionHistoryError, state.sessionStatusError, state.sessionHistoryPending, state.sessionStatusPending, Boolean(sessionTimelinePageRequest), state.sessionHistoryStartIndex, state.currentSession?.timelineComplete, state.currentSession?.canViewWorkDetails, state.currentSession?.readOnly, state.sessionLayout, [...state.submissionOutbox.values()].map(({id, status, attempts, retryable}) => [id, status, attempts, retryable]), state.timelineWindowEnd, visibleTimelineItems()]);
+  return JSON.stringify([[...pendingApprovalDecisions], state.sessionId, state.language, state.sessionHistoryError, state.sessionStatusError, state.sessionHistoryPending, state.sessionStatusPending, Boolean(sessionTimelinePageRequest), state.sessionHistoryStartIndex, state.currentSession?.timelineComplete, state.currentSession?.canViewWorkDetails, state.currentSession?.readOnly, state.sessionLayout, [...state.submissionOutbox.values()].map(({id, status, attempts, retryable}) => [id, status, attempts, retryable]), state.timelineWindowEnd, visibleTimelineItems()]);
 }
 function render() {
   const oldTimeline = document.querySelector('#timeline');
@@ -1116,8 +1147,24 @@ function focusableElements(scope) {
   if (!scope?.querySelectorAll) {
     return [];
   }
-  return [...scope.querySelectorAll('a[href], button:not([disabled]), iframe, input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
-    .filter((element) => !element.hidden && element.inert !== true && element.getAttribute?.('aria-hidden') !== 'true');
+  return [...scope.querySelectorAll('a[href], button:not([disabled]), summary, iframe, input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => {
+      if (element.hidden || element.inert === true || element.getAttribute?.('aria-hidden') === 'true') return false;
+      if (element.matches?.(':disabled')) return false;
+      if (element.hasAttribute?.('tabindex') && Number(element.getAttribute('tabindex')) < 0) return false;
+      if (element.closest?.('[hidden], [inert], [aria-hidden="true"]')) return false;
+      if (element.getClientRects && !element.getClientRects().length) return false;
+      const visibility = window.getComputedStyle?.(element)?.visibility;
+      if (visibility === 'hidden' || visibility === 'collapse') return false;
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor.tagName === 'DETAILS' && !ancestor.open) {
+          const summary = [...ancestor.children].find(child => child.tagName === 'SUMMARY');
+          if (summary !== element && !summary?.contains(element)) return false;
+        }
+        if (ancestor === scope) break;
+      }
+      return true;
+    });
 }
 
 function resolveFocusReturnTarget(target) {
@@ -1142,6 +1189,7 @@ function focusFallbackElement() {
 }
 
 function handleFocusScopeKeydown(event) {
+  if (event.target?.closest?.('dialog[open]')) return;
   if (event.key === 'Escape' && closeFocusScope()) {
     event.preventDefault?.();
     event.stopPropagation?.();
@@ -1229,6 +1277,7 @@ function closeShareDialog() {
 function resetSessionHistoryWindow() {
   cancelSessionTimelinePageLoad();
   state.timelineWindowEnd = null;
+  state.sessionHistoryRetryDirection = null;
   state.sessionHistoryItems = [];
   state.sessionHistoryStartIndex = 0;
   state.timelineShouldFollowLatest = true;
@@ -1501,7 +1550,7 @@ function renderSharedSessionPage() {
   const shell = document.createElement('div');
   shell.className = 'shell shared-session-shell';
   const loading = state.status === 'Loading session' && !state.currentSession;
-  const errorText = state.error || state.loginError || '';
+  const retryable = state.sharedSessionErrorKind === 'temporary';
   const fileOpen = state.currentSession && state.view === 'file';
   shell.innerHTML = localizeFragment(`
     <div class="shared-session-page${fileOpen ? ' shared-file-page' : ''}">
@@ -1510,7 +1559,12 @@ function renderSharedSessionPage() {
           ${UI.renderJumpLatest(state.timelineShouldFollowLatest, t('Back to latest'))}
       ` : `
         <main class="shared-session-empty">
-          <div class="empty-state">${escapeHtml(loading ? t('Loading session') : translateText(errorText || 'Shared session not found'))}</div>
+          ${loading ? `<div class="empty-state" role="status">${escapeHtml(t('Loading session'))}</div>` : `
+            <section class="shared-session-error" role="status">
+              <h1>${escapeHtml(t(retryable ? 'Shared session could not load' : 'Share link unavailable'))}</h1>
+              <p>${escapeHtml(t(retryable ? 'Check your connection and try again.' : 'Ask the sender for a new share link.'))}</p>
+              ${retryable ? `<button type="button" class="primary" id="shared-session-retry-button">${escapeHtml(t('Try again'))}</button>` : ''}
+            </section>`}
         </main>
       `}
     </div>
@@ -1752,11 +1806,9 @@ function renderAppSettings() {
   const shell = document.createElement('div');
   shell.className = 'shell';
   shell.innerHTML = localizeFragment(`
-    <div class="screen page-screen">
+    <div class="screen page-screen settings-mobile-screen">
       ${renderPageNav('Settings')}
-      <main class="app-settings-page">
-        ${renderAppSettingsSections()}
-      </main>
+      ${renderAppSettingsSections()}
     </div>
     ${renderWebhookDialogs()}
   `);
@@ -1765,26 +1817,26 @@ function renderAppSettings() {
 
 function renderDesktopSettingsPanel() {
   return localizeFragment(`
+    <div class="settings-modal-backdrop" data-modal-dismiss="desktop-settings">
     <aside class="desktop-settings-panel" role="dialog" aria-modal="true" aria-labelledby="desktop-settings-title" data-focus-scope="desktop-settings">
       <header class="desktop-panel-header">
         <h2 id="desktop-settings-title">Settings</h2>
         <button class="ghost compact-button" type="button" id="desktop-settings-close-button" data-initial-focus>Close</button>
       </header>
-      <main class="app-settings-page desktop-settings-body">
-        ${renderAppSettingsSections()}
-      </main>
+      ${renderAppSettingsSections()}
     </aside>
+    </div>
   `);
 }
 
 function renderAppSettingsSections() {
-  return `
-        ${renderSiteTitleSettingsSection()}
-        ${renderAppearanceSettingsSection()}
-        ${renderDefaultThreadSettingsSection()}
+  return globalThis.CodexWebSettingsUI.renderGroups([
+    { id: 'device', title: 'This device', description: 'Appearance and new-session defaults are saved in this browser.',
+      content: `${renderAppearanceSettingsSection()}${renderDefaultThreadSettingsSection()}` },
+    { id: 'server', title: 'Shared server', description: 'These settings apply to this Codex Web server.',
+      content: `${renderSiteTitleSettingsSection()}${renderAdminSettingsSection({ title: 'Administration', showLoadingNote: true })}${renderRuntimeSettingsSection()}` },
+    { id: 'account', title: 'Account', description: 'Manage your signed-in devices and access.', content: `
         ${renderWebhookSettingsSection()}
-        ${renderAdminSettingsSection({ title: 'Administration', showLoadingNote: true })}
-        ${renderRuntimeSettingsSection()}
         <section class="settings-section">
           <div class="settings-section-title">Account</div>
           <button class="ghost full-width-button" id="load-auth-devices" type="button">${escapeHtml(t('Signed-in devices'))}</button>
@@ -1792,7 +1844,8 @@ function renderAppSettingsSections() {
           ${Array.isArray(state.authDevices) ? `<ul class="auth-devices">${state.authDevices.map((device) => `<li><span>${escapeHtml(device.deviceName || t('Device'))}${device.current ? ` · ${escapeHtml(t('This device'))}` : ''}<small>${escapeHtml(formatShortDateTime(device.lastSeenAt))}</small></span>${!device.current ? `<button class="danger" type="button" data-revoke-device="${escapeAttribute(device.id)}">${escapeHtml(t('Sign out'))}</button>` : ''}</li>`).join('')}</ul><button class="ghost full-width-button" id="revoke-other-devices" type="button">${escapeHtml(t('Sign out other devices'))}</button>` : ''}
           <button class="danger compact-button full-width-button" type="button" id="settings-logout-button">Log out</button>
         </section>
-  `;
+  ` },
+  ]);
 }
 
 function renderAppearanceSettingsSection() {
@@ -1913,7 +1966,7 @@ function renderNewSessionContent({ desktop = false } = {}) {
       `}
     <main class="new-session-page${desktop ? ' desktop-new-session-page' : ''}">
       <div class="new-session-hero">
-        <h1 class="new-session-heading" data-i18n-skip>开启新会话</h1>
+        <h1 class="new-session-heading" data-i18n-skip>${escapeHtml(t('Start a new session'))}</h1>
         <form class="panel stack new-session-card bg-shared ring-theme" id="new-session-form">
           ${sessionTargetPicker}
           <div class="actions new-session-actions">
@@ -2220,7 +2273,7 @@ function renderReadOnlyComposerNotice(session) {
   `;
 }
 
-function renderRuntimeFeedback() {
+function renderRuntimeFeedback(live = true) {
   if (!state.sessionId) return '';
   const activity = state.currentSession?.lastBusinessActivityAt;
   const startedAt = state.currentSession?.turnStartedAt;
@@ -2229,30 +2282,30 @@ function renderRuntimeFeedback() {
     : 'Turn finished';
   const elapsed = startedAt && state.pendingTurn ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : null;
   const since = activity ? Math.max(0, Math.floor((Date.now() - activity) / 1000)) : null;
-  return `<div class="runtime-feedback" role="status">${escapeHtml(CONNECTION.label(t) || t(connection))}${elapsed != null ? ` · ${escapeHtml(t('Elapsed'))} ${formatElapsedDuration(elapsed)}` : ''}${since != null ? ` · ${escapeHtml(t('Last work activity'))} ${formatElapsedDuration(since)}` : ''}</div>`;
+  return `<div class="runtime-feedback"${live ? ' role="status"' : ''}>${escapeHtml(CONNECTION.label(t) || t(connection))}<span class="runtime-timing">${elapsed != null ? ` · ${escapeHtml(t('Elapsed'))} ${formatElapsedDuration(elapsed)}` : ''}${since != null ? ` · ${escapeHtml(t('Last work activity'))} ${formatElapsedDuration(since)}` : ''}</span></div>`;
 }
 function formatElapsedDuration(seconds) {
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
 }
 function refreshRuntimeFeedback() {
   if (document.visibilityState === 'hidden') return;
-  const feedback = document.querySelector('.runtime-feedback');
-  if (feedback) {
-    const next = htmlToElement(renderRuntimeFeedback());
+  for (const feedback of document.querySelectorAll('.runtime-feedback')) {
+    const next = htmlToElement(renderRuntimeFeedback(feedback.hasAttribute('role')));
     if (feedback.textContent !== next?.textContent) feedback.replaceWith(next);
   }
 }
 
-function renderGoalStatus() {
+function renderGoalStatus(details = false) {
   const goal = state.currentSession?.goal;
   const objective = String(goal?.objective || '').trim();
   if (!objective) {
     return '';
   }
   const { status, label } = goalStatusDisplay(goal.status);
+  if (details) return `<details><summary>${escapeHtml(t(label))}</summary><div class="goal-objective" data-i18n-skip>${escapeHtml(objective)}</div></details>`;
   return `
     <div class="goal-status" data-status="${escapeAttribute(status)}" data-i18n-skip>
-      <span>${escapeHtml(label)}</span>
+      <span>${escapeHtml(t(label))}</span>
       <span class="goal-objective">${escapeHtml(objective)}</span>
     </div>
   `;
@@ -2532,7 +2585,7 @@ function sessionActivityState(session) {
     if (waitingApproval || session.activityState === 'waiting_approval') {
       return 'waiting_approval';
     }
-    return 'running';
+    return session.activityState === 'stale' ? 'stale' : 'running';
   }
   if (session?.id === state.sessionId && !state.sessionStatusPending && state.currentSession?.id === session.id) {
     if (state.status === 'Ready' && !state.currentSession.activeTurnId) return null;
@@ -2687,6 +2740,11 @@ function renderSettingsDrawer() {
         <span class="settings-drawer-title">Current session</span>
         <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus>${UI.icon('x', { className: 'button-icon' })}</button>
       </div>
+      ${!isDesktopLayout() ? `<div class="session-context">
+        <strong data-i18n-skip>${escapeHtml(sessionDisplayTitle(state.currentSession))}</strong>
+        <div data-i18n-skip>${escapeHtml(projectNameForSession(state.currentSession, state.cwd))}</div>
+        ${renderGoalStatus(true)}${renderRuntimeFeedback(false)}
+      </div>` : ''}
       ${renderStopTurnSettingsControl()}
       ${renderSessionActionsSettingsSection()}
       <div class="settings-drawer-section">
@@ -2859,9 +2917,9 @@ function visibleTimelineItems() {
   return items.slice(Math.max(0, end - TIMELINE_DOM_WINDOW), end);
 }
 function moveTimelineWindow(direction) {
-  if (direction > 0 && state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer) return loadOlderSessionTimelinePage('after');
   const items = allDisplayTimelineItems();
   const end = Math.min(items.length, state.timelineWindowEnd ?? items.length);
+  if (direction > 0 && end === items.length && state.currentSession?.timelineHasNewer) return loadOlderSessionTimelinePage('after');
   const timelineBefore = document.querySelector('#timeline');
   const candidates = [...(timelineBefore?.querySelectorAll('[data-timeline-id]') || [])];
   const anchor = direction < 0 ? candidates[0] : candidates[candidates.length - 1];
@@ -2911,6 +2969,7 @@ function composerStatusLabel() {
     return 'Sending to server';
   }
   if (state.pendingTurn) {
+    if (state.status === 'Status awaiting sync') return 'Working|Status awaiting sync';
     if (state.status === 'Stream paused') {
       return 'Working|Reconnecting';
     }
@@ -2988,20 +3047,8 @@ function renderTimelineItem(item) {
     `;
   }
   if (item.kind === 'approval') {
-    return `
-    <article class="card" aria-live="polite">
-      <div class="card-header">
-        <span class="card-title">${escapeHtml(t('Approval requested'))}</span>
-        <span class="card-kind" data-i18n-skip>${escapeHtml(item.approvalKind)}</span>
-      </div>
-      ${renderSummary(item.summary)}
-      <div class="approval-actions">
-          <button type="button" class="primary" data-approval-action="accept" data-approval-id="${escapeAttribute(item.approvalId)}" ${item.resolved ? 'disabled' : ''}>${escapeHtml(t('Accept'))}</button>
-          <button type="button" class="ghost" data-approval-action="accept-for-session" data-approval-id="${escapeAttribute(item.approvalId)}" ${item.resolved ? 'disabled' : ''}>${escapeHtml(t('Allow for this session'))}</button>
-          <button type="button" class="danger" data-approval-action="deny" data-approval-id="${escapeAttribute(item.approvalId)}" ${item.resolved ? 'disabled' : ''}>${escapeHtml(t('Deny'))}</button>
-      </div>
-    </article>
-    `;
+    const sending = pendingApprovalDecisions.has(`${authRequestGeneration}:${state.sessionId}:${item.approvalId}`);
+    return globalThis.CodexWebApprovalUi.render(item, { t, escapeHtml, escapeAttribute, sending });
   }
   return `
     <article class="card">
@@ -3831,6 +3878,7 @@ function sanitizeRestrictedApprovalSummary(summary) {
     return {};
   }
   const result = {};
+  if (summary.detailsIncomplete === true) result.detailsIncomplete = true;
   const availableDecisionKeys = Array.isArray(summary.availableDecisionKeys)
     ? summary.availableDecisionKeys.filter((key) => typeof key === 'string' && key.trim())
     : [];
@@ -4239,6 +4287,7 @@ function listenWithSignal(target, type, listener, options, signal) {
 
 function bindGlobalEvents() {
   SESSION_RENAME.bind();
+  listenRendered(document.querySelector('#shared-session-retry-button'), 'click', () => { void loadSharedSessionFromLocation(); });
   for (const button of document.querySelectorAll('[data-retry-models]')) listenRendered(button, 'click', () => { void AUTH_RECOVERY.loadModels(); });
   const loginForm = document.querySelector('#login-form');
   if (loginForm) {
@@ -4424,6 +4473,7 @@ function bindGlobalEvents() {
   }
 
   const desktopSettingsCloseButton = document.querySelector('#desktop-settings-close-button');
+  globalThis.CodexWebSettingsUI.bindNavigation(document, listenRendered);
   if (desktopSettingsCloseButton) {
     listenRendered(desktopSettingsCloseButton, 'click', () => {
       requestFocusRestore();
@@ -4466,7 +4516,9 @@ function bindGlobalEvents() {
     }
     listenRendered(control, 'click', (event) => {
       event.preventDefault();
-      void openSessionFileByPath(control.getAttribute('data-session-file-path') || '');
+      void openSessionFileByPath(control.getAttribute('data-session-file-path') || '', {
+        basePath: control.closest?.('.session-file-document') ? state.currentSessionFilePath : '',
+      });
     });
   }
 
@@ -4478,7 +4530,7 @@ function bindGlobalEvents() {
   const retrySessionFileButton = document.querySelector('#retry-session-file-button');
   if (retrySessionFileButton) {
     listenRendered(retrySessionFileButton, 'click', () => {
-      void openSessionFileByPath(state.currentSessionFilePath, { preserveSnapshot: true });
+      void openSessionFileByPath(state.currentSessionFilePath, { preserveSnapshot: true, resolved: true });
     });
   }
 
@@ -4538,14 +4590,20 @@ function bindGlobalEvents() {
 
   const adminMultiUserToggle = document.querySelector('#admin-multi-user-toggle');
   if (adminMultiUserToggle) {
-    listenRendered(adminMultiUserToggle, 'change', (event) => {
-      if (!event.target.checked
-        && typeof window.confirm === 'function'
-        && !window.confirm(t('Disable multi-user mode?'))) {
+    listenRendered(adminMultiUserToggle, 'change', async (event) => {
+      const enabled = event.target.checked;
+      if (!enabled) {
         event.target.checked = true;
-        return;
+        const generation = authRequestGeneration;
+        const confirmed = await globalThis.CodexWebAdminUi.confirmAction({
+          title: t('Disable multi-user mode?'),
+          description: t('Team accounts and public shares will lose access. You may need to sign in again with the single-user password.'),
+          confirmLabel: t('Disable'), cancelLabel: t('Cancel'),
+          valid: () => isAuthRequestCurrent(generation) && isAdminPrincipal(),
+        });
+        if (!confirmed) return;
       }
-      void updateAdminSettings({ multiUserEnabled: event.target.checked });
+      void updateAdminSettings({ multiUserEnabled: enabled });
     });
   }
 
@@ -4713,13 +4771,18 @@ function bindGlobalEvents() {
   }
 
   for (const button of document.querySelectorAll('[data-admin-delete-user-id]')) {
-    listenRendered(button, 'click', () => {
+    listenRendered(button, 'click', async () => {
       const userId = button.getAttribute('data-admin-delete-user-id') || '';
       const userName = adminUserById(userId)?.username || userId;
-      if (typeof window.confirm === 'function'
-        && !window.confirm(t('Delete user {name}?', { name: userName }))) {
-        return;
-      }
+      const generation = authRequestGeneration;
+      const confirmed = await globalThis.CodexWebAdminUi.confirmAction({
+        title: t('Delete user {name}?', { name: userName }),
+        description: t('This user will lose access. This action cannot be undone.'),
+        confirmLabel: t('Delete'), cancelLabel: t('Cancel'),
+        valid: () => isAuthRequestCurrent(generation) && isAdminPrincipal()
+          && Boolean(adminUserById(userId)) && state.authSession?.principal?.userId !== userId,
+      });
+      if (!confirmed) return;
       void deleteAdminUser(userId);
     });
   }
@@ -4786,6 +4849,7 @@ function bindGlobalEvents() {
   if (refreshSystem) listenRendered(refreshSystem, 'click', () => { void refreshAdminConsole(); });
   if (refreshSession) listenRendered(refreshSession, 'click', () => { state.settingsOpen = false; void handleComposerRefresh(); });
   if (retryHistory) listenRendered(retryHistory, 'click', () => {
+    if (isAdminObservedSession() && state.sessionHistoryRetryDirection) return void loadOlderSessionTimelinePage(state.sessionHistoryRetryDirection);
     void handleComposerRefresh();
   });
   const promptInput = document.querySelector('#prompt-input');
@@ -4953,6 +5017,14 @@ function bindGlobalEvents() {
   if (webhookCopyKeyButton) {
     listenRendered(webhookCopyKeyButton, 'click', () => {
       void copyWebhookKey();
+    });
+  }
+
+  const webhookRevealKeyButton = document.querySelector('#webhook-reveal-key-button');
+  if (webhookRevealKeyButton) {
+    listenRendered(webhookRevealKeyButton, 'click', () => {
+      state.webhook.keyVisible = !state.webhook.keyVisible;
+      render();
     });
   }
 
@@ -5819,7 +5891,7 @@ function attachTimelineScrollTracking({ updateInitial = true } = {}) {
   detachTimelineScrollTracking();
   timeline.addEventListener('scroll', updateTimelineFollowState, { passive: true });
   timeline.addEventListener('wheel', handleTimelineWheel, { passive: false });
-  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timeline.addEventListener(type, SESSION_READING.input, { passive: true });
+  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timeline.addEventListener(type, handleTimelineInput, { passive: true });
   timelineScrollTrackingElement = timeline;
   if (updateInitial) {
     updateTimelineFollowState();
@@ -5832,7 +5904,7 @@ function detachTimelineScrollTracking() {
   }
   timelineScrollTrackingElement.removeEventListener('scroll', updateTimelineFollowState);
   timelineScrollTrackingElement.removeEventListener('wheel', handleTimelineWheel);
-  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timelineScrollTrackingElement.removeEventListener(type, SESSION_READING.input);
+  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timelineScrollTrackingElement.removeEventListener(type, handleTimelineInput);
   timelineScrollTrackingElement = null;
 }
 
@@ -5851,6 +5923,11 @@ function handleTimelineWheel(event) {
   }
 }
 
+function handleTimelineInput(event) {
+  SESSION_READING.input();
+  if (isAdminObservedSession()) globalThis.CodexWebAdminUi.observerInput(event, state.sessionId);
+}
+
 function updateTimelineFollowState() {
   const timeline = document.querySelector('#timeline');
   if (!timeline) {
@@ -5859,6 +5936,7 @@ function updateTimelineFollowState() {
   SESSION_READING.scrolled();
   syncReadingControls();
   rememberCurrentTimelineViewport();
+  if (isAdminObservedSession()) globalThis.CodexWebAdminUi.observerScroll({ state, timeline, busy: Boolean(sessionTimelinePageRequest), moveTimelineWindow });
 }
 
 function scrollTimelineToBottomIfFollowingLatest() {
@@ -5887,8 +5965,8 @@ async function onLoginSubmit(event) {
     if (!isAuthRequestCurrent(requestGeneration)) {
       return;
     }
-    state.token = payload.token;
     localStorage.setItem(TOKEN_KEY, payload.token);
+    state.token = payload.token;
     state.authSession = payload.session || createCachedAuthSession();
     state.sessionsLoading = true;
     state.sessionsLoadingScope = currentSessionScope();
@@ -5910,9 +5988,9 @@ async function onLogout() {
   const owner = currentDraftOwnerKey();
   const revocation = apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   try {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(SESSIONS_CACHE_KEY);
-    localStorage.removeItem(TIMELINE_CACHE_KEY);
+    removeOptionalStoredValue(TOKEN_KEY);
+    removeOptionalStoredValue(SESSIONS_CACHE_KEY);
+    removeOptionalStoredValue(TIMELINE_CACHE_KEY);
   } catch (_error) {}
   state.token = '';
   setLoggedOut();
@@ -5997,6 +6075,7 @@ function showSessionList() {
 }
 
 function openAppSettingsPage() {
+  state.webhook.keyVisible = false;
   cancelSessionOpen();
   savePromptDraftForCurrentSession();
   saveCurrentTimeline();
@@ -7784,6 +7863,8 @@ function presentTurnEventForCurrentAudience(event) {
         approvalId: typeof event.approvalId === 'string' ? event.approvalId : '',
         decision: typeof event.decision === 'string' ? event.decision : '',
       };
+    case 'turn.observation_interrupted':
+      return authPrincipalPending ? null : base;
     case 'turn.completed':
       if (authPrincipalPending) {
         return null;
@@ -7894,26 +7975,40 @@ async function reloadRuntime() {
 }
 
 async function resolveApproval(approvalId, action) {
-  if (!approvalId || !action) {
-    return;
-  }
+  const generation = authRequestGeneration, navigation = sessionNavigationGeneration;
+  const sessionId = state.sessionId;
+  const key = `${generation}:${sessionId}:${approvalId}`;
+  const item = state.approvals.get(approvalId);
+  if (!approvalId || !action || !item || item.resolved || item.decisionUncertain || pendingApprovalDecisions.has(key)) return;
+  if (!globalThis.CodexWebApprovalUi.actionsFor(item).some((option) => option.action === action)) return;
+  const isCurrent = () => isAuthRequestCurrent(generation) && navigation === sessionNavigationGeneration && state.sessionId === sessionId;
+  pendingApprovalDecisions.add(key);
+  render();
   try {
     await apiFetch(`/api/approvals/${encodeURIComponent(approvalId)}/${action}`, { method: 'POST' });
-    const item = state.approvals.get(approvalId);
-    if (item) {
-      item.resolved = true;
-    }
+    if (!isCurrent()) return;
+    const current = state.approvals.get(approvalId);
+    if (current) { current.resolved = true; current.decisionUncertain = false; }
     const hasPendingApproval = [...state.approvals.values()].some((approval) => approval?.resolved === false);
-    setSessionSummaryActivity(
-      state.sessionId,
-      state.pendingTurn ? (hasPendingApproval ? 'waiting_approval' : 'running') : null,
-      state.turnId,
-    );
+    setSessionSummaryActivity(sessionId, state.pendingTurn ? (hasPendingApproval ? 'waiting_approval' : 'running') : null, state.turnId);
     state.status = 'Approval sent';
     state.statusTone = 'warn';
-    render();
   } catch (error) {
-    handleApiError(error);
+    if (!isCurrent()) return;
+    const current = state.approvals.get(approvalId);
+    // A lost reply is not permission to send the decision again. SSE or a fresh
+    // session snapshot can confirm it; this request is never automatically retried.
+    if (current && !current.resolved && (!error?.status || error.status >= 500)) {
+      current.decisionUncertain = true;
+      state.error = '';
+    } else if (current && [404, 409].includes(error?.status)) {
+      current.resolved = true;
+      current.expired = true;
+      state.error = t('This approval is no longer available. Refresh the session.');
+    } else if (!current?.resolved) handleApiError(error);
+  } finally {
+    pendingApprovalDecisions.delete(key);
+    if (isCurrent()) render();
   }
 }
 
@@ -7924,7 +8019,7 @@ function applyTurnEvent(event, assistantEntry) {
     void refreshCurrentSessionMetadata();
     return assistantEntry;
   }
-  if ((event.type === 'turn.completed' || event.type === 'turn.failed')
+  if ((event.type === 'turn.completed' || event.type === 'turn.failed' || event.type === 'turn.observation_interrupted')
     && state.turnId
     && event.turnId
     && event.turnId !== state.turnId) {
@@ -7943,7 +8038,16 @@ function applyTurnEvent(event, assistantEntry) {
     if (event.type === 'turn.started') state.currentSession.turnStartedAt = Number(event.timestamp) || Date.now();
   }
   let sessionActivityChanged = false;
+  if (state.status === 'Status awaiting sync' && /^(assistant\.|batch\.|approval\.)/.test(event.type)) {
+    state.status = 'Turn running';
+    sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'running', event.turnId);
+  }
   switch (event.type) {
+    case 'turn.observation_interrupted':
+      state.status = 'Status awaiting sync';
+      state.statusTone = 'warn';
+      sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'stale', event.turnId);
+      break;
     case 'turn.started':
       state.terminalTurnIds.delete(event.turnId);
       clearLocallyStartedTurn();
@@ -7990,7 +8094,7 @@ function applyTurnEvent(event, assistantEntry) {
         approvalId: event.approvalId,
         approvalKind: event.approvalKind,
         turnId: event.turnId,
-        summary: sanitizeWorkSummary(event.summary),
+        summary: globalThis.CodexWebApprovalUi.sanitizeSummary(event.summary, sanitizeWorkSummary),
         resolved: false,
       };
       state.approvals.set(event.approvalId, approval);
@@ -8002,6 +8106,7 @@ function applyTurnEvent(event, assistantEntry) {
       const approval = state.approvals.get(event.approvalId);
       if (approval) {
         approval.resolved = true;
+        approval.decisionUncertain = false;
         approval.summary = {
           ...approval.summary,
           decision: event.decision,
@@ -8374,7 +8479,7 @@ async function refreshCurrentSessionMetadata({
   hydrateTimeline = false, viewportSnapshot = null, signal = null, forceDetail = false, latest = false,
 } = {}) {
   if (!state.sessionId || isShareContext()) return null;
-  if (isAdminObservedSession()) return refreshAdminObservedSessionMetadata({ viewportSnapshot, signal });
+  if (isAdminObservedSession()) return refreshAdminObservedSessionMetadata({ viewportSnapshot, signal, latest });
   if (!hydrateTimeline && !forceDetail) return refreshCurrentSessionStatus({ viewportSnapshot, signal });
   const sessionId = state.sessionId;
   const requestGeneration = authRequestGeneration;
@@ -8450,63 +8555,15 @@ function isAdminObservedSession(session = state.currentSession) {
     && state.sessionId === session.id;
 }
 
-async function refreshAdminObservedSessionMetadata({ viewportSnapshot = null, signal = null } = {}) {
-  const sessionId = state.sessionId;
-  if (!sessionId || !isAdminObservedSession()) {
-    return null;
-  }
-  const requestGeneration = authRequestGeneration;
-  const navigation = sessionNavigationGeneration;
-  const owns = () => isAuthRequestCurrent(requestGeneration) && navigation === sessionNavigationGeneration && state.sessionId === sessionId;
-  const startedViewport = viewportSnapshot || captureTimelineViewport();
-  try {
-    const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, { signal });
-    if (!owns() || !payload?.session) {
-      return null;
-    }
-    const session = {
-      ...payload.session,
-      mode: payload.mode || payload.session.mode || 'observer',
-      readOnly: true,
-    };
-    if (state.sessionId !== sessionId || state.admin.observedSession?.id !== sessionId) {
-      return session;
-    }
-    const snapshot = SESSION_READING.isCurrent(startedViewport) ? startedViewport : captureTimelineViewport();
-    state.sessionHistoryError = ''; state.sessionStatusError = '';
-    state.admin.observedSession = session;
-    state.currentSession = session;
-    state.cwd = session.cwd || '';
-    applySessionSettings(session);
-    restoreTimelineForSession(session, { fullHistory: true });
-    const runtimeStatus = syncRuntimeStatusFromSession(session);
-    if (runtimeStatus.activeTurnId && state.turnId) {
-      restoreTurnEventCursor(sessionId, state.turnId, { onlyIfUnset: true });
-    }
-    nextTimelineRestoreSnapshot = snapshot;
-    renderChatWithTimelineRestored(() => {});
-    nextTimelineRestoreSnapshot = null;
-    return session;
-  } catch (error) {
-    if (!owns()) {
-      return null;
-    }
-    if (error?.status === 401 || error?.status === 403) {
-      handleApiError(error);
-      return null;
-    }
-    if (isMissingSessionError(error)) {
-      if (state.sessionId === sessionId) {
-        handleMissingSession(error, '');
-      }
-      return null;
-    }
-    if (error?.name !== 'AbortError') {
-      state.sessionHistoryError = error?.message || 'Request failed';
-      state.sessionStatusError = state.sessionHistoryError;
-    }
-    return null;
-  }
+function refreshAdminObservedSessionMetadata(options = {}) {
+  const generation = authRequestGeneration, navigation = sessionNavigationGeneration, id = state.sessionId;
+  return globalThis.CodexWebAdminUi.refreshObserver({
+    state, apiFetch, captureTimelineViewport, SESSION_READING, applySessionSettings,
+    restoreTimelineForSession, syncRuntimeStatusFromSession, restoreTurnEventCursor,
+    renderChatWithTimelineRestored, handleApiError, isMissingSessionError, handleMissingSession,
+    setTimelineOpenPositionForSession,
+    owns: () => isAuthRequestCurrent(generation) && navigation === sessionNavigationGeneration && state.sessionId === id && isAdminObservedSession(),
+  }, options);
 }
 
 async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = null } = {}) {
@@ -8626,7 +8683,7 @@ function applyGlobalSettingsPayload(payload, { renderAfter = true } = {}) {
     loaded: true,
   };
   applySiteTitle(siteTitle, { persist: false });
-  localStorage.removeItem(SITE_TITLE_KEY);
+  removeOptionalStoredValue(SITE_TITLE_KEY);
   if (renderAfter) {
     render();
   }
@@ -8856,7 +8913,7 @@ async function openAdminObservedSession(sessionId) {
   state.admin.observedSessionError = '';
   render();
   try {
-    const payload = await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, { signal: operation.controller.signal });
+    const payload = await globalThis.CodexWebAdminUi.loadObserverPage(apiFetch, sessionId, { signal: operation.controller.signal, first: true });
     if (!owns()) {
       return;
     }
@@ -8876,7 +8933,8 @@ async function openAdminObservedSession(sessionId) {
     state.view = isDesktopLayout() ? 'admin' : 'chat';
     state.admin.page = 'sessions';
     state.timelineShouldFollowLatest = false;
-    state.timelineWindowEnd = TIMELINE_DOM_WINDOW;
+    state.timelineWindowEnd = null;
+    state.sessionHistoryError = ''; state.sessionStatusError = '';
     SESSION_READING.input();
     nextTimelineRestoreSnapshot = { ...captureTimelineViewport(), anchors: [], scrollTop: 0, shouldFollowLatest: false };
     state.admin.observedSessionLoading = false;
@@ -8900,10 +8958,10 @@ async function openAdminObservedSession(sessionId) {
   }
 }
 
-async function openSessionFileByPath(filePath, { preserveSnapshot = false } = {}) {
+async function openSessionFileByPath(filePath, { basePath = '', preserveSnapshot = Boolean(basePath), resolved = false } = {}) {
   cancelSessionOpen();
   const normalizedPath = decodeHtmlEntityText(filePath).trim();
-  const resolvablePath = decodeSessionFilePath(stripSessionFileLocationSuffix(normalizedPath.replace(/[?#].*$/u, '')));
+  let resolvablePath = resolved ? filePath : decodeSessionFilePath(stripSessionFileLocationSuffix(normalizedPath.replace(/[?#].*$/u, '')));
   if (!resolvablePath) {
     return;
   }
@@ -8913,6 +8971,9 @@ async function openSessionFileByPath(filePath, { preserveSnapshot = false } = {}
     }
     await openSharedReportById(reportFromPath(resolvablePath).id, { path: resolvablePath, preserveSnapshot });
     return;
+  }
+  if (!resolved && basePath && !resolvablePath.startsWith('/')) {
+    resolvablePath = basePath.slice(0, basePath.lastIndexOf('/') + 1) + resolvablePath;
   }
   if (!state.sessionId || state.draftSessionActive) {
     return;
@@ -9971,7 +10032,7 @@ function loadSessionsCacheScopes() {
       stats: parsed?.stats && typeof parsed.stats === 'object' ? parsed.stats : {},
     };
   } catch (_error) {
-    localStorage.removeItem(SESSIONS_CACHE_KEY);
+    removeOptionalStoredValue(SESSIONS_CACHE_KEY);
     return {
       scopes: { all: [], favorites: [], archived: [] },
       queryKeys: {
@@ -10495,7 +10556,7 @@ function loadTimelineCache() {
       }));
     }
   } catch (_error) {
-    localStorage.removeItem(TIMELINE_CACHE_KEY);
+    removeOptionalStoredValue(TIMELINE_CACHE_KEY);
   }
   return cache;
 }
@@ -10540,7 +10601,7 @@ function loadQueuedMessages() {
       }
     }
   } catch (_error) {
-    localStorage.removeItem(QUEUED_MESSAGES_KEY);
+    removeOptionalStoredValue(QUEUED_MESSAGES_KEY);
   }
   return queue;
 }
@@ -10594,7 +10655,7 @@ function loadSubmissionOutbox() {
     console.warn('[codex-web] legacy submission outbox read failed', error);
   }
   for (const key of submissionOutboxStorageKeys()) {
-    const entry = readStoredSubmissionOutboxEntry(localStorage.getItem(key), { restore: true });
+    const entry = readStoredSubmissionOutboxEntry(readOptionalStoredValue(key), { restore: true });
     if (!entry) {
       continue;
     }
@@ -10633,11 +10694,13 @@ function loadSubmissionOutbox() {
 
 function submissionOutboxStorageKeys() {
   const keys = [];
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (typeof key === 'string' && key.startsWith(SUBMISSION_OUTBOX_ENTRY_PREFIX)) {
-      keys.push(key);
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (typeof key === 'string' && key.startsWith(SUBMISSION_OUTBOX_ENTRY_PREFIX)) keys.push(key);
     }
+  } catch (error) {
+    console.warn('[codex-web] submission outbox index read failed', error);
   }
   return keys;
 }
@@ -11573,7 +11636,7 @@ function loadOlderSessionTimelinePage(direction = 'before') {
     }
     cancelSessionTimelinePageLoad();
   }
-  const generation = sessionNavigationGeneration;
+  const generation = sessionNavigationGeneration, authGeneration = authRequestGeneration;
   const controller = new AbortController();
   const cancelledResult = {};
   let settleCancellation = null;
@@ -11593,6 +11656,7 @@ function loadOlderSessionTimelinePage(direction = 'before') {
     if (sessionTimelinePageRequest === request) {
       sessionTimelinePageRequest = null;
       if (state.sessionId === sessionId) {
+        state.sessionHistoryRetryDirection = direction;
         state.sessionHistoryError = 'History could not be loaded. Retry to recover your messages.';
         render();
       }
@@ -11601,13 +11665,14 @@ function loadOlderSessionTimelinePage(direction = 'before') {
     controller.abort();
   }, SESSION_TIMELINE_PAGE_TIMEOUT_MS);
   const promise = Promise.race([
-    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/timeline?limit=50&${direction}=${encodeURIComponent(before)}`, {
+    apiFetch(`/api/${isAdminObservedSession() ? 'admin/' : ''}sessions/${encodeURIComponent(sessionId)}/timeline?limit=50&${direction}=${encodeURIComponent(before)}`, {
       signal: controller.signal,
     }),
     cancellation,
   ])
     .then((payload) => {
       if (payload === cancelledResult
+        || !isAuthRequestCurrent(authGeneration)
         || generation !== sessionNavigationGeneration
         || sessionTimelinePageRequest !== request
         || state.sessionId !== sessionId
@@ -11627,6 +11692,7 @@ function loadOlderSessionTimelinePage(direction = 'before') {
       state.sessionHistoryStartIndex = 0;
       state.timeline = combinedHistory.map(item => ({ ...item }));
       revealPrependedHistory(historyAnchor);
+      state.sessionHistoryRetryDirection = null;
       state.sessionHistoryError = '';
       saveCurrentTimeline();
       render();
@@ -11643,6 +11709,7 @@ function loadOlderSessionTimelinePage(direction = 'before') {
       } else if (isMissingSessionError(error)) {
         handleMissingSession(error, '');
       } else {
+        state.sessionHistoryRetryDirection = direction;
         state.sessionHistoryError = 'History could not be loaded. Retry to recover your messages.';
         render();
       }
@@ -12624,7 +12691,7 @@ function initializeDefaultThreadSettingsFromCodex(defaults = null) {
     });
     return;
   }
-  if (localStorage.getItem(DEFAULT_THREAD_SETTINGS_VERSION_KEY) === DEFAULT_THREAD_SETTINGS_VERSION) {
+  if (readOptionalStoredValue(DEFAULT_THREAD_SETTINGS_VERSION_KEY) === DEFAULT_THREAD_SETTINGS_VERSION) {
     return;
   }
   if (!configModel) {
@@ -12647,7 +12714,7 @@ function initializeDefaultThreadSettingsFromCodex(defaults = null) {
 }
 
 function hasSavedDefaultThreadSettings() {
-  const raw = localStorage.getItem(DEFAULT_THREAD_SETTINGS_KEY);
+  const raw = readOptionalStoredValue(DEFAULT_THREAD_SETTINGS_KEY);
   if (!raw) {
     return false;
   }
@@ -13471,14 +13538,14 @@ function handleApiError(error, options = {}) {
   if (code === 'setup_required') {
     state.setupRequired = true;
     state.setupMessage = message;
-    localStorage.removeItem(TOKEN_KEY);
+    removeOptionalStoredValue(TOKEN_KEY);
     state.token = '';
     stopStream();
     render();
     return;
   }
   if (error?.status === 401 || (options.auth && error?.status === 403)) {
-    localStorage.removeItem(TOKEN_KEY);
+    removeOptionalStoredValue(TOKEN_KEY);
     state.token = '';
     state.setupRequired = false;
     setLoggedOut(options.login ? message : 'Session expired');
@@ -13551,7 +13618,7 @@ function formatShortDate(timestamp) {
   if (Number.isNaN(date.getTime())) {
     return '';
   }
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return date.toLocaleDateString(state.language, { month: 'short', day: 'numeric' });
 }
 
 function formatShortDateTime(timestamp) {
@@ -13559,7 +13626,7 @@ function formatShortDateTime(timestamp) {
   if (Number.isNaN(date.getTime())) {
     return '';
   }
-  return date.toLocaleString([], {
+  return date.toLocaleString(state.language, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

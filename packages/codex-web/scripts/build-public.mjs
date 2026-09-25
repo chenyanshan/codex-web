@@ -25,6 +25,9 @@ export async function buildPublic({ sourceRoot = path.join(packageRoot, 'public'
           const result = await transform(source.toString('utf8'), {
             loader: name.endsWith('.css') ? 'css' : 'js',
             minify: true,
+            // index.html loads app.js as a module: allow safe top-level name
+            // minification there, while classic scripts keep their global API.
+            ...(name === 'app.js' ? { format: 'esm' } : {}),
             target: ['es2022', 'safari16.4'],
             legalComments: 'none',
             charset: 'utf8',

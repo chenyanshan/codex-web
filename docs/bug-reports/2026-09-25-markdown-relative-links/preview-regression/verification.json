@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-09-19T14:44:53.814Z",
+  "buildId": "c8018136629dd59e1f7f",
+  "deployment": {
+    "mode": "dist",
+    "restartCompleted": "2026-09-19 22:40:01 Asia/Shanghai",
+    "pid": 57852
+  },
+  "checks": {
+    "nativeTests": 58,
+    "webTests": 980,
+    "browserPassed": 158,
+    "browserConditionalSkips": 297,
+    "focusedFinalPassed": 3,
+    "typecheck": "pass",
+    "lint": "pass",
+    "diffCheck": "pass",
+    "builtPublicScripts": 21,
+    "builtPublicErrors": [],
+    "servedAssetsMatch": 22,
+    "privateRoutesRejectUnauthenticated": 6
+  },
+  "budget": {
+    "criticalAssets": 23,
+    "gzipBytes": 141239,
+    "maximumGzipBytes": 143360,
+    "appSourceBytes": 499876
+  },
+  "sourceHashes": {
+    "packages/codex-web/public/app.js": "9450992d8291dca07a9c265f90bb0683d11f8a56672be66a57a17358be0865f6",
+    "packages/codex-web/public/markdown-renderer.js": "6fb299acb172b05c96ac1fac01b535a9bddc0dc4f3e15cdb3240bd0ae263b462",
+    "packages/codex-web/public/session-file-viewer.js": "4bee92781f5b53aa88bb9da944be031f85a9a968c401e1243611d81174c2e21b",
+    "packages/codex-web/public/styles.css": "1379cbcb8c55476f2836fa5409760c21cd921a537b2f4f9e092ea8abe5d07d19",
+    "packages/codex-web/test/markdown_renderer.test.ts": "250b36533cd1df033c3cef22a471fb14ebab05a4819d47d93196b67460a263f6",
+    "packages/codex-web/test/public_ui.test.ts": "66a79d0a76e3129304b6560626e155ae89d9cc76a7192bf172558b028bb3d50e",
+    "packages/codex-web/test/browser/markdown-preview.spec.js": "0c8dcd7b9ba58d77e2a47c8038576b3738026e36a7b6a191c4ce94fd00c34e81"
+  }
+}

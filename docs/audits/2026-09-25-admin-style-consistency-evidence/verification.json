@@ -1,0 +1,135 @@
+{
+  "recordedAt": "2026-09-25T00:36:14.819929+00:00",
+  "sourceBuildId": "d4e5bacffae6d671461d",
+  "sourceChanges": [
+    "packages/codex-web/public/admin-ui.css"
+  ],
+  "testAdaptation": {
+    "file": "packages/codex-web/test/public_ui.test.ts",
+    "reason": "Project columns now apply in the base rule at every viewport. The old assertion required a duplicate mobile rule. Column geometry, wrapping, focus, authorization and scroll assertions remain intact."
+  },
+  "checks": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "command": "npm run lint",
+      "exitCode": 0
+    },
+    "unit": {
+      "files": [
+        "frontend_budget.test.ts",
+        "public_ui.test.ts",
+        "service_worker_cache.test.ts",
+        "theme_palette.test.ts"
+      ],
+      "initial": {
+        "passed": 471,
+        "failed": 1,
+        "skipped": 0
+      },
+      "recheck": {
+        "test": "admin console uses dense mobile-safe management rows",
+        "passed": 1,
+        "failed": 0
+      },
+      "unresolvedFailures": 0,
+      "note": "472 distinct checks covered; one obsolete CSS-placement assertion corrected and rechecked."
+    },
+    "browser": {
+      "rootAdminRegressions": {
+        "passed": 21,
+        "skipped": 39,
+        "failed": 0
+      },
+      "adminRedesign": {
+        "passed": 13,
+        "skipped": 7,
+        "failed": 0
+      },
+      "viewportApplicabilityUnchanged": true,
+      "totalPassed": 34,
+      "totalSkipped": 46
+    },
+    "visualCapture": {
+      "themes": 5,
+      "viewports": [
+        390,
+        1440
+      ],
+      "combinations": 10,
+      "passed": 10,
+      "scope": "Same-viewport session list, five admin pages, user editor, confirmation; Chromium emulation."
+    },
+    "build": {
+      "command": "npm run build",
+      "exitCode": 0,
+      "assets": 39,
+      "bytes": 765371
+    },
+    "builtHttpAndBrowserSmoke": {
+      "command": "npm run test:built-public --workspace @codex-mobile-web-app/codex-web",
+      "exitCode": 0,
+      "scripts": 27,
+      "verifiedAddedAssets": 6,
+      "browserErrors": []
+    },
+    "sessionRollbackReverseCheck": "passed; not applied",
+    "diffWhitespaceCheck": "passed",
+    "existingEvidenceRestoration": "byte equality verified against this round snapshot"
+  },
+  "preservation": {
+    "directlyAffected": [
+      "OPT-17",
+      "OPT-18"
+    ],
+    "regressionCovered": [
+      "OPT-06",
+      "OPT-09",
+      "OPT-10",
+      "OPT-11",
+      "OPT-13",
+      "OPT-15",
+      "OPT-21"
+    ],
+    "budget": "startup-budget.json",
+    "otherCapabilities": "Product change is admin CSS only. Existing broader verification remains historical evidence, not a new full regression claim."
+  },
+  "limitations": [
+    "Chromium viewport and touch emulation; no physical iPhone Safari/VoiceOver validation.",
+    "No production user/account writes used for validation.",
+    "Visual-only change; no claim of measurable runtime performance improvement."
+  ],
+  "production": {
+    "state": "passed",
+    "expectedBuildId": "d4e5bacffae6d671461d",
+    "activationDirectory": "/home/ubuntu/.codex-web/source-checkpoints/admin-style-activation-20260925T003614Z",
+    "statusFile": "/home/ubuntu/.codex-web/source-checkpoints/admin-style-activation-20260925T003614Z/status.json",
+    "queuedAt": "2026-09-25T00:37:07.619Z",
+    "observedAt": "2026-09-25T00:43:05.646000+00:00",
+    "transientUnit": "codex-web-admin-style-activate-20260925t003614.service",
+    "independentCgroupVerified": true,
+    "gatewayAndSourcePreflight": "passed",
+    "currentTurnBarrierCount": 1,
+    "restartRequestedAtObservation": true,
+    "observationNote": "Activation completed successfully. Current service is active/running; both local and public CSS match the reviewed source.",
+    "finishedAt": "2026-09-25T00:38:13.598Z",
+    "mainPid": 3699770,
+    "localAndPublicHomeAndVersion": "200; expected build verified",
+    "adminCss": [
+      {
+        "target": "local",
+        "status": 200,
+        "matchesReviewedSource": true,
+        "sha256": "ffdd22b4315e8df7067d071995dfeb974384014dfd3b315d0ec9109a874ee830"
+      },
+      {
+        "target": "public",
+        "status": 200,
+        "matchesReviewedSource": true,
+        "sha256": "ffdd22b4315e8df7067d071995dfeb974384014dfd3b315d0ec9109a874ee830"
+      }
+    ]
+  }
+}

@@ -1444,6 +1444,115 @@ test('admin can audit all sessions and read any session with observer mode', asy
   }
 });
 
+test('admin observer timeline pages from earliest through latest with bounded compact responses', async () => {
+  const identityStore = await createIdentityStore();
+  const reads: string[] = [];
+  const timeline = Array.from({ length: 123 }, (_, index) => ({
+    id: `item_${index}`, kind: 'message', role: 'assistant', label: 'Assistant',
+    meta: 'final', text: `Answer ${index}`, turnId: `turn_${index}`, phase: 'final_answer',
+    raw: { hidden: 'RAW_SHOULD_NOT_BE_SERIALIZED' },
+  }));
+  const runtime = {
+    ...runtimeStub(),
+    readSession: async () => { throw new Error('Full detail method must not be used'); },
+    readSessionTimeline: async (id: string) => {
+      reads.push(id);
+      return { id, settings: {}, activeTurnId: null, timeline,
+        thread: { turns: [{ id: 'secret_thread_turn', items: [{ text: 'FULL_THREAD_SHOULD_NOT_BE_SERIALIZED' }] }] } };
+    },
+  };
+  const server = createCodexWebServer({
+    auth: authFor({ admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' } }),
+    identityStore, runtime: runtime as any, config: createConfig(),
+  });
+  await server.start();
+  try {
+    const page = async (query: string, headers: Record<string, string> = {}) => {
+      const response = await fetch(`${server.baseUrl}/api/admin/sessions/app_bob/timeline${query}`, {
+        headers: { Authorization: 'Bearer admin', ...headers },
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json() as any;
+      assert.equal(payload.session.id, 'app_bob');
+      assert.equal(payload.session.mode, 'observer');
+      assert.equal(payload.mode, 'observer');
+      assert.equal(payload.session.readOnly, true);
+      assert.equal(payload.session.canRename, false);
+      assert.equal('timeline' in payload.session, false);
+      assert.equal('thread' in payload.session, false);
+      assert.equal(JSON.stringify(payload).includes('SHOULD_NOT_BE_SERIALIZED'), false);
+      assert.equal(payload.total, 123);
+      return payload;
+    };
+    const first = await page('?after=0&limit=50');
+    assert.deepEqual(first.items.map((item: any) => item.id), timeline.slice(0, 50).map(item => item.id));
+    assert.equal(first.nextBefore, null);
+    assert.equal(first.hasMore, false);
+    assert.equal(first.nextAfter, '50');
+    assert.equal(first.hasNewer, true);
+    assert.equal('turnSnapshot' in first, false);
+    const middle = await page(`?after=${first.nextAfter}&limit=50`);
+    assert.equal(middle.nextBefore, '50');
+    assert.equal(middle.nextAfter, '100');
+    const last = await page(`?after=${middle.nextAfter}&limit=50`);
+    assert.equal(last.items.length, 23);
+    assert.equal(last.nextAfter, null);
+    assert.equal(last.hasNewer, false);
+    assert.deepEqual([...first.items, ...middle.items, ...last.items].map(item => item.id), timeline.map(item => item.id));
+    const latest = await page('');
+    assert.equal(latest.items[0].id, 'item_73');
+    assert.equal(latest.items.at(-1).id, 'item_122');
+    assert.equal(latest.turnSnapshot, null);
+    assert.equal('turnSnapshot' in await page('', { 'X-Codex-Include-Turn-Snapshot': 'false' }), false);
+    const anchored = await page('?anchor=assistant_turn_60_final&limit=30');
+    assert.equal(anchored.anchorFound, true);
+    assert.equal(anchored.items[10].id, 'item_60');
+    assert.equal('turnSnapshot' in anchored, false);
+    assert.equal((await page('?anchor=missing')).anchorFound, false);
+    assert.equal((await page('?after=0&limit=10000')).items.length, 100);
+    assert.equal((await page('?before=50&limit=50')).items.at(-1).id, 'item_49');
+    assert.equal((await page('?after=123')).items.length, 0);
+    assert.equal(reads.every(id => id === 'thread_bob'), true);
+  } finally { await server.stop(); }
+});
+
+test('admin observer timeline enforces authorization per page and supports archived and legacy sessions', async () => {
+  const identityStore = await createIdentityStore();
+  const state = await identityStore.readState();
+  await identityStore.upsertSession({ ...state.sessions.find(session => session.id === 'app_bob')!, archived: true });
+  const runtime = runtimeStub();
+  runtime.listSessions = async () => [{ id: 'thread_legacy', cwd: '/legacy', settings: {}, thread: { turns: [] }, timeline: [] }] as any;
+  const principals: Record<string, CodexWebPrincipal> = {
+      admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+      alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+  };
+  const server = createCodexWebServer({
+    auth: authFor(principals), identityStore, runtime: runtime as any, config: createConfig(),
+  });
+  await server.start();
+  try {
+    const get = (id: string, token?: string) => fetch(`${server.baseUrl}/api/admin/sessions/${id}/timeline?after=0`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    assert.equal((await get('app_bob')).status, 401);
+    assert.equal((await get('app_bob', 'alice')).status, 403);
+    assert.equal((await get('missing', 'admin')).status, 404);
+    assert.equal((await get('thread_bob', 'admin')).status, 404);
+    assert.deepEqual(runtime.calls, []);
+    const archived = await get('app_bob', 'admin');
+    assert.equal(archived.status, 200);
+    assert.equal((await archived.json() as any).session.archived, true);
+    const legacy = (await identityStore.readState()).sessions.find(session => session.codexThreadId === 'thread_legacy')!;
+    assert.ok(legacy);
+    assert.equal((await get(legacy.id, 'admin')).status, 200);
+    assert.deepEqual(runtime.calls, ['read:thread_bob', 'read:thread_legacy']);
+    runtime.readSession = async () => null as any;
+    assert.equal((await get('app_bob', 'admin')).status, 404);
+    principals.admin = { ...principals.admin!, roleIds: ['role_user'], isAdmin: false };
+    assert.equal((await get('app_bob', 'admin')).status, 403);
+  } finally { await server.stop(); }
+});
+
 test('admin session audit returns newest sessions first', async () => {
   const identityStore = await createIdentityStore();
   await identityStore.upsertSession({

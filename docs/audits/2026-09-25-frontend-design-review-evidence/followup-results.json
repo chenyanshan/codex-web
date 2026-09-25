@@ -1,0 +1,680 @@
+[
+  {
+    "name": "mobile-app-settings-bottom",
+    "note": "Waited for device request before scrolling; prior audit locator raced a normal render.",
+    "text": "设置\n网站标题\n浏览器标题\n外观\n语言\nEnglish\n中文\n主题\n复古黄\n黑金\n纯粹黑\n清新白\n终端青\n会话界面\n当前\n控制台\n消息字号\n小\n中\n大\n此设备的新会话\n模型\n跟随 Codex 配置\nGPT-5.6-Sol\n推理\n跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra\n模式\n默认\n计划\n权限\n只读\n修改前询问\n完全访问\nWebhook\n启用 Webhook\nWebhook 已停用。\n高级\n运行时\n重载\n账户\n已登录设备\nAudit phone · 本设备\nSep 25, 08:00 AM\n退出其他设备\n退出登录",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "BUTTON",
+      "id": "load-auth-devices"
+    },
+    "buttons": [
+      {
+        "name": "返回",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "English",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "中文",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "复古黄",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "黑金",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "纯粹黑",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "清新白",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "终端青",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "当前",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "控制台",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "小",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "中",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "大",
+        "width": 113.34375,
+        "height": 44
+      },
+      {
+        "name": "默认",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "计划",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "只读",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "修改前询问",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "完全访问",
+        "width": 113.34375,
+        "height": 44
+      },
+      {
+        "name": "重载",
+        "width": 64,
+        "height": 44
+      },
+      {
+        "name": "已登录设备",
+        "width": 358,
+        "height": 44
+      },
+      {
+        "name": "退出其他设备",
+        "width": 358,
+        "height": 44
+      },
+      {
+        "name": "退出登录",
+        "width": 358,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "name": "mobile-webhook-enabled",
+    "text": "设置\n网站标题\n浏览器标题\n外观\n语言\nEnglish\n中文\n主题\n复古黄\n黑金\n纯粹黑\n清新白\n终端青\n会话界面\n当前\n控制台\n消息字号\n小\n中\n大\n此设备的新会话\n模型\n跟随 Codex 配置\nGPT-5.6-Sol\n推理\n跟随 Codex 配置\nLow\nMedium\nHigh\nxhigh\nMax\nUltra\n模式\n默认\n计划\n权限\n只读\n修改前询问\n完全访问\nWebhook\n启用 Webhook\nWebhook 接口地址\n复制\nWebhook 密钥\n复制密钥\n重新生成密钥\n高级\n运行时\n重载\n账户\n已登录设备\nAudit phone · 本设备\nSep 25, 08:00 AM\n退出其他设备\n退出登录",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "BUTTON",
+      "id": "load-auth-devices"
+    },
+    "buttons": [
+      {
+        "name": "返回",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "English",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "中文",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "复古黄",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "黑金",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "纯粹黑",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "清新白",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "终端青",
+        "width": 175,
+        "height": 56
+      },
+      {
+        "name": "当前",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "控制台",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "小",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "中",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "大",
+        "width": 113.34375,
+        "height": 44
+      },
+      {
+        "name": "默认",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "计划",
+        "width": 172,
+        "height": 44
+      },
+      {
+        "name": "只读",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "修改前询问",
+        "width": 113.328125,
+        "height": 44
+      },
+      {
+        "name": "完全访问",
+        "width": 113.34375,
+        "height": 44
+      },
+      {
+        "name": "复制",
+        "width": 50,
+        "height": 44
+      },
+      {
+        "name": "复制密钥",
+        "width": 74,
+        "height": 44
+      },
+      {
+        "name": "重新生成密钥",
+        "width": 98,
+        "height": 44
+      },
+      {
+        "name": "重载",
+        "width": 64,
+        "height": 44
+      },
+      {
+        "name": "已登录设备",
+        "width": 358,
+        "height": 44
+      },
+      {
+        "name": "退出其他设备",
+        "width": 358,
+        "height": 44
+      },
+      {
+        "name": "退出登录",
+        "width": 358,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "name": "mobile-attachment-progress",
+    "text": "Idle quality gate fixture\nyanshan_quant\n本轮已结束\n\nArchive an idle session\n\n正在上传附件\n很长的检查记录与下一步实施建议-design-audit.txt\n18 B\n上传中 42%\n发送",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "TEXTAREA",
+      "id": "prompt-input"
+    },
+    "buttons": [
+      {
+        "name": "会话",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "会话菜单",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "很长的检查记录与下一步实施建议-design-audit.txt\n18 B",
+        "width": 170.203125,
+        "height": 44
+      },
+      {
+        "name": "移除 很长的检查记录与下一步实施建议-design-audit.txt",
+        "width": 28,
+        "height": 28
+      },
+      {
+        "name": "添加文件",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "发送",
+        "width": 44,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "name": "mobile-attachment-failed",
+    "text": "Idle quality gate fixture\nyanshan_quant\n本轮已结束\n\nArchive an idle session\n\n失败\n上传服务暂时不可用\n很长的检查记录与下一步实施建议-design-audit.txt\n18 B\n失败\n重试\n发送",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "TEXTAREA",
+      "id": "prompt-input"
+    },
+    "buttons": [
+      {
+        "name": "会话",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "会话菜单",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "很长的检查记录与下一步实施建议-design-audit.txt\n18 B",
+        "width": 203,
+        "height": 44
+      },
+      {
+        "name": "重试",
+        "width": 44,
+        "height": 46
+      },
+      {
+        "name": "移除 很长的检查记录与下一步实施建议-design-audit.txt",
+        "width": 28,
+        "height": 28
+      },
+      {
+        "name": "添加文件",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "发送",
+        "width": 44,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "name": "mobile-session-502",
+    "draft": "保留这段草稿，先检查附件。",
+    "text": "Idle quality gate fixture\nyanshan_quant\n连接中断 · HTTP 502 · 正在重连\n运行状态更新失败。\n重试\n\nArchive an idle session\n\n连接中断 · HTTP 502 · 正在重连\n上传服务暂时不可用\n很长的检查记录与下一步实施建议-design-audit.txt\n18 B\n失败\n重试\n发送",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "TEXTAREA",
+      "id": "prompt-input"
+    },
+    "buttons": [
+      {
+        "name": "会话",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "会话菜单",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "重试",
+        "width": 46,
+        "height": 44
+      },
+      {
+        "name": "很长的检查记录与下一步实施建议-design-audit.txt\n18 B",
+        "width": 203,
+        "height": 44
+      },
+      {
+        "name": "重试",
+        "width": 44,
+        "height": 46
+      },
+      {
+        "name": "移除 很长的检查记录与下一步实施建议-design-audit.txt",
+        "width": 28,
+        "height": 28
+      },
+      {
+        "name": "添加文件",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "发送",
+        "width": 44,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "name": "desktop-admin-boundary-980",
+    "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n—\n用户管理\n3\n系统\n会话审计\n2 个会话\n刷新\n用户\n所有用户\nadmin\nwriter\ndisabled-user\n项目\n所有项目\nAlpha Console\nBeta Automation\n会话\n所有会话\n活动会话\n已归档会话\nDeployment checks and release report\n观察模式\nReview the deployment checks and update the release report.\nwriter · Alpha Console\nJul 31, 06:20 PM\nScheduled task failure investigation\n只读\nTrace the failed scheduled task without changing project files.\nadmin · Beta Automation\nJul 30, 03:15 PM\n会话详情\n只读\n未选择会话",
+    "pageWidth": 980,
+    "width": 980,
+    "active": {
+      "tag": "BODY",
+      "id": ""
+    },
+    "buttons": [
+      {
+        "name": "返回",
+        "width": 38,
+        "height": 38
+      },
+      {
+        "name": "会话审计\n2",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "项目管理\n2",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "角色管理\n—",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "用户管理\n3",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "系统",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "刷新",
+        "width": 50,
+        "height": 36
+      },
+      {
+        "name": "Deployment checks and release report\n观察模式\nReview the deployment checks and update the release report.\nwriter · Alpha Console\nJul 31, 06:20 PM",
+        "width": 334,
+        "height": 123.46875
+      },
+      {
+        "name": "Scheduled task failure investigation\n只读\nTrace the failed scheduled task without changing project files.\nadmin · Beta Automation\nJul 30, 03:15 PM",
+        "width": 334,
+        "height": 123.46875
+      }
+    ]
+  },
+  {
+    "name": "desktop-admin-observer-980",
+    "text": "管理控制台\n会话审计\n2\n项目管理\n2\n角色管理\n—\n用户管理\n3\n系统\n会话审计\n2 个会话\n刷新\n用户\n所有用户\nadmin\nwriter\ndisabled-user\n项目\n所有项目\nAlpha Console\nBeta Automation\n会话\n所有会话\n活动会话\n已归档会话\nDeployment checks and release report\n观察模式\nReview the deployment checks and update the release report.\nwriter · Alpha Console\nJul 31, 06:20 PM\nScheduled task failure investigation\n只读\nTrace the failed scheduled task without changing project files.\nadmin · Beta Automation\nJul 30, 03:15 PM\nDeployment checks and release report\nAlpha Console\n本轮已结束\n\nReview the deployment checks and update the release report.\n\nThe deployment checks passed and the release report is ready.",
+    "pageWidth": 980,
+    "width": 980,
+    "active": {
+      "tag": "BUTTON",
+      "id": ""
+    },
+    "buttons": [
+      {
+        "name": "返回",
+        "width": 38,
+        "height": 38
+      },
+      {
+        "name": "会话审计\n2",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "项目管理\n2",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "角色管理\n—",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "用户管理\n3",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "系统",
+        "width": 166,
+        "height": 44
+      },
+      {
+        "name": "刷新",
+        "width": 50,
+        "height": 36
+      },
+      {
+        "name": "Deployment checks and release report\n观察模式\nReview the deployment checks and update the release report.\nwriter · Alpha Console\nJul 31, 06:20 PM",
+        "width": 334,
+        "height": 123.46875
+      },
+      {
+        "name": "Scheduled task failure investigation\n只读\nTrace the failed scheduled task without changing project files.\nadmin · Beta Automation\nJul 30, 03:15 PM",
+        "width": 334,
+        "height": 123.46875
+      },
+      {
+        "name": "回到最新",
+        "width": 44,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "name": "admin-delete-confirm",
+    "type": "confirm",
+    "message": "删除用户 writer？",
+    "adminWriteRequests": 0
+  },
+  {
+    "name": "compact-admin-users",
+    "text": "管理控制台\n管理分区\n会话审计\n项目管理\n角色管理\n用户管理\n系统\n用户管理\n3 个用户\n添加用户\n团队成员\nadmin\n活动中\n当前账号\nuser_admin · admin@example.com · role_admin\n编辑\n更多\nwriter\n活动中\nuser_writer · writer@example.com · role_writer\n编辑\n更多\ndisabled-user\n已停用\ndisabled · disabled@example.com\n编辑\n更多",
+    "pageWidth": 320,
+    "width": 320,
+    "active": {
+      "tag": "BODY",
+      "id": ""
+    },
+    "buttons": [
+      {
+        "name": "返回",
+        "width": 44,
+        "height": 44
+      },
+      {
+        "name": "添加用户",
+        "width": 74,
+        "height": 44
+      },
+      {
+        "name": "编辑",
+        "width": 76,
+        "height": 44
+      },
+      {
+        "name": "编辑",
+        "width": 76,
+        "height": 44
+      },
+      {
+        "name": "编辑",
+        "width": 76,
+        "height": 44
+      }
+    ]
+  },
+  {
+    "name": "work-dialog-focus",
+    "inspected": [
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "visible": true,
+        "text": ""
+      },
+      {
+        "tag": "PRE",
+        "id": "",
+        "visible": false,
+        "text": ""
+      },
+      {
+        "tag": "PRE",
+        "id": "",
+        "visible": false,
+        "text": ""
+      },
+      {
+        "tag": "PRE",
+        "id": "",
+        "visible": false,
+        "text": ""
+      }
+    ],
+    "focus": [
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "inDialog": true
+      },
+      {
+        "tag": "SUMMARY",
+        "id": "",
+        "inDialog": true
+      },
+      {
+        "tag": "BUTTON",
+        "id": "close-work-details-button",
+        "inDialog": true
+      }
+    ]
+  },
+  {
+    "name": "boot-failure-after-15s",
+    "waitMs": 15000,
+    "text": "Codex",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "BODY",
+      "id": ""
+    },
+    "buttons": []
+  },
+  {
+    "name": "mobile-share-unavailable-404",
+    "text": "Session not found",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "BODY",
+      "id": ""
+    },
+    "buttons": []
+  }
+]

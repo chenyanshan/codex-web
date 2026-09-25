@@ -264,6 +264,61 @@ test('runtime reads the matching final answer output_text from a rollout snapsho
   assert.equal(JSON.stringify(snapshot).includes('Target tool output'), false);
 });
 
+test('runtime uses the outer rollout turn when response metadata has an internal child turn id', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-turn-boundary-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  fs.writeFileSync(rolloutPath, [
+    {
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_outer' },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'Outer turn final response' }],
+        internal_chat_message_metadata_passthrough: { turn_id: 'turn_internal_child' },
+      },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_outer' },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_other' },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'Other turn final response' }],
+        internal_chat_message_metadata_passthrough: { turn_id: 'turn_other' },
+      },
+    },
+  ].map((entry) => JSON.stringify(entry)).join('\n'));
+  const client: CodexWebRuntimeClient = {
+    ...createThreadListClient(async () => ({ items: [], nextCursor: null })),
+    readThread: async (threadId) => ({
+      ...createThread(threadId),
+      path: rolloutPath,
+      turns: [],
+    }),
+  };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+
+  const snapshot = await runtime.readTurnSnapshot('thread_target', 'turn_outer');
+
+  assert.equal(snapshot?.status, 'completed');
+  assert.equal(snapshot?.items[0]?.text, 'Outer turn final response');
+  assert.equal(JSON.stringify(snapshot).includes('Other turn final response'), false);
+});
+
 test('runtime recovers a completed turn from rollout before thread turns are materialized', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-turn-rollout-only-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -4635,4 +4690,107 @@ test('same-session renames serialize native writes and a failed rename cannot bl
     assert.equal((await runtime.readSessionStatus('thread_1'))?.title, 'Retry');
     assert.equal((runtime as any).renameWrites.size, 0);
   } finally { release(); await runtime.stop(); }
+});
+
+test('official final and tool-only snapshots do not import contradictory rollout output', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-official-snapshot-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  fs.writeFileSync(rolloutPath, [
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn_official' } },
+    { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Stale disk final' }] } },
+  ].map((entry) => JSON.stringify(entry)).join('\n'));
+  for (const item of [
+    { id: 'official_final', type: 'agentMessage', role: null, phase: 'final_answer', text: 'Official final' },
+    { id: 'official_tool', type: 'commandExecution', role: null, phase: null, text: '' },
+  ]) {
+    const client = createThreadListClient(async () => ({ items: [], nextCursor: null }));
+    client.readThread = async () => ({ ...createThread(), path: rolloutPath, turns: [{ id: 'turn_official', status: 'completed', error: null, items: [item] }] });
+    const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+    const snapshot = await runtime.readTurnSnapshot('thread_1', 'turn_official');
+    assert.equal(snapshot?.status, 'completed');
+    assert.equal(snapshot?.items.length, 1);
+    assert.equal(snapshot?.items[0]?.text, item.text);
+    if (item.type === 'agentMessage') assert.deepEqual(snapshot?.items[0]?.content, [{ type: 'output_text', text: 'Official final' }]);
+    assert.equal(JSON.stringify(snapshot).includes('Stale disk final'), false);
+  }
+});
+
+for (const code of ['app_server_observation_interrupted', 'app_server_response_uncertain']) {
+  test(`runtime retains a started turn without a failure event on ${code}`, async () => {
+    const client = createThreadListClient(async () => ({ items: [], nextCursor: null }));
+    client.startTurn = async ({ onTurnStarted }) => {
+      await onTurnStarted?.({ threadId: 'thread_1', turnId: 'turn_uncertain' });
+      throw Object.assign(new Error('transport stopped'), { code });
+    };
+    const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+    assert.equal((await runtime.startTurn('thread_1', { text: 'hello' })).turnId, 'turn_uncertain');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(runtime.getTurnEvents('turn_uncertain').map((entry) => entry.event.type), ['turn.started', 'turn.observation_interrupted']);
+    const status = await runtime.readSessionStatus('thread_1');
+    assert.equal(status?.activityState, 'stale');
+    assert.equal(status?.activeTurnId, 'turn_uncertain');
+  });
+}
+
+test('recovered observation loss remains pending and repeated reads have a retry cooldown', async () => {
+  const client = createThreadListClient(async () => ({ items: [], nextCursor: null }));
+  client.readThread = async () => ({ ...createThread(), runtimeStatus: { type: 'active', activeFlags: [] }, turns: [{ id: 'turn_recover', status: 'inProgress', error: null, items: [] }] });
+  let waits = 0;
+  client.waitForTurnResult = async () => { waits++; throw Object.assign(new Error('connection lost'), { code: 'app_server_observation_interrupted' }); };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+  await runtime.readSession('thread_1');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal((await runtime.readSession('thread_1'))?.activityState, 'stale');
+  await runtime.readSession('thread_1');
+  assert.equal(waits, 1);
+  assert.deepEqual(runtime.getTurnEvents('turn_recover').map((entry) => entry.event.type), ['turn.started', 'turn.observation_interrupted']);
+});
+
+test('concurrent identical approval decisions share one send and conflicting decisions are rejected', async () => {
+  let finish!: () => void;
+  const sent = new Promise<void>((resolve) => { finish = resolve; });
+  let sends = 0;
+  const client = createThreadListClient(async () => ({ items: [], nextCursor: null }));
+  client.startTurn = async ({ onTurnStarted, onApprovalRequest }) => {
+    await onTurnStarted?.({ threadId: 'thread_1', turnId: 'turn_approval' });
+    await onApprovalRequest?.({ requestId: 'approval_once', kind: 'command', threadId: 'thread_1', turnId: 'turn_approval', itemId: 'item_once', availableDecisionKeys: ['accept', 'decline'] });
+    return { outputText: '', status: 'running', threadId: 'thread_1', turnId: 'turn_approval' };
+  };
+  client.respondToApproval = async () => { sends++; await sent; };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+  await runtime.startTurn('thread_1', { text: 'hello' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const first = runtime.resolveApproval('approval_once', 'accept');
+  const second = runtime.resolveApproval('approval_once', 'accept');
+  assert.equal(first, second);
+  await assert.rejects(runtime.resolveApproval('approval_once', 'deny'), /already being sent/);
+  assert.equal(sends, 1);
+  finish();
+  await Promise.all([first, second]);
+  assert.equal(runtime.getTurnEvents('turn_approval').filter((entry) => entry.event.type === 'approval.resolved').length, 1);
+});
+
+test('negotiated official history does not read rollout for empty or missing turns', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-web-official-empty-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  fs.writeFileSync(rolloutPath, JSON.stringify({ type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn_empty' } }));
+  const client = createThreadListClient(async () => ({ items: [], nextCursor: null }));
+  client.diagnostics = () => ({ legacyRolloutRecovery: false, server: { userAgent: 'codex/0.156.1' } });
+  client.readThread = async () => ({ ...createThread(), path: rolloutPath, turns: [{ id: 'turn_empty', status: 'completed', error: null, items: [] }] });
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+  assert.deepEqual(await runtime.readTurnSnapshot('thread_1', 'turn_empty'), { id: 'turn_empty', status: 'completed', error: null, items: [] });
+  client.readThread = async () => ({ ...createThread(), path: rolloutPath, turns: [] });
+  assert.equal(await runtime.readTurnSnapshot('thread_1', 'turn_empty'), null);
+  assert.deepEqual(runtime.diagnostics().appServer, client.diagnostics());
+});
+
+test('expired approval identity reports a typed missing result without sending a decision', async () => {
+  const client = createThreadListClient(async () => ({ items: [], nextCursor: null }));
+  let sends = 0;
+  client.respondToApproval = async () => { sends++; };
+  const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
+  await assert.rejects(runtime.resolveApproval('expired', 'accept'), { code: 'approval_not_found', message: 'Unknown approval: expired' });
+  assert.equal(sends, 0);
 });

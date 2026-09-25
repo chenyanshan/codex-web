@@ -1,0 +1,182 @@
+[
+  {
+    "left": 478,
+    "right": 1397,
+    "width": 1440,
+    "pageWidth": 1440,
+    "columnWidth": 164.96875
+  },
+  {
+    "left": 379,
+    "right": 937,
+    "width": 980,
+    "pageWidth": 980,
+    "columnWidth": 146.859375
+  },
+  {
+    "left": 24,
+    "right": 955,
+    "width": 979,
+    "pageWidth": 979,
+    "columnWidth": 165.5625
+  },
+  {
+    "left": 24,
+    "right": 744,
+    "width": 768,
+    "pageWidth": 768,
+    "columnWidth": 154.984375
+  },
+  {
+    "left": 478,
+    "right": 1397,
+    "width": 1440,
+    "pageWidth": 1440,
+    "columnWidth": 164.96875
+  },
+  {
+    "theme": "fresh-light",
+    "contrast": [
+      {
+        "selector": "p",
+        "ratio": 14.67911847763172
+      },
+      {
+        "selector": "a",
+        "ratio": 6.467249862810378
+      },
+      {
+        "selector": "code",
+        "ratio": 13.883092196940131
+      },
+      {
+        "selector": "code a",
+        "ratio": 13.883092196940131
+      },
+      {
+        "selector": "th",
+        "ratio": 14.67911847763172
+      },
+      {
+        "selector": "td",
+        "ratio": 14.67911847763172
+      }
+    ]
+  },
+  {
+    "theme": "retro",
+    "contrast": [
+      {
+        "selector": "p",
+        "ratio": 8.862392129950917
+      },
+      {
+        "selector": "a",
+        "ratio": 6.479904057702286
+      },
+      {
+        "selector": "code",
+        "ratio": 10.938652937872991
+      },
+      {
+        "selector": "code a",
+        "ratio": 10.938652937872991
+      },
+      {
+        "selector": "th",
+        "ratio": 8.862392129950917
+      },
+      {
+        "selector": "td",
+        "ratio": 8.862392129950917
+      }
+    ]
+  },
+  {
+    "theme": "terminal",
+    "contrast": [
+      {
+        "selector": "p",
+        "ratio": 12.34899199504068
+      },
+      {
+        "selector": "a",
+        "ratio": 8.147299978716196
+      },
+      {
+        "selector": "code",
+        "ratio": 10.935550361014965
+      },
+      {
+        "selector": "code a",
+        "ratio": 10.935550361014965
+      },
+      {
+        "selector": "th",
+        "ratio": 12.34899199504068
+      },
+      {
+        "selector": "td",
+        "ratio": 12.34899199504068
+      }
+    ]
+  },
+  {
+    "theme": "dark-gold",
+    "contrast": [
+      {
+        "selector": "p",
+        "ratio": 12.818389663382185
+      },
+      {
+        "selector": "a",
+        "ratio": 9.019682193679925
+      },
+      {
+        "selector": "code",
+        "ratio": 7.366085945167838
+      },
+      {
+        "selector": "code a",
+        "ratio": 7.366085945167838
+      },
+      {
+        "selector": "th",
+        "ratio": 12.818389663382185
+      },
+      {
+        "selector": "td",
+        "ratio": 12.818389663382185
+      }
+    ]
+  },
+  {
+    "theme": "oled-black",
+    "contrast": [
+      {
+        "selector": "p",
+        "ratio": 16.613677244887317
+      },
+      {
+        "selector": "a",
+        "ratio": 10.126674412778812
+      },
+      {
+        "selector": "code",
+        "ratio": 8.61793953236006
+      },
+      {
+        "selector": "code a",
+        "ratio": 8.61793953236006
+      },
+      {
+        "selector": "th",
+        "ratio": 16.613677244887317
+      },
+      {
+        "selector": "td",
+        "ratio": 16.613677244887317
+      }
+    ]
+  }
+]

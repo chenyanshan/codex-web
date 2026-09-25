@@ -1,11 +1,89 @@
-import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
+import {
+  toProviderResponseItems,
+} from './app_server/response_items.js';
+import {
+  normalizeEventItemType,
+  extractTextCandidate,
+  buildArtifactFromFilePath,
+  inferMimeTypeFromPath,
+  normalizeLegacyImageMedia,
+  extractWorkEventsFromResponseItems,
+  isAssistantVisibleItem,
+  isUserVisibleItem,
+  extractToolCallCorrelationId,
+  normalizeNullableString,
+  extractItemId,
+  buildWorkSummary,
+  extractStructuredString,
+  extractFileChangesValue,
+  classifyWorkEventKind,
+  buildWorkTitle,
+  buildWorkEventEmissionKey,
+} from './app_server/projection.js';
+import {
+  type SessionTurnCompletionState,
+  inspectTurnCompletionFromSessionPath,
+  findOpenTurnRuntimeErrorFromSessionPath,
+  buildSessionTaskCompleteResult,
+  shouldWaitForSessionTaskMaterialization,
+  cloneSessionResponseItem,
+  attachSessionResponseItems,
+  emitWorkEventsFromSessionPath,
+} from './app_server/compat/rollout.js';
+import {
+  needsLegacyRolloutRecovery,
+} from './app_server/compat/policy.js';
+import {
+  TurnObserver,
+} from './app_server/turn_observer.js';
+import type {
+  JsonValue,
+} from './app_server/generated/stable/serde_json/JsonValue.js';
+import type {
+  SandboxPolicy,
+} from './app_server/generated/stable/v2/SandboxPolicy.js';
+import {
+  callAppServer,
+  wireEnum,
+  type AppServerMethod,
+  type AppServerParams,
+  type AppServerResponse,
+} from './app_server/client.js';
+import {
+  initializeParams,
+  validateInitialize,
+  EXPERIMENTAL_DEPENDENCIES,
+} from './app_server/capabilities.js';
+import {
+  startServer,
+  connectWebSocket,
+  terminateChildProcess,
+  sleep,
+} from './app_server/lifecycle.js';
+import {
+  parseMessage,
+  acceptResponse,
+  rejectPending as rejectTransportPending,
+  AppServerResponseUncertainError,
+  AppServerObservationInterruptedError,
+} from './app_server/transport.js';
+import {
+  EventEmitter,
+} from 'node:events';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { writeSequencedStderrLine } from './sequenced_stderr.js';
-import { readCodexAccountIdentity } from './auth_state.js';
+import {
+  spawn,
+  type ChildProcess,
+} from 'node:child_process';
+import {
+  writeSequencedStderrLine,
+} from './sequenced_stderr.js';
+import {
+  readCodexAccountIdentity,
+} from './auth_state.js';
 import type {
   ProviderAppInfo,
   ProviderApprovalRequest,
@@ -27,16 +105,13 @@ import type {
   ProviderUsageReport,
   ProviderThreadListResult,
   ProviderThreadGoal,
-  ProviderResponseItem,
   ProviderThreadStartResult,
   ProviderThreadSummary,
   ProviderTurnProgress,
   ProviderTurnResult,
   ProviderTurnWorkEvent,
-  ProviderTurnWorkEventKind,
 } from './provider.js';
 
-const APP_SERVER_CONNECT_TIMEOUT_MS = 20_000;
 const INITIAL_TURN_MATERIALIZATION_SETTLE_MS = 2_000;
 const INITIAL_TURN_MATERIALIZATION_POLL_MS = 250;
 const MAX_WORK_STREAM_BYTES = 256 * 1024;
@@ -415,6 +490,21 @@ export class CodexAppClient extends EventEmitter {
 
   threadConfigDefaults: Map<string, ProviderConfigDefaults>;
 
+  readonly connectionIdentity = randomUUID();
+
+  connectionEpoch = 0;
+
+  lifecycleGeneration = 0;
+
+  launchedBinaryPath: string | null = null;
+
+  initializedServer: { userAgent: string; binary: string; initializedAt: number; version?: string | null } | null = null;
+
+  diagnostics() {
+    return { connected: this.connected, pendingRequests: this.pending.size, pendingApprovals: this.pendingApprovals.size,
+      server: this.initializedServer, legacyRolloutRecovery: needsLegacyRolloutRecovery(this.initializedServer?.userAgent ?? null), experimentalDependencies: EXPERIMENTAL_DEPENDENCIES };
+  }
+
   constructor({
     codexCliBin,
     codexCliArgs = [],
@@ -480,13 +570,11 @@ export class CodexAppClient extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    if (this.connected) {
-      return;
-    }
     if (this.startPromise) {
       await this.startPromise;
       return;
     }
+    if (this.connected) return;
     const task = this.startServer().finally(() => {
       if (this.startPromise === task) {
         this.startPromise = null;
@@ -497,6 +585,7 @@ export class CodexAppClient extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.lifecycleGeneration += 1;
     stopAllEarlyTurnEventCaptures(this);
     this.connected = false;
     this.socket?.close();
@@ -512,7 +601,8 @@ export class CodexAppClient extends EventEmitter {
     this.pendingApprovals.clear();
     this.approvedExecutions.clear();
     this.threadConfigDefaults.clear();
-    this.rejectPending(new Error('Codex app client stopped'));
+    this.rejectPending(new AppServerObservationInterruptedError('Codex app client stopped'));
+    this.emit('observation_interrupted', new AppServerObservationInterruptedError('Codex app client stopped'));
   }
 
   async listThreads({
@@ -586,12 +676,11 @@ export class CodexAppClient extends EventEmitter {
   } = {}): Promise<ProviderThreadStartResult> {
     const result: any = await this.request('thread/start', {
       cwd,
-      title,
-      approvalPolicy,
+      approvalPolicy: wireEnum(approvalPolicy, ['untrusted', 'on-request', 'never'] as const, 'approval policy'),
       model,
       modelProvider: null,
       serviceTier,
-      sandbox: sandboxMode,
+      sandbox: sandboxMode === null ? null : wireEnum(sandboxMode, ['read-only', 'workspace-write', 'danger-full-access'] as const, 'sandbox mode'),
       config: buildRuntimeEnvironmentConfig(runtimeEnv),
       serviceName: null,
       baseInstructions: null,
@@ -602,6 +691,10 @@ export class CodexAppClient extends EventEmitter {
       persistExtendedHistory: false,
     }, { timeoutMs: 30_000 });
     const threadId = String(result.thread.id);
+    if (title?.trim()) {
+      await this.setThreadName(threadId, title.trim());
+      result.thread.name = title.trim();
+    }
     const effectiveSettings = normalizeConfigDefaults(result);
     this.threadConfigDefaults.set(threadId, effectiveSettings);
     return {
@@ -629,11 +722,11 @@ export class CodexAppClient extends EventEmitter {
     const result: any = await this.request('thread/resume', {
       threadId,
       cwd: null,
-      approvalPolicy,
+      approvalPolicy: approvalPolicy === null ? null : wireEnum(approvalPolicy, ['untrusted', 'on-request', 'never'] as const, 'approval policy'),
       baseInstructions: null,
       developerInstructions,
       config: buildRuntimeEnvironmentConfig(runtimeEnv),
-      sandbox: sandboxMode,
+      sandbox: sandboxMode === null ? null : wireEnum(sandboxMode, ['read-only', 'workspace-write', 'danger-full-access'] as const, 'sandbox mode'),
       model: null,
       modelProvider: null,
       personality: null,
@@ -680,7 +773,7 @@ export class CodexAppClient extends EventEmitter {
     const result: any = await this.request('thread/goal/set', {
       threadId,
       objective,
-      status,
+      status: status === null ? null : wireEnum(status, ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'] as const, 'goal status'),
     }, { timeoutMs: 15_000 });
     const autoStartedTurnId = await autoStartedTurnPromise;
     if (suppressAutoTurn && autoStartedTurnId) {
@@ -725,7 +818,7 @@ export class CodexAppClient extends EventEmitter {
       const result: any = await this.request('thread/goal/set', {
         threadId,
         objective,
-        status,
+        status: status === null ? null : wireEnum(status, ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'] as const, 'goal status'),
       }, { timeoutMs: 15_000 });
       const goal = mapThreadGoal(result?.goal ?? null);
       const turnId = await autoStartedTurnPromise;
@@ -862,13 +955,13 @@ export class CodexAppClient extends EventEmitter {
             text_elements: [],
           }],
         cwd,
-        approvalPolicy,
+        approvalPolicy: wireEnum(approvalPolicy, ['untrusted', 'on-request', 'never'] as const, 'approval policy'),
         sandboxPolicy: mapSandboxPolicy(sandboxMode),
         model: effectiveModel,
         serviceTier,
         effort: effectiveEffort,
         summary: null,
-        personality,
+        personality: personality === null ? null : wireEnum(personality, ['none', 'friendly', 'pragmatic'] as const, 'personality'),
         outputSchema: null,
         collaborationMode: serializeCollaborationMode({
           collaborationMode,
@@ -984,13 +1077,14 @@ export class CodexAppClient extends EventEmitter {
   }): Promise<void> {
     const pending = this.pendingApprovals.get(String(requestId)) ?? null;
     if (!pending) {
-      throw new Error(`Unknown approval request: ${requestId}`);
+      throw Object.assign(new Error(`Unknown approval request: ${requestId}`), { code: 'approval_not_found' });
     }
     const result = buildApprovalResponseResult(pending, option);
     const approvedExecution = createApprovedExecution(pending, option, this.turnPollNow());
     if (approvedExecution) {
       this.approvedExecutions.set(approvedExecution.requestId, approvedExecution);
     }
+    this.pendingApprovals.delete(String(requestId));
     try {
       this.send({
         jsonrpc: '2.0',
@@ -1001,7 +1095,7 @@ export class CodexAppClient extends EventEmitter {
       if (approvedExecution) {
         this.approvedExecutions.delete(approvedExecution.requestId);
       }
-      throw error;
+      throw new AppServerResponseUncertainError('approval/response', error instanceof Error ? error.message : String(error));
     }
     this.pendingApprovals.delete(String(requestId));
     if (approvedExecution) {
@@ -1120,7 +1214,7 @@ export class CodexAppClient extends EventEmitter {
     marketplaceName?: string | null;
     marketplacePath?: string | null;
   }): Promise<ProviderPluginDetail | null> {
-    const params: Record<string, unknown> = {
+    const params: AppServerParams<'plugin/read'> = {
       pluginName,
     };
     if (marketplacePath) {
@@ -1144,7 +1238,7 @@ export class CodexAppClient extends EventEmitter {
     marketplaceName?: string | null;
     marketplacePath?: string | null;
   }): Promise<ProviderPluginInstallResult> {
-    const params: Record<string, unknown> = {
+    const params: AppServerParams<'plugin/read'> = {
       pluginName,
     };
     if (marketplacePath) {
@@ -1249,7 +1343,7 @@ export class CodexAppClient extends EventEmitter {
   }
 
   async reloadMcpServers(): Promise<void> {
-    await this.request('config/mcpServer/reload', {}, { timeoutMs: 30_000 });
+    await this.request('config/mcpServer/reload', undefined, { timeoutMs: 30_000 });
   }
 
   async writeConfigValue({
@@ -1267,197 +1361,24 @@ export class CodexAppClient extends EventEmitter {
   }): Promise<void> {
     await this.request('config/value/write', {
       keyPath,
-      value,
+      value: value as JsonValue,
       mergeStrategy,
       filePath,
       expectedVersion,
     }, { timeoutMs: 30_000 });
   }
 
-  async startServer(): Promise<void> {
-    if (this.autolaunch && this.launchCommand?.trim()) {
-      const launcher = this.spawnImpl(this.launchCommand, {
-        shell: true,
-        detached: true,
-        stdio: 'ignore',
-      });
-      launcher.unref?.();
-    }
-    this.childStartError = null;
-    this.childStderrTail = [];
-    this.childStderrSequence = 0;
-    this.port = await reservePort();
-    const featureArgs = this.enabledFeatures.flatMap((feature) => ['--enable', feature]);
-    const launchSpec = createCodexAppServerLaunchSpec({
-      command: this.codexCliBin,
-      args: [...this.codexCliArgs, 'app-server', ...featureArgs, '--listen', `ws://127.0.0.1:${this.port}`],
-      platform: this.platform,
-    });
-    try {
-      this.child = launchSpec.args
-        ? this.spawnImpl(launchSpec.command, launchSpec.args, {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          ...launchSpec.options,
-        })
-        : this.spawnImpl(launchSpec.command, {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          ...launchSpec.options,
-        });
-    } catch (error) {
-      throw createCodexLaunchError({
-        command: launchSpec.displayCommand,
-        error,
-        platform: this.platform,
-      });
-    }
-    this.logDebug('app_server_spawned', {
-      command: launchSpec.displayCommand,
-      spawnCommand: launchSpec.command,
-      spawnArgs: launchSpec.args,
-      port: this.port,
-      codexCliArgs: this.codexCliArgs,
-      enabledFeatures: this.enabledFeatures,
-      autolaunch: this.autolaunch,
-      launchCommand: this.launchCommand,
-    });
-    this.child.stderr?.on('data', (chunk) => {
-      const text = String(chunk).trim();
-      if (text) {
-        this.childStderrSequence += 1;
-        rememberCodexStderrLine(this.childStderrTail, {
-          sequence: this.childStderrSequence,
-          text,
-        });
-        this.logger.debug?.(`[codex-app] codex.stderr ${text}`);
-      }
-    });
-    this.child.on('error', (error) => {
-      this.childStartError = createCodexLaunchError({
-        command: launchSpec.displayCommand,
-        error,
-        platform: this.platform,
-      });
-    });
-    this.child.on('exit', () => {
-      this.connected = false;
-      this.socket = null;
-    });
-    await this.connectWebSocket();
-    await this.initialize();
-  }
-
-  async connectWebSocket(): Promise<void> {
-    const url = `ws://127.0.0.1:${this.port}`;
-    const started = Date.now();
-    while (Date.now() - started < APP_SERVER_CONNECT_TIMEOUT_MS) {
-      if (this.childStartError) {
-        throw this.childStartError;
-      }
-      if (this.child && this.child.exitCode !== null && !this.connected) {
-        throw createCodexAppServerExitedError({
-          command: this.codexCliBin,
-          exitCode: this.child.exitCode,
-          stderrTail: codexStderrTextTail(this.childStderrTail),
-        });
-      }
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const ws = this.webSocketFactory(url);
-          const onError = (error: any) => {
-            ws.close();
-            reject(error instanceof Error ? error : new Error(String(error?.message ?? 'WebSocket connect failed')));
-          };
-          ws.addEventListener('open', () => {
-            this.socket = ws;
-            this.connected = true;
-            ws.addEventListener('message', (message) => this.handleMessage(String(message.data)));
-            ws.addEventListener('close', () => {
-              this.connected = false;
-              this.socket = null;
-            });
-            resolve();
-          }, { once: true });
-          ws.addEventListener('error', onError, { once: true });
-        });
-        return;
-      } catch {
-        await sleep(250);
-      }
-    }
-    if (this.childStartError) {
-      throw this.childStartError;
-    }
-    throw createCodexConnectTimeoutError({
-      command: this.codexCliBin,
-      url,
-      stderrTail: codexStderrTextTail(this.childStderrTail),
-    });
-  }
+  async startServer(): Promise<void> { return startServer.call(this); }
+  async connectWebSocket(): Promise<void> { return connectWebSocket.call(this); }
 
   async initialize(): Promise<void> {
-    await this.request('initialize', {
-      clientInfo: this.clientInfo,
-      capabilities: {
-        experimentalApi: true,
-        optOutNotificationMethods: [
-          'codex/event/agent_reasoning_delta',
-          'codex/event/reasoning_content_delta',
-          'codex/event/reasoning_raw_content_delta',
-        ],
-      },
-    }, { timeoutMs: 30_000 });
+    const response = validateInitialize(await this.request('initialize', initializeParams(this.clientInfo), { timeoutMs: 30_000 }));
+    this.initializedServer = { userAgent: response.userAgent, binary: this.launchedBinaryPath ?? this.codexCliBin, initializedAt: Date.now(), version: response.userAgent.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?/u)?.[0] ?? null };
     this.send({ jsonrpc: '2.0', method: 'initialized' });
   }
 
-  async request(method: string, params: any, { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): Promise<any> {
-    if (!this.socket || !this.connected) {
-      await this.start();
-    }
-    const id = String(++this.requestId);
-    const startedAt = this.turnPollNow();
-    this.logDebug('rpc_request_start', {
-      id,
-      method,
-      timeoutMs,
-      params: summarizeRpcParams(method, params),
-    });
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (!this.pending.has(id)) {
-          return;
-        }
-        this.pending.delete(id);
-        this.logDebug('rpc_request_timeout', {
-          id,
-          method,
-          elapsedMs: this.turnPollNow() - startedAt,
-        });
-        reject(new Error(`Timed out waiting for Codex JSON-RPC response to ${method}`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (result) => {
-          clearTimeout(timer);
-          this.logDebug('rpc_request_result', {
-            id,
-            method,
-            elapsedMs: this.turnPollNow() - startedAt,
-            result: summarizeRpcResult(method, result),
-          });
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          this.logDebug('rpc_request_error', {
-            id,
-            method,
-            elapsedMs: this.turnPollNow() - startedAt,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          reject(error);
-        },
-      });
-      this.send({ jsonrpc: '2.0', id, method, params });
-    });
+  async request<M extends AppServerMethod>(method: M, params: AppServerParams<M>, { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): Promise<AppServerResponse<M>> {
+    return callAppServer(this, method, params, timeoutMs);
   }
 
   send(payload: any): void {
@@ -1468,36 +1389,8 @@ export class CodexAppClient extends EventEmitter {
   }
 
   handleMessage(raw: string): void {
-    let message;
-    try {
-      message = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if ('id' in message && !('method' in message)) {
-      const pending = this.pending.get(String(message.id));
-      if (!pending) {
-        return;
-      }
-      this.pending.delete(String(message.id));
-      if (message.error) {
-        const error = new Error(message.error.message || 'JSON-RPC error') as Error & {
-          code?: string;
-          rpcCode?: unknown;
-          data?: unknown;
-        };
-        error.rpcCode = message.error.code;
-        error.data = message.error.data;
-        const codexErrorInfo = message.error.data?.codexErrorInfo ?? message.error.data?.codex_error_info;
-        if (codexErrorInfo?.activeTurnNotSteerable || codexErrorInfo?.active_turn_not_steerable) {
-          error.code = 'active_turn_not_steerable';
-        }
-        pending.reject(error);
-        return;
-      }
-      pending.resolve(message.result);
-      return;
-    }
+    const message = parseMessage(raw);
+    if (!message || acceptResponse(this, message)) return;
 
     if ('method' in message) {
       this.noteApprovedExecutionSignalFromNotification(message);
@@ -1513,7 +1406,21 @@ export class CodexAppClient extends EventEmitter {
     const pendingApproval = mapPendingApproval(message);
     if (!pendingApproval) {
       this.emit('server_request', message);
-      return false;
+      this.send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Unsupported server request: ${message.method}` } });
+      return true;
+    }
+    if (this.connectionEpoch > 0) {
+      pendingApproval.rpcId = `${this.connectionIdentity}:${this.connectionEpoch}:${pendingApproval.rpcId}`;
+      pendingApproval.request.requestId = pendingApproval.rpcId;
+    }
+    if (!pendingApproval.request.threadId || pendingApproval.request.threadId === 'undefined') {
+      this.send({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: 'Approval request requires thread identity' } });
+      return true;
+    }
+    if (this.pendingApprovals.has(pendingApproval.rpcId)) return true;
+    if (this.pendingApprovals.size >= 1024) {
+      this.send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'Client approval capacity reached' } });
+      return true;
     }
     this.pendingApprovals.set(pendingApproval.rpcId, pendingApproval);
     this.emit('approval_request', pendingApproval.request);
@@ -1521,10 +1428,7 @@ export class CodexAppClient extends EventEmitter {
   }
 
   rejectPending(error: Error): void {
-    for (const pending of this.pending.values()) {
-      pending.reject(error);
-    }
-    this.pending.clear();
+    rejectTransportPending(this, error);
   }
 
   captureNextTurnStartedForThread(threadId: string, timeoutMs: number): Promise<string | null> {
@@ -1753,12 +1657,14 @@ export class CodexAppClient extends EventEmitter {
     stderrBaseline?: number;
     turnStartStatus?: string | null;
   }): Promise<ProviderTurnResult> {
+    const legacyRolloutRecovery = needsLegacyRolloutRecovery(this.initializedServer?.userAgent ?? null);
     let deadline = this.turnPollNow() + timeoutMs;
     let firstTerminalWithoutOutputAt = null;
     let lastTurnSnapshotKey = null;
     let stableTerminalReadCount = 0;
     let terminalSettleLeaseRenewed = false;
     let pollCount = 0;
+    let consecutiveReadFailures = 0;
     let includeTurnsUnsupported = false;
     let includeTurnsUnsupportedAt = 0;
     let pendingApprovalWaitLogged = false;
@@ -1782,7 +1688,36 @@ export class CodexAppClient extends EventEmitter {
     let sawInterruptedTurnCompletionNotification = false;
     let sawTurnWorkActivity = false;
     let turnNotificationError: string | null = null;
+    const official = new TurnObserver(threadId, turnId);
+    let observationError: Error | null = null;
+    let wakeObservation: (() => void) | null = null;
+    const onObservationInterrupted = (error: Error) => { observationError = error; wakeObservation?.(); };
+    const waitForReconciliation = async (ms: number) => {
+      if (official.terminal || turnNotificationError || observationError) return;
+      if (this.turnPollSleep !== sleep) { await this.turnPollSleep(ms); return; }
+      await new Promise<void>((resolve) => {
+        const finish = () => { clearTimeout(timer); wakeObservation = null; resolve(); };
+        const timer = setTimeout(finish, ms);
+        wakeObservation = finish;
+      });
+    };
+    const officialResult = (): ProviderTurnResult | null => {
+      if (!official.terminal) return null;
+      const turn = mapTurn(official.terminal);
+      if (turn.status === 'failed') throw new Error(turn.error || 'Codex turn failed');
+      const outputText = extractTurnOutputText(turn) || resolveProgressPreviewText(progressState);
+      const outputArtifacts = extractTurnOutputArtifacts(turn);
+      emitWorkEventsFromTurnSnapshot({ turn, onWorkEvent, emittedKeys: emittedSnapshotWorkEvents });
+      return { threadId, turnId, title: null, status: turn.status,
+        outputText, previewText: resolveProgressPreviewText(progressState),
+        outputArtifacts, outputMedia: normalizeLegacyImageMedia(outputArtifacts),
+        responseItems: toProviderResponseItems(turn.items.map((item) => item.raw).filter(Boolean)),
+        outputState: turn.status === 'interrupted' ? 'interrupted' : 'complete', finalSource: 'official_turn_completed' };
+    };
     const onNotification = (notification) => {
+      const eventThreadId = extractThreadIdFromNotification(notification);
+      if (eventThreadId && eventThreadId !== threadId) return;
+      if (official.accept(notification)) wakeObservation?.();
       if (isTerminalNotificationForThread(notification, threadId, turnId)) {
         sawTerminalNotification = true;
       }
@@ -1792,6 +1727,7 @@ export class CodexAppClient extends EventEmitter {
       const notificationError = extractTurnErrorNotificationMessage(notification, { threadId, turnId });
       if (notificationError) {
         turnNotificationError = notificationError;
+        wakeObservation?.();
       }
       const workEvent = extractWorkEventUpdate(notification, {
         threadId,
@@ -1837,6 +1773,7 @@ export class CodexAppClient extends EventEmitter {
     };
     this.on('notification', onNotification);
     this.on('approval_request', onApprovalEvent);
+    this.on('observation_interrupted', onObservationInterrupted);
     this.logDebug('turn_wait_start', {
       threadId,
       turnId,
@@ -1862,6 +1799,10 @@ export class CodexAppClient extends EventEmitter {
         }
       }
       while (true) {
+        const eventResult = officialResult();
+        if (eventResult) return eventResult;
+        if (observationError) throw observationError;
+        if (turnNotificationError) throw new Error(turnNotificationError);
         const pendingApprovalCount = this.getPendingApprovals({ threadId, turnId }).length;
         const pastDeadline = this.turnPollNow() >= deadline;
         if (pastDeadline && pendingApprovalCount > 0) {
@@ -1885,6 +1826,14 @@ export class CodexAppClient extends EventEmitter {
         try {
           thread = await this.readThread(threadId, !includeTurnsUnsupported);
         } catch (error) {
+          if (official.terminal) return officialResult()!;
+          consecutiveReadFailures += 1;
+          if (!legacyRolloutRecovery && consecutiveReadFailures >= 3 && (isRequestTimeoutError(error) || isThreadMaterializationPendingError(error))) {
+            throw new AppServerObservationInterruptedError(`Unable to synchronize Codex turn ${turnId} after three reads`);
+          }
+          if (this.turnPollNow() >= deadline && pendingApprovalCount === 0) {
+            throw new AppServerObservationInterruptedError(`Unable to synchronize Codex turn ${turnId}`);
+          }
           if (isThreadMaterializationPendingError(error)) {
             this.logDebug('turn_poll_retry', {
               threadId,
@@ -1892,7 +1841,7 @@ export class CodexAppClient extends EventEmitter {
               pollCount,
               reason: 'thread_materialization_pending',
             });
-            await this.turnPollSleep(1000);
+            await waitForReconciliation(1000);
             continue;
           }
           if (isRequestTimeoutError(error)) {
@@ -1902,7 +1851,7 @@ export class CodexAppClient extends EventEmitter {
               pollCount,
               reason: 'thread_read_timeout',
             });
-            await this.turnPollSleep(1000);
+            await waitForReconciliation(1000);
             continue;
           }
           if (isIncludeTurnsUnsupportedError(error)) {
@@ -1918,7 +1867,7 @@ export class CodexAppClient extends EventEmitter {
               thread = await this.readThread(threadId, false);
             } catch (fallbackError) {
               if (isThreadMaterializationPendingError(fallbackError) || isRequestTimeoutError(fallbackError)) {
-                await this.turnPollSleep(250);
+                await waitForReconciliation(250);
                 continue;
               }
               throw fallbackError;
@@ -1927,6 +1876,10 @@ export class CodexAppClient extends EventEmitter {
             throw error;
           }
         }
+        consecutiveReadFailures = 0;
+        const completedDuringRead = officialResult();
+        if (completedDuringRead) return completedDuringRead;
+        if (observationError) throw observationError;
         const turn = includeTurnsUnsupported
           ? null
           : thread?.turns?.find((entry) => entry.id === turnId) ?? null;
@@ -1942,13 +1895,13 @@ export class CodexAppClient extends EventEmitter {
         });
         if (!turnHasNativeWorkItems(turn)) {
           emitWorkEventsFromSessionPath({
-            sessionPath: thread?.path ?? null,
+            sessionPath: legacyRolloutRecovery ? thread?.path ?? null : null,
             turnId,
             onWorkEvent,
             emittedKeys: emittedSnapshotWorkEvents,
           });
         }
-        const openTurnRuntimeError = findOpenTurnRuntimeErrorFromSessionPath(thread?.path ?? null, turnId);
+        const openTurnRuntimeError = findOpenTurnRuntimeErrorFromSessionPath(legacyRolloutRecovery ? thread?.path ?? null : null, turnId);
         if (openTurnRuntimeError) {
           this.logDebug('turn_wait_error', {
             threadId,
@@ -1969,23 +1922,12 @@ export class CodexAppClient extends EventEmitter {
           });
           throw new Error(turnNotificationError);
         }
-        const stderrRuntimeError = findCodexStderrRuntimeError(this.childStderrTail, stderrBaseline);
-        if (stderrRuntimeError) {
-          this.logDebug('turn_wait_error', {
-            threadId,
-            turnId,
-            pollCount,
-            reason: 'stderr_runtime_error',
-            error: stderrRuntimeError,
-          });
-          throw new Error(stderrRuntimeError);
-        }
         const turnIsTerminal = Boolean(turn && isTurnTerminal(turn.status));
         const threadRuntimeType = normalizeNullableString(thread?.runtimeStatus?.type);
         const shouldRenewObserverLease = pendingApprovalCount > 0
           || Boolean(turn && !turnIsTerminal)
           || threadRuntimeType === 'active'
-          || (includeTurnsUnsupported && !sawTerminalNotification);
+          || (legacyRolloutRecovery && includeTurnsUnsupported && !sawTerminalNotification);
         if (pastDeadline && !turnIsTerminal) {
           if (!shouldRenewObserverLease) {
             break;
@@ -2027,7 +1969,7 @@ export class CodexAppClient extends EventEmitter {
             )
             && this.turnPollNow() + 250 < deadline
           ) {
-            await this.turnPollSleep(250);
+            await waitForReconciliation(250);
             continue;
           }
           if (previewText) {
@@ -2062,7 +2004,7 @@ export class CodexAppClient extends EventEmitter {
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
             return result;
           }
-          await this.turnPollSleep(250);
+          await waitForReconciliation(250);
           continue;
         }
         if (turn) {
@@ -2097,6 +2039,26 @@ export class CodexAppClient extends EventEmitter {
         if (turn && initialActiveTurnSnapshotPending && !isTurnTerminal(turn.status)) {
           initialActiveTurnSnapshotPending = false;
         }
+        if (turn && isTurnTerminal(turn.status) && !legacyRolloutRecovery) {
+          // A resumed snapshot can briefly expose the prior interrupted materialization.
+          const awaitingMaterialization = initialActiveTurnSnapshotPending && normalizeTurnStatusKey(turn.status) === 'interrupted'
+            && !sawTerminalNotification && !turn.items.length;
+          if (awaitingMaterialization) {
+            initialInterruptedSnapshotAt ??= this.turnPollNow();
+            if (this.turnPollNow() - initialInterruptedSnapshotAt < INITIAL_TURN_MATERIALIZATION_SETTLE_MS) {
+              await waitForReconciliation(INITIAL_TURN_MATERIALIZATION_POLL_MS);
+              continue;
+            }
+          }
+          if (normalizeTurnStatusKey(turn.status) === 'failed') throw new Error(turn.error || 'Codex turn failed');
+          const outputArtifacts = extractTurnOutputArtifacts(turn);
+          return { threadId, turnId, title: thread?.title ?? null, status: turn.status,
+            outputText: extractTurnOutputText(turn) || resolveProgressPreviewText(progressState),
+            previewText: resolveProgressPreviewText(progressState), outputArtifacts,
+            outputMedia: normalizeLegacyImageMedia(outputArtifacts),
+            responseItems: toProviderResponseItems(turn.items.map((item) => item.raw).filter(Boolean)),
+            outputState: normalizeTurnStatusKey(turn.status) === 'interrupted' ? 'interrupted' : 'complete', finalSource: 'official_thread_snapshot' };
+        }
         if (turn && isTurnTerminal(turn.status)) {
           const outputText = extractTurnOutputText(turn);
           if (outputText) {
@@ -2119,7 +2081,7 @@ export class CodexAppClient extends EventEmitter {
               finalSource: 'thread_items',
               status: turn.status,
             };
-            const enrichedResult = attachSessionResponseItems(result, thread?.path ?? null);
+            const enrichedResult = attachSessionResponseItems(result, legacyRolloutRecovery ? thread?.path ?? null : null);
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(enrichedResult));
             return enrichedResult;
           }
@@ -2143,7 +2105,7 @@ export class CodexAppClient extends EventEmitter {
               finalSource: 'thread_items_media',
               status: turn.status,
             };
-            const enrichedResult = attachSessionResponseItems(result, thread?.path ?? null);
+            const enrichedResult = attachSessionResponseItems(result, legacyRolloutRecovery ? thread?.path ?? null : null);
             this.logDebug('turn_wait_return', summarizeTurnResultForDebug(enrichedResult));
             return enrichedResult;
           }
@@ -2194,7 +2156,7 @@ export class CodexAppClient extends EventEmitter {
                 materializationElapsedMs,
                 materializationSettleMs: INITIAL_TURN_MATERIALIZATION_SETTLE_MS,
               });
-              await this.turnPollSleep(INITIAL_TURN_MATERIALIZATION_POLL_MS);
+              await waitForReconciliation(INITIAL_TURN_MATERIALIZATION_POLL_MS);
               continue;
             }
             initialActiveTurnSnapshotPending = false;
@@ -2283,7 +2245,7 @@ export class CodexAppClient extends EventEmitter {
                 terminalElapsedMs: this.turnPollNow() - firstTerminalWithoutOutputAt,
                 terminalSettleMs,
               });
-              await this.turnPollSleep(1000);
+              await waitForReconciliation(1000);
               continue;
             }
           }
@@ -2348,9 +2310,9 @@ export class CodexAppClient extends EventEmitter {
                 turnId,
                 pollCount,
                 reason: 'waiting_for_session_task_complete',
-                sessionPath: thread?.path ?? null,
+                sessionPath: legacyRolloutRecovery ? thread?.path ?? null : null,
               });
-              await this.turnPollSleep(1000);
+              await waitForReconciliation(1000);
               continue;
             }
             const previewText = resolveTurnPreviewText(turn, progressState);
@@ -2385,7 +2347,7 @@ export class CodexAppClient extends EventEmitter {
                 reason: 'unsettled_assistant_activity',
                 progress: summarizeProgressState(progressState),
               });
-              await this.turnPollSleep(1000);
+              await waitForReconciliation(1000);
               continue;
             }
             const previewText = resolveTurnPreviewText(turn, progressState);
@@ -2425,8 +2387,9 @@ export class CodexAppClient extends EventEmitter {
           this.logDebug('turn_wait_return', summarizeTurnResultForDebug(result));
           return result;
         }
-        await this.turnPollSleep(1000);
+        await waitForReconciliation(legacyRolloutRecovery ? 1000 : Math.min(30_000, 1000 * 2 ** Math.min(pollCount - 1, 5)));
       }
+      if (!legacyRolloutRecovery) throw new AppServerObservationInterruptedError(`Timed out synchronizing Codex turn ${turnId}`);
       const previewText = resolveProgressPreviewText(progressState);
       if (previewText) {
         const result = {
@@ -2453,11 +2416,13 @@ export class CodexAppClient extends EventEmitter {
       this.clearApprovedExecutionsForTurn({ threadId, turnId });
       this.off('notification', onNotification);
       this.off('approval_request', onApprovalEvent);
+      this.off('observation_interrupted', onObservationInterrupted);
+      wakeObservation?.();
     }
   }
 }
 
-function buildRuntimeEnvironmentConfig(runtimeEnv: Record<string, string | null>): Record<string, unknown> {
+function buildRuntimeEnvironmentConfig(runtimeEnv: Record<string, string | null>): Record<string, JsonValue> {
   const entries = Object.entries(runtimeEnv);
   if (entries.length === 0) {
     return {};
@@ -2910,11 +2875,6 @@ function summarizeApprovedExecutionSignal(entry: ApprovedExecution, signalKind: 
   };
 }
 
-function normalizeNullableString(value: unknown): string | null {
-  const normalized = String(value ?? '').trim();
-  return normalized || null;
-}
-
 function normalizeConfigDefaults(value: any): ProviderConfigDefaults {
   const config = value?.config && typeof value.config === 'object' ? value.config : value;
   return {
@@ -3203,16 +3163,6 @@ function summarizeProgressState(progressState: Partial<ProgressState>) {
     sawAssistantActivity: Boolean(progressState?.sawAssistantActivity),
     lastAssistantActivityAt: progressState?.lastAssistantActivityAt ?? 0,
   };
-}
-
-interface SessionTurnCompletionState {
-  hasTaskComplete: boolean;
-  hasTurnAborted: boolean;
-  lastAgentMessage: string | null;
-  toolSuggestionMessage: string | null;
-  responseItems: ProviderResponseItem[];
-  outputArtifacts: Array<{ kind?: string | null; path?: string | null }>;
-  runtimeError: string | null;
 }
 
 function summarizeSessionState(
@@ -3819,14 +3769,14 @@ function mergeModelCatalog(baseModels, overlayModels) {
   return merged;
 }
 
-function mapSandboxPolicy(mode) {
+function mapSandboxPolicy(mode): SandboxPolicy {
   if (mode === 'read-only') {
-    return { type: 'readOnly' };
+    return { type: 'readOnly' } as SandboxPolicy;
   }
   if (mode === 'danger-full-access') {
     return { type: 'dangerFullAccess' };
   }
-  return { type: 'workspaceWrite' };
+  return { type: 'workspaceWrite' } as SandboxPolicy;
 }
 
 const TERMINAL_TURN_STATUS_KEYS = new Set([
@@ -3950,7 +3900,9 @@ function extractTurnErrorNotificationMessage(
     return null;
   }
   const params = notification.params ?? {};
+  if (params.willRetry === true) return null;
   const notificationTurnId = extractNotificationTurnId(params);
+  if (params.willRetry === false && (notificationThreadId !== threadId || notificationTurnId !== turnId)) return null;
   if (notificationTurnId && notificationTurnId !== turnId) {
     return null;
   }
@@ -4084,10 +4036,6 @@ function extractTurnOutputArtifacts(turn) {
     });
 }
 
-function normalizeLegacyImageMedia(artifacts) {
-  return artifacts.filter((artifact) => artifact?.kind === 'image');
-}
-
 function extractOutputArtifactFromItem(item) {
   const savedPath = typeof item?.savedPath === 'string' ? item.savedPath.trim() : '';
   if (savedPath && fs.existsSync(savedPath)) {
@@ -4119,74 +4067,6 @@ function extractOutputArtifactFromItem(item) {
     }
   }
   return [];
-}
-
-function buildArtifactFromFilePath(filePath) {
-  const normalizedPath = String(filePath ?? '').trim();
-  const kind = inferArtifactKindFromPath(normalizedPath);
-  let sizeBytes = null;
-  try {
-    sizeBytes = fs.statSync(normalizedPath).size;
-  } catch {
-    sizeBytes = null;
-  }
-  return {
-    kind,
-    path: normalizedPath,
-    displayName: path.basename(normalizedPath) || null,
-    mimeType: inferMimeTypeFromPath(normalizedPath),
-    sizeBytes,
-    caption: null,
-    source: 'provider_native' as const,
-    turnId: null,
-  };
-}
-
-function inferArtifactKindFromPath(filePath) {
-  const extension = path.extname(String(filePath ?? '')).toLowerCase();
-  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(extension)) {
-    return 'image';
-  }
-  if (['.mp4', '.mov', '.mkv', '.webm'].includes(extension)) {
-    return 'video';
-  }
-  if (['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.amr'].includes(extension)) {
-    return 'audio';
-  }
-  return 'file';
-}
-
-function inferMimeTypeFromPath(filePath) {
-  const extension = path.extname(String(filePath ?? '')).toLowerCase();
-  return ({
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.pdf': 'application/pdf',
-    '.doc': 'application/msword',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    '.xls': 'application/vnd.ms-excel',
-    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    '.csv': 'text/csv',
-    '.txt': 'text/plain',
-    '.md': 'text/markdown',
-    '.json': 'application/json',
-    '.html': 'text/html',
-    '.zip': 'application/zip',
-    '.tar': 'application/x-tar',
-    '.gz': 'application/gzip',
-    '.tgz': 'application/gzip',
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav',
-    '.ogg': 'audio/ogg',
-    '.m4a': 'audio/mp4',
-  })[extension] ?? null;
 }
 
 function isLocalFilePath(value) {
@@ -4259,455 +4139,6 @@ function materializeInlineImage(savedPath, buffer) {
   } catch {
     return null;
   }
-}
-
-function inspectTurnCompletionFromSessionPath(sessionPath, turnId) {
-  if (!sessionPath || !turnId || !fs.existsSync(sessionPath)) {
-    return emptySessionTurnCompletionState();
-  }
-  try {
-    const lines = fs.readFileSync(sessionPath, 'utf8').split('\n');
-    let hasTurnAborted = false;
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const line = lines[index]?.trim();
-      if (!line) {
-        continue;
-      }
-      let entry = null;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const payload = entry?.payload ?? null;
-      if (
-        entry?.type === 'event_msg'
-        && payload?.type === 'turn_aborted'
-        && String(payload?.turn_id ?? '') === turnId
-      ) {
-        hasTurnAborted = true;
-        continue;
-      }
-      if (entry?.type !== 'event_msg' || payload?.type !== 'task_complete') {
-        continue;
-      }
-      if (String(payload.turn_id ?? '') !== turnId) {
-        continue;
-      }
-      const responseItems = extractSessionResponseItemsForTurn(lines, index, turnId);
-      const lastAgentMessage = selectSessionAgentMessage(
-        responseItems,
-        extractTextCandidate(payload.last_agent_message)?.trim() || null,
-      );
-      const toolSuggestionMessage = findSessionToolSuggestionMessageForTurn(lines, index, turnId);
-      const runtimeError = findSessionRuntimeErrorForTurn(lines, index, turnId);
-      return inspectSessionTurnArtifacts(lines, index, {
-        hasTaskComplete: true,
-        hasTurnAborted,
-        lastAgentMessage,
-        toolSuggestionMessage,
-        responseItems,
-        runtimeError,
-      });
-    }
-    if (hasTurnAborted) {
-      return {
-        ...emptySessionTurnCompletionState(),
-        hasTurnAborted: true,
-      };
-    }
-  } catch {
-    return emptySessionTurnCompletionState();
-  }
-  return emptySessionTurnCompletionState();
-}
-
-function findOpenTurnRuntimeErrorFromSessionPath(sessionPath, turnId): string | null {
-  if (!sessionPath || !turnId || !fs.existsSync(sessionPath)) {
-    return null;
-  }
-  try {
-    const lines = fs.readFileSync(sessionPath, 'utf8').split('\n');
-    return findOpenTurnRuntimeError(lines, turnId);
-  } catch {
-    return null;
-  }
-}
-
-function findOpenTurnRuntimeError(lines: string[], turnId: string): string | null {
-  let inTurn = false;
-  let runtimeError: string | null = null;
-  for (const line of lines) {
-    const entry = parseSessionLine(line);
-    if (!entry) {
-      continue;
-    }
-    const payload = entry.payload ?? null;
-    if (isSessionTurnStartBoundary(entry, turnId)) {
-      inTurn = true;
-      runtimeError = null;
-      continue;
-    }
-    if (!inTurn) {
-      continue;
-    }
-    if (entry.type === 'event_msg' && payload?.type === 'task_complete' && String(payload?.turn_id ?? '') === turnId) {
-      return null;
-    }
-    if (isSessionAnyTurnBoundary(entry)) {
-      return runtimeError;
-    }
-    if (entry.type !== 'event_msg') {
-      continue;
-    }
-    if (String(payload?.type ?? '') === 'token_count') {
-      runtimeError = describeSessionRateLimitError(payload?.rate_limits ?? payload?.rateLimits ?? null) ?? runtimeError;
-      continue;
-    }
-    runtimeError = extractSessionErrorMessage(payload) ?? runtimeError;
-  }
-  return runtimeError;
-}
-
-function findSessionToolSuggestionMessageForTurn(lines: string[], taskCompleteIndex: number, turnId: string): string | null {
-  for (let index = taskCompleteIndex - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim();
-    if (!line) {
-      continue;
-    }
-    let entry: any = null;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const payload = entry?.payload ?? null;
-    if (entry?.type === 'turn_context' && String(payload?.turn_id ?? '') === turnId) {
-      break;
-    }
-    if (entry?.type === 'event_msg' && payload?.type === 'task_started' && String(payload?.turn_id ?? '') === turnId) {
-      break;
-    }
-    if (entry?.type !== 'response_item') {
-      continue;
-    }
-    const suggestion = extractToolSuggestResponseItemText(payload);
-    if (suggestion) {
-      return suggestion;
-    }
-  }
-  return null;
-}
-
-function extractToolSuggestResponseItemText(payload: any): string | null {
-  if (String(payload?.type ?? '') !== 'function_call' || String(payload?.name ?? '') !== 'tool_suggest') {
-    return null;
-  }
-  let parsedArguments: any = null;
-  if (typeof payload?.arguments === 'string') {
-    try {
-      parsedArguments = JSON.parse(payload.arguments);
-    } catch {
-      parsedArguments = null;
-    }
-  } else if (payload?.arguments && typeof payload.arguments === 'object') {
-    parsedArguments = payload.arguments;
-  }
-  const reason = extractTextCandidate(parsedArguments?.suggest_reason)?.trim() || '';
-  const toolType = String(parsedArguments?.tool_type ?? '').trim().toLowerCase();
-  if (!reason) {
-    return null;
-  }
-  const prefix = toolType === 'connector'
-    ? '当前缺少所需连接。'
-    : toolType === 'plugin'
-      ? '当前缺少所需插件。'
-      : '当前缺少所需扩展能力。';
-  return `${prefix}\n${reason}\n请先完成对应的安装或认证，再重试原请求。`;
-}
-
-function findSessionRuntimeErrorForTurn(lines: string[], taskCompleteIndex: number, turnId: string): string | null {
-  for (let index = taskCompleteIndex - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim();
-    if (!line) {
-      continue;
-    }
-    let entry: any = null;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const payload = entry?.payload ?? null;
-    if (entry?.type === 'turn_context') {
-      if (String(payload?.turn_id ?? '') === turnId) {
-        break;
-      }
-      continue;
-    }
-    if (entry?.type !== 'event_msg') {
-      continue;
-    }
-    const eventType = String(payload?.type ?? '');
-    if (eventType === 'task_started' && String(payload?.turn_id ?? '') === turnId) {
-      break;
-    }
-    if (eventType === 'token_count') {
-      const rateLimitError = describeSessionRateLimitError(payload?.rate_limits ?? payload?.rateLimits ?? null);
-      if (rateLimitError) {
-        return rateLimitError;
-      }
-    }
-    const message = extractSessionErrorMessage(payload);
-    if (message) {
-      return message;
-    }
-  }
-  return null;
-}
-
-function extractSessionErrorMessage(payload: any): string | null {
-  const eventType = String(payload?.type ?? '').toLowerCase();
-  if (!/error|failed|failure/.test(eventType)) {
-    return null;
-  }
-  return extractTextCandidate(payload?.message)
-    ?? extractTextCandidate(payload?.error)
-    ?? extractTextCandidate(payload);
-}
-
-function describeSessionRateLimitError(rateLimits: any): string | null {
-  if (!rateLimits || typeof rateLimits !== 'object') {
-    return null;
-  }
-  const limitId = normalizeRateLimitString(rateLimits.limit_id ?? rateLimits.limitId) ?? 'codex';
-  const credits = rateLimits.credits && typeof rateLimits.credits === 'object'
-    ? rateLimits.credits
-    : null;
-  if (credits) {
-    const hasCredits = normalizeRateLimitBoolean(credits.has_credits ?? credits.hasCredits);
-    const unlimited = normalizeRateLimitBoolean(credits.unlimited) === true;
-    const balance = normalizeRateLimitString(credits.balance);
-    if (hasCredits === false && !unlimited) {
-      return `Codex subscription credits are exhausted (${limitId} balance ${balance ?? '0'}).`;
-    }
-  }
-  const reachedType = normalizeRateLimitString(rateLimits.rate_limit_reached_type ?? rateLimits.rateLimitReachedType);
-  if (reachedType) {
-    return `Codex usage limit reached (${limitId}: ${reachedType}).`;
-  }
-  const primaryUsed = normalizeRateLimitNumber(rateLimits.primary?.used_percent ?? rateLimits.primary?.usedPercent);
-  if (primaryUsed !== null && primaryUsed >= 100) {
-    return `Codex usage limit reached (${limitId} primary ${Math.round(primaryUsed)}%).`;
-  }
-  const secondaryUsed = normalizeRateLimitNumber(rateLimits.secondary?.used_percent ?? rateLimits.secondary?.usedPercent);
-  if (secondaryUsed !== null && secondaryUsed >= 100) {
-    return `Codex usage limit reached (${limitId} weekly ${Math.round(secondaryUsed)}%).`;
-  }
-  return null;
-}
-
-function normalizeRateLimitString(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : null;
-}
-
-function normalizeRateLimitBoolean(value: unknown): boolean | null {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'true') {
-      return true;
-    }
-    if (normalized === 'false') {
-      return false;
-    }
-  }
-  return null;
-}
-
-function normalizeRateLimitNumber(value: unknown): number | null {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function inspectSessionTurnArtifacts(
-  lines,
-  taskCompleteIndex,
-  state: Omit<SessionTurnCompletionState, 'outputArtifacts'>,
-): SessionTurnCompletionState {
-  const outputArtifacts = [];
-  const seenArtifacts = new Set<string>();
-  for (let index = taskCompleteIndex - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim();
-    if (!line) {
-      continue;
-    }
-    let entry = null;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const payload = entry?.payload ?? null;
-    if (entry?.type === 'event_msg' && payload?.type === 'task_started') {
-      break;
-    }
-    if (entry?.type !== 'event_msg' || payload?.type !== 'image_generation_end') {
-      continue;
-    }
-    const savedPath = typeof payload?.saved_path === 'string' ? payload.saved_path.trim() : '';
-    if (!savedPath || !fs.existsSync(savedPath)) {
-      continue;
-    }
-    const artifact = buildArtifactFromFilePath(savedPath);
-    const key = `${artifact.kind}:${artifact.path}`;
-    if (seenArtifacts.has(key)) {
-      continue;
-    }
-    seenArtifacts.add(key);
-    outputArtifacts.unshift(artifact);
-  }
-  return {
-    hasTaskComplete: state.hasTaskComplete,
-    hasTurnAborted: state.hasTurnAborted,
-    lastAgentMessage: state.lastAgentMessage || state.toolSuggestionMessage || null,
-    toolSuggestionMessage: state.toolSuggestionMessage ?? null,
-    responseItems: state.responseItems,
-    runtimeError: state.runtimeError ?? null,
-    outputArtifacts,
-  };
-}
-
-function buildSessionTaskCompleteResult({
-  turnId,
-  threadId,
-  title,
-  status,
-  previewText,
-  sessionState,
-}) {
-  return {
-    turnId,
-    threadId,
-    title,
-    outputText: sessionState.lastAgentMessage ?? '',
-    responseItems: sessionState.responseItems,
-    outputArtifacts: sessionState.outputArtifacts,
-    outputMedia: normalizeLegacyImageMedia(sessionState.outputArtifacts),
-    outputState: 'complete',
-    previewText,
-    finalSource: sessionState.outputArtifacts.length > 0
-      ? 'session_task_complete_media'
-      : 'session_task_complete',
-    status,
-  };
-}
-
-function shouldWaitForSessionTaskMaterialization(sessionState, hasAssistantVisibleItems) {
-  return sessionState.hasTaskComplete
-    && !hasAssistantVisibleItems
-    && !sessionState.lastAgentMessage
-    && sessionState.outputArtifacts.length === 0;
-}
-
-function emptySessionTurnCompletionState(): SessionTurnCompletionState {
-  return {
-    hasTaskComplete: false,
-    hasTurnAborted: false,
-    lastAgentMessage: null,
-    toolSuggestionMessage: null,
-    responseItems: [],
-    outputArtifacts: [],
-    runtimeError: null,
-  };
-}
-
-function extractSessionResponseItemsForTurn(
-  lines: string[],
-  taskCompleteIndex: number,
-  turnId: string,
-): ProviderResponseItem[] {
-  const responseItems: ProviderResponseItem[] = [];
-  for (let index = taskCompleteIndex - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim();
-    if (!line) {
-      continue;
-    }
-    let entry: any = null;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const payload = entry?.payload ?? null;
-    if (entry?.type === 'turn_context' && String(payload?.turn_id ?? '') === turnId) {
-      break;
-    }
-    if (entry?.type === 'event_msg' && payload?.type === 'task_started' && String(payload?.turn_id ?? '') === turnId) {
-      break;
-    }
-    if (entry?.type !== 'response_item' || !payload || typeof payload !== 'object') {
-      continue;
-    }
-    responseItems.unshift(cloneSessionResponseItem(payload));
-  }
-  return responseItems;
-}
-
-function selectSessionAgentMessage(
-  responseItems: ProviderResponseItem[],
-  fallback: string | null,
-): string | null {
-  for (let index = responseItems.length - 1; index >= 0; index -= 1) {
-    const payload = responseItems[index] as Record<string, unknown>;
-    if (String(payload?.type ?? '') !== 'message' || String(payload?.role ?? '') !== 'assistant') {
-      continue;
-    }
-    const phase = String(payload?.phase ?? '');
-    if (phase && phase !== 'final_answer') {
-      continue;
-    }
-    const text = extractTextCandidate(payload?.content)?.trim() || null;
-    if (text) {
-      return text;
-    }
-  }
-  return fallback;
-}
-
-function cloneSessionResponseItem(payload: Record<string, unknown>): ProviderResponseItem {
-  const cloned: ProviderResponseItem = typeof structuredClone === 'function'
-    ? structuredClone(payload)
-    : JSON.parse(JSON.stringify(payload));
-  if (normalizeEventItemType(cloned) === 'reasoning') {
-    delete cloned.content;
-    delete cloned.encrypted_content;
-    delete cloned.encryptedContent;
-  }
-  return cloned;
-}
-
-function attachSessionResponseItems(
-  result: ProviderTurnResult,
-  sessionPath: string | null | undefined,
-): ProviderTurnResult {
-  if (!result.turnId || !sessionPath) {
-    return result;
-  }
-  const sessionState = inspectTurnCompletionFromSessionPath(sessionPath, result.turnId);
-  if (sessionState.responseItems.length === 0) {
-    return result;
-  }
-  return {
-    ...result,
-    responseItems: sessionState.responseItems,
-  };
 }
 
 function shouldWaitForTaskCompleteBeforeMissing(sessionPath, sessionState) {
@@ -5037,34 +4468,6 @@ function emitWorkEventsFromTurnSnapshot({
   }
 }
 
-function emitWorkEventsFromSessionPath({
-  sessionPath,
-  turnId,
-  onWorkEvent,
-  emittedKeys,
-}: {
-  sessionPath: string | null | undefined;
-  turnId: string;
-  onWorkEvent?: ((event: ProviderTurnWorkEvent) => Promise<void> | void) | null;
-  emittedKeys: Set<string>;
-}): void {
-  if (typeof onWorkEvent !== 'function') {
-    return;
-  }
-  for (const event of extractWorkEventsFromSessionPath(sessionPath, turnId)) {
-    const key = buildWorkEventEmissionKey(event);
-    if (emittedKeys.has(key)) {
-      continue;
-    }
-    emittedKeys.add(key);
-    void onWorkEvent(event);
-  }
-}
-
-function buildWorkEventEmissionKey(event: ProviderTurnWorkEvent): string {
-  return `${event.itemId}:${event.type}:${JSON.stringify(event.summary ?? {})}`;
-}
-
 function extractWorkEventsFromTurnSnapshot(turn: any): ProviderTurnWorkEvent[] {
   const items = Array.isArray(turn?.items) ? turn.items : [];
   return extractWorkEventsFromResponseItems(items.map((item) => (
@@ -5094,684 +4497,6 @@ function turnHasWorkActivityItems(turn: any): boolean {
       'customtoolcalloutput',
     ].includes(normalizeEventItemType(raw));
   });
-}
-
-function extractWorkEventsFromSessionPath(
-  sessionPath: string | null | undefined,
-  turnId: string,
-): ProviderTurnWorkEvent[] {
-  if (!sessionPath || !turnId || !fs.existsSync(sessionPath)) {
-    return [];
-  }
-  try {
-    const lines = fs.readFileSync(sessionPath, 'utf8').split('\n');
-    return extractWorkEventsFromResponseItems(extractSessionResponseItemsForOpenTurn(lines, turnId));
-  } catch {
-    return [];
-  }
-}
-
-function extractWorkEventsFromResponseItems(items: any[]): ProviderTurnWorkEvent[] {
-  const startedByItemId = new Map<string, ProviderTurnWorkEvent>();
-  const events: ProviderTurnWorkEvent[] = [];
-  for (const item of items) {
-    const extracted = extractWorkEventFromTurnItem(item, startedByItemId);
-    if (!extracted) {
-      continue;
-    }
-    const itemEvents = Array.isArray(extracted) ? extracted : [extracted];
-    for (const event of itemEvents) {
-      events.push(event);
-      if (event.type === 'started') {
-        startedByItemId.set(event.itemId, event);
-      }
-    }
-  }
-  return events;
-}
-
-function extractSessionResponseItemsForOpenTurn(lines: string[], turnId: string): ProviderResponseItem[] {
-  let startIndex = -1;
-  let endIndex = lines.length;
-  let taskCompleteIndex = -1;
-  for (let index = 0; index < lines.length; index += 1) {
-    const entry = parseSessionLine(lines[index]);
-    if (!entry) {
-      continue;
-    }
-    const payload = entry.payload ?? null;
-    if (isSessionTurnStartBoundary(entry, turnId)) {
-      startIndex = index;
-      endIndex = lines.length;
-      continue;
-    }
-    if (entry.type === 'event_msg' && payload?.type === 'task_complete' && String(payload?.turn_id ?? '') === turnId) {
-      taskCompleteIndex = index;
-      if (startIndex >= 0) {
-        endIndex = index;
-        break;
-      }
-      continue;
-    }
-    if (startIndex >= 0 && isSessionAnyTurnBoundary(entry)) {
-      endIndex = index;
-      break;
-    }
-  }
-  if (startIndex < 0) {
-    return taskCompleteIndex >= 0
-      ? extractSessionResponseItemsForTurn(lines, taskCompleteIndex, turnId)
-      : [];
-  }
-  const responseItems: ProviderResponseItem[] = [];
-  for (let index = startIndex + 1; index < endIndex; index += 1) {
-    const entry = parseSessionLine(lines[index]);
-    const payload = entry?.payload ?? null;
-    if (entry?.type !== 'response_item' || !payload || typeof payload !== 'object') {
-      continue;
-    }
-    responseItems.push(cloneSessionResponseItem(payload));
-  }
-  return responseItems;
-}
-
-function parseSessionLine(line: string | undefined): any | null {
-  const text = line?.trim();
-  if (!text) {
-    return null;
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function isSessionTurnStartBoundary(entry: any, turnId: string): boolean {
-  const payload = entry?.payload ?? null;
-  if (entry?.type === 'turn_context') {
-    return String(payload?.turn_id ?? '') === turnId;
-  }
-  return entry?.type === 'event_msg'
-    && payload?.type === 'task_started'
-    && String(payload?.turn_id ?? '') === turnId;
-}
-
-function isSessionAnyTurnBoundary(entry: any): boolean {
-  const payload = entry?.payload ?? null;
-  return entry?.type === 'turn_context'
-    || (
-      entry?.type === 'event_msg'
-      && (payload?.type === 'task_started' || payload?.type === 'task_complete')
-    );
-}
-
-function extractWorkEventFromTurnItem(
-  item: any,
-  startedByItemId: Map<string, ProviderTurnWorkEvent>,
-): ProviderTurnWorkEvent | ProviderTurnWorkEvent[] | null {
-  if (!item || typeof item !== 'object' || isAssistantVisibleItem(item) || isUserVisibleItem(item)) {
-    return null;
-  }
-  const itemType = normalizeEventItemType(item);
-  const responseToolItem = itemType === 'functioncall'
-    || itemType === 'customtoolcall'
-    || itemType === 'functioncalloutput'
-    || itemType === 'customtoolcalloutput';
-  const itemId = responseToolItem
-    ? extractToolCallCorrelationId(item)
-    : extractItemId(item);
-  if (!itemId) {
-    return null;
-  }
-  if (itemType === 'functioncall' || itemType === 'customtoolcall') {
-    const summary = buildWorkSummary(item, item);
-    const kind = classifyWorkEventKind(item, item);
-    if (kind === 'unknown' && Object.keys(summary).length === 0) {
-      return null;
-    }
-    return {
-      type: 'started',
-      itemId,
-      kind,
-      title: buildWorkTitle(kind, item, summary),
-      status: normalizeNullableString(item?.status),
-      summary,
-      raw: item,
-    };
-  }
-  if (itemType === 'functioncalloutput' || itemType === 'customtoolcalloutput') {
-    const previous = startedByItemId.get(itemId);
-    const summary = buildWorkSummary(item, item);
-    const kind = previous?.kind ?? classifyWorkEventKind(item, item);
-    if (kind === 'unknown' && Object.keys(summary).length === 0) {
-      return null;
-    }
-    return {
-      type: 'completed',
-      itemId,
-      kind,
-      title: previous?.title ?? buildWorkTitle(kind, item, summary),
-      status: normalizeNullableString(item?.status) ?? 'completed',
-      summary,
-      raw: item,
-    };
-  }
-  if (itemType === 'commandexecution' || itemType === 'filechange') {
-    const summary = buildWorkSummary(item, item);
-    const kind = itemType === 'commandexecution' ? 'command' : 'file_change';
-    const status = normalizeNullableString(item?.status);
-    const title = buildWorkTitle(kind, item, summary);
-    const events: ProviderTurnWorkEvent[] = [{
-      type: 'started',
-      itemId,
-      kind,
-      title,
-      status,
-      summary: {},
-      raw: item,
-    }, {
-      type: 'updated',
-      itemId,
-      kind,
-      title,
-      status,
-      summary,
-      raw: item,
-    }];
-    if (isCompletedWorkItemStatus(status)) {
-      events.push({
-        type: 'completed',
-        itemId,
-        kind,
-        title,
-        status,
-        summary,
-        raw: item,
-      });
-    }
-    return events;
-  }
-  return null;
-}
-
-function extractToolCallCorrelationId(...values: any[]): string | null {
-  for (const value of values) {
-    const callId = normalizeNullableString(
-      value?.call_id
-        ?? value?.callId
-        ?? value?.item?.call_id
-        ?? value?.item?.callId,
-    );
-    if (callId) {
-      return callId;
-    }
-  }
-  for (const value of values) {
-    const itemId = extractItemId(value);
-    if (itemId) {
-      return itemId;
-    }
-  }
-  return null;
-}
-
-function isCompletedWorkItemStatus(status: string | null): boolean {
-  const normalized = String(status ?? '').replace(/[^a-z]/giu, '').toLowerCase();
-  return ['completed', 'complete', 'failed', 'declined', 'cancelled', 'canceled'].includes(normalized);
-}
-
-function classifyWorkEventKind(item, params): ProviderTurnWorkEventKind {
-  const toolName = extractToolName(item) ?? extractToolName(params);
-  const parsedToolArguments = parseToolArguments(item) ?? parseToolArguments(params);
-  if (hasEmbeddedApplyPatchCall(item) || hasEmbeddedApplyPatchCall(params)) {
-    return 'file_change';
-  }
-  const typeText = [
-    item?.type,
-    item?.kind,
-    item?.name,
-    item?.toolName,
-    item?.tool_name,
-    params?.type,
-    params?.kind,
-    params?.method,
-  ]
-    .map((entry) => String(entry ?? ''))
-    .join(' ')
-    .toLowerCase();
-  if (
-    isCommandToolName(toolName)
-    || typeText.includes('command')
-    || typeText.includes('exec')
-    || typeText.includes('shell')
-    || hasAnyOwnProperty(item, ['command', 'cmd', 'args', 'argv'])
-    || hasAnyOwnProperty(params, ['command', 'cmd'])
-    || hasAnyOwnProperty(parsedToolArguments, ['command', 'cmd', 'args', 'argv'])
-  ) {
-    return 'command';
-  }
-  if (
-    isFileChangeToolName(toolName)
-    || typeText.includes('file')
-    || typeText.includes('patch')
-    || typeText.includes('diff')
-    || hasAnyOwnProperty(item, ['fileChanges', 'file_changes', 'changes', 'diff', 'patch', 'path'])
-    || hasAnyOwnProperty(params, ['fileChanges', 'file_changes', 'changes', 'diff', 'patch', 'path'])
-    || hasAnyOwnProperty(parsedToolArguments, ['fileChanges', 'file_changes', 'changes', 'diff', 'patch', 'path'])
-    || extractPatchText(item)
-    || extractPatchText(params)
-  ) {
-    return 'file_change';
-  }
-  if (typeText.includes('permission') || typeText.includes('approval')) {
-    return 'permission';
-  }
-  return 'unknown';
-}
-
-function buildWorkSummary(item, params): Record<string, unknown> {
-  const summary: Record<string, unknown> = {};
-  const itemArguments = parseToolArguments(item);
-  const paramsArguments = parseToolArguments(params);
-  const command = extractCommandValue(item)
-    ?? extractCommandValue(params)
-    ?? extractCommandValue(itemArguments)
-    ?? extractCommandValue(paramsArguments);
-  if (command) {
-    summary.command = command;
-  }
-  const cwd = normalizeNullableString(
-    item?.cwd
-      ?? item?.workingDirectory
-      ?? item?.working_directory
-      ?? params?.cwd
-      ?? itemArguments?.cwd
-      ?? itemArguments?.workdir
-      ?? itemArguments?.workingDirectory
-      ?? itemArguments?.working_directory
-      ?? paramsArguments?.cwd
-      ?? paramsArguments?.workdir
-      ?? paramsArguments?.workingDirectory
-      ?? paramsArguments?.working_directory,
-  );
-  if (cwd) {
-    summary.cwd = cwd;
-  }
-  const output = extractWorkOutputValue(item)
-    ?? extractWorkOutputValue(params)
-    ?? extractWorkOutputValue(itemArguments)
-    ?? extractWorkOutputValue(paramsArguments);
-  if (output) {
-    summary.output = output;
-  }
-  const exitCode = extractNumericValue(item, ['exitCode', 'exit_code', 'code'])
-    ?? extractNumericValue(params, ['exitCode', 'exit_code', 'code'])
-    ?? extractNumericValue(itemArguments, ['exitCode', 'exit_code', 'code'])
-    ?? extractNumericValue(paramsArguments, ['exitCode', 'exit_code', 'code']);
-  if (exitCode !== null) {
-    summary.exitCode = exitCode;
-  }
-  const patchText = extractPatchText(item) ?? extractPatchText(params) ?? extractPatchText(itemArguments) ?? extractPatchText(paramsArguments);
-  const fileChanges = firstNonEmptyFileChanges([
-    extractFileChangesValue(item),
-    extractFileChangesValue(params),
-    extractFileChangesValue(itemArguments),
-    extractFileChangesValue(paramsArguments),
-    extractFileChangesFromPatch(patchText),
-  ]);
-  if (fileChanges.length) {
-    summary.fileChanges = fileChanges;
-  }
-  const diff = normalizeNullableString(item?.diff ?? item?.patch ?? params?.diff ?? params?.patch ?? itemArguments?.diff ?? itemArguments?.patch ?? paramsArguments?.diff ?? paramsArguments?.patch ?? patchText);
-  if (diff) {
-    summary.diff = diff;
-  }
-  const pathValue = normalizeNullableString(item?.path ?? item?.file ?? params?.path ?? params?.file ?? itemArguments?.path ?? itemArguments?.file ?? paramsArguments?.path ?? paramsArguments?.file);
-  if (pathValue) {
-    summary.path = pathValue;
-  }
-  const status = normalizeNullableString(item?.status ?? params?.status);
-  if (status) {
-    summary.status = status;
-  }
-  const error = extractStructuredString(item?.error ?? params?.error);
-  if (error) {
-    summary.error = error;
-  }
-  return summary;
-}
-
-function buildWorkTitle(
-  kind: ProviderTurnWorkEventKind,
-  item,
-  summary: Record<string, unknown>,
-): string {
-  const explicit = normalizeNullableString(item?.title ?? item?.name ?? item?.label);
-  if (explicit && !(kind === 'file_change' && normalizeToolName(explicit) === 'exec')) {
-    return explicit;
-  }
-  if (kind === 'command' && typeof summary.command === 'string' && summary.command.trim()) {
-    return summary.command;
-  }
-  if (kind === 'file_change') {
-    const changes = Array.isArray(summary.fileChanges) ? summary.fileChanges : [];
-    if (changes.length === 1) {
-      const pathValue = normalizeNullableString((changes[0] as any)?.path);
-      if (pathValue) {
-        return `Edited ${pathValue}`;
-      }
-    }
-    if (changes.length > 1) {
-      return `Edited ${changes.length} files`;
-    }
-    if (typeof summary.path === 'string' && summary.path.trim()) {
-      return `Edited ${summary.path}`;
-    }
-  }
-  if (kind === 'permission') {
-    return 'Permission request';
-  }
-  return 'Tool activity';
-}
-
-function extractCommandValue(value): string | null {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  if (Array.isArray(value?.command)) {
-    const command = value.command.map((entry) => String(entry ?? '').trim()).filter(Boolean).join(' ');
-    return command || null;
-  }
-  if (Array.isArray(value?.cmd)) {
-    const command = value.cmd.map((entry) => String(entry ?? '').trim()).filter(Boolean).join(' ');
-    return command || null;
-  }
-  if (Array.isArray(value?.args) && typeof value?.cmd === 'string') {
-    const command = [value.cmd, ...value.args].map((entry) => String(entry ?? '').trim()).filter(Boolean).join(' ');
-    return command || null;
-  }
-  return normalizeNullableString(value?.command ?? value?.cmd);
-}
-
-function extractToolName(value): string | null {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  return normalizeNullableString(value?.name ?? value?.toolName ?? value?.tool_name ?? value?.item?.name ?? value?.item?.toolName ?? value?.item?.tool_name);
-}
-
-function isCommandToolName(value: string | null): boolean {
-  const normalized = normalizeToolName(value);
-  return normalized === 'execcommand'
-    || normalized === 'exec'
-    || normalized === 'shell'
-    || normalized === 'bash'
-    || normalized === 'command';
-}
-
-function isFileChangeToolName(value: string | null): boolean {
-  const normalized = normalizeToolName(value);
-  return normalized === 'applypatch'
-    || normalized === 'patch'
-    || normalized === 'edit'
-    || normalized === 'filechange'
-    || normalized === 'writefile';
-}
-
-function normalizeToolName(value: string | null): string {
-  return String(value ?? '').replace(/[^a-z]/giu, '').toLowerCase();
-}
-
-function parseToolArguments(value): any | null {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  const raw = value?.arguments ?? value?.args_json ?? value?.argumentsJson ?? value?.item?.arguments;
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    return raw;
-  }
-  if (typeof raw !== 'string' || !raw.trim()) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function extractPatchText(value): string | null {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  const direct = normalizeNullableString(value?.patch ?? value?.diff ?? value?.changeset ?? value?.item?.patch ?? value?.item?.diff);
-  if (direct) {
-    return direct;
-  }
-  const candidates = [
-    value?.arguments,
-    value?.input,
-    value?.item?.arguments,
-    value?.item?.input,
-  ];
-  for (const candidate of candidates) {
-    const patch = extractEmbeddedPatchPayload(candidate);
-    if (patch) {
-      return patch;
-    }
-  }
-  return null;
-}
-
-function hasEmbeddedApplyPatchCall(value): boolean {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  for (const candidate of [value?.arguments, value?.input, value?.item?.arguments, value?.item?.input]) {
-    if (typeof candidate === 'string' && /\btools\s*\.\s*apply_patch\s*\(/u.test(candidate)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function extractEmbeddedPatchPayload(value): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const start = value.indexOf('*** Begin Patch');
-  if (start < 0) {
-    return null;
-  }
-  const marker = '*** End Patch';
-  const end = value.indexOf(marker, start);
-  if (end < 0) {
-    return null;
-  }
-  const payload = value.slice(start, end + marker.length);
-  return payload.includes('\n') ? payload : decodeEscapedPatchPayload(payload);
-}
-
-function decodeEscapedPatchPayload(value: string): string {
-  let decoded = '';
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index]!;
-    if (character !== '\\' || index + 1 >= value.length) {
-      decoded += character;
-      continue;
-    }
-    const escape = value[index + 1]!;
-    if (escape === 'n') {
-      decoded += '\n';
-      index += 1;
-    } else if (escape === 'r') {
-      decoded += '\r';
-      index += 1;
-    } else if (escape === 't') {
-      decoded += '\t';
-      index += 1;
-    } else if (escape === '"' || escape === "'" || escape === '\\') {
-      decoded += escape;
-      index += 1;
-    } else {
-      decoded += character;
-    }
-  }
-  return decoded;
-}
-
-function firstNonEmptyFileChanges(groups: Array<Array<Record<string, unknown>>>): Array<Record<string, unknown>> {
-  for (const group of groups) {
-    if (Array.isArray(group) && group.length > 0) {
-      return group;
-    }
-  }
-  return [];
-}
-
-function extractFileChangesFromPatch(value: string | null): Array<Record<string, unknown>> {
-  if (!value) {
-    return [];
-  }
-  const changes = new Map<string, Record<string, unknown>>();
-  for (const line of value.split(/\r?\n/u)) {
-    const match = line.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/u);
-    if (!match) {
-      continue;
-    }
-    const pathValue = match[1]?.trim();
-    if (!pathValue) {
-      continue;
-    }
-    const action = line.startsWith('*** Add File:')
-      ? 'added'
-      : line.startsWith('*** Delete File:')
-        ? 'deleted'
-        : 'modified';
-    changes.set(pathValue, { path: pathValue, action });
-  }
-  return [...changes.values()];
-}
-
-function extractWorkOutputValue(value): string | null {
-  for (const candidate of [
-    value?.output,
-    value?.aggregatedOutput,
-    value?.aggregated_output,
-    value?.stdout,
-    value?.stderr,
-    value?.text,
-    value?.content,
-    value?.result?.output,
-  ]) {
-    const direct = extractStructuredString(candidate);
-    if (direct) {
-      return direct;
-    }
-  }
-  if (Array.isArray(value?.outputs)) {
-    const output = value.outputs
-      .map((entry) => extractStructuredString(entry))
-      .filter(Boolean)
-      .join('\n');
-    return output || null;
-  }
-  return null;
-}
-
-function extractFileChangesValue(value): Array<Record<string, unknown>> {
-  if (!value || typeof value !== 'object') {
-    return [];
-  }
-  const raw = value?.fileChanges ?? value?.file_changes ?? value?.changes ?? value?.files;
-  if (Array.isArray(raw)) {
-    return raw.map(normalizeFileChange).filter(Boolean) as Array<Record<string, unknown>>;
-  }
-  if (raw && typeof raw === 'object') {
-    return Object.entries(raw)
-      .map(([pathValue, change]) => normalizeFileChange({ path: pathValue, ...(change && typeof change === 'object' ? change : {}) }))
-      .filter(Boolean) as Array<Record<string, unknown>>;
-  }
-  const pathValue = normalizeNullableString(value?.path ?? value?.file);
-  if (!pathValue) {
-    return [];
-  }
-  return [normalizeFileChange(value) ?? { path: pathValue }];
-}
-
-function normalizeFileChange(value): Record<string, unknown> | null {
-  if (typeof value === 'string') {
-    return { path: value };
-  }
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  const pathValue = normalizeNullableString(value?.path ?? value?.file ?? value?.target ?? value?.source);
-  if (!pathValue) {
-    return null;
-  }
-  const change: Record<string, unknown> = { path: pathValue };
-  const kind = value?.kind && typeof value.kind === 'object' ? value.kind : null;
-  const kindType = normalizeNullableString(kind?.type ?? (typeof value?.kind === 'string' ? value.kind : null));
-  const action = normalizeFileChangeAction(
-    normalizeNullableString(value?.action ?? kindType ?? value?.type ?? value?.status),
-  );
-  if (action) {
-    change.action = action;
-  }
-  if (kindType) {
-    change.kind = kindType;
-  }
-  const movePath = normalizeNullableString(kind?.move_path ?? kind?.movePath ?? value?.move_path ?? value?.movePath);
-  if (movePath) {
-    change.movePath = movePath;
-  }
-  const diff = typeof value?.diff === 'string' ? value.diff : null;
-  if (diff !== null) {
-    change.diff = diff;
-  }
-  const additions = extractNumericValue(value, ['additions', 'added', 'linesAdded']);
-  if (additions !== null) {
-    change.additions = additions;
-  }
-  const deletions = extractNumericValue(value, ['deletions', 'deleted', 'linesDeleted']);
-  if (deletions !== null) {
-    change.deletions = deletions;
-  }
-  return change;
-}
-
-function normalizeFileChangeAction(value: string | null): string | null {
-  const normalized = String(value ?? '').replace(/[^a-z]/giu, '').toLowerCase();
-  if (normalized === 'add' || normalized === 'added' || normalized === 'create' || normalized === 'created') {
-    return 'added';
-  }
-  if (normalized === 'delete' || normalized === 'deleted' || normalized === 'remove' || normalized === 'removed') {
-    return 'deleted';
-  }
-  if (normalized === 'update' || normalized === 'updated' || normalized === 'modify' || normalized === 'modified') {
-    return 'modified';
-  }
-  return value;
-}
-
-function extractNumericValue(value, keys: string[]): number | null {
-  for (const key of keys) {
-    const candidate = value?.[key];
-    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
-      return candidate;
-    }
-    if (typeof candidate === 'string' && candidate.trim() && Number.isFinite(Number(candidate))) {
-      return Number(candidate);
-    }
-  }
-  return null;
-}
-
-function hasAnyOwnProperty(value, keys: string[]): boolean {
-  return Boolean(value && typeof value === 'object' && keys.some((key) => Object.prototype.hasOwnProperty.call(value, key)));
 }
 
 function extractNotificationTurnId(params) {
@@ -5908,30 +4633,6 @@ function classifyAgentOutput(phase, completed) {
   return 'commentary';
 }
 
-function normalizeEventItemType(item) {
-  return String(item?.type ?? '').replace(/[^a-z]/gi, '').toLowerCase();
-}
-
-function normalizeEventItemRole(item) {
-  return String(item?.role ?? '').replace(/[^a-z]/gi, '').toLowerCase();
-}
-
-function isAssistantVisibleItem(item) {
-  const itemType = normalizeEventItemType(item);
-  if (itemType === 'agentmessage' || itemType === 'assistantmessage') {
-    return true;
-  }
-  return itemType === 'message' && normalizeEventItemRole(item) === 'assistant';
-}
-
-function isUserVisibleItem(item) {
-  const itemType = normalizeEventItemType(item);
-  if (itemType.includes('user')) {
-    return true;
-  }
-  return itemType === 'message' && normalizeEventItemRole(item) === 'user';
-}
-
 function isAgentDeltaNotificationMethod(method) {
   const normalized = String(method ?? '').replace(/[^a-z]/gi, '').toLowerCase();
   return normalized === 'itemagentmessagedelta'
@@ -5947,25 +4648,6 @@ function isReasoningSummaryDeltaNotificationMethod(method) {
 function normalizeSummaryIndex(value): number {
   const numeric = Number(value);
   return Number.isInteger(numeric) && numeric >= 0 ? numeric : 0;
-}
-
-function extractItemId(value) {
-  const candidates = [
-    value?.itemId,
-    value?.item_id,
-    value?.id,
-    value?.call_id,
-    value?.callId,
-    value?.item?.id,
-    value?.item?.call_id,
-    value?.item?.callId,
-  ];
-  for (const candidate of candidates) {
-    if (candidate !== null && candidate !== undefined && String(candidate).trim()) {
-      return String(candidate);
-    }
-  }
-  return null;
 }
 
 function extractAgentPhase(value) {
@@ -6008,277 +4690,5 @@ function extractStructuredText(value) {
   return directText ?? extractTextCandidate(value);
 }
 
-function extractStructuredString(value) {
-  if (typeof value === 'string' && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const text = value
-      .map((entry) => extractStructuredString(entry))
-      .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
-      .join('\n');
-    return text || null;
-  }
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  return extractTextCandidate(value) ?? extractTextCandidate(value?.message) ?? extractTextCandidate(value?.error);
-}
-
-function extractTextCandidate(value) {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-  for (const key of ['text', 'delta', 'content', 'value', 'message']) {
-    if (typeof value[key] === 'string') {
-      return value[key];
-    }
-  }
-  for (const key of ['parts', 'segments', 'content']) {
-    const candidate = value[key];
-    if (!Array.isArray(candidate)) {
-      continue;
-    }
-    const text = candidate
-      .map((entry) => extractTextCandidate(entry))
-      .filter((entry) => typeof entry === 'string')
-      .join('');
-    if (text) {
-      return text;
-    }
-  }
-  return null;
-}
-
-function rememberCodexStderrLine(stderrTail: CodexStderrEntry[], entry: CodexStderrEntry): void {
-  stderrTail.push(entry);
-  while (stderrTail.length > 10) {
-    stderrTail.shift();
-  }
-}
-
-function codexStderrTextTail(stderrTail: CodexStderrEntry[]): string[] {
-  return stderrTail.map((entry) => entry.text);
-}
-
-function findCodexStderrRuntimeError(stderrTail: CodexStderrEntry[], baselineSequence = 0): string | null {
-  for (let index = stderrTail.length - 1; index >= 0; index -= 1) {
-    const entry = stderrTail[index];
-    if (!entry || entry.sequence <= baselineSequence) {
-      continue;
-    }
-    const message = normalizeCodexStderrRuntimeError(entry.text);
-    if (message) {
-      return message;
-    }
-  }
-  return null;
-}
-
-function normalizeCodexStderrRuntimeError(line: unknown): string | null {
-  const text = String(line ?? '')
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '')
-    .trim()
-    .replace(/^■\s*/u, '')
-    .trim();
-  if (!text) {
-    return null;
-  }
-  if (isBackgroundMcpTransportFailure(text) || isRecoverableToolRouterFailure(text)) {
-    return null;
-  }
-  if (/unexpected status\s+\d{3}\b/iu.test(text)) {
-    return text;
-  }
-  if (/\b(401|403|429)\b/u.test(text)
-    && /\b(unauthorized|forbidden|too many requests|rate limit|invalid[_\s-]*api[_\s-]*key)\b/iu.test(text)) {
-    return text;
-  }
-  return null;
-}
-
-function isBackgroundMcpTransportFailure(message: string): boolean {
-  return /\brmcp::transport::worker\b/iu.test(message)
-    && /\bUnexpectedServerResponse\s*\(\s*["']?HTTP\s+\d{3}\b/iu.test(message);
-}
-
-function isRecoverableToolRouterFailure(message: string): boolean {
-  return /\bcodex_core::tools::router\b/iu.test(message);
-}
-
-function createCodexAppServerLaunchSpec({
-  command,
-  args,
-  platform,
-}: {
-  command: string;
-  args: string[];
-  platform: NodeJS.Platform;
-}): {
-  command: string;
-  args?: string[] | null;
-  options?: Record<string, unknown>;
-  displayCommand: string;
-} {
-  if (platform === 'win32' && /\.(cmd|bat)$/iu.test(command)) {
-    return {
-      command: buildWindowsShellCommandLine([command, ...args]),
-      args: null,
-      options: {
-        shell: true,
-        windowsHide: true,
-      },
-      displayCommand: command,
-    };
-  }
-  return {
-    command,
-    args,
-    displayCommand: command,
-  };
-}
-
-function createCodexLaunchError({
-  command,
-  error,
-  platform,
-}: {
-  command: string;
-  error: unknown;
-  platform: NodeJS.Platform;
-}): Error {
-  const code = typeof error === 'object' && error && 'code' in error
-    ? String((error as { code?: unknown }).code ?? '')
-    : '';
-  const message = error instanceof Error ? error.message : String(error ?? 'Unknown error');
-  if (code === 'ENOENT' || /spawn .* ENOENT/i.test(message)) {
-    const windowsHint = platform === 'win32'
-      ? ' Ensure the Codex CLI is installed and reachable on PATH, or set CODEX_REAL_BIN to the full path of codex.exe or codex.cmd.'
-      : ' Ensure the Codex CLI is installed and reachable on PATH.';
-    return new Error(`Failed to launch Codex app-server with "${command}": command not found.${windowsHint}`);
-  }
-  return new Error(`Failed to launch Codex app-server with "${command}": ${message}`);
-}
-
-function createCodexAppServerExitedError({
-  command,
-  exitCode,
-  stderrTail,
-}: {
-  command: string;
-  exitCode: number;
-  stderrTail: string[];
-}): Error {
-  const detail = stderrTail.length > 0
-    ? ` Last stderr: ${stderrTail.join(' | ')}`
-    : '';
-  return new Error(`Codex app-server exited before opening its WebSocket (command: "${command}", exit code: ${exitCode}).${detail}`);
-}
-
-function createCodexConnectTimeoutError({
-  command,
-  url,
-  stderrTail,
-}: {
-  command: string;
-  url: string;
-  stderrTail: string[];
-}): Error {
-  const detail = stderrTail.length > 0
-    ? ` Last stderr: ${stderrTail.join(' | ')}`
-    : '';
-  return new Error(`Timed out connecting to ${url} after launching "${command}".${detail}`);
-}
-
-function buildWindowsShellCommandLine(parts: string[]): string {
-  return parts.map(quoteWindowsShellArgument).join(' ');
-}
-
-function quoteWindowsShellArgument(value: string): string {
-  const normalized = String(value ?? '');
-  if (!normalized) {
-    return '""';
-  }
-  if (!/[\s"]/u.test(normalized)) {
-    return normalized;
-  }
-  return `"${normalized.replace(/"/g, '""')}"`;
-}
-
-async function reservePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        reject(new Error('Failed to reserve TCP port'));
-        return;
-      }
-      const port = address.port;
-      server.close(() => resolve(port));
-    });
-    server.on('error', reject);
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function waitForChildExit(child: ChildProcess | null, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    if (!child || child.exitCode !== null) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error('Timed out waiting for Codex child process to exit'));
-    }, timeoutMs);
-    const onExit = () => {
-      cleanup();
-      resolve();
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      child.off('exit', onExit);
-    };
-    child.on('exit', onExit);
-  });
-}
-
-async function terminateChildProcess(child: ChildProcess, platform: NodeJS.Platform): Promise<void> {
-  if (platform === 'win32' && typeof child.pid === 'number') {
-    await terminateWindowsProcessTree(child.pid);
-    return;
-  }
-  child.kill('SIGTERM');
-  await waitForChildExit(child, 5000).catch(() => {
-    if (child.exitCode === null) {
-      child.kill('SIGKILL');
-    }
-    return waitForChildExit(child, 2000).catch(() => {});
-  });
-}
-
-function terminateWindowsProcessTree(pid: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
-      windowsHide: true,
-      stdio: 'ignore',
-    });
-    killer.on('error', () => {
-      resolve();
-    });
-    killer.on('exit', () => {
-      resolve();
-    });
-  });
-}
 
 export { readCodexAccountIdentity };

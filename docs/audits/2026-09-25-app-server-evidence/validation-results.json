@@ -1,0 +1,70 @@
+{
+  "nodeVersion": "v24.16.0",
+  "build": {
+    "status": "passed"
+  },
+  "typecheck": {
+    "status": "passed"
+  },
+  "lint": {
+    "status": "passed"
+  },
+  "unitAndApiTests": {
+    "status": "passed",
+    "native": 75,
+    "web": 1014,
+    "tooling": 5,
+    "total": 1094,
+    "failed": 0,
+    "skipped": 0
+  },
+  "browserInitialBroad": {
+    "passed": 140,
+    "failed": 11,
+    "skipped": 229,
+    "total": 380,
+    "note": "11 failures from 3 existing workspace assertions reproduced on baseline; fixed assertions retained product checks."
+  },
+  "browserFinalFocused": {
+    "command": "npx playwright test workspace.spec.js approval-delivery.spec.js connection-status.spec.js weak-network.spec.js session-output-recovery.spec.js --workers=4",
+    "passed": 93,
+    "failed": 0,
+    "skipped": 122,
+    "total": 215,
+    "note": "Five configured viewport projects. Existing viewport skips retained. All 20 new approval-delivery project cases run."
+  },
+  "approvalThemeLayoutMatrix": {
+    "passed": 60,
+    "failed": 0,
+    "themes": 5,
+    "layouts": 2,
+    "widths": [
+      320,
+      390,
+      844,
+      979,
+      980,
+      1440
+    ]
+  },
+  "criticalGzipBytes": {
+    "before": 145497,
+    "after": 134115,
+    "unchangedBudget": 143360
+  },
+  "rawLogSha256": {
+    "final-test.log": "b44cf53f6b69c70453e5fa2d10c6140eb3dc7cc22ed1d6f5020a88d39e5c50d7",
+    "final-typecheck.log": "6741b5a8e00a5b45cde28af3408f3feb8520b72d50c75aa88be9aabd1dd9b6c9",
+    "final-build.log": "ff6c15805fe375d41a79c04ac780d0f7c268bd7717c5c198a66d29f8b112ff9d",
+    "final-lint.log": "c29534b8d513bb453278ee4d47a1f3d1f835b0a6d4a1daf7b046befd7e31c11f",
+    "browser-full.log": "78d63aa0efdf901bb009182aa6477d628690dbb3e72d51e45e9f4b67685940bc",
+    "browser-final.log": "be6f3a8ad4b69109b460bbe042a8e193094b098d576182472592eb0e32cc7573",
+    "final-built-public.log": "481e48ce290b9ea4ec5e369cae996ea6c2f49e98bcc331cf5a4e27ed8ec1607b"
+  },
+  "limitations": [
+    "Browser tests use fixtures, not real mobile hardware.",
+    "No matched latency/bandwidth/memory benchmark.",
+    "Real model smokes cover text, official completion and persisted recovery, not commands/files/approvals.",
+    "Production cutover and observation remain pending."
+  ]
+}

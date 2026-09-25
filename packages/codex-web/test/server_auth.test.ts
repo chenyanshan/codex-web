@@ -137,6 +137,65 @@ test('API routes accept valid bearer token', async () => {
   }
 });
 
+test('runtime version diagnostics stay behind administrator authentication', async (t) => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-runtime-diagnostics-'));
+  const auth = {
+    ...createAcceptingAuth(),
+    verifyToken: async (token: string | null | undefined) => {
+      if (token !== 'admin' && token !== 'member') return null;
+      return {
+        id: `session_${token}`, deviceName: 'test', createdAt: '', lastSeenAt: '',
+        principal: { userId: token, username: token, roleId: token, roleName: token, mode: 'multi' as const, isAdmin: token === 'admin' },
+      };
+    },
+  };
+  const runtime = {
+    ...createRuntimeStub(),
+    diagnostics: () => ({ appServer: { version: '0.156.1', binaryPath: '/private/runtime/codex', connected: true } }),
+  };
+  const server = createCodexWebServer({ auth, runtime: runtime as any, config: createConfig({ stateDir }) });
+  t.after(async () => { await server.stop(); await fs.rm(stateDir, { recursive: true, force: true }); });
+  await server.start();
+  for (const [token, expected] of [[null, 401], ['member', 403], ['admin', 200]] as const) {
+    const response = await fetch(`${server.baseUrl}/api/metrics`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    assert.equal(response.status, expected);
+    const payload = await response.json() as any;
+    if (token === 'admin') {
+      assert.equal(payload.runtime.appServer.version, '0.156.1');
+      assert.equal(payload.runtime.appServer.binaryPath, '/private/runtime/codex');
+    } else {
+      assert.equal(JSON.stringify(payload).includes('/private/runtime'), false);
+      assert.equal(JSON.stringify(payload).includes('0.156.1'), false);
+    }
+  }
+});
+
+test('expired approvals report 404 after authentication without replaying the decision', async (t) => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-expired-approval-'));
+  let decisions = 0;
+  const runtime = {
+    ...createRuntimeStub(),
+    resolveApproval: async () => {
+      decisions += 1;
+      throw Object.assign(new Error('Unknown approval request: prior-connection:41'), { code: 'approval_not_found' });
+    },
+  };
+  const server = createCodexWebServer({ auth: createAcceptingAuth(), runtime: runtime as any, config: createConfig({ stateDir }) });
+  t.after(async () => { await server.stop(); await fs.rm(stateDir, { recursive: true, force: true }); });
+  await server.start();
+  const url = `${server.baseUrl}/api/approvals/prior-connection%3A41/accept`;
+  assert.equal((await fetch(url, { method: 'POST' })).status, 401);
+  assert.equal(decisions, 0);
+  const response = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer cw_token' } });
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), {
+    error: 'approval_not_found', message: 'This approval is no longer available. Refresh the session.',
+  });
+  assert.equal(decisions, 1);
+});
+
 test('large JSON responses negotiate gzip compression', async () => {
   const runtime = {
     ...createRuntimeStub(),
@@ -893,6 +952,34 @@ test('static root is public', async () => {
       await asset.arrayBuffer();
     }
     assert.equal(scriptResponse.headers.get('cache-control'), 'no-cache');
+
+    for (const name of ['boot-recovery.js', 'approval-ui.js', 'approval-ui.css', 'settings-ui.js', 'settings-ui.css', 'admin-ui.css']) {
+      assert.ok(html.includes(`/${name}?v=${buildId}`), `${name} must use the current build ID`);
+      const assetUrl = `${server.baseUrl}/${name}`;
+      const unversioned = await fetch(assetUrl);
+      assert.equal(unversioned.status, 200, name);
+      assert.equal(unversioned.headers.get('cache-control'), 'no-cache', name);
+      const body = await unversioned.text();
+      assert.ok(body.length > 0, name);
+      for (const encoding of ['br', 'gzip']) {
+        const headers = { 'Accept-Encoding': encoding };
+        const asset = await fetch(`${assetUrl}?v=${buildId}`, { headers });
+        assert.equal(asset.status, 200, name);
+        assert.equal(asset.headers.get('content-type'), name.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8', name);
+        assert.equal(asset.headers.get('cache-control'), 'public, max-age=31536000, immutable', name);
+        assert.equal(asset.headers.get('content-encoding'), encoding, name);
+        assert.match(asset.headers.get('vary') ?? '', /Accept-Encoding/iu);
+        assert.equal(await asset.text(), body, name);
+        const etag = asset.headers.get('etag');
+        assert.ok(etag, name);
+        const unchanged = await fetch(`${assetUrl}?v=${buildId}`, { headers: { ...headers, 'If-None-Match': etag } });
+        assert.equal(unchanged.status, 304, name);
+        assert.equal(await unchanged.text(), '', name);
+      }
+      const staleVersion = await fetch(`${assetUrl}?v=old-build`);
+      assert.equal(staleVersion.headers.get('cache-control'), 'no-cache', name);
+      await staleVersion.arrayBuffer();
+    }
 
     const workViewResponse = await fetch(`${server.baseUrl}/work-details-view.js?v=${buildId}&attempt=2`);
     assert.equal(workViewResponse.status, 200);

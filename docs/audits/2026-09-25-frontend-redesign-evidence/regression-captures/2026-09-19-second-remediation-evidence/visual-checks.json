@@ -1,0 +1,156 @@
+{
+  "bounds": [
+    {
+      "left": 586,
+      "right": 1426,
+      "width": 1440,
+      "scrollWidth": 1440
+    },
+    {
+      "left": 586,
+      "right": 1186,
+      "width": 1200,
+      "scrollWidth": 1200
+    },
+    {
+      "left": 586,
+      "right": 966,
+      "width": 980,
+      "scrollWidth": 980
+    },
+    {
+      "left": 0,
+      "right": 768,
+      "width": 768,
+      "scrollWidth": 768
+    }
+  ],
+  "themes": [
+    {
+      "theme": "fresh-light",
+      "samples": [
+        {
+          "selector": ".admin-page-count",
+          "fontSize": 12,
+          "contrast": 6.915009179987764
+        },
+        {
+          "selector": ".admin-nav-count",
+          "fontSize": 12,
+          "contrast": 6.915009179987764
+        },
+        {
+          "selector": ".admin-row-meta",
+          "fontSize": 13,
+          "contrast": 7.09002454406596
+        },
+        {
+          "selector": ".admin-status-badge",
+          "fontSize": 12,
+          "contrast": 4.774874916984864
+        }
+      ]
+    },
+    {
+      "theme": "retro",
+      "samples": [
+        {
+          "selector": ".admin-page-count",
+          "fontSize": 12,
+          "contrast": 6.600576578768865
+        },
+        {
+          "selector": ".admin-nav-count",
+          "fontSize": 12,
+          "contrast": 6.600576578768865
+        },
+        {
+          "selector": ".admin-row-meta",
+          "fontSize": 13,
+          "contrast": 6.710083567038532
+        },
+        {
+          "selector": ".admin-status-badge",
+          "fontSize": 12,
+          "contrast": 5.174777784705527
+        }
+      ]
+    },
+    {
+      "theme": "terminal",
+      "samples": [
+        {
+          "selector": ".admin-page-count",
+          "fontSize": 12,
+          "contrast": 8.827129049413244
+        },
+        {
+          "selector": ".admin-nav-count",
+          "fontSize": 12,
+          "contrast": 8.827129049413244
+        },
+        {
+          "selector": ".admin-row-meta",
+          "fontSize": 13,
+          "contrast": 8.649896808421687
+        },
+        {
+          "selector": ".admin-status-badge",
+          "fontSize": 12,
+          "contrast": 7.6234431712657145
+        }
+      ]
+    },
+    {
+      "theme": "dark-gold",
+      "samples": [
+        {
+          "selector": ".admin-page-count",
+          "fontSize": 12,
+          "contrast": 8.537604252264266
+        },
+        {
+          "selector": ".admin-nav-count",
+          "fontSize": 12,
+          "contrast": 8.537604252264266
+        },
+        {
+          "selector": ".admin-row-meta",
+          "fontSize": 13,
+          "contrast": 8.34353508402333
+        },
+        {
+          "selector": ".admin-status-badge",
+          "fontSize": 12,
+          "contrast": 8.851603837891542
+        }
+      ]
+    },
+    {
+      "theme": "oled-black",
+      "samples": [
+        {
+          "selector": ".admin-page-count",
+          "fontSize": 12,
+          "contrast": 9.83305270789512
+        },
+        {
+          "selector": ".admin-nav-count",
+          "fontSize": 12,
+          "contrast": 9.83305270789512
+        },
+        {
+          "selector": ".admin-row-meta",
+          "fontSize": 13,
+          "contrast": 9.367543271835558
+        },
+        {
+          "selector": ".admin-status-badge",
+          "fontSize": 12,
+          "contrast": 10.128267369802435
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

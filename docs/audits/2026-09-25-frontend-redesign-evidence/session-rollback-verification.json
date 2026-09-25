@@ -1,0 +1,21 @@
+{
+  "checkpoint": "/home/ubuntu/.codex-web/source-checkpoints/frontend-nonsession-20260924T191637Z",
+  "headerCheckpoint": "/home/ubuntu/.codex-web/source-checkpoints/frontend-mobile-header-before",
+  "patch": "/home/ubuntu/workspace/codex-mobile-web-app/docs/audits/2026-09-25-frontend-redesign-evidence/session-polish.patch",
+  "patchSha256": "0a8df8044276cdcb338674769e073337df340528561c1e3a13def5d214c0f1a2",
+  "isolatedReverseReproducesCheckpoint": true,
+  "isolatedForwardReproducesFinalWorkspace": true,
+  "files": [
+    "packages/codex-web/public/app.js",
+    "packages/codex-web/public/styles.css",
+    "packages/codex-web/public/ui-copy.js",
+    "packages/codex-web/test/browser/mobile-session-header.spec.js",
+    "packages/codex-web/test/browser/session-controls.spec.js",
+    "packages/codex-web/test/browser/session-polish.spec.js",
+    "packages/codex-web/test/browser/workspace.spec.js",
+    "packages/codex-web/test/public_ui.test.ts"
+  ],
+  "independentApprovalTestUpdatesPreserved": true,
+  "verifiedAgainstFinalWorkspace": true,
+  "includesMobileHeaderRefinement": true
+}

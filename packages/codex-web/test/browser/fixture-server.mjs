@@ -699,7 +699,7 @@ function streamActiveTurn(request, response) {
       turnId: 'turn_browser_active',
       approvalId: 'approval_browser_fixture',
       approvalKind: 'command',
-      summary: { command: 'npm test' },
+      summary: { command: 'npm test', availableDecisionKeys: ['accept', 'acceptForSession', 'decline'] },
     },
   ];
 

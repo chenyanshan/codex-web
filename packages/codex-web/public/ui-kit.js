@@ -108,8 +108,10 @@
   }
 
   function readStoredBoolean(key) {
-    const value = globalObject.localStorage.getItem(key);
-    return value === null ? null : value === 'true';
+    try {
+      const value = globalObject.localStorage.getItem(key);
+      return value === null ? null : value === 'true';
+    } catch (_error) { return null; }
   }
 
   function storeBoolean(key, value) {

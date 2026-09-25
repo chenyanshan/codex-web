@@ -1,0 +1,8 @@
+{
+  "criticalGzipBytes": 143096,
+  "criticalGzipLimit": 143360,
+  "appSourceBytes": 498375,
+  "appBuiltBytes": 259313,
+  "appSourceLimit": 500000,
+  "adminOutsideCriticalGraph": true
+}

@@ -435,6 +435,48 @@ test('failed submission status probes report the rejection without retrying exec
   }
 });
 
+for (const phase of ['create', 'start'] as const) {
+  test(`typed uncertain app-server ${phase} responses cannot replay after restart`, async (t) => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-uncertain-rpc-'));
+    t.after(() => fs.rm(stateDir, { recursive: true, force: true }));
+    const runtime = runtimeStub();
+    const uncertain = () => Object.assign(new Error('socket closed after sending the request'), {
+      code: 'app_server_response_uncertain',
+    });
+    if (phase === 'create') {
+      runtime.createSession = async () => { runtime.calls.create += 1; throw uncertain(); };
+    } else {
+      runtime.startTurn = async () => { runtime.calls.start += 1; throw uncertain(); };
+    }
+    const config = createConfig(stateDir);
+    let server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config });
+    t.after(() => server.stop());
+    await server.start();
+    const body = { submissionId: `uncertain-${phase}`, text: 'execute exactly once' };
+    const first = await postJson(`${server.baseUrl}/api/session-submissions`, body);
+    assert.equal(first.status, 503);
+    const failure = await first.json() as any;
+    assert.equal(failure.error, 'app_server_response_uncertain');
+    assert.equal(failure.outcomeUnknown, true);
+    assert.equal(failure.retryable, false);
+    await server.stop();
+    server = createCodexWebServer({ auth: acceptingAuth(), runtime: runtime as any, config });
+    await server.start();
+    const replay = await postJson(`${server.baseUrl}/api/session-submissions`, { ...body, retry: true });
+    const receipt = await replay.json() as any;
+    assert.equal(receipt.submission.status, 'outcome_unknown');
+    const probe = await fetch(`${server.baseUrl}/api/session-submissions/${body.submissionId}`, {
+      headers: { Authorization: 'Bearer token' },
+    });
+    const probeResult = await probe.json() as any;
+    assert.equal(probeResult.submission.status, 'outcome_unknown');
+    assert.equal(probeResult.retryAllowed, false);
+    assert.deepEqual(runtime.calls, { create: 1, start: phase === 'start' ? 1 : 0 });
+    const unauthenticated = await fetch(`${server.baseUrl}/api/session-submissions/${body.submissionId}`);
+    assert.equal(unauthenticated.status, 401);
+  });
+}
+
 test('session submission ids reject payload conflicts without another side effect', async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-server-submission-conflict-'));
   const runtime = runtimeStub();

@@ -1,0 +1,340 @@
+--- a/packages/codex-web/public/app.js
++++ b/packages/codex-web/public/app.js
+@@ -1965,7 +1965,7 @@
+       `}
+     <main class="new-session-page${desktop ? ' desktop-new-session-page' : ''}">
+       <div class="new-session-hero">
+-        <h1 class="new-session-heading" data-i18n-skip>开启新会话</h1>
++        <h1 class="new-session-heading" data-i18n-skip>${escapeHtml(t('Start a new session'))}</h1>
+         <form class="panel stack new-session-card bg-shared ring-theme" id="new-session-form">
+           ${sessionTargetPicker}
+           <div class="actions new-session-actions">
+@@ -2272,7 +2272,7 @@
+   `;
+ }
+ 
+-function renderRuntimeFeedback() {
++function renderRuntimeFeedback(live = true) {
+   if (!state.sessionId) return '';
+   const activity = state.currentSession?.lastBusinessActivityAt;
+   const startedAt = state.currentSession?.turnStartedAt;
+@@ -2281,30 +2281,30 @@
+     : 'Turn finished';
+   const elapsed = startedAt && state.pendingTurn ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : null;
+   const since = activity ? Math.max(0, Math.floor((Date.now() - activity) / 1000)) : null;
+-  return `<div class="runtime-feedback" role="status">${escapeHtml(CONNECTION.label(t) || t(connection))}${elapsed != null ? ` · ${escapeHtml(t('Elapsed'))} ${formatElapsedDuration(elapsed)}` : ''}${since != null ? ` · ${escapeHtml(t('Last work activity'))} ${formatElapsedDuration(since)}` : ''}</div>`;
++  return `<div class="runtime-feedback"${live ? ' role="status"' : ''}>${escapeHtml(CONNECTION.label(t) || t(connection))}<span class="runtime-timing">${elapsed != null ? ` · ${escapeHtml(t('Elapsed'))} ${formatElapsedDuration(elapsed)}` : ''}${since != null ? ` · ${escapeHtml(t('Last work activity'))} ${formatElapsedDuration(since)}` : ''}</span></div>`;
+ }
+ function formatElapsedDuration(seconds) {
+   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+ }
+ function refreshRuntimeFeedback() {
+   if (document.visibilityState === 'hidden') return;
+-  const feedback = document.querySelector('.runtime-feedback');
+-  if (feedback) {
+-    const next = htmlToElement(renderRuntimeFeedback());
++  for (const feedback of document.querySelectorAll('.runtime-feedback')) {
++    const next = htmlToElement(renderRuntimeFeedback(feedback.hasAttribute('role')));
+     if (feedback.textContent !== next?.textContent) feedback.replaceWith(next);
+   }
+ }
+ 
+-function renderGoalStatus() {
++function renderGoalStatus(details = false) {
+   const goal = state.currentSession?.goal;
+   const objective = String(goal?.objective || '').trim();
+   if (!objective) {
+     return '';
+   }
+   const { status, label } = goalStatusDisplay(goal.status);
++  if (details) return `<details><summary>${escapeHtml(t(label))}</summary><div class="goal-objective" data-i18n-skip>${escapeHtml(objective)}</div></details>`;
+   return `
+     <div class="goal-status" data-status="${escapeAttribute(status)}" data-i18n-skip>
+-      <span>${escapeHtml(label)}</span>
++      <span>${escapeHtml(t(label))}</span>
+       <span class="goal-objective">${escapeHtml(objective)}</span>
+     </div>
+   `;
+@@ -2739,6 +2739,11 @@
+         <span class="settings-drawer-title">Current session</span>
+         <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus>${UI.icon('x', { className: 'button-icon' })}</button>
+       </div>
++      ${!isDesktopLayout() ? `<div class="session-context">
++        <strong data-i18n-skip>${escapeHtml(sessionDisplayTitle(state.currentSession))}</strong>
++        <div data-i18n-skip>${escapeHtml(projectNameForSession(state.currentSession, state.cwd))}</div>
++        ${renderGoalStatus(true)}${renderRuntimeFeedback(false)}
++      </div>` : ''}
+       ${renderStopTurnSettingsControl()}
+       ${renderSessionActionsSettingsSection()}
+       <div class="settings-drawer-section">
+@@ -13643,7 +13648,7 @@
+   if (Number.isNaN(date.getTime())) {
+     return '';
+   }
+-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
++  return date.toLocaleDateString(state.language, { month: 'short', day: 'numeric' });
+ }
+ 
+ function formatShortDateTime(timestamp) {
+@@ -13651,7 +13656,7 @@
+   if (Number.isNaN(date.getTime())) {
+     return '';
+   }
+-  return date.toLocaleString([], {
++  return date.toLocaleString(state.language, {
+     month: 'short',
+     day: 'numeric',
+     hour: '2-digit',
+--- a/packages/codex-web/public/styles.css
++++ b/packages/codex-web/public/styles.css
+@@ -3376,7 +3376,7 @@
+   padding: 4px 4px 4px 9px;
+   flex: 0 1 auto;
+   display: grid;
+-  grid-template-columns: minmax(0, 1fr) auto 28px;
++  grid-template-columns: minmax(0, 1fr) auto 44px;
+   align-items: center;
+   gap: 7px;
+   border: 1px solid var(--border);
+@@ -3390,7 +3390,13 @@
+ 
+ .attachment-chip.is-failed {
+   border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
+-}
++  grid-template-areas: "file file remove" "status retry retry";
++}
++
++.attachment-chip.is-failed .attachment-main { grid-area: file; }
++.attachment-chip.is-failed .attachment-status { grid-area: status; }
++.attachment-chip.is-failed .attachment-remove { grid-area: remove; }
++.attachment-chip.is-failed .attachment-retry { grid-area: retry; justify-self: end; min-height: 44px; min-width: 64px; padding: 8px 14px; white-space: normal; line-height: 1.4; }
+ 
+ .attachment-main {
+   min-width: 0;
+@@ -3442,9 +3448,9 @@
+ }
+ 
+ .attachment-remove {
+-  width: 28px;
+-  min-width: 28px;
+-  min-height: 28px;
++  width: 44px;
++  min-width: 44px;
++  min-height: 44px;
+   padding: 0;
+   color: var(--muted);
+ }
+@@ -5862,7 +5868,6 @@
+ .session-preview, .session-card-meta, .path-choice small { color: var(--muted); font-size: 12px; }
+ .composer-status-action { min-height: 44px; min-width: 44px; padding: 8px 4px; }
+ .chat-project-context { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+-.chat-title-stack { min-width: 0; }
+ .chat-title-stack .project-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ .history-load-error { padding: 12px; color: var(--warn); border: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+ .timeline-window-control {
+@@ -5915,6 +5920,12 @@
+ .chat-context-row .runtime-feedback { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ .chat-context-row .goal-status { flex-shrink: 0; font-size: 12px; line-height: 18px; }
+ .desktop-chat-topbar .chat-context-row { justify-content: flex-start; }
++.chat-topbar:not(.desktop-chat-topbar) :is(.chat-project-context, .goal-status, .runtime-timing) { display: none; }
++.chat-topbar:not(.desktop-chat-topbar) .runtime-feedback { white-space: normal; overflow-wrap: anywhere; }
++.session-context { display: grid; gap: 8px; padding: 12px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
++.session-context strong { color: var(--text); }
++.session-context summary { min-height: 44px; padding-block: 12px; cursor: pointer; }
++.session-context .goal-objective { display: block; }
+ .chat-stop-button { width: 38px; min-width: 38px; height: 38px; padding: 0; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; }
+ .chat-stop-button .button-icon { width: 18px; height: 18px; }
+ .chat-stop-button rect { fill: currentColor; stroke: none; }
+--- a/packages/codex-web/public/ui-copy.js
++++ b/packages/codex-web/public/ui-copy.js
+@@ -230,6 +230,10 @@
+       Copied: '已复制',
+       Administration: '管理',
+       'Current session': '当前会话',
++      'Goal active': '目标进行中',
++      'Goal paused': '目标已暂停',
++      'Goal done': '目标已完成',
++      'Goal blocked': '目标受阻',
+       'Current session is running': '当前会话正在运行',
+       'Current session is idle': '当前会话已空闲',
+       'Model and reasoning': '模型与推理',
+--- /dev/null
++++ b/packages/codex-web/test/browser/mobile-session-header.spec.js
+@@ -0,0 +1,73 @@
++import { test, expect } from '@playwright/test';
++import fs from 'node:fs/promises';
++const evidence = 'docs/audits/2026-09-25-session-polish-evidence';
++const title = 'Review session rendering, navigation and weak-network recovery across every layout / 排查手机长任务恢复';
++const project = 'a-very-long-production-project-directory-name';
++const objective = 'Verify that the session remains readable throughout the running goal / 检查目标完成情况';
++test.use({ serviceWorkers: 'block' });
++
++test('mobile header keeps essential status visible and moves full context into the existing menu', async ({ page }, info) => {
++  test.skip(!info.project.name.startsWith('mobile'));
++  await fs.mkdir(evidence, { recursive: true });
++  const errors = []; page.on('pageerror', error => errors.push(error.message));
++  await page.addInitScript(() => { localStorage.setItem('codexWebToken', 'mobile-header-fixture'); localStorage.setItem('codexWebLanguage', 'en'); });
++  await page.route('**/app.js*', async route => {
++    const response = await route.fetch();
++    await route.fulfill({ response, body: `${await response.text()}\nglobalThis.__headerTest={state,render,applyTheme,applyLanguage,setSessionLayout,refreshRuntimeFeedback,CONNECTION};` });
++  });
++  await page.goto('/'); await page.locator('[data-session-id="session_browser_history"]').click();
++  await expect(page.locator('#timeline')).toContainText('Latest browser answer');
++  await page.evaluate(({ title, project, objective }) => {
++    const { state, render } = globalThis.__headerTest;
++    state.currentSession = { ...state.currentSession, title, projectName: project, cwd: `/workspace/${project}`, goal: { objective, status: 'active' }, turnStartedAt: Date.now() - 45000, lastBusinessActivityAt: Date.now() - 5000 };
++    state.pendingTurn = true; state.turnId = 'header-fixture'; state.streamConnection = 'reconnecting'; render();
++  }, { title, project, objective });
++  const header = page.locator('.chat-topbar');
++  for (const language of ['en', 'zh-CN']) for (const layout of ['current', 'console']) for (const theme of ['fresh-light', 'retro', 'dark-gold', 'oled-black', 'terminal']) {
++    await page.evaluate(({ language, layout, theme }) => { globalThis.__headerTest.applyLanguage(language); globalThis.__headerTest.setSessionLayout(layout); globalThis.__headerTest.applyTheme(theme); globalThis.__headerTest.render(); }, { language, layout, theme });
++    await expect(header.locator('.project-title')).toHaveText(title);
++    await expect(header.locator('.chat-project-context')).toBeHidden();
++    await expect(header.locator('.goal-status')).toBeHidden();
++    await expect(header.locator('.runtime-timing')).toBeHidden();
++    await expect(header.locator('.runtime-feedback')).toBeVisible();
++    const geometry = await header.evaluate(el => {
++      const status = el.querySelector('.runtime-feedback');
++      return { height: el.getBoundingClientRect().height, clipped: status.scrollHeight > status.clientHeight + 1 || status.scrollWidth > status.clientWidth + 1, width: document.documentElement.scrollWidth };
++    });
++    expect(geometry.height).toBeLessThanOrEqual(90);
++    expect(geometry.clipped).toBe(false); expect(geometry.width).toBeLessThanOrEqual(info.project.use.viewport.width);
++    for (const selector of ['#back-to-list-button', '#visible-stop-button', '#settings-toggle']) {
++      const box = await page.locator(selector).boundingBox(); expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
++    }
++    await page.screenshot({ path: `${evidence}/header-${info.project.name}-${language}-${layout}-${theme}.png` });
++  }
++  await page.evaluate(() => { globalThis.__headerTest.CONNECTION.failed('header-fixture', { status: 502, message: 'fixture network failure' }); globalThis.__headerTest.render(); });
++  await expect(header.locator('.runtime-feedback')).toContainText('HTTP 502');
++  expect(await header.locator('.runtime-feedback').evaluate(el => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1)).toBe(false);
++  expect((await header.boundingBox()).height).toBeLessThanOrEqual(90);
++  await page.locator('#prompt-input').fill('Keep this draft / 保留草稿');
++  await page.locator('#settings-toggle').click();
++  const context = page.locator('.session-context');
++  await expect(context).toContainText(title); await expect(context).toContainText(project); await expect(context).toContainText(objective); await expect(context).toContainText('目标进行中');
++  await expect(context.locator('.goal-objective')).toBeHidden();
++  await page.evaluate(() => { globalThis.__headerTest.state.currentSession.goal.objective = globalThis.__headerTest.state.currentSession.goal.objective.repeat(80); globalThis.__headerTest.render(); });
++  await expect(context.locator('details')).not.toHaveAttribute('open');
++  await expect(context.locator('.goal-objective')).toBeHidden();
++  await context.locator('details > summary').click();
++  await expect(context.locator('.goal-objective')).toBeVisible();
++  await context.locator('details > summary').click();
++  await expect(context.locator('.runtime-timing')).toBeVisible();
++  await expect(context.locator('.runtime-feedback')).not.toHaveAttribute('role');
++  await expect(page.locator('.runtime-feedback[role="status"]')).toHaveCount(1);
++  await page.evaluate(() => { globalThis.__headerTest.state.currentSession.turnStartedAt = Date.now() - 125000; globalThis.__headerTest.refreshRuntimeFeedback(); });
++  await expect(context.locator('.runtime-timing')).toContainText('2m 5s');
++  await expect(context.locator('.runtime-feedback')).not.toHaveAttribute('role');
++  await page.screenshot({ path: `${evidence}/header-menu-${info.project.name}.png` });
++  await page.locator('#settings-drawer-close').click();
++  await expect(page.locator('#settings-toggle')).toBeFocused();
++  await expect(page.locator('#prompt-input')).toHaveValue('Keep this draft / 保留草稿');
++  const scrollBefore = await page.locator('#timeline').evaluate(el => el.scrollTop);
++  await page.evaluate(() => globalThis.__headerTest.refreshRuntimeFeedback());
++  expect(await page.locator('#timeline').evaluate(el => el.scrollTop)).toBe(scrollBefore);
++  expect(errors).toEqual([]);
++});
+--- a/packages/codex-web/test/browser/session-controls.spec.js
++++ b/packages/codex-web/test/browser/session-controls.spec.js
+@@ -44,7 +44,7 @@
+     expect(arrow.y + arrow.height).toBeLessThanOrEqual(composer.y);
+     if (info.project.name.startsWith('mobile')) expect((await stop.boundingBox()).height).toBeGreaterThanOrEqual(44);
+     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+-    await page.screenshot({ path: `docs/audits/2026-09-19-second-remediation-evidence/session-controls-${info.project.name}-${width}.png` });
++    await page.screenshot({ path: `docs/audits/2026-09-25-session-polish-evidence/session-controls-${info.project.name}-${width}.png` });
+   }
+   await latest.focus(); await page.keyboard.press('Enter');
+   await expect.poll(() => page.locator('#timeline').evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2);
+--- /dev/null
++++ b/packages/codex-web/test/browser/session-polish.spec.js
+@@ -0,0 +1,54 @@
++import { test, expect } from '@playwright/test';
++import fs from 'node:fs/promises';
++
++test.use({ serviceWorkers: 'block', locale: 'fr-FR' });
++const evidence = 'docs/audits/2026-09-25-session-polish-evidence';
++
++for (const language of ['en', 'zh-CN']) {
++  test(`session heading and dates use the selected ${language} language`, async ({ page }) => {
++    await page.addInitScript(language => {
++      localStorage.setItem('codexWebToken', 'session-language-fixture');
++      localStorage.setItem('codexWebLanguage', language);
++    }, language);
++    await page.goto('/');
++    const expected = await page.evaluate(language => new Date('2026-07-15T07:01:00.000Z').toLocaleString(language, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }), language);
++    await expect(page.locator('[data-session-id="session_browser_idle"] .session-card-meta')).toContainText(expected);
++    await page.locator('#open-new-session-button').click();
++    await expect(page.locator('.new-session-heading')).toHaveText(language === 'en' ? 'Start a new session' : '新建会话');
++  });
++
++  test(`failed attachments keep ${language} retry and remove actions readable and preserve the draft`, async ({ page }, info) => {
++    await page.addInitScript(language => {
++      localStorage.setItem('codexWebToken', 'session-attachment-polish');
++      localStorage.setItem('codexWebLanguage', language);
++    }, language);
++    await page.route('**/api/sessions/session_browser_idle/attachments', route => route.fulfill({ status: 503, json: { message: 'Synthetic upload failure' } }));
++    await page.goto('/');
++    await page.locator('button[data-session-id="session_browser_idle"]').click();
++    await page.locator('#prompt-input').fill('Keep this draft while removing a failed attachment');
++    await page.locator('#attachment-input').setInputFiles({ name: '这是一份文件名很长的附件-report-with-a-long-name-that-should-not-hide-the-retry-action.txt', mimeType: 'text/plain', buffer: Buffer.from('Attachment layout fixture') });
++    const chip = page.locator('.attachment-chip.is-failed');
++    await expect(chip).toBeVisible();
++    for (const theme of ['retro', 'dark-gold', 'oled-black', 'fresh-light', 'terminal']) {
++      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
++      for (const action of ['.attachment-retry', '.attachment-remove']) {
++        const geometry = await chip.locator(action).evaluate(el => {
++          const box = el.getBoundingClientRect();
++          const parent = el.closest('.attachment-chip').getBoundingClientRect();
++          return { width: box.width, height: box.height, inside: box.left >= parent.left && box.right <= parent.right && box.top >= parent.top && box.bottom <= parent.bottom, clipped: el.scrollWidth > el.clientWidth };
++        });
++        expect(geometry.inside).toBe(true);
++        expect(geometry.clipped).toBe(false);
++        expect(geometry.height).toBeGreaterThanOrEqual(44);
++        expect(geometry.width).toBeGreaterThanOrEqual(44);
++      }
++      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
++    }
++    await page.evaluate(() => { document.documentElement.dataset.theme = 'fresh-light'; });
++    await fs.mkdir(evidence, { recursive: true });
++    await page.screenshot({ path: `${evidence}/attachment-${info.project.name}-${language}.png` });
++    await chip.locator('.attachment-remove').click();
++    await expect(chip).toHaveCount(0);
++    await expect(page.locator('#prompt-input')).toHaveValue('Keep this draft while removing a failed attachment');
++  });
++}
+--- a/packages/codex-web/test/browser/workspace.spec.js
++++ b/packages/codex-web/test/browser/workspace.spec.js
+@@ -1505,7 +1505,7 @@
+     await expect(page.locator('.session-list').first()).toBeVisible();
+ 
+     await page.locator('#open-new-session-button').click();
+-    await expect(page.getByRole('heading', { name: '开启新会话' })).toBeVisible();
++    await expect(page.getByRole('heading', { name: 'Start a new session' })).toBeVisible();
+     await expect(page.locator('#new-session-form')).toBeVisible();
+     const newSessionSurfaces = await page.evaluate(() => {
+       const root = getComputedStyle(document.documentElement);
+--- a/packages/codex-web/test/public_ui.test.ts
++++ b/packages/codex-web/test/public_ui.test.ts
+@@ -3689,11 +3689,11 @@
+   assert.doesNotMatch(sessionListHtml, /<span class="session-title">发送<\/span>/u);
+ 
+   const chatHtml = api.renderChat().innerHTML;
+-  assert.match(chatHtml, /<span>Goal active<\/span>/u);
++  assert.match(chatHtml, /<span>目标进行中<\/span>/u);
+   assert.match(chatHtml, /<span class="goal-objective">Send<\/span>/u);
+   assert.match(chatHtml, /<span class="queued-message-text" data-i18n-skip>Send<\/span>/u);
+   assert.match(chatHtml, /aria-label="删除排队消息"/u);
+-  assert.doesNotMatch(chatHtml, /目标进行中/u);
++  assert.doesNotMatch(chatHtml, /<span>Goal active<\/span>/u);
+   assert.doesNotMatch(chatHtml, /<span class="goal-objective">发送<\/span>/u);
+   assert.doesNotMatch(chatHtml, /<span class="queued-message-text">发送<\/span>/u);
+ 
+@@ -3979,7 +3979,7 @@
+ 
+   assert.match(app, /<textarea id="new-cwd-input"[^>]*name="cwd"[^>]*rows="3"/u);
+   assert.doesNotMatch(app, /<input id="new-cwd-input"[^>]*type="text"/u);
+-  assert.match(app, /<h1 class="new-session-heading" data-i18n-skip>开启新会话<\/h1>/u);
++  assert.match(app, /<h1 class="new-session-heading" data-i18n-skip>\$\{escapeHtml\(t\('Start a new session'\)\)\}<\/h1>/u);
+   assert.match(app, /class="panel stack new-session-card bg-shared ring-theme"/u);
+   assert.match(styles, /\.new-session-page\s*\{[^}]*align-items:\s*center;/su);
+   assert.match(styles, /\.new-session-page\s*\{[^}]*justify-content:\s*center;/su);

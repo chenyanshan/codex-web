@@ -1,0 +1,10 @@
+{
+  "viewport": "mobile-portrait",
+  "testFile": "packages/codex-web/test/browser/markdown-file-links.spec.js",
+  "failed": 2,
+  "cause": "Nested Markdown links resolve from the project root instead of the current document directory.",
+  "screenshots": [
+    "before-markdown-file-links-links--105d5--return-to-the-conversation-mobile-portrait.png",
+    "before-markdown-file-links-retry--f6d7b-nd-literal-encoded-filename-mobile-portrait.png"
+  ]
+}

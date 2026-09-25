@@ -12,14 +12,24 @@
   <link rel="manifest" href="/manifest.webmanifest?v=__CODEX_WEB_BUILD_ID__">
   <link rel="icon" href="/icon.svg?v=__CODEX_WEB_BUILD_ID__" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=__CODEX_WEB_BUILD_ID__">
+  <script src="/boot-recovery.js?v=__CODEX_WEB_BUILD_ID__"></script>
   <script src="/theme-init.js?v=__CODEX_WEB_BUILD_ID__"></script>
   <link rel="stylesheet" href="/styles.css?v=__CODEX_WEB_BUILD_ID__">
+  <link rel="stylesheet" href="/approval-ui.css?v=__CODEX_WEB_BUILD_ID__">
+  <link rel="stylesheet" href="/settings-ui.css?v=__CODEX_WEB_BUILD_ID__">
+  <link rel="stylesheet" href="/admin-ui.css?v=__CODEX_WEB_BUILD_ID__">
 </head>
 <body>
   <div id="app">
     <div class="boot-shell" role="status" aria-label="Loading Codex">
       <strong class="boot-wordmark">Codex</strong>
       <span class="boot-progress" aria-hidden="true"><span></span></span>
+      <details class="boot-help">
+        <summary>Having trouble loading?</summary>
+        <p class="boot-help-message">Check your connection and reload the page.</p>
+        <a href="" class="boot-reload">Reload page</a>
+      </details>
+      <noscript>Enable JavaScript to use Codex Web.</noscript>
     </div>
   </div>
   <div id="global-tooltip" class="global-tooltip" role="tooltip" aria-hidden="true"></div>
@@ -44,6 +54,8 @@
   <script src="/session-attention.js?v=__CODEX_WEB_BUILD_ID__"></script>
   <script src="/draft-store.js?v=__CODEX_WEB_BUILD_ID__"></script>
   <script src="/session-pagination.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script src="/approval-ui.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script src="/settings-ui.js?v=__CODEX_WEB_BUILD_ID__"></script>
   <script type="module" src="/app.js?v=__CODEX_WEB_BUILD_ID__"></script>
 </body>
 </html>

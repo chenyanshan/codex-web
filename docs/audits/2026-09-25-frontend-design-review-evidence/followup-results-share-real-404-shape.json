@@ -1,0 +1,13 @@
+[
+  {
+    "name": "mobile-share-unavailable-404",
+    "text": "Selected session was not found.",
+    "pageWidth": 390,
+    "width": 390,
+    "active": {
+      "tag": "BODY",
+      "id": ""
+    },
+    "buttons": []
+  }
+]
