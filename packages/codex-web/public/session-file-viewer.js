@@ -94,6 +94,55 @@ function sandboxedSessionFileHtml(content) {
   return `<meta http-equiv="Content-Security-Policy" content="${SESSION_FILE_HTML_CSP}">${String(content || '')}`;
 }
 
+// Only raster images are embedded; HTML scripts and external resources remain blocked.
+async function embedSessionFileImages(content, documentPath, readImage, signal) {
+  const template = document.createElement('template');
+  template.innerHTML = content;
+  const images = [...template.content.querySelectorAll('img[src]')].slice(0, 64);
+  const cache = new Map();
+  let remainingBytes = 16 * 1024 * 1024;
+  for (const image of images) {
+    signal?.throwIfAborted();
+    const src = String(image.getAttribute('src') || '').trim();
+    if (!src || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/iu.test(src)) continue;
+    let imagePath;
+    try {
+      const local = decodeURIComponent(src.split(/[?#]/u)[0]);
+      imagePath = local.startsWith('/') ? local : documentPath.slice(0, documentPath.lastIndexOf('/') + 1) + local;
+    } catch { continue; }
+    try {
+      if (!cache.has(imagePath)) {
+        const blob = await readImage(imagePath, Math.min(2 * 1024 * 1024, remainingBytes));
+        signal?.throwIfAborted();
+        if (!blob || !/^image\/(?:png|jpeg|gif|webp|bmp|avif)$/u.test(blob.type) || blob.size > Math.min(2 * 1024 * 1024, remainingBytes)) {
+          cache.set(imagePath, '');
+        } else {
+          remainingBytes -= blob.size;
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+          });
+          cache.set(imagePath, dataUrl);
+        }
+      }
+      if (cache.get(imagePath)) {
+        image.setAttribute('src', cache.get(imagePath));
+        image.removeAttribute('srcset');
+        // A picture source must not override the authenticated embedded image.
+        if (image.parentElement?.tagName === 'PICTURE') image.parentElement.querySelectorAll('source').forEach(source => source.remove());
+      }
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error?.status === 401) throw error;
+      cache.set(imagePath, '');
+    }
+  }
+  signal?.throwIfAborted();
+  return template.innerHTML;
+}
+
 function normalizeSessionFile(file, fallbackPath = '') {
   if (!file || typeof file !== 'object') {
     return null;
@@ -232,7 +281,7 @@ function revokeSessionFileObjectUrl() {
 }
 
 
-    return { renderDesktopSessionFileOverlay, renderSessionFileViewer, renderSessionFileViewerContent, renderSessionFileViewerBody, renderSessionFileDocument, sandboxedSessionFileHtml, normalizeSessionFile, sessionFilePlaceholder, normalizeSessionFileKind, sessionFileKindFromPath, sessionFileMetadata, isSafeSessionFileContentUrl, sessionFileProtocolError, sessionFileErrorCode, sessionFileErrorMessage, decodeSessionFilePath, createTextFileBlob, createSessionFileObjectUrl, revokeSessionFileObjectUrl };
+    return { embedSessionFileImages, renderDesktopSessionFileOverlay, renderSessionFileViewer, renderSessionFileViewerContent, renderSessionFileViewerBody, renderSessionFileDocument, sandboxedSessionFileHtml, normalizeSessionFile, sessionFilePlaceholder, normalizeSessionFileKind, sessionFileKindFromPath, sessionFileMetadata, isSafeSessionFileContentUrl, sessionFileProtocolError, sessionFileErrorCode, sessionFileErrorMessage, decodeSessionFilePath, createTextFileBlob, createSessionFileObjectUrl, revokeSessionFileObjectUrl };
   }
   globalScope.CodexWebFileViewer = { createRenderer };
 }(globalThis));

@@ -264,7 +264,7 @@ const { translateUi, t, translateText, localizeUiHtml, localizeUiHtmlOutsideProt
   escapeHtml
 });
 
-const { renderDesktopSessionFileOverlay, renderSessionFileViewer, renderSessionFileViewerContent, renderSessionFileViewerBody, renderSessionFileDocument, sandboxedSessionFileHtml, normalizeSessionFile, sessionFilePlaceholder, normalizeSessionFileKind, sessionFileKindFromPath, sessionFileMetadata, isSafeSessionFileContentUrl, sessionFileProtocolError, sessionFileErrorCode, sessionFileErrorMessage, decodeSessionFilePath, createTextFileBlob, createSessionFileObjectUrl, revokeSessionFileObjectUrl } = globalThis.CodexWebFileViewer.createRenderer({
+const { embedSessionFileImages, renderDesktopSessionFileOverlay, renderSessionFileViewer, renderSessionFileViewerContent, renderSessionFileViewerBody, renderSessionFileDocument, sandboxedSessionFileHtml, normalizeSessionFile, sessionFilePlaceholder, normalizeSessionFileKind, sessionFileKindFromPath, sessionFileMetadata, isSafeSessionFileContentUrl, sessionFileProtocolError, sessionFileErrorCode, sessionFileErrorMessage, decodeSessionFilePath, createTextFileBlob, createSessionFileObjectUrl, revokeSessionFileObjectUrl } = globalThis.CodexWebFileViewer.createRenderer({
   localizeFragment,
   localizeElement,
   state,
@@ -9051,7 +9051,35 @@ async function loadResolvedSessionFile(file, loadController, { skipAuth = false 
     if (!isActiveSessionFileLoad(loadController)) {
       return;
     }
-    state.currentSessionFileContent = content;
+    const documentPath = state.currentSessionFilePath;
+    const resolveUrl = file.contentUrl.replace(/\/[^/]+\/content$/u, '/resolve');
+    const previewContent = file.kind === 'html' && !skipAuth
+      ? await embedSessionFileImages(content, documentPath, async (imagePath, maxBytes) => {
+        if (!isActiveSessionFileLoad(loadController) || maxBytes <= 0) return null;
+        const payload = await apiFetch(resolveUrl, {
+          method: 'POST', body: { path: imagePath }, signal: loadController.signal,
+        });
+        const image = normalizeSessionFile(payload?.file, imagePath);
+        if (!image || image.kind !== 'image' || image.sizeBytes > maxBytes) return null;
+        const response = await fetchSessionFileContent(image.contentUrl, { signal: loadController.signal });
+        // Read a bounded stream even if a file changes after metadata resolution.
+        const reader = response.body.getReader();
+        const chunks = [];
+        let bytes = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > maxBytes) return null;
+            chunks.push(value);
+          }
+          return new Blob(chunks, { type: image.mimeType });
+        } finally { await reader.cancel(); }
+      }, loadController.signal)
+      : content;
+    if (!isActiveSessionFileLoad(loadController)) return;
+    state.currentSessionFileContent = previewContent;
     state.currentSessionFileBlob = createTextFileBlob(content, file.mimeType);
   } else {
     const blob = await response.blob();

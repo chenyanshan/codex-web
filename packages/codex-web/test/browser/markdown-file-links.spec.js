@@ -13,11 +13,12 @@ test.beforeEach(async ({ page }, info) => {
 
 async function installFiles(page, { failCsvOnce = false } = {}) {
   const files = new Map([
-    ['docs/browser-session-guide.md', { id: 'sf_guide', kind: 'markdown', mimeType: 'text/markdown', data: '# Guide\n\n[Nested guide](notes/nested.md)\n\n[Spreadsheet](downloads/monthly%20report%2525.csv)\n\n[Absolute image](/Users/test/yanshan_quant/docs/assets/preview.png)' }],
+    ['docs/browser-session-guide.md', { id: 'sf_guide', kind: 'markdown', mimeType: 'text/markdown', data: '# Guide\n\n[HTML preview](preview.html)\n\n[Nested guide](notes/nested.md)\n\n[Spreadsheet](downloads/monthly%20report%2525.csv)\n\n[Absolute image](/Users/test/yanshan_quant/docs/assets/preview.png)' }],
     ['docs/notes/nested.md', { id: 'sf_nested', kind: 'markdown', mimeType: 'text/markdown', data: '# Nested guide\n\n[Preview image](../assets/preview.png)' }],
     ['docs/assets/preview.png', { id: 'sf_image', kind: 'image', mimeType: 'image/png', data: png }],
     ['docs/downloads/monthly report%25.csv', { id: 'sf_csv', kind: 'file', mimeType: 'text/csv', data: 'name,value\nexample,42\n' }],
   ]);
+  files.set('docs/preview.html', { id: 'sf_html', kind: 'html', mimeType: 'text/html', data: '<h1>Local covers</h1><img src="assets/preview.png"><img src="assets/preview.png"><img src="missing.png"><script>parent.document.body.textContent="unsafe"</script>' });
   const requests = [];
   await page.route(`**/api/sessions/${sessionId}/files/resolve`, async route => {
     const input = route.request().postDataJSON().path;
@@ -33,7 +34,7 @@ async function installFiles(page, { failCsvOnce = false } = {}) {
     const { data, ...metadata } = file;
     await route.fulfill({ json: { file: { ...metadata, name: path.posix.basename(relative), source: 'project', sizeBytes: Buffer.byteLength(data), contentUrl: `/api/sessions/${sessionId}/files/${file.id}/content` } } });
   });
-  await page.route(`**/api/sessions/${sessionId}/files/*/content?*`, async route => {
+  await page.route(`**/api/sessions/${sessionId}/files/*/content**`, async route => {
     const id = new URL(route.request().url()).pathname.split('/').at(-2);
     const file = [...files.values()].find(item => item.id === id);
     if (!file) return route.fulfill({ status: 404, json: { error: 'file_not_found' } });
@@ -78,4 +79,55 @@ test('retry and download retain the resolved document directory and literal enco
   expect((await download).suggestedFilename()).toBe('monthly report%25.csv');
   await page.locator('#close-session-file-button').click();
   await expect(page.locator('#prompt-input')).toHaveValue('Preserve the conversation draft');
+});
+
+
+test('HTML preview embeds local images through authenticated file APIs and keeps sandbox isolation', async ({ page }) => {
+  const requests = await installFiles(page);
+  const imageHeaders = [];
+  page.on('request', request => {
+    if (request.url().includes('/files/sf_image/content')) imageHeaders.push(request.headers().authorization);
+  });
+  await page.getByRole('link', { name: 'HTML preview', exact: true }).click();
+  const frame = page.frameLocator('.session-file-html');
+  await expect(frame.locator('h1')).toHaveText('Local covers');
+  await expect.poll(() => frame.locator('img').evaluateAll(images => images.filter(image => image.naturalWidth === 1).length)).toBe(2);
+  expect(requests.filter(path => path === 'docs/assets/preview.png')).toHaveLength(1);
+  expect(imageHeaders).toEqual(['Bearer markdown-link-fixture']);
+  await expect(page.locator('.session-file-html')).toHaveAttribute('sandbox', '');
+  await expect(page.locator('#close-session-file-button')).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await page.locator('#session-file-download').click();
+  expect((await downloadPromise).suggestedFilename()).toBe('preview.html');
+  await page.locator('#close-session-file-button').click();
+  await expect(page.locator('#prompt-input')).toHaveValue('Preserve the conversation draft');
+});
+
+test('HTML image embedding bounds resources, ignores remote URLs, and cancels stale loads', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { embedSessionFileImages } = globalThis.CodexWebFileViewer.createRenderer({});
+    const requested = [];
+    const html = await embedSessionFileImages('<img src="https://example.com/private"><img src="//example.com/x"><img src="data:image/png;base64,eA=="><img src="large.png"><img src="bad.svg"><img src="%E0%A4%A"><img src="space%20name.png">', '/project/docs/index.html', async path => {
+      requested.push(path);
+      return path.endsWith('large.png') ? new Blob([new Uint8Array(2 * 1024 * 1024 + 1)], { type: 'image/png' }) : new Blob(['x'], { type: path.endsWith('.svg') ? 'image/svg+xml' : 'image/png' });
+    });
+    const controller = new AbortController();
+    let aborted = false;
+    try {
+      await embedSessionFileImages('<img src="a.png"><img src="b.png">', '/index.html', async () => {
+        controller.abort();
+        return new Blob(['x'], { type: 'image/png' });
+      }, controller.signal);
+    } catch (error) { aborted = error.name === 'AbortError'; }
+    let reads = 0;
+    await embedSessionFileImages(Array.from({length: 100}, (_, i) => `<img src="${i}.png">`).join(''), '/index.html', async () => { reads++; return null; });
+    return { requested, html, aborted, reads };
+  });
+  expect(result.requested).toEqual(['/project/docs/large.png', '/project/docs/bad.svg', '/project/docs/space name.png']);
+  expect(result.html).toContain('src="large.png"');
+  expect(result.html).toContain('src="bad.svg"');
+  expect(result.html).toContain('src="data:image/png;base64,eA=="');
+  expect(result.aborted).toBe(true);
+  expect(result.reads).toBe(64);
 });
