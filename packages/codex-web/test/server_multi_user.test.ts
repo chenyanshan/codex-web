@@ -4364,3 +4364,35 @@ test('rename capability follows session write access in list/status/timeline and
     assert.deepEqual(calls, ['thread_alice']);
   } finally { await server.stop(); }
 });
+
+test('existing-session uploads complete without Codex history and still enforce ownership and archive checks', async t => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-upload-independent-'));
+  const projectDir = path.join(stateDir, 'project');
+  await fs.mkdir(projectDir);
+  const identityStore = await createIdentityStore();
+  await identityStore.upsertProject({ id: 'project_allowed', internalName: 'secret-repo', cwd: projectDir, displayName: 'Allowed Project', enabled: true });
+  let historyReads = 0;
+  const server = createCodexWebServer({
+    auth: authFor({ alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' } }),
+    identityStore,
+    runtime: { ...runtimeStub(), readSession: async () => { historyReads++; throw new Error('Codex history unavailable'); } } as any,
+    config: createConfig({ stateDir }),
+  });
+  await server.start();
+  t.after(async () => { await server.stop(); await fs.rm(stateDir, { recursive: true, force: true }); });
+  const send = (session: string) => {
+    const form = new FormData();
+    form.append('files', new Blob([new Uint8Array(3_700_000)], { type: 'application/octet-stream' }), 'phone.bin');
+    return fetch(`${server.baseUrl}/api/sessions/${session}/attachments`, { method: 'POST', headers: { Authorization: 'Bearer alice' }, body: form, signal: AbortSignal.timeout(5000) });
+  };
+  const response = await send('app_alice');
+  assert.equal(response.status, 201);
+  const item = (await response.json() as any).items[0];
+  assert.equal((await fs.stat(item.localPath)).size, 3_700_000);
+  assert.equal(historyReads, 0);
+  assert.equal((await send('app_bob')).status, 404);
+  const session = (await identityStore.readState()).sessions.find(s => s.id === 'app_alice')!;
+  await identityStore.upsertSession({ ...session, archived: true, archivedAt: new Date().toISOString() });
+  assert.equal((await send('app_alice')).status, 409);
+  assert.equal(historyReads, 0);
+});

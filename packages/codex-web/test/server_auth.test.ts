@@ -320,7 +320,8 @@ test('POST /api/sessions/:sessionId/attachments stores uploads in the session pr
     auth: createAcceptingAuth(),
     runtime: {
       ...createRuntimeStub(),
-      readSession: async () => ({ id: 'thread_1', cwd: projectDir }),
+      readSessionMetadata: async () => ({ id: 'thread_1', cwd: projectDir }),
+      readSession: async () => { throw new Error('Full history must not block uploads'); },
     } as any,
     config: createConfig({ stateDir }),
   });

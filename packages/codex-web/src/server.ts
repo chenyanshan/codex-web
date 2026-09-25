@@ -1219,7 +1219,7 @@ async function handleRequest({
   const sessionAttachmentsMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/attachments$/u);
   if (sessionAttachmentsMatch && method === 'POST') {
     const sessionId = decodeURIComponent(sessionAttachmentsMatch[1]!);
-    const session = await runtime.readSession(sessionId);
+    const session = await (runtime.readSessionMetadata ?? runtime.readSession).call(runtime, sessionId);
     if (!session) {
       writeSessionNotFound(response);
       return;
@@ -4913,8 +4913,13 @@ async function handleMultiUserRequest({
     if (rejectArchivedSessionWrite(response, resolved.appSession)) {
       return true;
     }
-    const runtimeSession = await runtime.readSession(resolved.appSession.codexThreadId);
-    const projectCwd = normalizeOptionalString(resolved.project?.cwd) || normalizeOptionalString(runtimeSession?.cwd);
+    // The authorized project already owns the upload destination. Do not wait
+    // for Codex history (or an active turn) before consuming the request body.
+    let projectCwd = normalizeOptionalString(resolved.project?.cwd);
+    if (!projectCwd) {
+      const runtimeSession = await (runtime.readSessionMetadata ?? runtime.readSession).call(runtime, resolved.appSession.codexThreadId);
+      projectCwd = normalizeOptionalString(runtimeSession?.cwd);
+    }
     const items = await storeSessionAttachments({
       request,
       config,
