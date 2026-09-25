@@ -131,3 +131,56 @@ test('HTML image embedding bounds resources, ignores remote URLs, and cancels st
   expect(result.aborted).toBe(true);
   expect(result.reads).toBe(64);
 });
+
+test('HTML stays readable while an image request stalls and closing cancels it', async ({ page }) => {
+  await installFiles(page);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route(`**/api/sessions/${sessionId}/files/sf_image/content`, async route => {
+    await gate;
+    await route.fulfill({ contentType: 'image/png', body: png }).catch(() => {});
+  });
+  await page.getByRole('link', { name: 'HTML preview', exact: true }).click();
+  await expect(page.frameLocator('.session-file-html').locator('h1')).toHaveText('Local covers', { timeout: 2000 });
+  await expect(page.locator('.session-file-loading')).toHaveCount(0);
+  await page.locator('#close-session-file-button').click();
+  release();
+  await expect(page.locator('#prompt-input')).toHaveValue('Preserve the conversation draft');
+  await expect(page.locator('.session-file-html')).toHaveCount(0);
+});
+
+test('image batch timeout returns successful images even when another read never settles', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { embedSessionFileImages } = globalThis.CodexWebFileViewer.createRenderer({});
+    const signals = [];
+    const started = performance.now();
+    const html = await embedSessionFileImages('<img src="good.png"><img src="stuck.png">', '/index.html', async (path, limit, signal) => {
+      signals.push(signal);
+      if (path.endsWith('stuck.png')) return new Promise(() => {});
+      return new Blob(['x'], { type: 'image/png' });
+    }, undefined, { timeoutMs: 250, requestTimeoutMs: 100 });
+    return { html, elapsed: performance.now() - started, aborted: signals.some(signal => signal.aborted) };
+  });
+  expect(result.html).toContain('data:image/png;base64,eA==');
+  expect(result.elapsed).toBeLessThan(2000);
+  expect(result.aborted).toBe(true);
+});
+
+test('a stalled document exits loading with a retry action', async ({ page }) => {
+  await installFiles(page);
+  await page.clock.install();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route(`**/api/sessions/${sessionId}/files/sf_html/content?*`, async route => {
+    await gate;
+    await route.fulfill({ contentType: 'text/html', body: '<h1>Late</h1>' }).catch(() => {});
+  });
+  const pending = page.waitForRequest(`**/files/sf_html/content?*`);
+  await page.getByRole('link', { name: 'HTML preview', exact: true }).click();
+  await pending;
+  await page.clock.fastForward(13000);
+  await expect(page.locator('#retry-session-file-button')).toBeVisible();
+  await expect(page.locator('.session-file-loading')).toHaveCount(0);
+  release();
+});

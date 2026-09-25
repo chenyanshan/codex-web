@@ -9000,6 +9000,7 @@ async function openSessionFileByPath(filePath, { basePath = '', preserveSnapshot
       method: 'POST',
       body: { path: resolvablePath },
       signal: loadController.signal,
+      timeoutMs: 12000,
     });
     if (!isActiveSessionFileLoad(loadController)) {
       return;
@@ -9037,31 +9038,39 @@ async function loadResolvedSessionFile(file, loadController, { skipAuth = false 
   }
   const previewUrl = new URL(file.contentUrl, window.location.origin);
   previewUrl.searchParams.set('preview', '1');
-  const response = await fetchSessionFileContent(previewUrl.pathname + previewUrl.search, {
-    signal: loadController.signal,
-    skipAuth,
-  });
+  const textual = file.kind === 'markdown' || file.kind === 'html';
+  const { response, body } = await globalThis.CodexWebNetworkRecovery.bounded(async signal => {
+    const response = await fetchSessionFileContent(previewUrl.pathname + previewUrl.search, { signal, skipAuth });
+    const body = textual ? await response.text() : await response.blob();
+    return { response, body };
+  }, { signal: loadController.signal, timeoutMs: 12000 });
   if (!isActiveSessionFileLoad(loadController)) {
     return;
   }
   file.previewTruncated = response.headers?.get?.('X-Content-Truncated') === 'true';
   file.totalBytes = Number(response.headers?.get?.('X-Content-Total-Bytes')) || file.sizeBytes;
-  if (file.kind === 'markdown' || file.kind === 'html') {
-    const content = await response.text();
+  if (textual) {
+    const content = body;
     if (!isActiveSessionFileLoad(loadController)) {
       return;
     }
+    // Show the document immediately; slow or missing images must not block it.
+    state.currentSessionFileContent = content;
+    state.currentSessionFileBlob = createTextFileBlob(content, file.mimeType);
+    state.currentSessionFileObjectUrl = createSessionFileObjectUrl(state.currentSessionFileBlob);
+    state.currentSessionFileLoading = false;
+    renderSessionFileWithScrollPreserved(() => {});
     const documentPath = state.currentSessionFilePath;
     const resolveUrl = file.contentUrl.replace(/\/[^/]+\/content$/u, '/resolve');
     const previewContent = file.kind === 'html' && !skipAuth
-      ? await embedSessionFileImages(content, documentPath, async (imagePath, maxBytes) => {
+      ? await embedSessionFileImages(content, documentPath, async (imagePath, maxBytes, imageSignal) => {
         if (!isActiveSessionFileLoad(loadController) || maxBytes <= 0) return null;
         const payload = await apiFetch(resolveUrl, {
-          method: 'POST', body: { path: imagePath }, signal: loadController.signal,
+          method: 'POST', body: { path: imagePath }, signal: imageSignal,
         });
         const image = normalizeSessionFile(payload?.file, imagePath);
         if (!image || image.kind !== 'image' || image.sizeBytes > maxBytes) return null;
-        const response = await fetchSessionFileContent(image.contentUrl, { signal: loadController.signal });
+        const response = await fetchSessionFileContent(image.contentUrl, { signal: imageSignal });
         // Read a bounded stream even if a file changes after metadata resolution.
         const reader = response.body.getReader();
         const chunks = [];
@@ -9080,15 +9089,14 @@ async function loadResolvedSessionFile(file, loadController, { skipAuth = false 
       : content;
     if (!isActiveSessionFileLoad(loadController)) return;
     state.currentSessionFileContent = previewContent;
-    state.currentSessionFileBlob = createTextFileBlob(content, file.mimeType);
   } else {
-    const blob = await response.blob();
+    const blob = body;
     if (!isActiveSessionFileLoad(loadController)) {
       return;
     }
     state.currentSessionFileBlob = blob;
   }
-  state.currentSessionFileObjectUrl = createSessionFileObjectUrl(state.currentSessionFileBlob);
+  if (!state.currentSessionFileObjectUrl) state.currentSessionFileObjectUrl = createSessionFileObjectUrl(state.currentSessionFileBlob);
   state.currentSessionFileLoading = false;
   state.currentSessionFileError = '';
   renderSessionFileWithScrollPreserved(() => {});

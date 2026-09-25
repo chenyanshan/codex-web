@@ -95,49 +95,62 @@ function sandboxedSessionFileHtml(content) {
 }
 
 // Only raster images are embedded; HTML scripts and external resources remain blocked.
-async function embedSessionFileImages(content, documentPath, readImage, signal) {
+async function embedSessionFileImages(content, documentPath, readImage, signal, { timeoutMs = 12000, requestTimeoutMs = 4000 } = {}) {
   const template = document.createElement('template');
   template.innerHTML = content;
   const images = [...template.content.querySelectorAll('img[src]')].slice(0, 64);
   const cache = new Map();
+  const { bounded } = globalThis.CodexWebNetworkRecovery;
   let remainingBytes = 16 * 1024 * 1024;
-  for (const image of images) {
-    signal?.throwIfAborted();
-    const src = String(image.getAttribute('src') || '').trim();
-    if (!src || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/iu.test(src)) continue;
-    let imagePath;
-    try {
-      const local = decodeURIComponent(src.split(/[?#]/u)[0]);
-      imagePath = local.startsWith('/') ? local : documentPath.slice(0, documentPath.lastIndexOf('/') + 1) + local;
-    } catch { continue; }
-    try {
-      if (!cache.has(imagePath)) {
-        const blob = await readImage(imagePath, Math.min(2 * 1024 * 1024, remainingBytes));
-        signal?.throwIfAborted();
-        if (!blob || !/^image\/(?:png|jpeg|gif|webp|bmp|avif)$/u.test(blob.type) || blob.size > Math.min(2 * 1024 * 1024, remainingBytes)) {
-          cache.set(imagePath, '');
-        } else {
-          remainingBytes -= blob.size;
-          const dataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result));
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(blob);
+  let next = 0;
+  try {
+    await bounded(async batchSignal => {
+      async function embed(image) {
+        const src = String(image.getAttribute('src') || '').trim();
+        if (!src || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/iu.test(src)) return;
+        let imagePath;
+        try {
+          const local = decodeURIComponent(src.split(/[?#]/u)[0]);
+          imagePath = local.startsWith('/') ? local : documentPath.slice(0, documentPath.lastIndexOf('/') + 1) + local;
+        } catch { return; }
+        if (!cache.has(imagePath)) {
+          const pending = bounded(async imageSignal => {
+            const blob = await readImage(imagePath, Math.min(2 * 1024 * 1024, remainingBytes), imageSignal);
+            imageSignal.throwIfAborted();
+            if (!blob || !/^image\/(?:png|jpeg|gif|webp|bmp|avif)$/u.test(blob.type) || blob.size > Math.min(2 * 1024 * 1024, remainingBytes)) return '';
+            remainingBytes -= blob.size;
+            return new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result));
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(blob);
+            });
+          }, { signal: batchSignal, timeoutMs: requestTimeoutMs }).catch(error => {
+            if (error?.status === 401) throw error;
+            return '';
           });
-          cache.set(imagePath, dataUrl);
+          cache.set(imagePath, pending);
+        }
+        const dataUrl = await cache.get(imagePath);
+        batchSignal.throwIfAborted();
+        if (dataUrl) {
+          image.setAttribute('src', dataUrl);
+          image.removeAttribute('srcset');
+          if (image.parentElement?.tagName === 'PICTURE') image.parentElement.querySelectorAll('source').forEach(source => source.remove());
         }
       }
-      if (cache.get(imagePath)) {
-        image.setAttribute('src', cache.get(imagePath));
-        image.removeAttribute('srcset');
-        // A picture source must not override the authenticated embedded image.
-        if (image.parentElement?.tagName === 'PICTURE') image.parentElement.querySelectorAll('source').forEach(source => source.remove());
+      async function worker() {
+        while (next < images.length) {
+          batchSignal.throwIfAborted();
+          await embed(images[next++]);
+        }
       }
-    } catch (error) {
-      signal?.throwIfAborted();
-      if (error?.status === 401) throw error;
-      cache.set(imagePath, '');
-    }
+      await Promise.all([worker(), worker(), worker()]);
+    }, { signal, timeoutMs });
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (error?.name !== 'TimeoutError') throw error;
+    // Keep images already loaded when the batch budget expires.
   }
   signal?.throwIfAborted();
   return template.innerHTML;
