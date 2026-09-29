@@ -1,7 +1,11 @@
+import type { TimelineIdentity } from './canonical_timeline.js';
 import { SessionPartitionStore } from './session_partition_store.js';
 
 export interface CodexWebTimelineMessage {
   id: string;
+  timeline?: TimelineIdentity;
+  canonicalKey?: string;
+  timelineAliases?: string[];
   kind: 'message';
   role: 'user' | 'assistant' | 'system';
   label: string;

@@ -2977,16 +2977,11 @@ test('settings separate current-session controls from this-device new-session de
   assert.match(appHtml, /role="group" aria-labelledby="default-permissions-label"/u);
 });
 
-test('mobile settings page title is centered with back on the left', async () => {
+test('mobile settings header uses the shared icon close control', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 390 });
-
   const html = api.renderAppSettings().innerHTML;
-  const pageNav = html.match(/<div class="page-nav">[\s\S]*?<\/div>\s*<\/div>/u)?.[0] || '';
-
-  assert.match(pageNav, /class="ghost page-back-button" type="button" id="back-to-list-button" aria-label="Back">[\s\S]*class="button-icon button-icon-back"[\s\S]*<\/button>/u);
-  assert.match(pageNav, /<div class="page-title">Settings<\/div>/u);
-  assert.match(pageNav, /<div class="page-nav-spacer" aria-hidden="true"><\/div>/u);
-  assert.doesNotMatch(pageNav, />Sessions<\/button>/u);
+  assert.match(html, /<header class="settings-global-header"><h2>Settings<\/h2>/u);
+  assert.match(html, /id="back-to-list-button"[^>]*aria-label="Close"[\s\S]*?<svg class="button-icon"/u);
 });
 
 test('app settings persist theme and default thread settings', async () => {
@@ -3630,7 +3625,7 @@ test('Chinese language setting localizes settings, chat, and admin management UI
   api.state.admin.sessions = [{ id: 'session_1', ownerUserId: 'user_1', projectId: 'project_a' }];
 
   const settingsHtml = api.renderAppSettings().innerHTML;
-  assert.match(settingsHtml, /<div class="page-title">设置<\/div>/u);
+  assert.match(settingsHtml, /<h2>设置<\/h2>/u);
   assert.match(settingsHtml, /语言/u);
   assert.match(settingsHtml, /网站标题/u);
   assert.match(settingsHtml, /此设备的新会话/u);
@@ -3686,8 +3681,8 @@ test('Chinese UI keeps model and reasoning option labels untranslated', async ()
   const sessionHtml = api.renderSettingsDrawer();
   const sessionReasoning = sessionHtml.match(/<select id="reasoning-select"[\s\S]*?<\/select>/u)?.[0] || '';
 
-  assert.match(defaultHtml, /<label for="default-model-select">模型<\/label>/u);
-  assert.match(defaultHtml, /<label for="default-reasoning-select">推理<\/label>/u);
+  assert.match(defaultHtml, /<label class="settings-option-row" for="default-model-select">\s*<span class="settings-option-label">模型<\/span>/u);
+  assert.match(defaultHtml, /<label class="settings-option-row" for="default-reasoning-select">\s*<span class="settings-option-label">推理<\/span>/u);
   assert.match(defaultReasoning, />Medium<\/option>/u);
   assert.match(defaultReasoning, />xhigh<\/option>/u);
   assert.match(defaultReasoning, />Ultra<\/option>/u);
@@ -5725,6 +5720,7 @@ test('composer renders handled help slash command results inline', async () => {
 
 test('settings drawer exposes runtime reload and posts to the runtime endpoint', async () => {
   const app = await readFile(appUrl, 'utf8');
+  const settings = await readFile(new URL('../public/settings-ui.js', import.meta.url), 'utf8');
   const fetchCalls = [];
   const { api } = await loadAppHarness({
     fetch: async (path, options = {}) => {
@@ -5740,7 +5736,7 @@ test('settings drawer exposes runtime reload and posts to the runtime endpoint',
     },
   });
 
-  assert.match(app, /id="runtime-reload-button"/u);
+  assert.match(settings, /id="runtime-reload-button"/u);
   assert.match(app, /function reloadRuntime\(\)/u);
   assert.match(app, /apiFetch\('\/api\/runtime\/reload',\s*\{\s*method:\s*'POST'\s*\}\)/su);
 
@@ -7579,7 +7575,7 @@ test('hidden-member downgrade clears sensitive work data from live, history, app
   assert.equal(api.canViewCurrentWorkDetails(), true);
   assert.match(api.renderComposerStatus(), /id="open-work-details-button"/u);
   assert.match(api.renderWorkDetailsDialog(), /cat packages\/private\/credentials\.txt/u);
-  assert.match(api.renderWorkDetailsDialog(), /secret-output-value/u);
+  assert.match(hydrateWorkBody(api, 'batch_secret'), /secret-output-value/u);
 
   api.upsertSession({
     ...api.state.currentSession,
@@ -8341,7 +8337,7 @@ test('work batches retain compact recovery metadata without raw transport payloa
   api.state.workDetailsVisibleEndIndex = 1;
   const html = api.renderWorkDetailsDialog();
   assert.match(html, /class="work-turn"/u);
-  assert.match(html, /Ran 1/u);
+  assert.match(html, /Run command/u);
   assert.match(html, /npm test/u);
   assert.doesNotMatch(html, /item\/started/u);
 });
@@ -8414,8 +8410,9 @@ test('file-change batches surface changed paths and line counts', async () => {
   api.state.workDetailsOpen = true;
   api.state.workDetailsTurnId = 'turn_edit';
   api.state.workDetailsVisibleEndIndex = 1;
-  const html = api.renderWorkDetailsDialog();
-  assert.match(html, /Edited 1/u);
+  const shell = api.renderWorkDetailsDialog();
+  assert.doesNotMatch(shell, /Modified/u, 'collapsed activity bodies are lazy');
+  const html = hydrateWorkBody(api, 'edit_1');
   assert.match(html, /packages\/codex-web\/src\/runtime\.ts/u);
   assert.match(html, /Modified/u);
   assert.match(html, /\+8 \/ -2/u);
@@ -8447,9 +8444,9 @@ test('work details normalize structured output and heterogeneous file-change sha
       ],
     },
   });
-  const html = api.renderWorkDetailsDialog();
-
-  assert.match(html, /Edited 2/u);
+  const shell = api.renderWorkDetailsDialog();
+  assert.doesNotMatch(shell, /Script completed/u);
+  const html = hydrateWorkBody(api, 'edit_structured');
   assert.match(html, /packages\/codex-web\/public\/app\.js/u);
   assert.match(html, /packages\/codex-web\/public\/styles\.css/u);
   assert.match(html, /Modified/u);
@@ -10444,7 +10441,7 @@ test('thread work updates render failed command details and a visible error mess
   assert.doesNotMatch(workHtml, /work-error|error-badge/u);
   assert.match(workHtml, /Exit 1/u);
   assert.match(workHtml, /npm test/u);
-  assert.match(workHtml, /1 failing/u);
+  assert.match(hydrateWorkBody(api, 'cmd_error'), /1 failing/u);
 
   const errorHtml = api.renderTimelineItem(latest);
   assert.match(errorHtml, /<span class="error-badge">Error<\/span>/u);
@@ -11732,7 +11729,8 @@ test('authorized work batches stay out of the timeline while details remain avai
   const detailsHtml = api.renderWorkDetailsDialog();
   assert.match(detailsHtml, /class="work-turn"/u);
   assert.match(detailsHtml, /npm test -- --focused/u);
-  assert.match(detailsHtml, /12 passed/u);
+  assert.doesNotMatch(detailsHtml, /12 passed/u);
+  assert.match(hydrateWorkBody(api, 'batch_inline'), /12 passed/u);
 });
 
 test('assistant final messages stay at the bottom after hidden timeline work updates complete', async () => {
@@ -14440,7 +14438,7 @@ test('mobile project drawer closes from the uncovered backdrop area', async () =
   const app = await readFile(appUrl, 'utf8');
 
   assert.match(app, /id="mobile-drawer-backdrop"/u);
-  assert.match(app, /id="mobile-drawer-close-button"/u);
+  assert.match(app, /UI\.closeButton\('mobile-drawer-close-button'/u);
   assert.match(app, /const mobileProjectDrawerBackdrop = document\.querySelector\('#mobile-drawer-backdrop'\);/u);
   assert.match(app, /listenRendered\(mobileProjectDrawerBackdrop, 'click',\s*\(event\) => \{/u);
   assert.match(app, /if \(event\.target !== mobileProjectDrawerBackdrop\) \{\s*return;\s*\}/u);
@@ -18327,7 +18325,7 @@ function createRestoreAuthFetch({ models = [], defaults = null, sessions = [] } 
 }
 
 async function loadAppHarness(overrides = {}) {
-  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, submissionDelivery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, workView, sessionAttention, approvalUi, settingsUi] = await Promise.all([
+  const [app, uiCopy, uiKit, attachmentUtils, markdownRenderer, adminUi, sessionPagination, requestContext, draftStore, localization, fileViewer, webhookSettings, sessionRename, networkRecovery, submissionIdentity, submissionDelivery, sessionLoader, sessionReading, adminEditor, adminData, attachmentUpload, timelineReconciliation, timelineModel, lazyFeature, workView, sessionAttention, approvalUi, settingsUi] = await Promise.all([
     readFile(appUrl, 'utf8'),
     readFile(uiCopyUrl, 'utf8'),
     readFile(uiKitUrl, 'utf8'),
@@ -18342,6 +18340,7 @@ async function loadAppHarness(overrides = {}) {
     readFile(webhookSettingsUrl, 'utf8'),
     readFile(new URL('../public/session-rename.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/network-recovery.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/submission-identity.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/submission-delivery.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/session-loader.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/session-reading.js', import.meta.url), 'utf8'),
@@ -18349,6 +18348,8 @@ async function loadAppHarness(overrides = {}) {
     readFile(new URL('../public/admin-data.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/attachment-upload.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/timeline-reconciliation.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/timeline-model.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/lazy-feature.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/work-details-view.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/session-attention.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/approval-ui.js', import.meta.url), 'utf8'),
@@ -18720,6 +18721,7 @@ ${sessionAttention}
 ${approvalUi}
 ${settingsUi}
 ${networkRecovery}
+${submissionIdentity}
 ${submissionDelivery}
 ${sessionLoader}
 ${sessionReading}
@@ -18727,6 +18729,8 @@ ${adminEditor}
 ${adminData}
 ${attachmentUpload}
 ${timelineReconciliation}
+${timelineModel}
+${lazyFeature}
 ${app}
 globalThis.__codexWebTest = {
   createComposerSubmission,
@@ -18772,7 +18776,8 @@ globalThis.__codexWebTest = {
   renderTimelineItem: typeof renderTimelineItem === 'function' ? renderTimelineItem : null,
   renderTimeline: typeof renderTimeline === 'function' ? renderTimeline : null,
   renderComposerStatus: typeof renderComposerStatus === 'function' ? renderComposerStatus : null,
-	  renderWorkDetailsDialog: typeof renderWorkDetailsDialog === 'function' ? renderWorkDetailsDialog : null,
+	  getWorkView,
+  renderWorkDetailsDialog: typeof renderWorkDetailsDialog === 'function' ? renderWorkDetailsDialog : null,
 	  mergeAuthoritativeTimelineAuxiliaryEntries: typeof mergeAuthoritativeTimelineAuxiliaryEntries === 'function' ? mergeAuthoritativeTimelineAuxiliaryEntries : null,
 	  handleWorkDetailToggle: typeof handleWorkDetailToggle === 'function' ? handleWorkDetailToggle : null,
   currentSessionWorkItems: typeof currentSessionWorkItems === 'function' ? currentSessionWorkItems : null,
@@ -19151,4 +19156,37 @@ test('history rendering retains empty loading feedback, visible errors, and expl
   assert.match(api.renderTimeline(), /timeline-window-control[^>]*disabled aria-busy="true"[^>]*>Loading history/u);
   finishOlder({ ok: true, status: 200, json: async () => ({ items: [], hasMore: false, nextBefore: null }) });
   await loading;
+});
+
+function hydrateWorkBody(api: any, id: string): string {
+  const list: any = { addEventListener() {}, querySelector: () => null };
+  api.getWorkView().bind(list);
+  const body = { childElementCount: 0, innerHTML: '', dataset: {} };
+  list.workHydrate({ querySelector: () => body, getAttribute: () => id });
+  return body.innerHTML;
+}
+
+test('late status calibration cannot overwrite newer retry and resolved-question events', async () => {
+  let release: (value: any) => void = () => {};
+  const { api } = await loadAppHarness({ fetch: () => new Promise(resolve => { release = resolve; }) });
+  const oldActivity = { turnId: 'turn_portable', revision: 1, health: { status: 'working' } };
+  const question = { requestId: 'question_portable', turnId: 'turn_portable', status: 'pending', questions: [] };
+  api.state.token = 'token'; api.state.authSession = { id: 'auth', principal: { mode: 'single', isAdmin: true } };
+  api.state.sessionId = 'session_portable'; api.state.turnId = 'turn_portable'; api.state.pendingTurn = true;
+  api.state.currentSession = { id: 'session_portable', activeTurnId: 'turn_portable', turnActivity: oldActivity, userInputRequests: [question] };
+  api.state.sessions = [api.state.currentSession];
+  const stale = { ...api.state.currentSession };
+  const refreshing = api.refreshCurrentSessionMetadata();
+  await flushMicrotasks();
+  api.applyTurnEvent({ type: 'turn.activity', turnId: 'turn_portable', activity: { ...oldActivity, revision: 2, health: { status: 'retrying' } } }, null);
+  api.applyTurnEvent({ type: 'user_input.updated', turnId: 'turn_portable', request: { ...question, status: 'resolved' } }, null);
+  release({ ok: true, status: 200, json: async () => ({ session: stale }) });
+  await refreshing;
+  assert.equal(api.state.currentSession.turnActivity.health.status, 'retrying');
+  assert.equal(api.state.currentSession.userInputRequests[0].status, 'resolved');
+  api.applyTurnEvent({ type: 'user_input.updated', turnId: 'turn_portable', request: question }, null);
+  assert.equal(api.state.currentSession.userInputRequests[0].status, 'resolved');
+  api.state.terminalTurnIds.add('turn_portable');
+  api.applyTurnEvent({ type: 'turn.activity', turnId: 'turn_portable', activity: { ...oldActivity, revision: 3 } }, null);
+  assert.equal(api.state.currentSession.turnActivity.health.status, 'retrying');
 });

@@ -954,8 +954,14 @@ test('static root is public', async () => {
     }
     assert.equal(scriptResponse.headers.get('cache-control'), 'no-cache');
 
-    for (const name of ['boot-recovery.js', 'approval-ui.js', 'approval-ui.css', 'settings-ui.js', 'settings-ui.css', 'admin-ui.css']) {
-      assert.ok(html.includes(`/${name}?v=${buildId}`), `${name} must use the current build ID`);
+    assert.ok(script.includes(`const APP_BUILD_ID = '${buildId}';`));
+    for (const name of ['boot-recovery.js', 'approval-ui.js', 'approval-ui.css', 'settings-ui.js', 'settings-ui.css', 'admin-ui.css', 'submission-identity.js', 'timeline-model.js', 'lazy-feature.js']) {
+      if (name === 'admin-ui.css') {
+        assert.ok(script.includes('loadStylesheet(`/admin-ui.css?v=${encodeURIComponent(APP_BUILD_ID)}`)'), 'the lazy stylesheet must use the current build ID');
+        assert.ok(!html.includes('/admin-ui.css'), 'admin styles load when the console opens');
+      } else {
+        assert.ok(html.includes(`/${name}?v=${buildId}`), `${name} must use the current build ID`);
+      }
       const assetUrl = `${server.baseUrl}/${name}`;
       const unversioned = await fetch(assetUrl);
       assert.equal(unversioned.status, 200, name);

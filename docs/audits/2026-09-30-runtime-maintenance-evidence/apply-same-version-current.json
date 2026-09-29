@@ -1,0 +1,21 @@
+{
+  "kind": "same-version owned app-server restart; not an upgrade",
+  "isolation": "temporary home/project; no credentials; no inference; existing live services untouched",
+  "before": {
+    "version": "0.153.4",
+    "pid": 94336,
+    "connectionEpoch": 1,
+    "eventEpoch": "50d502d2-fed9-49d5-97e9-f51570ccffab"
+  },
+  "after": {
+    "version": "0.153.4",
+    "pid": 94363,
+    "connectionEpoch": 2,
+    "eventEpoch": "1f15714f-a706-4418-a2e8-6cfa03b3d217"
+  },
+  "applied": {
+    "runningVersion": "0.153.4"
+  },
+  "resetNotifications": 1,
+  "status": "passed"
+}

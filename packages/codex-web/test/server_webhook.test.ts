@@ -1220,6 +1220,7 @@ test('single-user webhooks use the server default cwd and reject unsupported pay
       title: 'Single-user webhook',
     });
     assert.equal(accepted.status, 201);
+    const acceptedSubmission = await accepted.json() as any;
     assert.deepEqual(runtime.createInputs, [{
       cwd: null,
       title: 'Single-user webhook',
@@ -1230,6 +1231,7 @@ test('single-user webhooks use the server default cwd and reject unsupported pay
       settings: {},
       attachments: [],
       attachmentIds: [],
+      clientMessageId: crypto.createHash('sha256').update(acceptedSubmission.submission.id).digest('hex').slice(0, 24),
     });
   } finally {
     await server.stop();

@@ -55,7 +55,10 @@
       return String(html || '').replace(
         /(^|[\s:：>（(])((?:(?:~?\/|\.\.?\/)?(?:[^\s\/<>"'`()：:]+\/)*[^\s\/<>"'`(),，。！？!?；;：:]+\.(?:md|markdown|html?|pdf|txt|rtf|docx?|odt|xlsx?|xlsm|ods|csv|tsv|pptx?|odp|epub|png|jpe?g|gif|webp|bmp|avif|tiff?|svg|heic|mp3|wav|m4a|flac|mp4|mov|webm|zip|7z|rar|tar|gz|tgz|bz2|xz|zst|[cm]?[jt]sx?|jsonc?|jsonl|xml|ya?ml|toml|ini|conf|log|sql|sqlite|db|css|scss|less|sh|bash|zsh|fish|py|rb|rs|go|java|kt|swift|c|cc|cpp|h|hpp|bin|dmg|pkg|apk|ipa|exe)))(?=$|[\s<),，。！？!?；;:：])/giu,
         (_match, prefix, filePath) => {
-          if (!isSessionFilePath(filePath) || !canRenderSessionFileLink(filePath)) {
+          // A filename mentioned in prose is not a destination: app.js may
+          // live several directories below cwd, or refer to another project.
+          // Explicit Markdown links can still target root-level filenames.
+          if (!filePath.includes('/') || !isSessionFilePath(filePath) || !canRenderSessionFileLink(filePath)) {
             return `${prefix}${filePath}`;
           }
           return `${prefix}${renderSessionFileLink(filePath, filePath)}`;

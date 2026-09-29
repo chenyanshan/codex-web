@@ -1,13 +1,19 @@
+import type { TimelineCheckpoint, TimelineIdentity } from './canonical_timeline.js';
 import crypto from 'node:crypto';
 import type {
   ProviderApprovalRequest,
+  TurnActivitySnapshot,
+  UserInputRequest,
   ProviderTurnProgress,
   ProviderTurnResult,
   ProviderTurnWorkEvent,
 } from '@codex-mobile-web-app/codex-native-api';
 
-export type CodexWebEvent =
+export type CodexWebEvent = { timeline?: TimelineIdentity; timelineCheckpoint?: TimelineCheckpoint } & (
+  | { id: string; type: 'user.message'; turnId: string; threadId: string; text: string; clientMessageId?: string; itemId?: string; canonicalKey?: string; raw?: unknown }
   | { id: string; type: 'turn.observation_interrupted'; turnId: string; threadId: string; raw?: unknown }
+  | { id: string; type: 'turn.activity'; turnId: string; threadId: string; activity: TurnActivitySnapshot; raw?: unknown }
+  | { id: string; type: 'user_input.updated'; turnId: string; threadId: string; request: UserInputRequest; raw?: unknown }
   | { id: string; type: 'turn.started'; turnId: string; threadId: string; raw?: unknown }
   | {
     id: string;
@@ -39,7 +45,7 @@ export type CodexWebEvent =
   | { id: string; type: 'approval.requested'; turnId: string; approvalId: string; approvalKind: string; summary: Record<string, unknown>; raw?: unknown }
   | { id: string; type: 'approval.resolved'; turnId: string; approvalId: string; decision: 'accepted' | 'accepted_for_session' | 'denied'; raw?: unknown }
   | { id: string; type: 'turn.completed'; turnId: string; threadId: string; status: string; raw?: unknown }
-  | { id: string; type: 'turn.failed'; turnId: string; threadId: string | null; message: string; details?: string | null; raw?: unknown };
+  | { id: string; type: 'turn.failed'; turnId: string; threadId: string | null; message: string; details?: string | null; raw?: unknown });
 
 export type CodexWebEventAudience = 'workspace' | 'workspace_summary' | 'share';
 
@@ -52,9 +58,19 @@ export function presentCodexWebEvent(
     id: event.id,
     type: event.type,
     turnId: event.turnId,
+    ...(event.timeline ? { timeline: event.timeline } : {}),
+    ...(event.timelineCheckpoint ? { timelineCheckpoint: event.timelineCheckpoint } : {}),
   };
   switch (event.type) {
+    case 'turn.activity':
+      return audience === 'workspace' ? { ...base, activity: event.activity } : null;
+    case 'user_input.updated':
+      return audience === 'workspace' ? { ...base, request: event.request } : null;
+    case 'user.message':
+      return { ...base, text: event.text, ...(event.clientMessageId ? { clientMessageId: event.clientMessageId } : {}), ...(event.itemId ? { itemId: event.itemId } : {}) };
     case 'turn.observation_interrupted':
+      return audience === 'workspace' && event.raw && typeof event.raw === 'object' && 'snapshotRequired' in event.raw && event.raw.snapshotRequired === true
+        ? { ...base, snapshotRequired: true } : base;
     case 'turn.started':
       return base;
     case 'assistant.delta':

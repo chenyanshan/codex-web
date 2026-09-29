@@ -6,7 +6,7 @@ import path from 'node:path';
 
 export type CodexWebSessionFileKind = 'markdown' | 'html' | 'pdf' | 'image' | 'file';
 
-export type CodexWebSessionFileSource = 'project' | 'upload' | 'turn_attachment' | 'legacy_report';
+export type CodexWebSessionFileSource = 'project' | 'upload' | 'turn_attachment' | 'legacy_report' | 'session_output';
 
 export interface CodexWebSessionFile {
   id: string;
@@ -36,6 +36,8 @@ export interface CodexWebSessionFileScope {
   projectStorageKey: string;
   attachmentSessionIds: string[];
   legacyReportKeys: string[];
+  linkedFilePaths?: string[];
+  loadLinkedFilePaths?: () => Promise<string[]>;
   stateDir: string;
   reportsDir: string;
 }
@@ -52,6 +54,7 @@ interface SessionFileHandle {
 interface AllowedRoot {
   path: string;
   source: CodexWebSessionFileSource;
+  exactFilePath?: string;
 }
 
 interface ValidatedSessionFile {
@@ -262,8 +265,11 @@ async function validateSessionFile(
   expectedSource?: CodexWebSessionFileSource,
 ): Promise<ValidatedSessionFile> {
   const absolutePath = path.resolve(requestedPath);
-  const allowedRoots = allowedRootsForScope(scope);
-  const matchedRoot = allowedRootForPath(scope, allowedRoots, absolutePath);
+  let matchedRoot = allowedRootForPath(scope, allowedRootsForScope(scope), absolutePath);
+  if (!matchedRoot && scope.loadLinkedFilePaths) {
+    const linkedScope = { ...scope, linkedFilePaths: await scope.loadLinkedFilePaths() };
+    matchedRoot = allowedRootForPath(linkedScope, allowedRootsForScope(linkedScope), absolutePath);
+  }
   if (!matchedRoot || (expectedSource && matchedRoot.source !== expectedSource)) {
     throw new SessionFileNotFoundError();
   }
@@ -362,8 +368,17 @@ function allowedRootsForScope(scope: CodexWebSessionFileScope): AllowedRoot[] {
       path: projectRoot,
       source: 'project',
     },
+    ...uniqueAbsolutePaths(scope.linkedFilePaths ?? []).map((filePath): AllowedRoot => ({
+      path: path.dirname(filePath),
+      source: 'session_output',
+      exactFilePath: filePath,
+    })),
   ];
-  return roots.map((root) => ({ ...root, path: path.resolve(root.path) }));
+  return roots.map((root) => ({
+    ...root,
+    path: path.resolve(root.path),
+    ...(root.exactFilePath ? { exactFilePath: path.resolve(root.exactFilePath) } : {}),
+  }));
 }
 
 function allowedRootForPath(
@@ -372,27 +387,38 @@ function allowedRootForPath(
   candidatePath: string,
 ): AllowedRoot | null {
   const matchingManagedRoot = roots.find((root) => (
-    root.source !== 'project' && isPathInsideOrEqual(candidatePath, root.path)
+    root.source !== 'project'
+    && root.source !== 'session_output'
+    && isPathInsideOrEqual(candidatePath, root.path)
   ));
   if (matchingManagedRoot) {
     return matchingManagedRoot;
   }
 
   const projectRoot = roots.find((root) => root.source === 'project');
-  if (!projectRoot || !isPathInsideOrEqual(candidatePath, projectRoot.path)) {
-    return null;
+  if (projectRoot && isPathInsideOrEqual(candidatePath, projectRoot.path)) {
+    const restrictedRoots = [
+      path.join(projectRoot.path, 'uploads'),
+      path.join(path.resolve(scope.stateDir), 'uploads'),
+      path.join(path.resolve(scope.stateDir), 'turn-attachments'),
+      path.resolve(scope.reportsDir),
+    ];
+    if (!restrictedRoots.some((root) => isPathInsideOrEqual(candidatePath, root))) {
+      return projectRoot;
+    }
   }
 
-  const restrictedRoots = [
-    path.join(projectRoot.path, 'uploads'),
-    path.join(path.resolve(scope.stateDir), 'uploads'),
-    path.join(path.resolve(scope.stateDir), 'turn-attachments'),
+  // An assistant link must never bypass managed-file ownership checks.
+  if ([
+    path.resolve(scope.stateDir),
     path.resolve(scope.reportsDir),
-  ];
-  if (restrictedRoots.some((root) => isPathInsideOrEqual(candidatePath, root))) {
+    ...(projectRoot ? [path.join(projectRoot.path, 'uploads')] : []),
+  ].some((root) => isPathInsideOrEqual(candidatePath, root))) {
     return null;
   }
-  return projectRoot;
+  return roots.find((root) => (
+    root.source === 'session_output' && root.exactFilePath === candidatePath
+  )) ?? null;
 }
 
 async function rejectPathSymlinks(rootPath: string, candidatePath: string): Promise<void> {
@@ -488,6 +514,13 @@ function uniquePathSegments(values: string[]): string[] {
     return normalized && normalized !== '.' && normalized !== '..' && path.basename(normalized) === normalized
       ? normalized
       : null;
+  }).filter((value): value is string => Boolean(value)))];
+}
+
+function uniqueAbsolutePaths(values: string[]): string[] {
+  return [...new Set(values.map((value) => {
+    const normalized = String(value ?? '').trim();
+    return normalized && path.isAbsolute(normalized) ? path.resolve(normalized) : null;
   }).filter((value): value is string => Boolean(value)))];
 }
 

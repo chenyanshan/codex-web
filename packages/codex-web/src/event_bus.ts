@@ -22,7 +22,8 @@ export type CodexWebReplayResetReason =
   | 'epoch_mismatch'
   | 'cursor_expired'
   | 'cursor_ahead'
-  | 'history_truncated';
+  | 'history_truncated'
+  | 'timeline_generation_changed';
 
 export interface CodexWebEventReplay {
   epoch: string;
@@ -41,7 +42,24 @@ interface CodexWebProjectedEvent {
 }
 
 export class CodexWebEventBus {
-  readonly epoch: string;
+  private currentEpoch: string;
+
+  get epoch(): string { return this.currentEpoch; }
+
+  private readonly resetListeners = new Set<() => void>();
+
+  subscribeToReset(listener: () => void): () => void {
+    this.resetListeners.add(listener);
+    return () => { this.resetListeners.delete(listener); };
+  }
+
+  /** Reconnect readers with an epoch mismatch while preserving bounded history. */
+  resetEpoch(): void {
+    this.currentEpoch = crypto.randomUUID();
+    for (const listener of [...this.resetListeners]) {
+      try { listener(); } catch { /* One disconnected reader must not block others. */ }
+    }
+  }
 
   private readonly maxEventsPerTurn: number;
 
@@ -93,7 +111,7 @@ export class CodexWebEventBus {
     this.maxEventBytes = Math.max(1024, maxEventBytes);
     this.maxBytesPerTurn = Math.max(this.maxEventBytes, maxBytesPerTurn);
     this.maxTotalBytes = Math.max(this.maxBytesPerTurn, maxTotalBytes);
-    this.epoch = epoch.trim() || crypto.randomUUID();
+    this.currentEpoch = epoch.trim() || crypto.randomUUID();
   }
 
   append(turnId: string, event: CodexWebEvent): CodexWebStoredEvent {
@@ -355,12 +373,18 @@ export class CodexWebEventBus {
   }
 
   private recordProjectionCompleteness(turnId: string, event: CodexWebEvent): void {
+    if (event.type === 'turn.observation_interrupted' && event.raw && typeof event.raw === 'object'
+      && 'snapshotRequired' in event.raw && event.raw.snapshotRequired === true) {
+      this.projectionCompleteness.set(turnId, false);
+      return;
+    }
+
     if (this.projectionCompleteness.has(turnId)) {
       return;
     }
     this.projectionCompleteness.set(
       turnId,
-      event.type === 'turn.started' && !isRecoveredTurnStart(event),
+      (event.type === 'turn.started' && !isRecoveredTurnStart(event)) || (event.type === 'user.message' && event.canonicalKey === 'initial-user'),
     );
   }
 }
@@ -382,6 +406,12 @@ function normalizeSequence(value: string | number | null | undefined): number | 
 
 function projectionKey(event: CodexWebEvent): string {
   switch (event.type) {
+    case 'turn.activity':
+      return 'turn:activity';
+    case 'user_input.updated':
+      return `question:${event.request.requestId}`;
+    case 'user.message':
+      return `user:${event.timeline?.id ?? event.clientMessageId ?? event.itemId ?? event.id}`;
     case 'turn.observation_interrupted':
       return 'turn:observation';
     case 'turn.started':

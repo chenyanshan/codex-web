@@ -184,6 +184,25 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   throw new Error('Timed out waiting for SSE output');
 }
 
+test('runtime epoch rotation closes existing streams and releases listeners for snapshot recovery', async () => {
+  const bus = new CodexWebEventBus({ epoch: 'before_restart' });
+  const response = new FakeSseResponse();
+  const request = Object.assign(new EventEmitter(), { socket: { destroy() {} } });
+  const runtime = {
+    eventBus: bus,
+    getTurnEvents: (id: string) => bus.list(id),
+    subscribeToTurn: (id: string, listener: any) => bus.subscribe(id, listener),
+  };
+  await streamTurnEvents({ request: request as any, response: response as any, runtime: runtime as any,
+    turnId: 'restart_turn', registerSseCloser: () => () => {} });
+  assert.equal(bus.retentionStats().listeners, 1);
+  bus.resetEpoch();
+  assert.notEqual(bus.epoch, 'before_restart');
+  assert.equal(response.writableEnded, true);
+  assert.equal(bus.retentionStats().listeners, 0);
+  assert.equal(bus.replay('restart_turn', 0, 'before_restart').resetReason, 'epoch_mismatch');
+});
+
 test('SSE authorization deadline closes idle streams and prevents expired live delivery', async () => {
   const bus = new CodexWebEventBus({ epoch: 'expiry' });
   const response = new FakeSseResponse();

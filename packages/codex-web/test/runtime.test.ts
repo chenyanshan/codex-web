@@ -877,8 +877,15 @@ test('runtime timeline preserves projection metadata and classifies historical a
   const session = await runtime.readSession(thread.threadId);
   const byText = new Map(session?.timeline.map((entry) => [entry.text, entry]));
 
-  assert.deepEqual(byText.get('Question'), {
-    id: 'history_turn_explicit_0',
+  const question = byText.get('Question')!;
+  assert.equal(question.id, question.timeline?.id);
+  assert.ok(question.timeline?.aliases.includes('history_turn_explicit_0'));
+  assert.equal(question.timeline?.position, 1);
+  assert.deepEqual(question, {
+    id: question.id,
+    canonicalKey: 'initial-user',
+    timelineAliases: ['history_turn_explicit_0'],
+    timeline: question.timeline,
     kind: 'message',
     role: 'user',
     label: 'You',
@@ -2621,6 +2628,7 @@ test('runtime readSession exposes backend-managed slash command timeline entries
     'Earlier answer',
     '/goal resume',
     'Goal resumed: ship slash goal support',
+    'Goal work completed',
   ]);
 });
 
@@ -3076,7 +3084,7 @@ test('runtime readSession exposes backend-managed turn failure timeline entries'
     'Trigger auth failure',
     'unexpected status 403 Forbidden',
   ]);
-  const errorEntry = session?.timeline.find((item) => item.id === 'error_turn_403');
+  const errorEntry = session?.timeline.find((item) => item.timeline?.aliases.includes('error_turn_403'));
   assert.equal(errorEntry?.severity, 'error');
 });
 
@@ -3120,7 +3128,7 @@ test('runtime hides request timeout details behind a generic turn failure', asyn
   const failedEvent = eventBus.list('turn_timeout').find((entry) => entry.event.type === 'turn.failed');
   assert.equal(failedEvent?.event.type === 'turn.failed' ? failedEvent.event.message : null, 'Turn failed');
   const session = await runtime.readSession('thread_timeout');
-  assert.equal(session?.timeline.find((item) => item.id === 'error_turn_timeout')?.text, 'Turn failed');
+  assert.equal(session?.timeline.find((item) => item.timeline?.aliases.includes('error_turn_timeout'))?.text, 'Turn failed');
 });
 
 test('runtime anchors failed turn errors after the newly persisted user message', async () => {
@@ -3447,6 +3455,7 @@ test('runtime emits normalized turn and approval events and maps approval decisi
   await new Promise((resolve) => setTimeout(resolve, 0));
   const events = runtime.getTurnEvents('turn_1').map((entry) => entry.event.type);
   assert.deepEqual(events, [
+    'user.message',
     'turn.started',
     'assistant.delta',
     'batch.started',
@@ -3916,6 +3925,7 @@ test('runtime uses completed turn id when start callback is missing', async () =
   await new Promise((resolve) => setTimeout(resolve, 0));
   const events = runtime.getTurnEvents('turn_late').map((entry) => entry.event.type);
   assert.deepEqual(events, [
+    'user.message',
     'turn.started',
     'assistant.final',
     'turn.completed',
@@ -3971,7 +3981,7 @@ test('runtime keeps partial provider turn results active instead of completing t
 
   await new Promise((resolve) => setTimeout(resolve, 0));
   const events = runtime.getTurnEvents('turn_partial').map((entry) => entry.event.type);
-  assert.deepEqual(events, ['turn.started']);
+  assert.deepEqual(events, ['user.message', 'turn.started']);
   assert.equal((await runtime.readSession('thread_partial'))?.activeTurnId, 'turn_partial');
 });
 
@@ -4051,6 +4061,7 @@ test('runtime emits command and file work events from native work callbacks', as
   const events = runtime.getTurnEvents('turn_1').map((entry) => entry.event);
 
   assert.deepEqual(events.map((event) => event.type), [
+    'user.message',
     'turn.started',
     'batch.started',
     'batch.updated',
@@ -4062,12 +4073,12 @@ test('runtime emits command and file work events from native work callbacks', as
     'assistant.final',
     'turn.completed',
   ]);
-  assert.equal((events[1] as any).title, 'npm test');
-  assert.deepEqual((events[2] as any).summary, {
+  assert.equal((events[2] as any).title, 'npm test');
+  assert.deepEqual((events[3] as any).summary, {
     command: 'npm test',
     cwd: '/workspace',
   });
-  assert.deepEqual((events[3] as any).summary, {
+  assert.deepEqual((events[4] as any).summary, {
     output: '42 passing',
     exitCode: 0,
   });
@@ -4081,10 +4092,10 @@ test('runtime emits command and file work events from native work callbacks', as
     output: '42 passing',
     exitCode: 0,
   });
-  assert.deepEqual((events[5] as any).summary.fileChanges, [
+  assert.deepEqual((events[6] as any).summary.fileChanges, [
     { path: 'packages/codex-web/public/app.js', action: 'modified' },
   ]);
-  assert.deepEqual((events[6] as any).summary.fileChanges, [
+  assert.deepEqual((events[7] as any).summary.fileChanges, [
     { path: 'packages/codex-web/public/app.js', action: 'modified' },
   ]);
 });
@@ -4155,6 +4166,7 @@ test('runtime forwards work events extracted from native polled turn items', asy
   const events = runtime.getTurnEvents('turn_1').map((entry) => entry.event);
 
   assert.deepEqual(events.map((event) => event.type), [
+    'user.message',
     'turn.started',
     'batch.started',
     'batch.updated',
@@ -4163,13 +4175,13 @@ test('runtime forwards work events extracted from native polled turn items', asy
     'assistant.final',
     'turn.completed',
   ]);
-  assert.equal((events[1] as any).kind, 'file_change');
-  assert.deepEqual((events[2] as any).summary.fileChanges, [
+  assert.equal((events[2] as any).kind, 'file_change');
+  assert.deepEqual((events[3] as any).summary.fileChanges, [
     { path: 'packages/codex-web/public/app.js', action: 'modified' },
   ]);
-  assert.match(String((events[2] as any).summary.diff), /Update File: packages\/codex-web\/public\/app\.js/u);
-  assert.match(String((events[3] as any).summary.output), /Success/u);
-  assert.deepEqual((events[3] as any).raw, {
+  assert.match(String((events[3] as any).summary.diff), /Update File: packages\/codex-web\/public\/app\.js/u);
+  assert.match(String((events[4] as any).summary.output), /Success/u);
+  assert.deepEqual((events[4] as any).raw, {
     type: 'custom_tool_call_output',
     call_id: 'call_patch_1',
   });
@@ -4731,7 +4743,7 @@ for (const code of ['app_server_observation_interrupted', 'app_server_response_u
     const runtime = new CodexWebRuntime({ codexBin: 'codex', defaultCwd: '/workspace', client });
     assert.equal((await runtime.startTurn('thread_1', { text: 'hello' })).turnId, 'turn_uncertain');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.deepEqual(runtime.getTurnEvents('turn_uncertain').map((entry) => entry.event.type), ['turn.started', 'turn.observation_interrupted']);
+    assert.deepEqual(runtime.getTurnEvents('turn_uncertain').map((entry) => entry.event.type), ['user.message', 'turn.started', 'turn.observation_interrupted']);
     const status = await runtime.readSessionStatus('thread_1');
     assert.equal(status?.activityState, 'stale');
     assert.equal(status?.activeTurnId, 'turn_uncertain');

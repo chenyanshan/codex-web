@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 
-const evidence = 'docs/audits/2026-09-19-connection-work-evidence';
+const evidence = 'docs/audits/2026-09-30-activity-panel-evidence';
 test.use({ serviceWorkers: 'block' });
 const diff = ['diff --git a/public/app.js b/public/app.js', '--- a/public/app.js', '+++ b/public/app.js', '@@ -12,2 +12,3 @@', '-  showStatus("Ready");', '+  showStatus(connection.label());', '+  keepDraft("<script>alert(1)</script>");', '   render();', '\\ No newline at end of file'].join('\n');
 
@@ -48,8 +48,8 @@ test('work details show actual progress, readable output and numbered diffs with
   await page.locator('#open-work-details-button').click();
   const dialog = page.locator('.work-details-dialog');
   await expect(dialog.locator('.work-progress-current')).toHaveText('public/app.js +1');
-  await expect(dialog.locator('.work-progress-count')).toHaveText('已完成 2 / 3 项活动');
-  await expect(dialog.locator('.work-progress-title')).toContainText('当前正在进行');
+  await expect(dialog.locator('.work-progress-count')).toHaveText('已收到 3 条活动');
+  await expect(dialog.locator('.work-progress-title')).toContainText('修改文件');
   const command = dialog.locator('[data-work-event-id="batch_browser_command"]');
   const edit = dialog.locator('[data-work-event-id="batch_browser_edit"]');
   await command.locator(':scope > summary').click();
@@ -86,7 +86,7 @@ test('work details show actual progress, readable output and numbered diffs with
   });
   await expect.poll(() => region.evaluate(el => el.scrollLeft)).toBe(horizontal);
   await emit(page, { type: 'batch.completed', batchId: 'batch_browser_edit', status: 'completed' });
-  await expect(dialog.locator('.work-progress-count')).toHaveText('已完成 3 / 3 项活动');
+  await expect(dialog.locator('.work-progress-count')).toHaveText('已收到 3 条活动');
   await expect(region).toBeFocused();
   await expect(edit).toHaveAttribute('open', '');
   await expect.poll(() => region.evaluate(el => el.scrollLeft)).toBe(horizontal);
@@ -96,12 +96,13 @@ test('work details show actual progress, readable output and numbered diffs with
   await expect(dialog.locator('[data-work-show-latest]')).toBeVisible();
   await expect(region).toBeFocused();
   const boxes = await dialog.evaluate(el => {
-    const progress = el.querySelector('.work-turn-header').getBoundingClientRect();
+    const progress = el.querySelector('.work-details-list').getBoundingClientRect();
     const button = el.querySelector('[data-work-show-latest]').getBoundingClientRect();
-    return { progress: { top: progress.top, bottom: progress.bottom, right: progress.right }, button: { top: button.top, bottom: button.bottom, right: button.right }, pageWidth: document.documentElement.scrollWidth };
+    return { progress: { top: progress.top, bottom: progress.bottom, right: progress.right }, button: { top: button.top, bottom: button.bottom, right: button.right }, pageWidth: document.documentElement.scrollWidth, viewportHeight: window.innerHeight };
   });
   expect(boxes.button.top).toBeGreaterThanOrEqual(boxes.progress.top);
   expect(boxes.button.bottom).toBeLessThanOrEqual(boxes.progress.bottom);
+  expect(boxes.button.bottom).toBeLessThanOrEqual(boxes.viewportHeight);
   expect(boxes.button.right).toBeLessThanOrEqual(boxes.progress.right);
   expect(boxes.pageWidth).toBeLessThanOrEqual(info.project.use.viewport.width);
   await page.screenshot({ path: `${evidence}/work-live-${info.project.name}.png` });
@@ -159,7 +160,7 @@ test('a failed work module can be retried by reopening the dialog', async ({ pag
   await expect(page.locator('.work-details-dialog')).toContainText('工作详情加载失败');
   await page.locator('#close-work-details-button').click();
   await page.locator('#open-work-details-button').click();
-  await expect(page.locator('.work-progress-count')).toHaveText('已完成 1 / 3 项活动');
+  await expect(page.locator('.work-progress-count')).toHaveText('已收到 3 条活动');
   expect(attempts).toBe(2);
 });
 
@@ -170,6 +171,7 @@ test('work text and diff lines remain readable in every theme', async ({ page },
   await page.locator('#open-work-details-button').click();
   const dialog = page.locator('.work-details-dialog');
   await dialog.locator('[data-work-event-id="batch_browser_edit"] > summary').click();
+  await expect(dialog.locator('.work-diff')).toBeVisible();
   const checks = [];
   for (const theme of ['fresh-light', 'retro', 'terminal', 'dark-gold', 'oled-black']) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -192,4 +194,134 @@ test('work text and diff lines remain readable in every theme', async ({ page },
     await page.screenshot({ path: `${evidence}/work-theme-${theme}.png` });
   }
   await fs.writeFile(`${evidence}/work-contrast.json`, JSON.stringify(checks, null, 2));
+});
+
+test('long retained output is lazy, expandable and survives updates without losing return focus', async ({ page }, info) => {
+  await openSession(page);
+  const output = Array.from({ length: 100 }, (_, index) => `record ${index}: retained test output`).join('\n');
+  await emit(page, { type: 'batch.updated', batchId: 'batch_browser_command', summary: { output } });
+  await page.locator('#open-work-details-button').click();
+  const detail = page.locator('[data-work-event-id="batch_browser_command"]');
+  await expect(detail.locator('.work-output')).toHaveCount(0);
+  await detail.locator(':scope > summary').click();
+  await expect(detail.locator('.work-output').last()).not.toContainText('record 99');
+  await detail.locator('[data-work-content-open]').click();
+  await expect(detail.locator('.work-output').last()).toContainText('record 99');
+  await expect(detail.locator('[data-work-content-back]')).toBeFocused();
+  await emit(page, { type: 'batch.completed', batchId: 'batch_browser_command', status: 'completed' });
+  await expect(detail.locator('.work-output').last()).toContainText('record 99');
+  await expect(detail.locator('[data-work-content-back]')).toBeFocused();
+  await detail.locator('[data-work-content-back]').click();
+  await expect(detail.locator('[data-work-content-open]')).toBeFocused();
+  await expect(detail.locator('.work-output').last()).not.toContainText('record 99');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#open-work-details-button')).toBeFocused();
+});
+
+test('official activity state is compact, optional and keeps plan disclosure across updates', async ({ page }, info) => {
+  const activity = {
+    threadId: 'session_browser_fixture', turnId: 'turn_browser_active', revision: 1, observedAt: Date.now(), lastProgressAt: Date.now(),
+    health: { status: 'retrying', observedRetryCount: 2, lastError: 'Upstream connection interrupted; retrying' }, observation: 'connected', compaction: 'idle',
+    plan: { explanation: 'Verify the narrow-screen activity workflow', steps: [{ step: 'Inspect existing activity', status: 'completed' }, { step: 'Exercise keyboard and retained output', status: 'in_progress' }] },
+    agents: [{ threadId: 'agent-ui-review', status: 'running', message: 'Checking mobile reading position', observedAt: Date.now() }],
+    tools: [], tokenUsage: { last: { totalTokens: 1200 }, total: { totalTokens: 4600 } }, diff: { available: false }, truncated: false,
+  };
+  await page.route(/\/api\/sessions\/session_browser_fixture(?:\?.*)?$/, async route => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.session.turnActivity = activity;
+    await route.fulfill({ response, json });
+  });
+  await openSession(page);
+  await emit(page, { type: 'turn.activity', activity });
+  await page.locator('#open-work-details-button').click();
+  const dialog = page.locator('.work-details-dialog');
+  await expect(dialog.locator('.work-progress-title')).toHaveText('模型连接重试中');
+  const plan = dialog.locator('[data-work-section="plan"]');
+  await expect(plan).not.toHaveAttribute('open');
+  await expect(plan.locator('summary')).toHaveText('计划：完成 1/2 步');
+  await plan.locator('summary').click();
+  await emit(page, { type: 'batch.completed', batchId: 'batch_browser_command', status: 'completed' });
+  await expect(plan).toHaveAttribute('open', '');
+  await expect(dialog.locator('.work-progress-count')).toHaveText('已收到 3 条活动');
+  await dialog.locator('.work-details-list').evaluate(el => { el.scrollTop = 0; });
+  await page.screenshot({ path: `${evidence}/work-retry-plan-${info.project.name}.png` });
+});
+
+test('turn diff loads on demand, retries locally, and preserves horizontal reading through updates', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop');
+  let requests = 0;
+  await page.route('**/api/sessions/session_browser_fixture/turns/turn_browser_active/diff', async route => {
+    requests += 1;
+    if (requests === 1) return route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } });
+    return route.fulfill({ json: { diff: { text: `${diff}\n+${'long_code_'.repeat(180)}`, bytes: 5000, truncated: true } } });
+  });
+  await openSession(page);
+  await emit(page, { type: 'turn.activity', activity: { turnId: 'turn_browser_active', revision: 1, health: { status: 'working' }, diff: { available: true } } });
+  await page.locator('#open-work-details-button').click();
+  const section = page.locator('[data-work-section="diff"]');
+  await section.locator('summary').click();
+  expect(requests).toBe(0);
+  await section.locator('[data-work-load-diff]').click();
+  await expect(section).toContainText('差异加载失败');
+  await section.locator('[data-work-load-diff]').click();
+  const region = section.locator('.work-diff');
+  await expect(region).toBeVisible();
+  await expect(section).toContainText('仅显示已保留的差异');
+  await region.focus();
+  await region.evaluate(el => { el.scrollLeft = 100; });
+  await emit(page, { type: 'batch.completed', batchId: 'batch_browser_command', status: 'completed' });
+  await expect(region).toBeFocused();
+  expect(await region.evaluate(el => el.scrollLeft)).toBe(100);
+  expect(requests).toBe(2);
+});
+
+test('long activity history stays inside the panel with a pinned overview and readable assignments and token units', async ({ page }, info) => {
+  await openSession(page);
+  const activity = { turnId: 'turn_browser_active', revision: 1, health: { status: 'working' }, observation: 'connected',
+    agents: [{ threadId: 'child-opaque-123', prompt: '检查手机端的活动窗口，保留阅读位置与输入焦点。\n核对弱网下的恢复行为。', status: 'running', observedAt: Date.now() }],
+    tools: [], tokenUsage: { total: { totalTokens: 2400000000, inputTokens: 2100000000, outputTokens: 300000000, cachedInputTokens: 1250000 }, last: { totalTokens: 12500 }, modelContextWindow: 1000000 } };
+  await emit(page, { type: 'turn.activity', activity });
+  for (let i = 0; i < 35; i++) await emit(page, { type: 'batch.started', batchId: `overflow-${i}`, kind: 'command', title: `Read activity record ${i}` });
+  await page.locator('#open-work-details-button').click();
+  const dialog = page.locator('.work-details-dialog');
+  const checkBounds = async () => {
+    await expect(dialog.locator('.work-overview')).toBeVisible();
+    const bounds = await dialog.evaluate(el => {
+      const rect = node => { const r = node.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,height:r.height}; };
+      return { dialog: rect(el), header: rect(el.querySelector('.work-details-header')), overview: rect(el.querySelector('.work-overview')), list: rect(el.querySelector('.work-details-list')), viewport: innerHeight };
+    });
+    expect(bounds.dialog.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.dialog.bottom).toBeLessThanOrEqual(bounds.viewport + 1);
+    expect(bounds.header.top).toBeGreaterThanOrEqual(bounds.dialog.top);
+    expect(bounds.overview.top).toBeGreaterThanOrEqual(bounds.header.bottom - 1);
+    expect(bounds.overview.bottom).toBeLessThan(bounds.list.bottom);
+    expect(bounds.list.height - bounds.overview.height).toBeGreaterThan(70);
+  };
+  await checkBounds();
+  const agents = dialog.locator('[data-work-section="agents"]');
+  await agents.locator(':scope > summary').click();
+  await expect(agents.locator('.work-agent-prompt')).toContainText('检查手机端的活动窗口');
+  await expect(agents.locator('.work-agent-meta')).not.toHaveAttribute('open');
+  await checkBounds();
+  await agents.locator(':scope > summary').click();
+  const usage = dialog.locator('[data-work-section="usage"]');
+  await usage.locator(':scope > summary').click();
+  await expect(usage.locator('.work-token-metrics')).toContainText('2.4B');
+  await expect(usage.locator('.work-token-metrics')).toContainText('12.5K');
+  await expect(usage.locator('.work-token-metrics')).toContainText('1M');
+  await usage.locator('.work-token-metrics').scrollIntoViewIfNeeded();
+  await checkBounds();
+  await page.screenshot({ path: `${evidence}/refined-tokens-${info.project.name}.png` });
+  await usage.locator(':scope > summary').click();
+  await agents.locator(':scope > summary').click();
+  await agents.locator('.work-agent-prompt').scrollIntoViewIfNeeded();
+  await emit(page, { type: 'turn.activity', activity: { ...activity, revision: 2 } });
+  await expect(agents).toHaveAttribute('open', '');
+  await checkBounds();
+  await page.screenshot({ path: `${evidence}/refined-agents-${info.project.name}.png` });
+  await dialog.locator('.work-details-list').evaluate(el => { el.scrollTop = 0; });
+  await checkBounds();
+  await dialog.locator('.work-details-list').evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await checkBounds();
 });

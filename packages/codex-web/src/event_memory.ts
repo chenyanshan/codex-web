@@ -17,6 +17,11 @@ export function retainedEventSize(event: CodexWebEvent): number {
 export function boundEventForRetention(event: CodexWebEvent): CodexWebEvent {
   const raw = compactRaw(event.raw);
   switch (event.type) {
+    case 'turn.activity':
+    case 'user_input.updated':
+      return { ...event, raw: undefined };
+    case 'user.message':
+      return { ...event, text: truncateUtf8(event.text, MAX_STREAM_TEXT_BYTES), raw: undefined };
     case 'assistant.delta': {
       const delta = typeof event.delta === 'string'
         ? truncateUtf8(event.delta, MAX_STREAM_DELTA_BYTES)
@@ -67,6 +72,16 @@ export function fitEventForRetention(event: CodexWebEvent, maxBytes: number): Co
   const bounded = boundEventForRetention(event);
   if (retainedEventSize(bounded) <= maxBytes) {
     return bounded;
+  }
+  if (bounded.type === 'turn.activity' || bounded.type === 'user_input.updated') {
+    // Questions are indivisible: trimming options/text could change what a user answers.
+    // Recover complete authorized state through the existing session snapshot path.
+    return { id: bounded.id, type: 'turn.observation_interrupted', turnId: bounded.turnId,
+      threadId: bounded.threadId, raw: { snapshotRequired: true } };
+  }
+  if (bounded.type === 'user.message') {
+    const base = { ...bounded, text: '', raw: undefined };
+    return { ...base, text: truncateUtf8(bounded.text, Math.max(0, maxBytes - retainedEventSize(base))) };
   }
   if (bounded.type === 'assistant.delta' || bounded.type === 'assistant.final') {
     const base = { ...bounded, text: '', delta: undefined, raw: undefined };

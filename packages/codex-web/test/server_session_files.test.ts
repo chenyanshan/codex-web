@@ -39,7 +39,10 @@ function createConfig(stateDir: string, defaultCwd: string) {
   };
 }
 
-function runtimeForProjects(projectsByThread: Record<string, string>) {
+function runtimeForProjects(
+  projectsByThread: Record<string, string>,
+  timelinesByThread: Record<string, Array<Record<string, unknown>>> = {},
+) {
   return {
     listModels: async () => [],
     readUsage: async () => null,
@@ -48,7 +51,14 @@ function runtimeForProjects(projectsByThread: Record<string, string>) {
     readSession: async (threadId: string) => {
       const cwd = projectsByThread[threadId];
       return cwd
-        ? { id: threadId, cwd, projectName: path.basename(cwd), settings: {}, thread: { turns: [] }, timeline: [] }
+        ? {
+            id: threadId,
+            cwd,
+            projectName: path.basename(cwd),
+            settings: {},
+            thread: { turns: [] },
+            timeline: timelinesByThread[threadId] ?? [],
+          }
         : null;
     },
     archiveSession: async () => true,
@@ -402,6 +412,110 @@ test('single-user session files safely render project files, uploads, attachment
   }
 });
 
+test('single-user admins can open exact absolute files linked by assistant messages without exposing sibling paths', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-session-linked-files-'));
+  t.after(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const stateDir = path.join(root, 'state');
+  const projectDir = path.join(root, 'project');
+  const outputDir = path.join(root, 'other project', 'tmp');
+  await Promise.all([
+    fs.mkdir(projectDir, { recursive: true }),
+    fs.mkdir(outputDir, { recursive: true }),
+  ]);
+  const markdownFile = path.join(outputDir, 'PR notes.md');
+  const archiveFile = path.join(outputDir, 'build.zip');
+  const siblingFile = path.join(outputDir, 'not-linked.txt');
+  const userLinkedFile = path.join(outputDir, 'user-only.md');
+  const symlinkFile = path.join(outputDir, 'linked-secret.md');
+  await Promise.all([
+    fs.writeFile(markdownFile, '# Linked output\n'),
+    fs.writeFile(archiveFile, 'zip fixture'),
+    fs.writeFile(siblingFile, 'not linked'),
+    fs.writeFile(userLinkedFile, '# User link\n'),
+  ]);
+  await fs.symlink(siblingFile, symlinkFile);
+
+  const timeline = [
+    {
+      id: 'user_1', kind: 'message', role: 'user', label: 'You', meta: 'history',
+      text: `[User file](<${userLinkedFile}>)`,
+    },
+    {
+      id: 'assistant_1', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history',
+      text: `[PR notes](<${markdownFile}:12:3>) · [Archive](${archiveFile.replaceAll(' ', '%20')}) · [Symlink](<${symlinkFile}>)`,
+    },
+  ];
+  const server = createCodexWebServer({
+    auth: singleUserAuth(),
+    runtime: runtimeForProjects(
+      { thread_linked: projectDir, thread_other: projectDir },
+      { thread_linked: timeline },
+    ) as any,
+    config: createConfig(stateDir, projectDir),
+  });
+  await server.start();
+  t.after(async () => {
+    await server.stop();
+  });
+
+  for (const [filePath, expectedKind] of [[markdownFile, 'markdown'], [archiveFile, 'file']]) {
+    const resolved = await resolveFile(server.baseUrl, 'thread_linked', filePath!);
+    assert.equal(resolved.status, 200, filePath);
+    const file = (await resolved.json() as any).file;
+    assert.equal(file.kind, expectedKind);
+    assert.equal(file.source, 'session_output');
+    const content = await fetch(`${server.baseUrl}${file.contentUrl}`, {
+      headers: { Authorization: 'Bearer local-token' },
+    });
+    assert.equal(content.status, 200);
+    assert.deepEqual(Buffer.from(await content.arrayBuffer()), await fs.readFile(filePath!));
+
+    const wrongSession = await fetch(`${server.baseUrl}${file.contentUrl.replace('thread_linked', 'thread_other')}`, {
+      headers: { Authorization: 'Bearer local-token' },
+    });
+    assert.equal(wrongSession.status, 404);
+  }
+
+  for (const deniedPath of [siblingFile, userLinkedFile, symlinkFile, outputDir]) {
+    const denied = await resolveFile(server.baseUrl, 'thread_linked', deniedPath);
+    assert.equal(denied.status, 404, deniedPath);
+  }
+  assert.equal((await resolveFile(server.baseUrl, 'thread_other', markdownFile)).status, 404);
+  const { file } = await (await resolveFile(server.baseUrl, 'thread_linked', markdownFile)).json();
+  timeline.pop();
+  assert.equal((await fetch(`${server.baseUrl}${file.contentUrl}`, {
+    headers: { Authorization: 'Bearer local-token' },
+  })).status, 404, 'a cached handle must revalidate its current session link');
+});
+
+test('project files stay readable when the session history service is unavailable', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-files-metadata-'));
+  const project = path.join(root, 'project');
+  await fs.mkdir(project);
+  await fs.writeFile(path.join(project, 'app.js'), 'const ready = true;');
+  const runtime = runtimeForProjects({ thread: project });
+  let historyReads = 0;
+  const server = createCodexWebServer({
+    config: createConfig(path.join(root, 'state'), project),
+    auth: singleUserAuth(),
+    runtime: { ...runtime, readSessionMetadata: runtime.readSession, readSessionTimeline: async () => {
+      historyReads++;
+      throw new Error('history unavailable');
+    } } as any,
+  });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  await server.start();
+  const response = await resolveFile(server.baseUrl, 'thread', 'app.js');
+  assert.equal(response.status, 200);
+  const { file } = await response.json();
+  const content = await fetch(`${server.baseUrl}${file.contentUrl}`, { headers: { Authorization: 'Bearer local-token' } });
+  assert.equal(content.status, 200);
+  assert.equal(await content.text(), 'const ready = true;');
+  assert.equal(historyReads, 0);
+});
+
 test('multi-user session files enforce session ownership, project read access, and user-scoped attachments', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-web-session-files-multi-'));
   t.after(async () => {
@@ -511,6 +625,11 @@ test('multi-user session files enforce session ownership, project read access, a
       mode: 'multi' as const,
     },
   };
+  const linkedPath = path.join(deniedProject, 'secret.md');
+  const linkedTimeline = [{
+    id: 'assistant_output', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history',
+    text: `[Output](${linkedPath}) [Other upload](${bobUpload}) [Other report](${deniedLegacyReport})`,
+  }];
   const server = createCodexWebServer({
     auth: multiUserAuth(principals),
     identityStore,
@@ -518,7 +637,7 @@ test('multi-user session files enforce session ownership, project read access, a
       thread_alice: allowedProject,
       thread_bob: allowedProject,
       thread_denied: deniedProject,
-    }) as any,
+    }, { thread_alice: linkedTimeline }) as any,
     config: createConfig(stateDir, allowedProject),
   });
   await server.start();
@@ -560,6 +679,30 @@ test('multi-user session files enforce session ownership, project read access, a
     });
     assert.equal(observedUpload.status, 200);
     assert.equal((await observedUpload.json() as any).file.source, 'upload');
+
+    const observedOutput = await fetch(`${server.baseUrl}/api/admin/sessions/app_alice/files/resolve`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: linkedPath }),
+    });
+    assert.equal(observedOutput.status, 200);
+    const outputFile = (await observedOutput.json() as any).file;
+    const outputContent = await fetch(`${server.baseUrl}${outputFile.contentUrl}`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
+    assert.equal(outputContent.status, 200);
+    assert.equal(await outputContent.text(), '# Denied project\n');
+    assert.equal((await fetch(`${server.baseUrl}${outputFile.contentUrl}`, {
+      headers: { Authorization: 'Bearer alice' },
+    })).status, 403);
+    for (const managedPath of [bobUpload, deniedLegacyReport]) {
+      const denied = await fetch(`${server.baseUrl}/api/admin/sessions/app_alice/files/resolve`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: managedPath }),
+      });
+      assert.equal(denied.status, 404, 'linked paths cannot bypass managed-file ownership');
+    }
 
     const deniedRequests = await Promise.all([
       resolveFile(server.baseUrl, 'app_bob', 'summary.md', 'alice'),

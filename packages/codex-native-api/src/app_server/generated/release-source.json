@@ -1,15 +1,14 @@
 {
-  "checkedDateAsiaShanghai": "2026-09-25",
+  "checkedDateAsiaShanghai": "2026-09-30",
   "github": {
-    "url": "https://github.com/openai/codex/releases/tag/rust-v0.156.1",
-    "tag": "rust-v0.156.1",
-    "publishedAt": "2026-09-23T02:41:36Z",
-    "commit": "b412ff32c417f855c2b2d1581b77058eed87c84b"
+    "url": "https://github.com/openai/codex/releases/tag/rust-v0.159.0",
+    "tag": "rust-v0.159.0",
+    "commit": "687a119f0fcaace47e1f1abcc77cec6c813fd6da"
   },
   "npm": {
-    "version": "0.156.1",
-    "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.156.1.tgz",
-    "integrity": "sha512-nI1iVl/n2SO2lSvlwEsJx63zdSI4C4Me2gR7AG0OWMJiGSakz2tY2hx43E39Zq5aEoeB5bZjJXzp5Sqhog6vyA=="
+    "version": "0.159.0",
+    "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.0.tgz",
+    "integrity": "sha512-nQWxAkzn+Rhr8TgtIhVhSlqvCytrMoqe+P8xoo4xxhCIBnzOfRs6SEmkMJfTPjkU3BYlsplwDOY2dbSp4+514g=="
   },
-  "acquisition": "Explicit npm install --prefix isolated temporary directory --ignore-scripts @openai/codex@0.156.1; no global upgrade"
+  "acquisition": "Generated using existing installed /opt/homebrew/bin/codex 0.159.0; no installation mutation. Tag commit verified via git ls-remote."
 }

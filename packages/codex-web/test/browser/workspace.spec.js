@@ -473,8 +473,8 @@ test('workspace is usable without overflow and exposes work and status semantics
   await expect(workDialog).toBeVisible();
   const workTurn = workDialog.locator('.work-turn');
   await expect(workTurn).toHaveCount(1);
-  await expect(workTurn).toContainText('Ran 1');
-  await expect(workTurn).toContainText('Edited 2');
+  await expect(workTurn).toContainText('Run command');
+  await expect(workTurn).toContainText('Modify files');
   await expect(workTurn).not.toContainText('[object Object]');
   const commandDetail = workTurn.locator('.work-detail[data-work-kind="command"]');
   await commandDetail.locator('summary').click();
@@ -1281,7 +1281,7 @@ test('Chinese work details render symbols and activity labels without escaped en
 
   const dialog = page.locator('.work-details-dialog');
   await expect(dialog).toContainText('本轮活动');
-  await expect(dialog).toContainText('执行 1 · 修改 2 个文件');
+  await expect(dialog).toContainText('已收到 3 条活动');
   await expect(dialog).toContainText('packages/codex-web/public/styles.css +1');
   await expect(page.locator('#close-work-details-button')).toHaveAttribute('aria-label', '关闭工作详情');
   await expect(page.locator('#close-work-details-button .button-icon')).toBeVisible();

@@ -35,7 +35,7 @@ function renderSessionFileViewerContent(file = state.currentSessionFile) {
   return `
     <header class="topbar page-topbar session-file-topbar">
       <div class="page-nav">
-        <button class="ghost page-back-button" type="button" id="close-session-file-button" aria-label="Back" data-initial-focus>${renderBackButtonIcon()}</button>
+        ${globalScope.CodexWebUi.closeButton('close-session-file-button')}
         <div class="session-file-title-stack">
           <div class="page-title" data-i18n-skip title="${escapeAttribute(title)}">${escapeHtml(title)}</div>
           ${activityLabel ? `<span class="session-file-activity" data-state="${escapeAttribute(activityState)}">${escapeHtml(t(activityLabel))}</span>` : ''}

@@ -96,7 +96,8 @@ test('1000 saved settings are loaded once per manifest revision on lightweight s
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-settings-index-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const settingsPath = path.join(dir, 'settings.json');
-  await fs.writeFile(settingsPath, JSON.stringify({ version: 1, sessions: Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`thread-${i}`, { bridgeSessionId: `thread-${i}`, updatedAt: 1 }])) }));
+  // Seed initialized ordering: bootstrapping a missing order legitimately changes the manifest.
+  await fs.writeFile(settingsPath, JSON.stringify({ version: 1, sessions: Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`thread-${i}`, { bridgeSessionId: `thread-${i}`, updatedAt: 1, listOrderAt: 1 }])) }));
   const store = new FileSessionSettingsStore({ settingsPath });
   let lists = 0;
   const originalList = store.list.bind(store);

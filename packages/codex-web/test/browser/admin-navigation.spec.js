@@ -30,8 +30,10 @@ test('admin observation opens the first history window on every entry and suppor
     await expect(page.locator('#timeline [data-timeline-id]').last()).toHaveAttribute('data-timeline-id', 'audit_119');
     await expect(page.locator('[data-timeline-id="audit_119"]')).toBeInViewport();
     await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+    await expect(page.locator('[data-timeline-window][aria-busy="true"]')).toHaveCount(0);
     for (let step = 0; step < 3 && await page.locator('#timeline [data-timeline-id]').first().getAttribute('data-timeline-id') !== 'audit_0'; step++) {
       await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+      await expect(page.locator('[data-timeline-window][aria-busy="true"]')).toHaveCount(0);
     }
     await expect(page.locator('#timeline [data-timeline-id]').first()).toHaveAttribute('data-timeline-id', 'audit_0');
     await returnToAdminList(page);

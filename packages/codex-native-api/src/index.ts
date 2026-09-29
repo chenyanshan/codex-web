@@ -167,3 +167,6 @@ export type {
   ProviderUsageReport,
   ProviderUsageWindow,
 } from './provider.js';
+
+export type { TurnActivitySnapshot } from './app_server/activity.js';
+export type { UserInputRequest, UserInputResponse } from './app_server/user_input.js';

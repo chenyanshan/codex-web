@@ -43,7 +43,9 @@ try {
   const emitted = await fs.readFile(new URL('../dist/public/app.js', import.meta.url), 'utf8');
   const appScript = await page.locator('script[src*="/app.js"]').getAttribute('src');
   const buildId = new URL(appScript, url).searchParams.get('v');
-  const addedAssets = ['boot-recovery.js', 'approval-ui.js', 'approval-ui.css', 'settings-ui.js', 'settings-ui.css', 'admin-ui.css'];
+  const portableAssets = ['runtime-settings.js', 'user-input-view.js', 'user-input-view.css', 'work-details-view.css'];
+  const lazyAssets = new Set(['admin-ui.css', 'session-file-viewer.js', 'webhook-settings.js', ...portableAssets]);
+  const addedAssets = [...portableAssets, 'boot-recovery.js', 'approval-ui.js', 'approval-ui.css', 'settings-ui.js', 'settings-ui.css', 'admin-ui.css', 'submission-identity.js', 'timeline-model.js', 'lazy-feature.js', 'session-file-viewer.js', 'webhook-settings.js'];
   for (const name of addedAssets) {
     const assetUrl = `${url}/${name}`;
     const unversioned = await fetch(assetUrl);
@@ -52,7 +54,7 @@ try {
     const body = await unversioned.text();
     const emittedAsset = await fs.readFile(new URL(`../dist/public/${name}`, import.meta.url), 'utf8');
     assert.equal(body, emittedAsset.replaceAll('__CODEX_WEB_BUILD_ID__', buildId), `${name} must come from dist/public`);
-    assert.equal(await page.locator(`[src="/${name}?v=${buildId}"], [href="/${name}?v=${buildId}"]`).count(), 1, name);
+    assert.equal(await page.locator(`[src="/${name}?v=${buildId}"], [href="/${name}?v=${buildId}"]`).count(), lazyAssets.has(name) ? 0 : 1, name);
     for (const encoding of ['br', 'gzip']) {
       const headers = { 'Accept-Encoding': encoding };
       const asset = await fetch(`${assetUrl}?v=${buildId}`, { headers });
@@ -78,6 +80,26 @@ try {
     return typeof globalThis.CodexWebWorkView?.createRenderer;
   }, buildId);
   assert.equal(lazyWork, 'function', 'the production server must deliver the lazy work view');
+  const portableViews = await page.evaluate(async buildId => {
+    await Promise.all([
+      import(`/runtime-settings.js?v=${encodeURIComponent(buildId)}`),
+      import(`/user-input-view.js?v=${encodeURIComponent(buildId)}`),
+      globalThis.CodexWebLazyFeature.loadStylesheet(`/work-details-view.css?v=${encodeURIComponent(buildId)}`),
+      globalThis.CodexWebLazyFeature.loadStylesheet(`/user-input-view.css?v=${encodeURIComponent(buildId)}`),
+    ]);
+    return [typeof globalThis.CodexWebRuntimeSettings?.mountRuntimeSettings, typeof globalThis.CodexWebUserInput?.createUserInputView];
+  }, buildId);
+  assert.deepEqual(portableViews, ['function', 'function'], 'portable views and styles must load from the production build');
+  const lazyViews = await page.evaluate(async buildId => {
+    await Promise.all([
+      import(`/session-file-viewer.js?v=${encodeURIComponent(buildId)}`),
+      import(`/webhook-settings.js?v=${encodeURIComponent(buildId)}`),
+      globalThis.CodexWebLazyFeature.loadStylesheet(`/admin-ui.css?v=${encodeURIComponent(buildId)}`),
+    ]);
+    return [typeof globalThis.CodexWebFileViewer?.createRenderer, typeof globalThis.CodexWebWebhookSettings?.createRenderer];
+  }, buildId);
+  assert.deepEqual(lazyViews, ['function', 'function'], 'production optional views must load successfully');
+  assert.equal(await page.locator(`link[href="/admin-ui.css?v=${buildId}"]`).count(), 1);
   assert.deepEqual(failures, []);
   assert.ok(scripts.every(script => script.status === 200));
   assert.equal(served, emitted.replaceAll('__CODEX_WEB_BUILD_ID__', buildId));

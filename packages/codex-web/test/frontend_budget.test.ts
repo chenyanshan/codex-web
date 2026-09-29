@@ -17,6 +17,9 @@ test('production startup dependency graph stays self-contained and within the we
     assert.ok(dependencies.includes('draft-store.js'));
     assert.ok(dependencies.includes('request-context.js'));
     assert.ok(!dependencies.includes('admin-ui.js'), 'admin tools must stay outside the critical graph');
+    for (const asset of ['admin-ui.css', 'session-file-viewer.js', 'webhook-settings.js']) {
+      assert.ok(!dependencies.includes(asset), `${asset} loads when its view opens`);
+    }
     const assets = await Promise.all(dependencies.map((asset) => readFile(path.join(outdir, asset))));
     const compressedBytes = [Buffer.from(index), ...assets].reduce((total, source) => total + gzipSync(source, { level: 6 }).byteLength, 0);
     assert.ok(compressedBytes <= 140 * 1024, `critical production gzip payload is ${compressedBytes} bytes`);

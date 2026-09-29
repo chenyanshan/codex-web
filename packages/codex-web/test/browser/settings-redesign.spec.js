@@ -46,3 +46,48 @@ test('settings navigation preserves scope, masked clipboard and nested confirmat
   await expect(page.locator('#webhook-rotate-key-button')).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
 });
+
+test('compact settings share centered close controls and preserve defaults', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await expect(page.locator('#open-app-settings-button')).toBeAttached();
+  if (!await page.locator('#open-app-settings-button').isVisible()) await page.locator('#mobile-sidebar-toggle-button').click();
+  await page.locator('#open-app-settings-button').click();
+  await expect(page.locator('#default-model-select')).toBeVisible();
+  const close = page.locator('.desktop-settings-panel .panel-close, .settings-global-header .panel-close');
+  await expect(close).toHaveCount(1);
+  const bounds = await close.boundingBox();
+  const icon = await close.locator('svg').boundingBox();
+  expect(bounds.width).toBeGreaterThanOrEqual(44);
+  expect(bounds.height).toBeGreaterThanOrEqual(44);
+  expect(Math.abs(icon.x + icon.width / 2 - bounds.x - bounds.width / 2)).toBeLessThan(1);
+  expect(Math.abs(icon.y + icon.height / 2 - bounds.y - bounds.height / 2)).toBeLessThan(1);
+  expect(await page.locator('#settings-content').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: `docs/audits/2026-09-30-activity-panel-evidence/settings-${testInfo.project.name}.png` });
+  await page.locator('[data-default-mode="plan"]').click();
+  await expect(page.locator('[data-default-mode="plan"]')).toHaveAttribute('aria-pressed', 'true');
+  await close.click();
+  await expect(page.locator('#settings-content')).toHaveCount(0);
+  if (!await page.locator('#open-app-settings-button').isVisible()) await page.locator('#mobile-sidebar-toggle-button').click();
+  await page.locator('#open-app-settings-button').click();
+  await expect(page.locator('[data-default-mode="plan"]')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('phone settings close remains tappable below the device safe area', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith('mobile'));
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 47, left: 0, right: 0, bottom: 34 } });
+  await page.goto('/');
+  await expect(page.locator('#open-app-settings-button')).toBeAttached();
+  if (!await page.locator('#open-app-settings-button').isVisible()) await page.locator('#mobile-sidebar-toggle-button').tap();
+  await page.locator('#open-app-settings-button').tap();
+  const close = page.locator('.settings-global-header .panel-close');
+  await expect(close).toBeVisible();
+  const box = await close.boundingBox();
+  expect(box.y).toBeGreaterThanOrEqual(47);
+  expect(await close.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await close.tap();
+  await expect(page.locator('#settings-content')).toHaveCount(0);
+});

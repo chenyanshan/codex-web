@@ -217,3 +217,37 @@ test('late models fill untouched defaults while preserving explicit draft reason
     assert.equal(state.permissionPreset, edited ? 'read-only' : 'full-access');
   }
 });
+
+test('activity watchdog calibrates once after ten minutes of unchanged progress without treating a wait as failure', async () => {
+  let now = 600000, calls = 0;
+  const api = await network({ Date: { now: () => now } });
+  const state = { pendingTurn: true, turnId: 'turn', currentSession: { turnActivity: { lastProgressAt: 1 } } };
+  const recovery = api.createObservationRecovery({ getState: () => state, getOwner: () => 'owner', eligible: () => true,
+    refresh: async () => { calls++; return state.currentSession; } });
+  await recovery.check(); assert.equal(calls, 0);
+  now += 1; await recovery.check(); await recovery.check(); assert.equal(calls, 1);
+  now += 600000; await recovery.check(); assert.equal(calls, 1);
+  state.currentSession.turnActivity.lastProgressAt = now;
+  now += 600000; await recovery.check(); assert.equal(calls, 2);
+  assert.equal(state.pendingTurn, true);
+});
+
+test('oversized snapshot invalidation retries after throttle and cannot start parallel calibration', async () => {
+  let now = 1000000, calls = 0, owner = 'a';
+  let complete: (value: any) => void = () => {};
+  const api = await network({ Date: { now: () => now } });
+  const state = { pendingTurn: true, turnId: 'turn', currentSession: { turnActivity: { lastProgressAt: now } } };
+  const recovery = api.createObservationRecovery({ getState: () => state, getOwner: () => owner, eligible: () => true,
+    refresh: () => { calls++; return new Promise(resolve => { complete = resolve; }); } });
+  recovery.invalidate();
+  const first = recovery.check(true);
+  now += 30001; await recovery.check(); assert.equal(calls, 1);
+  complete(null); await first; assert.equal(recovery.isPending(), true);
+  const retry = recovery.check(); assert.equal(calls, 2);
+  complete(state.currentSession); await retry; assert.equal(recovery.isPending(), false);
+  recovery.invalidate(); await recovery.check(true); assert.equal(calls, 2);
+  now += 30001;
+  const later = recovery.check(); assert.equal(calls, 3);
+  owner = 'b'; assert.equal(recovery.isPending(), false);
+  complete(state.currentSession); await later; assert.equal(recovery.isPending(), false);
+});

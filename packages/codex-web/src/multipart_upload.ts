@@ -1,4 +1,5 @@
 import busboy from 'busboy';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
@@ -28,6 +29,17 @@ export async function withMultipartFiles<T>(request: IncomingMessage, operation:
   let directory = '';
   const files: ParsedUploadFile[] = [], writes: Promise<void>[] = [];
   let bytes = 0, failure: Error | null = null;
+  const uploadId = randomUUID();
+  const startedAt = Date.now();
+  let phase = 'receiving';
+  const report = () => console.info('[codex-web-upload]', JSON.stringify({
+    at: new Date().toISOString(), uploadId, phase, elapsedMs: Date.now() - startedAt,
+    expectedBytes: Number(request.headers['content-length']) || null, receivedBytes: bytes,
+    fileBytes: files.reduce((total, file) => total + file.sizeBytes, 0),
+    requestComplete: request.complete, aborted: request.aborted,
+  }));
+  report();
+  const progressTimer = setInterval(report, 15_000); progressTimer.unref();
   const meter = new Transform({ transform(chunk: Buffer, _encoding, callback) {
     bytes += chunk.length;
     callback(bytes > bodyLimit ? uploadError(413, 'payload_too_large', 'Upload request is too large.') : null, chunk);
@@ -58,8 +70,15 @@ export async function withMultipartFiles<T>(request: IncomingMessage, operation:
     await parsed; await Promise.all(writes);
     if (failure) throw failure;
     if (!files.length) throw uploadError(400, 'invalid_upload', 'Upload request must include at least one file.');
-    return await operation(files);
+    phase = 'saving'; report();
+    const result = await operation(files);
+    phase = 'saved';
+    return result;
+  } catch (error) {
+    phase = `failed:${(error as { code?: string })?.code || 'upload_error'}`;
+    throw error;
   } finally {
+    clearInterval(progressTimer); report();
     request.unpipe(meter); meter.unpipe(parser);
     request.off('aborted', aborted); request.off('error', fail); request.off('timeout', idle); request.setTimeout(0);
     clearTimeout(deadline); meter.destroy(); parser.destroy();

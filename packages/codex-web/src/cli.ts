@@ -13,6 +13,10 @@ import { HybridAuthStore } from './hybrid_auth_store.js';
 import { FileIdentityStore } from './identity_store.js';
 import type { ScheduledTaskIdentityStoreLike } from './task_runner.js';
 import { CodexWebRuntime } from './runtime.js';
+import { RuntimeMaintenance } from './runtime_maintenance.js';
+import { acquireRuntimeExecutionLease } from './runtime_execution_lease.js';
+import { RuntimeUpdateService } from './runtime_update.js';
+import { registerRuntimeMaintenance } from './runtime_maintenance_routes.js';
 import { createCodexWebServer, type CodexWebAuthLike, type CodexWebServerHandle } from './server.js';
 import { FileSessionSettingsStore } from './session_settings_store.js';
 import { FileSessionTimelineStore } from './session_timeline_store.js';
@@ -159,9 +163,11 @@ export async function runTaskCommand(
     const createIdentityStoreFn = dependencies.createIdentityStore
       ?? (({ identityPath }) => new FileIdentityStore({ identityPath }));
     const runTaskFn = dependencies.runTask ?? runScheduledTask;
+    const releaseExecutionLease = await acquireRuntimeExecutionLease(config.stateDir);
     stdout.write(`task_started: ${task.id}\n`);
-    const runtime = createRuntimeFn({ config });
+    let runtime: CodexWebRuntime | undefined;
     try {
+      runtime = createRuntimeFn({ config });
       const result = await runTaskFn({
         task,
         runtime,
@@ -174,7 +180,8 @@ export async function runTaskCommand(
       }
       stdout.write(`archived: ${result.archived ? 'true' : 'false'}\n`);
     } finally {
-      await runtime.stop();
+      await runtime?.stop();
+      await releaseExecutionLease();
     }
     return;
   }
@@ -284,6 +291,21 @@ export async function startServeCommand(
 
   const createRuntimeFn = dependencies.createRuntime ?? createDefaultRuntime;
   const runtime = createRuntimeFn({ config });
+  if (!dependencies.createRuntime) {
+    const updater = new RuntimeUpdateService({ codexBin: config.codexBin, compatibilityScript: fileURLToPath(new URL('../../../scripts/app-server/compatibility.ts', import.meta.url)) });
+    const maintenance = new RuntimeMaintenance({
+      stateDir: config.stateDir,
+      inspectActivity: () => runtime.inspectRuntimeActivity(),
+      applyInstalled: () => runtime.applyInstalledRuntime(),
+      updater,
+    });
+    await maintenance.initialize();
+    runtime.setRuntimeMaintenance(maintenance);
+    const manifest = JSON.parse(await fsPromises.readFile(fileURLToPath(new URL('../../codex-native-api/src/app_server/generated/manifest.json', import.meta.url)), 'utf8'));
+    registerRuntimeMaintenance(runtime, { maintenance, updater, versions: () => runtime.runtimeVersionStatus(), webBuild: JSON.parse(await fsPromises.readFile(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')).version, protocolVersion: manifest.version ?? null });
+    // Version inspection is cached and does not delay server startup or ordinary page rendering.
+    void updater.refresh().catch(() => {});
+  }
   const createServerFn = dependencies.createServer ?? ((args) => createCodexWebServer({
     ...args,
     identityStore,
@@ -372,6 +394,9 @@ function createDefaultRuntime({ config: runtimeConfig }: { config: CodexWebConfi
   return new CodexWebRuntime({
     codexBin: runtimeConfig.codexBin,
     defaultCwd: runtimeConfig.defaultCwd,
+    canonicalTimelinePath: path.join(runtimeConfig.stateDir, 'canonical-timeline.sqlite'),
+    canonicalTimelineMaxBytes: runtimeConfig.timelineMaxBytes,
+    canonicalTimelineMaxEntriesPerSession: runtimeConfig.timelineMaxEntriesPerSession,
     logger: runtimeConfig.debug
       ? {
         debug: writeDebugStderrLine,

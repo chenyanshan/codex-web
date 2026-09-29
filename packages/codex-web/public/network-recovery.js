@@ -218,7 +218,11 @@
         if (!state.pendingTurn) { state.status = 'Ready'; state.statusTone = 'success'; }
         render();
         if (state.sessionId && wasWorkspaceRestored()) {
-          connectActiveTurnStream({ forceReconnect: true }); void reconcileCurrentSessionInBackground();
+          const sessionId = state.sessionId;
+          connectActiveTurnStream({ forceReconnect: true });
+          void reconcileCurrentSessionInBackground().then(() => {
+            if (current() && state.sessionId === sessionId) connectActiveTurnStream();
+          });
         }
         void drainSubmissionOutbox({ force: true });
         return true;
@@ -234,5 +238,36 @@
     }
     return { restore, needsRecovery, loadModels, modelFeedback };
   }
-  globalScope.CodexWebNetworkRecovery = { bounded, retryable, createAuthRecovery, createConnectionState, createApiClient, buildApiError };
+  function activityLabel(state, t) {
+    const a = state.currentSession?.turnActivity;
+    if (!a || a.turnId !== state.turnId || !state.pendingTurn) return '';
+    if (a.observation === 'disconnected') return t('Reconnecting');
+    if (state.currentSession?.userInputRequests?.some(q => q.turnId === state.turnId && q.isBlocking && q.status === 'pending')) return t('Waiting for your answer');
+    if (a.health?.status === 'retrying') return t('Model connection retrying');
+    if (a.compaction === 'running') return t('Compacting context');
+    const waiting = a.tools?.find(tool => ['running', 'inProgress'].includes(tool.status));
+    if (waiting) return t(/collab|subAgent/u.test(waiting.kind) ? 'Waiting for agents' : 'Tool is still running');
+    const quiet = Date.now() - (a.lastProgressAt || state.currentSession.turnStartedAt || Date.now());
+    return quiet >= 600000 ? t('No progress for 10 minutes') : quiet >= 180000 ? t('No recent progress') : '';
+  }
+  function createObservationRecovery({ getState, getOwner, eligible, refresh, onChange = () => {} }) {
+    let owner = '', attempted = '', lastAttempt = -Infinity, pending = false, active = '';
+    const sync = () => { const next = getOwner(); if (owner !== next) { owner = next; attempted = ''; lastAttempt = -Infinity; pending = false; } };
+    function invalidate() { sync(); pending = true; onChange(); }
+    function confirmed() { sync(); pending = false; onChange(); }
+    async function check(force = false) {
+      sync();
+      const state = getState(), activity = state.currentSession?.turnActivity;
+      const progress = activity?.lastProgressAt || state.currentSession?.turnStartedAt;
+      const key = `${state.turnId}:${progress}`;
+      if (!eligible() || active === owner || (!force && !pending && (!state.pendingTurn || !progress || Date.now() - progress < 600000 || key === attempted))) return;
+      if (Date.now() - lastAttempt < 30000) return;
+      lastAttempt = Date.now(); attempted = key; active = owner;
+      const ticket = owner;
+      if (force) invalidate();
+      try { const result = await refresh(); if (result && ticket === getOwner()) confirmed(); } catch { /* Existing recovery keeps cached state available. */ } finally { if (active === ticket) active = ''; }
+    }
+    return { check, invalidate, confirmed, isPending() { sync(); return pending; } };
+  }
+  globalScope.CodexWebNetworkRecovery = { bounded, retryable, activityLabel, createObservationRecovery, createAuthRecovery, createConnectionState, createApiClient, buildApiError };
 })(globalThis);

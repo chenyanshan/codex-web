@@ -24,5 +24,10 @@
       });
     }
   }
-  scope.CodexWebSettingsUI = { renderGroups, bindNavigation };
+  function renderRuntimeSection(owner) {
+    return `<section class="settings-section"><div class="settings-section-title">Advanced</div>
+      <div class="settings-action-row"><span class="meta">MCP configuration</span><button class="ghost compact-button" type="button" id="runtime-reload-button">Reload MCP configuration</button></div>
+      <div id="runtime-version-settings" data-owned-view="runtime" data-reconcile-key="${owner}"></div></section>`;
+  }
+  scope.CodexWebSettingsUI = { renderGroups, bindNavigation, renderRuntimeSection };
 }(globalThis));

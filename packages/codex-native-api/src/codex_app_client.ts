@@ -1,3 +1,5 @@
+import { TurnActivityProjection } from './app_server/activity.js';
+import { UserInputRequests, type UserInputResponse } from './app_server/user_input.js';
 import { randomUUID } from 'node:crypto';
 import {
   toProviderResponseItems,
@@ -493,6 +495,20 @@ export class CodexAppClient extends EventEmitter {
   readonly connectionIdentity = randomUUID();
 
   connectionEpoch = 0;
+
+  private readonly activityProjection = new TurnActivityProjection();
+  private readonly userInputs = new UserInputRequests(this.connectionIdentity, (request, fresh) => {
+    this.emit(fresh ? 'user_input_request' : 'user_input_updated', request);
+  });
+
+  getObservedTurnActivities() { return this.activityProjection.list(); }
+  getTurnActivity(threadId: string, turnId?: string) { return this.activityProjection.get(threadId, turnId); }
+  getTurnDiff(threadId: string, turnId: string) { return this.activityProjection.getDiff(threadId, turnId); }
+  listUserInputRequests(threadId?: string) { return this.userInputs.list(threadId); }
+  answerUserInput(requestId: string, response: UserInputResponse, options: { beforeSend: () => Promise<void> }) {
+    return this.userInputs.answer(requestId, response, () => this.connectionEpoch, () => this.connected,
+      payload => this.send(payload), options.beforeSend);
+  }
 
   lifecycleGeneration = 0;
 
@@ -1378,7 +1394,13 @@ export class CodexAppClient extends EventEmitter {
   }
 
   async request<M extends AppServerMethod>(method: M, params: AppServerParams<M>, { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): Promise<AppServerResponse<M>> {
-    return callAppServer(this, method, params, timeoutMs);
+    const baseline = (method === 'thread/read' || method === 'thread/resume') ? this.activityProjection.revisions() : null;
+    const response = await callAppServer(this, method, params, timeoutMs);
+    if (baseline) {
+      const activity = this.activityProjection.hydrate((response as any)?.thread, baseline);
+      if (activity) this.emit('turn_activity', activity);
+    }
+    return response;
   }
 
   send(payload: any): void {
@@ -1398,11 +1420,19 @@ export class CodexAppClient extends EventEmitter {
       if ('id' in message && this.handleServerRequest(message)) {
         return;
       }
+      if (message.method === 'serverRequest/resolved') this.userInputs.resolve(message.params, this.connectionEpoch);
+      const activity = this.activityProjection.observe(message);
+      if (activity) this.emit('turn_activity', activity);
       this.emit('notification', message);
     }
   }
 
   handleServerRequest(message: any): boolean {
+    if (message.method === 'item/tool/requestUserInput') {
+      try { this.userInputs.receive(message, this.connectionEpoch); }
+      catch (error) { this.send({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: String((error as Error).message) } }); }
+      return true;
+    }
     const pendingApproval = mapPendingApproval(message);
     if (!pendingApproval) {
       this.emit('server_request', message);
@@ -1428,6 +1458,8 @@ export class CodexAppClient extends EventEmitter {
   }
 
   rejectPending(error: Error): void {
+    this.userInputs.disconnect();
+    for (const activity of this.activityProjection.disconnect()) this.emit('turn_activity', activity);
     rejectTransportPending(this, error);
   }
 

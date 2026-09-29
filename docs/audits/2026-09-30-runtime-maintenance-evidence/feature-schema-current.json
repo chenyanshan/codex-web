@@ -1,0 +1,12 @@
+{
+  "version": "codex-cli 0.153.4",
+  "isolation": "temporary home; no credentials; schema only",
+  "checks": {
+    "item/tool/requestUserInput": true,
+    "thread/status/changed": true,
+    "thread/tokenUsage/updated": true,
+    "turn/diff/updated": true,
+    "thread/loaded/list": true,
+    "thread/read": true
+  }
+}

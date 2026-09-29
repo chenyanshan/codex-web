@@ -3,6 +3,7 @@ import type { InitializeResponse } from './generated/stable/InitializeResponse.j
 
 /** Experimental capabilities retained for existing product features, not discovery probes. */
 export const EXPERIMENTAL_DEPENDENCIES = [
+  { feature: 'request-user-input', methods: ['item/tool/requestUserInput', 'serverRequest/resolved'], reason: 'Generated 0.159.0 question and answer schemas are explicitly EXPERIMENTAL', exit: 'Stable schema and reconnect resolution parity verified' },
   { feature: 'collaboration-mode', methods: ['turn/start'], reason: 'Existing plan/default collaboration settings require experimental collaborationMode field', exit: 'Stable equivalent field and plan-mode parity verified' },
   { feature: 'raw-events', methods: ['thread/start', 'thread/resume'], reason: 'Legacy tool and reasoning projections', exit: 'Official item history parity verified' },
 ] as const;

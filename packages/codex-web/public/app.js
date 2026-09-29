@@ -4,6 +4,7 @@ const UI = globalThis.CodexWebUi || {
   segmentedControl: () => '',
 };
 const SESSION_PAGINATION_API = globalThis.CodexWebSessionPagination;
+const TIMELINE_SYNC = globalThis.CodexWebTimelineReconciliation;
 const { adminSessionsPath, normalizeAdminSessionState, projectGrantsFromProjectIds } = globalThis.CodexWebAdminData;
 const {
   fileNameFromPath,
@@ -129,6 +130,33 @@ const UI_TRANSLATIONS = globalThis.CodexWebCopy;
 
 const INITIAL_SITE_TITLE = normalizeSiteTitle(readBootstrapSiteTitle() || readOptionalStoredValue(SITE_TITLE_KEY));
 
+const { serializeTimelineCacheEntry, deserializeTimelineCacheEntry, isCacheMapPair, cloneCacheMap, sanitizeCacheValue, cloneTimelineEntries, cloneTimelineItem, fullHydratedTimelineFromSession, timelineTurnId, timelineProjectionIdentity, dedupeTimelineProjectionEntries, normalizeSessionTimeline, normalizeSessionTimelineItem } = globalThis.CodexWebTimelineModel.createModel({
+  MAX_TIMELINE_CACHE_ITEMS,
+  MAX_TIMELINE_CACHE_MAP_ITEMS,
+  MAX_TIMELINE_ITEM_TEXT,
+  MAX_TIMELINE_SUMMARY_TEXT,
+  MAX_TIMELINE_SUMMARY_ARRAY_ITEMS,
+  MAX_TIMELINE_SUMMARY_OBJECT_KEYS,
+  MAX_TIMELINE_SUMMARY_DEPTH,
+  normalizeStreamCursor,
+  restrictedFinalAssistantItemsForTurn,
+  timelineRoleForThreadItem,
+  isFailureTurnStatus,
+  runtimeTurnErrorMessage,
+  firstInputForSession,
+  restrictedFinalAssistantTimelineIndexes,
+  sessionTurns,
+  assistantTimelineEntryId,
+  assistantProjectionMeta,
+  normalizeAssistantProjectionPhase,
+  isTurnInterruptTimeoutMessage,
+  timelineMessageIdentity,
+  normalizeTimelineMessageDisplay,
+  isBackgroundMcpTransportFailure,
+  isRecoverableToolRouterFailure,
+  publicRuntimeTurnFailureMessage
+});
+
 const state = {
   token: readOptionalStoredValue(TOKEN_KEY) || '',
   authSession: null,
@@ -231,8 +259,11 @@ const state = {
   approvalPolicy: DEFAULT_APPROVAL_POLICY,
   sandboxMode: DEFAULT_SANDBOX_MODE,
   timeline: [],
+  timelineProjectionComplete: true,
   sessionHistoryItems: [],
   sessionHistoryStartIndex: 0,
+  sessionHistoryPending: false,
+  sessionStatusPending: false,
   timelineCache: loadTimelineCache(),
   batches: new Map(),
   approvals: new Map(),
@@ -264,7 +295,11 @@ const { translateUi, t, translateText, localizeUiHtml, localizeUiHtmlOutsideProt
   escapeHtml
 });
 
-const { embedSessionFileImages, renderDesktopSessionFileOverlay, renderSessionFileViewer, renderSessionFileViewerContent, renderSessionFileViewerBody, renderSessionFileDocument, sandboxedSessionFileHtml, normalizeSessionFile, sessionFilePlaceholder, normalizeSessionFileKind, sessionFileKindFromPath, sessionFileMetadata, isSafeSessionFileContentUrl, sessionFileProtocolError, sessionFileErrorCode, sessionFileErrorMessage, decodeSessionFilePath, createTextFileBlob, createSessionFileObjectUrl, revokeSessionFileObjectUrl } = globalThis.CodexWebFileViewer.createRenderer({
+const SESSION_FILE_UI = globalThis.CodexWebLazyFeature.createFeature({
+  globalName: "CodexWebFileViewer", path: "/session-file-viewer.js" + `?v=${encodeURIComponent(APP_BUILD_ID)}`,
+  getOwner: () => authRequestGeneration, onError: handleApiError,
+  asyncMethods: [], fallbacks: {},
+  context: {
   localizeFragment,
   localizeElement,
   state,
@@ -278,9 +313,15 @@ const { embedSessionFileImages, renderDesktopSessionFileOverlay, renderSessionFi
   formatAttachmentSize,
   renderMarkdown,
   SESSION_FILE_HTML_CSP
+}
 });
+const { embedSessionFileImages, renderDesktopSessionFileOverlay, renderSessionFileViewer, renderSessionFileViewerContent, renderSessionFileViewerBody, renderSessionFileDocument, sandboxedSessionFileHtml, normalizeSessionFile, sessionFilePlaceholder, normalizeSessionFileKind, sessionFileKindFromPath, sessionFileMetadata, isSafeSessionFileContentUrl, sessionFileProtocolError, sessionFileErrorCode, sessionFileErrorMessage, decodeSessionFilePath, createTextFileBlob, createSessionFileObjectUrl, revokeSessionFileObjectUrl } = SESSION_FILE_UI;
 
-const { renderWebhookSettingsSection, renderWebhookDialogs, renderWebhookRotateConfirmDialog, normalizeWebhookEndpointPath, normalizeWebhookKeyHint, webhookKeyHintDisplay, webhookEndpointUrl, applyWebhookSettingsPayload, webhookResponseKey, webhookErrorMessage, handleWebhookRequestError, refreshWebhookSettings, setWebhookEnabled, requestWebhookKeyRotation, cancelWebhookKeyRotation, rotateWebhookKey, copyWebhookEndpoint, copyWebhookKey } = globalThis.CodexWebWebhookSettings.createRenderer({
+const WEBHOOK_UI = globalThis.CodexWebLazyFeature.createFeature({
+  globalName: "CodexWebWebhookSettings", path: "/webhook-settings.js" + `?v=${encodeURIComponent(APP_BUILD_ID)}`,
+  getOwner: () => authRequestGeneration, onError: handleApiError,
+  asyncMethods: ["refreshWebhookSettings"], fallbacks: {"renderWebhookSettingsSection": "<p class=\"meta\" role=\"status\">Loading webhook settings...</p>"},
+  context: {
   state,
   t,
   escapeHtml,
@@ -296,7 +337,9 @@ const { renderWebhookSettingsSection, renderWebhookDialogs, renderWebhookRotateC
   rememberFocusReturn,
   requestFocusRestore,
   copyTextToClipboard
+}
 });
+const { renderWebhookSettingsSection, renderWebhookDialogs, renderWebhookRotateConfirmDialog, normalizeWebhookEndpointPath, normalizeWebhookKeyHint, webhookKeyHintDisplay, webhookEndpointUrl, applyWebhookSettingsPayload, webhookResponseKey, webhookErrorMessage, handleWebhookRequestError, refreshWebhookSettings, setWebhookEnabled, requestWebhookKeyRotation, cancelWebhookKeyRotation, rotateWebhookKey, copyWebhookEndpoint, copyWebhookKey } = WEBHOOK_UI;
 
 const SESSION_PAGINATION = SESSION_PAGINATION_API.createController({
   state,
@@ -426,6 +469,12 @@ let nextTimelineRestoreSnapshot = null;
 let sharedSessionLoadPromise = null;
 let streamRecoveryTimer = null;
 let streamRecoveryPromise = null;
+let streamRecoveryKey = '';
+let sessionReconcileKey = '';
+let timelineRevision = 0;
+const deferredCanonicalUsers = new Map();
+let pendingLatestSessionOpen = null;
+const recoveryOwnerKey = () => `${authRequestGeneration}:${sessionNavigationGeneration}:${state.sessionId || ''}`;
 let sessionReconcilePromise = null;
 let sessionReconcileForceDetail = false;
 let streamReconnectTimer = null;
@@ -461,6 +510,7 @@ const SESSION_READING = globalThis.CodexWebSessionReading.createController({
     const timeline = document.querySelector('#timeline');
     return timeline?.getAttribute('data-session-id') === String(state.sessionId || '') ? timeline : null;
   },
+  resolveAnchorId: id => state.timeline.find(item => item.id === id || item.timeline?.aliases?.includes(id))?.id || id,
   getFollowing: () => state.timelineShouldFollowLatest,
   setFollowing: (following) => { state.timelineShouldFollowLatest = following; syncReadingControls(); },
   isLatestWindow: () => state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer !== true,
@@ -499,7 +549,7 @@ const SUBMISSION_DELIVERY = globalThis.CodexWebSubmissionDelivery.createControll
     failSubmissionDelivery(entry, error, { wasActiveDraft: isActiveNewSessionSubmission(entry) });
   },
   reset: resetSubmissionAfterAuthChange, authError: handleApiError,
-  storageError: error => { state.error = error?.message || 'Could not save this message for delivery.'; state.status = 'Send failed'; state.statusTone = 'danger'; render(); },
+  storageError: (error, { accepted = false } = {}) => { state.error = error?.message || 'Could not save this message for delivery.'; state.status = accepted ? 'Server received' : 'Send failed'; state.statusTone = accepted ? 'warn' : 'danger'; render(); },
   defer: (entry, error) => isSteerSubmissionEntry(entry) && isActiveTurnNotSteerableError(error) && deferSteerSubmissionUntilTurnCompletes(entry),
 });
 
@@ -554,7 +604,25 @@ let workView = null;
 let workViewError = '';
 let workViewLoadPromise = null;
 let workViewLoadAttempts = 0;
+let workStylesPromise = null;
 let cachedSettingsDrawer = null;
+const OBSERVATION_RECOVERY = globalThis.CodexWebNetworkRecovery.createObservationRecovery({
+  getState: () => state, getOwner: recoveryOwnerKey,
+  eligible: () => Boolean(state.authSession && !isCachedAuthPrincipalPending() && state.sessionId && navigator.onLine !== false && document.visibilityState !== 'hidden'),
+  refresh: () => refreshCurrentSessionMetadata(), onChange: () => syncQuestionView(),
+});
+const QUESTIONS = globalThis.CodexWebLazyFeature.createFeature({
+  globalName: 'CodexWebOwnedQuestionView', path: `/user-input-view.js?v=${encodeURIComponent(APP_BUILD_ID)}`,
+  getOwner: questionOwnerKey, asyncMethods: ['sync'], manualRetry: true, fallbacks: { focused: null },
+  onError: () => { const node = document.querySelector('#user-input-questions'); if (node && !node.querySelector('[data-question-retry]')) { node.hidden = false; node.innerHTML = `<p class="meta">${escapeHtml(t('Questions could not be loaded.'))}</p><button class="ghost" data-question-retry>${escapeHtml(t('Retry'))}</button>`; node.querySelector('button')?.addEventListener('click', () => { QUESTIONS.retry(); node.replaceChildren(); syncQuestionView(); }); } },
+  context: {
+  globalName: 'CodexWebUserInput', factory: 'createUserInputView', selector: '#user-input-questions',
+  stylesheet: `/user-input-view.css?v=${encodeURIComponent(APP_BUILD_ID)}`,
+  getOwner: questionOwnerKey, getRequests: () => state.currentSession?.userInputRequests || [],
+  getVerified: () => !OBSERVATION_RECOVERY.isPending() && navigator.onLine !== false && !AUTH_RECOVERY.needsRecovery() && !state.sessionStatusPending && !state.sessionStatusError,
+  context: { apiFetch, getIdentity: () => currentSubmissionOwnerKey(), getSessionId: () => state.sessionId, t },
+} });
+
 bootstrap();
 applyTheme(state.theme, { persist: false });
 UI.applySessionLayout(state, state.sessionLayout, { persist: false });
@@ -756,6 +824,7 @@ function restoreWorkspaceStateFromCache() {
     restoreTurnEventCursor(session.id, runtimeStatus.activeTurnId);
   }
   setTimelineOpenPositionForSession(session);
+  pendingLatestSessionOpen = { owner: recoveryOwnerKey(), snapshot: latestTimelineViewportSnapshot() };
   workspaceRestoredFromCache = true;
   passiveDesktopSessionId = '';
   return true;
@@ -897,10 +966,24 @@ function isAuthRequestCurrent(requestGeneration) {
   return requestGeneration === authRequestGeneration;
 }
 
+function questionOwnerKey() {
+  return state.authSession && !isCachedAuthPrincipalPending() && state.sessionId && !isReadOnlySession(state.currentSession)
+    ? JSON.stringify([currentSubmissionOwnerKey(), state.sessionId]) : '';
+}
+function renderQuestionSlot() {
+  const owner = questionOwnerKey();
+  return owner ? `<div id="user-input-questions" data-reconcile-key="${escapeAttribute(owner)}" data-owned-view="questions" hidden></div>` : '';
+}
+function destroyQuestionView() { QUESTIONS.destroy(); }
+function syncQuestionView() {
+  if (state.currentSession?.userInputRequests?.length || globalThis.CodexWebOwnedQuestionView) QUESTIONS.sync();
+}
+
 function timelineFingerprint() {
   return JSON.stringify([[...pendingApprovalDecisions], state.sessionId, state.language, state.sessionHistoryError, state.sessionStatusError, state.sessionHistoryPending, state.sessionStatusPending, Boolean(sessionTimelinePageRequest), state.sessionHistoryStartIndex, state.currentSession?.timelineComplete, state.currentSession?.canViewWorkDetails, state.currentSession?.readOnly, state.sessionLayout, [...state.submissionOutbox.values()].map(({id, status, attempts, retryable}) => [id, status, attempts, retryable]), state.timelineWindowEnd, visibleTimelineItems()]);
 }
 function render() {
+  const questionFocus = QUESTIONS.focused();
   const oldTimeline = document.querySelector('#timeline');
   const fingerprint = timelineFingerprint();
   retainedTimeline = oldTimeline?.nodeType === 1 && fingerprint === lastTimelineFingerprint ? oldTimeline : null;
@@ -911,6 +994,7 @@ function render() {
   detachTimelineScrollTracking();
   clearManagedInert();
   if (state.setupRequired) {
+    destroyQuestionView();
     app.innerHTML = '';
     app.appendChild(renderSetup());
     bindGlobalEvents();
@@ -919,6 +1003,7 @@ function render() {
     return;
   }
   if (!state.authSession) {
+    destroyQuestionView();
     cachedSettingsDrawer = null;
     app.innerHTML = '';
     app.appendChild(renderLogin());
@@ -947,6 +1032,8 @@ function render() {
   lastTimelineFingerprint = fingerprint;
   bindGlobalEvents();
   bindTimelineActionEvents();
+  syncQuestionView();
+  if (questionFocus?.isConnected) questionFocus.focus({ preventScroll: true });
   syncFocusScope();
   globalThis.CodexWebWorkView?.restoreDialog(document, workReading);
   const timeline = document.querySelector('#timeline');
@@ -973,6 +1060,7 @@ function reconcileWorkspaceNode(current, next) {
   if (current.nodeType === 3) { if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue; return; }
   if (current.nodeType !== 1) return;
   if (current.id === 'timeline' && retainedTimeline === current) return;
+  if (current.hasAttribute('data-owned-view') && current.getAttribute('data-owned-view') === next.getAttribute('data-owned-view')) return;
   for (const attribute of [...current.attributes]) if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
   for (const attribute of next.attributes) if (current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
   if (current.id === 'prompt-input') {
@@ -1805,7 +1893,7 @@ function renderAppSettings() {
   shell.className = 'shell';
   shell.innerHTML = localizeFragment(`
     <div class="screen page-screen settings-mobile-screen">
-      ${renderPageNav('Settings')}
+      <header class="settings-global-header"><h2>Settings</h2>${UI.closeButton('back-to-list-button')}</header>
       ${renderAppSettingsSections()}
     </div>
     ${renderWebhookDialogs()}
@@ -1819,7 +1907,7 @@ function renderDesktopSettingsPanel() {
     <aside class="desktop-settings-panel" role="dialog" aria-modal="true" aria-labelledby="desktop-settings-title" data-focus-scope="desktop-settings">
       <header class="desktop-panel-header">
         <h2 id="desktop-settings-title">Settings</h2>
-        <button class="ghost compact-button" type="button" id="desktop-settings-close-button" data-initial-focus>Close</button>
+        ${UI.closeButton('desktop-settings-close-button')}
       </header>
       ${renderAppSettingsSections()}
     </aside>
@@ -1860,18 +1948,7 @@ function renderDefaultThreadSettingsSection() {
 }
 
 function renderRuntimeSettingsSection() {
-  if (isManagedMultiUserPrincipal()) {
-    return '';
-  }
-  return `
-        <section class="settings-section">
-          <div class="settings-section-title">Advanced</div>
-          <div class="settings-action-row">
-            <span class="meta">Runtime</span>
-            <button class="ghost compact-button" type="button" id="runtime-reload-button">Reload</button>
-          </div>
-        </section>
-  `;
+  return isManagedMultiUserPrincipal() ? '' : globalThis.CodexWebSettingsUI.renderRuntimeSection(escapeAttribute(currentSubmissionOwnerKey()));
 }
 
 function renderSiteTitleSettingsSection() {
@@ -2155,13 +2232,12 @@ function renderShareDialog() {
       <div class="modal-backdrop share-modal-backdrop" data-modal-dismiss="share">
         <section class="confirm-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title" data-focus-scope="share-dialog">
           <div>
-            <h2 id="share-dialog-title">Share link</h2>
+            <div class="panel-heading"><h2 id="share-dialog-title">Share link</h2>${UI.closeButton('close-share-dialog-button', { initialFocus: false })}</div>
             <p class="meta">${escapeHtml(state.shareDialog.copied ? 'Copied to clipboard.' : 'Copy this read-only session link.')}</p>
           </div>
           <input id="share-link-input" class="share-link-input" type="text" readonly value="${escapeAttribute(state.shareDialog.url)}" data-initial-focus>
           <div class="actions">
             <button class="ghost compact-button" type="button" id="copy-share-link-button">Copy</button>
-            <button class="primary compact-button" type="button" id="close-share-dialog-button">Done</button>
           </div>
         </section>
       </div>
@@ -2181,7 +2257,7 @@ function renderWorkDetailsDialog() {
         <section class="confirm-dialog work-details-dialog" role="dialog" aria-modal="true" aria-labelledby="work-details-title" data-focus-scope="work-details">
           <header class="work-details-header">
             <h2 id="work-details-title">${escapeHtml(t('Turn activity'))}</h2>
-            <button class="ghost icon-button work-details-close" type="button" id="close-work-details-button" aria-label="Close work details" title="Close work details" data-initial-focus>${UI.icon('x', { className: 'button-icon' })}</button>
+            ${UI.closeButton('close-work-details-button', { label: 'Close work details' })}
           </header>
           <div class="work-details-list">
             ${renderWorkItem(workItem, currentWorkDetailsWindow(workItem))}
@@ -2736,7 +2812,7 @@ function renderSettingsDrawer() {
     <div class="settings-drawer" role="dialog" aria-modal="true" aria-label="Session settings" data-focus-scope="session-settings">
       <div class="settings-drawer-header">
         <span class="settings-drawer-title">Current session</span>
-        <button class="ghost icon-button settings-drawer-close" type="button" id="settings-drawer-close" aria-label="Close session menu" title="Close session menu" data-initial-focus>${UI.icon('x', { className: 'button-icon' })}</button>
+        ${UI.closeButton('settings-drawer-close', { label: 'Close session menu' })}
       </div>
       ${!isDesktopLayout() ? `<div class="session-context">
         <strong data-i18n-skip>${escapeHtml(sessionDisplayTitle(state.currentSession))}</strong>
@@ -2765,46 +2841,33 @@ function renderThreadSettingsControls({ defaults = false, modelOnly = false, beh
   const prefix = defaults ? 'default-' : '';
   const settings = defaults ? state.defaultThreadSettings : state;
   const accessPreset = defaults ? defaultThreadAccessPreset() : state.permissionPreset;
-  const defaultModelControls = `
-        <div class="control-group">
-          <label for="${prefix}model-select">Model</label>
-          <select id="${prefix}model-select" name="${defaults ? 'defaultModel' : 'model'}" data-i18n-skip>${renderModelOptions(settings.model)}</select>
-        </div>
-        <div class="control-group">
-          <label for="${prefix}reasoning-select">Reasoning</label>
-          <select id="${prefix}reasoning-select" name="${defaults ? 'defaultReasoningEffort' : 'reasoningEffort'}" data-i18n-skip>
-            ${renderReasoningOptions(settings.reasoningEffort, settings.model)}
-          </select>
-        </div>
-  `;
-  const sessionModelControls = `
-        <label class="settings-option-row" for="model-select">
+  const modelControls = `
+        <label class="settings-option-row" for="${prefix}model-select">
           <span class="settings-option-label">Model</span>
           <span class="settings-select-shell">
-            <select id="model-select" name="model" data-i18n-skip>${renderModelOptions(settings.model)}</select>
+            <select id="${prefix}model-select" name="${defaults ? 'defaultModel' : 'model'}" data-i18n-skip>${renderModelOptions(settings.model)}</select>
           </span>
         </label>
-        <label class="settings-option-row" for="reasoning-select">
+        <label class="settings-option-row" for="${prefix}reasoning-select">
           <span class="settings-option-label">Reasoning</span>
           <span class="settings-select-shell">
-            <select id="reasoning-select" name="reasoningEffort" data-i18n-skip>
+            <select id="${prefix}reasoning-select" name="${defaults ? 'defaultReasoningEffort' : 'reasoningEffort'}" data-i18n-skip>
               ${renderReasoningOptions(settings.reasoningEffort, settings.model)}
             </select>
           </span>
         </label>
-  `;
-  const modelControls = (defaults ? defaultModelControls : sessionModelControls) + AUTH_RECOVERY.modelFeedback();
+  ` + AUTH_RECOVERY.modelFeedback();
   const modeAttribute = defaults ? 'data-default-mode' : 'data-mode';
   const permissionAttribute = defaults ? 'data-default-permission-preset' : 'data-permission-preset';
   const behaviorControls = `
-        <div class="control-group thread-setting-wide${defaults ? '' : ' settings-option-row'}">
+        <div class="control-group thread-setting-wide settings-option-row">
           <label class="settings-option-label" id="${prefix}mode-label">Mode</label>
           <div class="toggle" role="group" aria-labelledby="${prefix}mode-label">
             <button type="button" ${modeAttribute}="default" aria-pressed="${String(settings.collaborationMode === 'default')}">Default</button>
             <button type="button" ${modeAttribute}="plan" aria-pressed="${String(settings.collaborationMode === 'plan')}">Plan</button>
           </div>
         </div>
-        <div class="control-group thread-setting-wide${defaults ? '' : ' settings-option-row'}">
+        <div class="control-group thread-setting-wide settings-option-row">
           <label class="settings-option-label" id="${prefix}permissions-label">Permissions</label>
           <div class="toggle permission-toggle" role="group" aria-labelledby="${prefix}permissions-label">
             <button type="button" ${permissionAttribute}="read-only" aria-pressed="${String(accessPreset === 'read-only')}">Read only</button>
@@ -2878,13 +2941,13 @@ function renderTimeline() {
   const visibleItems = visibleTimelineItems();
   const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status">${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}<button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : !visibleItems.length && (state.sessionHistoryPending || state.sessionStatusPending) ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
   if (!visibleItems.length) {
-    return historyNotice || `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`;
+    return (historyNotice || `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`) + renderQuestionSlot();
   }
   const allItems = allDisplayTimelineItems();
   const end = Math.min(allItems.length, state.timelineWindowEnd ?? allItems.length);
   const earlier = hasMoreSessionHistory() ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="-1"${sessionTimelinePageRequest ? ' disabled aria-busy="true"' : ''}>${escapeHtml(t(sessionTimelinePageRequest ? 'Loading history…' : 'Show earlier messages'))}</button>` : state.sessionHistoryPending || state.sessionHistoryError ? '' : `<div class="timeline-history-end meta" hidden>${escapeHtml(t('Beginning of conversation'))}</div>`;
   const newer = end < allItems.length || state.currentSession?.timelineHasNewer === true ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="1">${escapeHtml(t('Show newer messages'))}</button>` : '';
-  return historyNotice + earlier + visibleItems.map((item) => renderTimelineItem(item)).join('') + newer;
+  return historyNotice + earlier + visibleItems.map((item) => renderTimelineItem(item)).join('') + newer + renderQuestionSlot();
 }
 
 function allDisplayTimelineItems() {
@@ -2934,8 +2997,17 @@ function moveTimelineWindow(direction) {
   }
 }
 
+function portableActivityStatus() { return globalThis.CodexWebNetworkRecovery.activityLabel(state, t); }
+
+async function loadTurnDiff(turnId, { signal } = {}) {
+  const sessionId = state.sessionId;
+  const payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/diff`, { signal });
+  if (sessionId !== state.sessionId) throw new Error('Session changed');
+  return payload.diff ?? null;
+}
+
 function renderComposerStatus() {
-  const label = state.draftStorageFailed ? t('Draft could not be saved on this device.') : localizedComposerStatusLabel();
+  const label = state.draftStorageFailed ? t('Draft could not be saved on this device.') : portableActivityStatus() || localizedComposerStatusLabel();
   const canOpenWork = canViewCurrentWorkDetails() && Boolean(currentWorkDetailsItem());
   const content = canOpenWork
     ? `<button class="composer-status-action" type="button" id="open-work-details-button" aria-haspopup="dialog" aria-expanded="${String(state.workDetailsOpen)}" aria-label="${escapeAttribute(`${label}. ${t('Work details')}`)}"><span>${escapeHtml(label)}</span><span class="composer-status-disclosure" aria-hidden="true">&#8250;</span></button>`
@@ -3136,32 +3208,14 @@ function renderMessageAttachment(attachment) {
 }
 
 function getWorkView() {
-  return workView ||= globalThis.CodexWebWorkView?.createRenderer({ t, escapeHtml, escapeAttribute, shorten, summarizeWorkItem, workDetailsForItem, workTurnStatus, formatWorkCounts, WORK_DETAILS_EVENT_PAGE_SIZE, formatWorkEventStatus, workKindLabel, normalizeWorkFileChanges, primitiveWorkText, formatWorkFileAction, formatWorkChangeStats, formatWorkTextValue, hasSummaryValue, MAX_TIMELINE_SUMMARY_TEXT });
+  return workView ||= globalThis.CodexWebWorkView?.createRenderer({ icon: UI.icon, loadTurnDiff, finiteWorkNumber, startCase, t, escapeHtml, escapeAttribute, shorten, workDetailsForItem, workTurnStatus, WORK_DETAILS_EVENT_PAGE_SIZE, normalizeWorkFileChanges, primitiveWorkText, hasSummaryValue, MAX_TIMELINE_SUMMARY_TEXT });
 }
 
-function renderWorkItem(...args) {
-  return getWorkView()?.renderWorkItem(...args) || '<p class="meta" role="status">' + escapeHtml(t(workViewError || 'Loading work details…')) + '</p>';
+function renderWorkItem(item, options = {}) {
+  const activityState = state.currentSession?.turnActivity?.turnId === item.turnId ? state.currentSession.turnActivity : null;
+  return getWorkView()?.renderWorkItem(item, { ...options, activityState }) || '<p class="meta" role="status">' + escapeHtml(t(workViewError || 'Loading work details…')) + '</p>';
 }
 
-function summarizeWorkItem(item) {
-  const summary = {
-    reads: 0,
-    commands: 0,
-    edits: 0,
-    approvals: Array.isArray(item.approvals) ? item.approvals.length : 0,
-  };
-  for (const batch of item.batches || []) {
-    const kind = classifyWorkBatch(batch);
-    if (kind === 'read') {
-      summary.reads += 1;
-    } else if (kind === 'edit') {
-      summary.edits += Math.max(1, workChangedFiles(batch).length);
-    } else if (kind === 'command') {
-      summary.commands += 1;
-    }
-  }
-  return summary;
-}
 
 function workTurnStatus(item) {
   if (state.pendingTurn && item?.turnId === state.turnId) return t('In progress');
@@ -3171,69 +3225,15 @@ function workTurnStatus(item) {
     : '';
 }
 
+
 function workBatchHasError(batch) {
   const status = String(batch?.status || '').toLowerCase();
   const exitCode = Number(batch?.summary?.exitCode);
-  return Boolean(batch?.summary?.error)
-    || status === 'failed'
-    || status === 'error'
-    || (Number.isFinite(exitCode) && exitCode !== 0);
-}
-
-function formatWorkCounts(summary) {
-  const parts = [];
-  if (summary.reads) {
-    parts.push(t('Read {count}', { count: summary.reads }));
-  }
-  if (summary.commands) {
-    parts.push(t('Ran {count}', { count: summary.commands }));
-  }
-  if (summary.edits) {
-    parts.push(t('Edited {count}', { count: summary.edits }));
-  }
-  if (summary.approvals) {
-    parts.push(t('Approval {count}', { count: summary.approvals }));
-  }
-  return parts.join(' · ') || 'No activity';
+  return Boolean(batch?.summary?.error) || status === 'failed' || status === 'error' || (Number.isFinite(exitCode) && exitCode !== 0);
 }
 
 function workDetailsForItem(item) {
-  const orderedDetails = [];
-  for (const [index, batch] of (item.batches || []).entries()) {
-    const kind = classifyWorkBatch(batch);
-    const fileChanges = workFileChanges(batch);
-    orderedDetails.push({
-      order: workTimelineEntryOrder(inlineWorkTimelineId(item.turnId, batch.batchId), index),
-      fallbackOrder: index,
-      detail: {
-        id: batch.batchId || batch.id || `${item.turnId || 'turn'}-batch-${index}`,
-        kind,
-        title: workDetailTitle(batch, kind, fileChanges),
-        status: batch.status || '',
-        summary: batch.summary || {},
-        fileChanges,
-      },
-    });
-  }
-  const batchCount = orderedDetails.length;
-  for (const [index, approval] of (item.approvals || []).entries()) {
-    const fallbackOrder = batchCount + index;
-    orderedDetails.push({
-      order: workTimelineEntryOrder(`approval_${approval.approvalId || ''}`, fallbackOrder),
-      fallbackOrder,
-      detail: {
-        id: approval.approvalId || approval.id || `${item.turnId || 'turn'}-approval-${index}`,
-        kind: 'approval',
-        title: approval.summary?.command || approval.summary?.reason || approval.approvalKind || 'Approval requested',
-        status: approval.resolved ? approval.summary?.decision || 'resolved' : 'requested',
-        summary: approval.summary || {},
-        fileChanges: [],
-      },
-    });
-  }
-  return orderedDetails
-    .sort((left, right) => left.order - right.order || left.fallbackOrder - right.fallbackOrder)
-    .map((entry) => entry.detail);
+  return globalThis.CodexWebTimelineModel.workDetailsForItem(item, { classifyWorkBatch, workFileChanges, workTimelineEntryOrder, inlineWorkTimelineId, primitiveWorkText });
 }
 
 function workTimelineEntryOrder(entryId, fallbackOrder) {
@@ -3241,74 +3241,6 @@ function workTimelineEntryOrder(entryId, fallbackOrder) {
   return index >= 0 ? index : state.timeline.length + fallbackOrder;
 }
 
-function workDetailTitle(batch, kind, fileChanges) {
-  const summary = batch?.summary || {};
-  if (kind === 'command' || kind === 'read') {
-    return primitiveWorkText(summary.command) || primitiveWorkText(batch?.title) || 'Command';
-  }
-  if (kind === 'edit' && fileChanges.length) {
-    const firstPath = primitiveWorkText(fileChanges[0]?.path);
-    if (firstPath) {
-      return fileChanges.length === 1
-        ? firstPath
-        : `${firstPath} +${fileChanges.length - 1}`;
-    }
-  }
-  return primitiveWorkText(batch?.title)
-    || primitiveWorkText(workTitleFromSummary(summary))
-    || 'Tool activity';
-}
-
-function formatWorkEventStatus(detail) {
-  const exitCode = finiteWorkNumber(detail?.summary?.exitCode);
-  if (exitCode !== null && exitCode !== 0) {
-    return { label: t('Exit {code}', { code: exitCode }), tone: 'failed' };
-  }
-  const status = String(detail?.status || '').trim().toLowerCase();
-  if (detail?.kind === 'approval' && ['accept', 'accept-for-session', 'deny', 'cancel'].includes(status)) {
-    return { label: t(status === 'deny' || status === 'cancel' ? 'Declined' : 'Accepted'), tone: 'done' };
-  }
-  if (status === 'failed' || status === 'error' || hasSummaryValue(detail?.summary?.error)) {
-    return { label: t('Failed'), tone: 'failed' };
-  }
-  if (!status || status === 'started' || status === 'running' || status === 'pending') {
-    return { label: t('In progress'), tone: 'running' };
-  }
-  if (status === 'requested') {
-    return { label: t('Requested'), tone: 'running' };
-  }
-  if (status === 'completed' || status === 'complete' || status === 'success' || status === 'succeeded' || status === 'resolved') {
-    return { label: t('Done'), tone: 'done' };
-  }
-  return { label: startCase(status), tone: 'done' };
-}
-
-function formatWorkTextValue(value, seen = new Set()) {
-  if (typeof value === 'string') {
-    return value.trim();
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  if (!value || typeof value !== 'object' || seen.has(value)) {
-    return '';
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((entry) => formatWorkTextValue(entry, seen)).filter(Boolean).join('\n');
-  }
-  for (const key of ['text', 'delta', 'content', 'value', 'message', 'output']) {
-    const text = formatWorkTextValue(value[key], seen);
-    if (text) {
-      return text;
-    }
-  }
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return '';
-  }
-}
 
 function primitiveWorkText(value) {
   if (typeof value === 'string') {
@@ -3320,33 +3252,7 @@ function primitiveWorkText(value) {
   return '';
 }
 
-function formatWorkFileAction(value) {
-  const action = primitiveWorkText(value).toLowerCase();
-  const label = {
-    add: 'Added',
-    added: 'Added',
-    create: 'Added',
-    created: 'Added',
-    delete: 'Deleted',
-    deleted: 'Deleted',
-    remove: 'Deleted',
-    removed: 'Deleted',
-    update: 'Modified',
-    updated: 'Modified',
-    modify: 'Modified',
-    modified: 'Modified',
-  }[action] || (action ? startCase(action) : '');
-  return label ? t(label) : '';
-}
 
-function formatWorkChangeStats(change) {
-  const additions = finiteWorkNumber(change?.additions ?? change?.added ?? change?.linesAdded);
-  const deletions = finiteWorkNumber(change?.deletions ?? change?.deleted ?? change?.linesDeleted);
-  if (additions === null && deletions === null) {
-    return '';
-  }
-  return `+${additions ?? 0} / -${deletions ?? 0}`;
-}
 
 function finiteWorkNumber(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -3974,11 +3880,12 @@ async function openWorkDetails(trigger = document.activeElement, turnId = '') {
   state.workDetailsOpen = true;
   workViewError = '';
   render();
-  if (!getWorkView()) {
+  if (!getWorkView() || !workStylesPromise) {
     const sessionId = state.sessionId;
     try {
       workViewLoadPromise ||= import(`/work-details-view.js?v=${encodeURIComponent(APP_BUILD_ID)}&attempt=${++workViewLoadAttempts}`).catch(error => { workViewLoadPromise = null; throw error; });
-      await workViewLoadPromise;
+      workStylesPromise ||= globalThis.CodexWebLazyFeature.loadStylesheet(`/work-details-view.css?v=${encodeURIComponent(APP_BUILD_ID)}`).catch(error => { workStylesPromise = null; throw error; });
+      await Promise.all([workViewLoadPromise, workStylesPromise]);
     } catch {
       workViewError = 'Could not load work details. Close and try again.';
     }
@@ -3994,6 +3901,7 @@ async function openWorkDetails(trigger = document.activeElement, turnId = '') {
 }
 
 function closeWorkDetails() {
+  getWorkView()?.dispose(document.querySelector('.work-details-list'));
   if (!state.workDetailsOpen) {
     return;
   }
@@ -4091,19 +3999,6 @@ function isWorkFileAction(value) {
   return /^(?:add|added|create|created|delete|deleted|modify|modified|remove|removed|update|updated)$/iu.test(value);
 }
 
-function workTitleFromSummary(summary) {
-  return summary?.command || summary?.reason || '';
-}
-
-function workKindLabel(kind) {
-  return t({
-    read: 'Read',
-    command: 'Ran',
-    edit: 'Edited',
-    approval: 'Approval',
-    tool: 'Tool',
-  }[kind] || 'Tool');
-}
 
 function renderSummary(summary) {
   const entries = Object.entries(summary || {}).filter(([, value]) => hasSummaryValue(value));
@@ -4368,11 +4263,24 @@ function bindGlobalEvents() {
 
   const workDetailsList = document.querySelector('.work-details-list');
   if (workDetailsList) {
+    getWorkView()?.bind(workDetailsList);
     listenRendered(workDetailsList, 'click', handleWorkDetailsListClick);
     listenRendered(workDetailsList, 'scroll', updateWorkDetailsFollowState, { passive: true });
     listenRendered(workDetailsList, 'toggle', handleWorkDetailToggle, { capture: true });
   }
 
+  const runtimeSettingsNode = document.querySelector('#runtime-version-settings');
+  if (runtimeSettingsNode && !runtimeSettingsNode.dataset.loading) {
+    runtimeSettingsNode.dataset.loading = 'true';
+    const identityGeneration = authRequestGeneration;
+    void import(`/runtime-settings.js?v=${encodeURIComponent(APP_BUILD_ID)}`).then(module => {
+      if (identityGeneration !== authRequestGeneration || !runtimeSettingsNode.isConnected) return;
+      globalThis.CodexWebRuntimeSettings.mountRuntimeSettings(runtimeSettingsNode, { apiFetch, t, identityKey: currentSubmissionOwnerKey(),
+        isCurrent: () => identityGeneration === authRequestGeneration });
+    }).catch(() => {
+      if (runtimeSettingsNode.isConnected) { runtimeSettingsNode.textContent = t('Runtime settings could not be loaded. Reopen settings to retry.'); }
+    });
+  }
   const runtimeReloadButton = document.querySelector('#runtime-reload-button');
   if (runtimeReloadButton) {
     listenRendered(runtimeReloadButton, 'click', () => {
@@ -4798,7 +4706,6 @@ function bindGlobalEvents() {
     });
   }
 
-  for (const control of document.querySelectorAll('[data-timeline-window]')) listenRendered(control, 'click', () => Number(control.dataset.timelineWindow) < 0 ? showMoreSessionHistory() : moveTimelineWindow(1));
   const latestButton = document.querySelector('#timeline-jump-latest');
   if (latestButton) listenRendered(latestButton, 'click', jumpToLatestTimeline);
   const devicesButton = document.querySelector('#load-auth-devices');
@@ -5268,11 +5175,14 @@ function refreshChatDynamicUi({ dirtyEntryIds = [] } = {}) {
     render();
     return false;
   }
+  const questionFocus = QUESTIONS.focused();
   beginTimelineEventBindings();
   if (!updateTimelineProjectionDom(timeline, dirtyEntryIds)) {
     timeline.innerHTML = renderTimeline();
   }
   bindTimelineActionEvents({ reset: false });
+  syncQuestionView();
+  if (questionFocus?.isConnected) questionFocus.focus({ preventScroll: true });
   syncComposerStatusDisplay();
   syncWorkDetailsDialogContent();
   syncComposerErrorDisplay();
@@ -5315,7 +5225,7 @@ function updateTimelineProjectionDom(timeline, dirtyEntryIds) {
     if (visibleItems.at(-1)?.id !== id || !timeline.appendChild) {
       return false;
     }
-    timeline.appendChild(replacement);
+    timeline.insertBefore(replacement, timeline.querySelector('#user-input-questions'));
     nodesById.set(id, replacement);
   }
   return true;
@@ -5344,6 +5254,7 @@ function syncWorkDetailsDialogContent() {
   const anchor = captureWorkDetailsAnchor(list);
   const reading = globalThis.CodexWebWorkView?.captureReadingState(list) || [];
   list.innerHTML = renderWorkItem(item, currentWorkDetailsWindow(item));
+  getWorkView()?.bind(list);
   globalThis.CodexWebWorkView?.restoreReadingState(list, reading);
   if (state.workDetailsFollowLatest) {
     list.scrollTop = list.scrollHeight;
@@ -5362,7 +5273,7 @@ function captureWorkDetailsAnchor(list) {
       continue;
     }
     const rect = detail.getBoundingClientRect();
-    if (rect.bottom > listRect.top + 1) {
+    if (rect.bottom > (list.querySelector('.work-overview')?.getBoundingClientRect().bottom ?? listRect.top) + 1) {
       return {
         id: detail.getAttribute('data-work-event-id') || '',
         offset: rect.top - listRect.top,
@@ -5620,6 +5531,9 @@ function bindTimelineActionEvents({ reset = true } = {}) {
   const timeline = document.querySelector('#timeline');
   if (!timeline) {
     return;
+  }
+  for (const control of timeline.querySelectorAll?.('[data-timeline-window]') || []) {
+    listenTimeline(control, 'click', () => Number(control.dataset.timelineWindow) < 0 ? showMoreSessionHistory() : moveTimelineWindow(1));
   }
   for (const button of timeline.querySelectorAll?.('[data-approval-action]') || []) {
     listenTimeline(button, 'click', () => {
@@ -6123,7 +6037,10 @@ async function openAdminConsole() {
   }
   if (!ADMIN_UI) {
     try {
-      adminUiLoadPromise ||= import(`/admin-ui.js?v=${encodeURIComponent(APP_BUILD_ID)}`).catch((error) => { adminUiLoadPromise = null; throw error; });
+      adminUiLoadPromise ||= Promise.all([
+        import(`/admin-ui.js?v=${encodeURIComponent(APP_BUILD_ID)}`),
+        globalThis.CodexWebLazyFeature.loadStylesheet(`/admin-ui.css?v=${encodeURIComponent(APP_BUILD_ID)}`),
+      ]).catch((error) => { adminUiLoadPromise = null; throw error; });
       await adminUiLoadPromise;
       ADMIN_UI = globalThis.CodexWebAdminUi.createRenderer(adminUiDependencies);
       if (navigation !== sessionNavigationGeneration || !isAuthRequestCurrent(generation)) return;
@@ -6316,12 +6233,23 @@ async function selectSession(sessionId) {
     render();
     return;
   }
+  let requestTimelineRevision = timelineRevision;
+  const requestTimelineGeneration = state.currentSession?.timelineCheckpoint?.generation;
   let historyApplied = false;
   let executionSignature = '';
   let progressApplied = false;
   const applyProgress = async (payload) => {
     if (!isCurrent() || !payload?.session) return;
     progressApplied = true;
+    if (!payload.compact && Array.isArray(payload.session.timeline)) Object.assign(payload.session, { timelineComplete: true, timelineHasNewer: false, timelineNextBefore: null, timelineNextAfter: null });
+    const revisionCurrent = requestTimelineRevision === timelineRevision;
+    if (!revisionCurrent && !canMergeCanonicalResponse(payload, requestTimelineGeneration)) {
+      state.sessionHistoryPending = payload.historyPending === true;
+      state.sessionStatusPending = payload.statusPending === true;
+      renderChatWithTimelineRestored(() => {});
+      return;
+    }
+    if (!revisionCurrent) retainCurrentExecutionFields(payload.session);
     const hasHistory = !payload.compact || payload.hasTimelineData;
     const hasStatus = !payload.compact || payload.hasStatusData;
     const viewport = captureTimelineViewport();
@@ -6349,6 +6277,7 @@ async function selectSession(sessionId) {
       }
     }
     if (!isCurrent()) return;
+    requestTimelineRevision = timelineRevision;
     state.sessionHistoryPending = payload.historyPending === true;
     state.sessionStatusPending = payload.statusPending === true;
     state.sessionHistoryError = payload.historyError || '';
@@ -6383,7 +6312,7 @@ async function selectSession(sessionId) {
 }
 
 function mergeLatestTimelineHistory(cached, incoming) {
-  return dedupeTimelineProjectionEntries(globalThis.CodexWebTimelineReconciliation.mergeLatestHistory(
+  return dedupeTimelineProjectionEntries(TIMELINE_SYNC.mergeLatestHistory(
     cached, incoming, timelineContinuityIdentities,
   ));
 }
@@ -6400,7 +6329,7 @@ function timelineContinuityIdentities(item) {
   if (!item || typeof item !== 'object') {
     return [];
   }
-  const identities = [];
+  const identities = TIMELINE_SYNC.stableIds(item).map(id => `id:${id}`);
   const projectionKey = typeof item.projectionKey === 'string' ? item.projectionKey.trim() : '';
   const turnId = timelineTurnId(item);
   const itemId = typeof item.itemId === 'string' ? item.itemId.trim() : '';
@@ -6430,7 +6359,9 @@ async function applySessionTurnSnapshot(snapshot, turnId) {
   }
   const throughSequence = Number(snapshot.throughSequence);
   const sameEpoch = !snapshot.epoch || !state.lastTurnEventEpoch || snapshot.epoch === state.lastTurnEventEpoch;
-  if (sameEpoch
+  const sameGeneration = !snapshot.timelineCheckpoint?.generation || !state.currentSession?.timelineCheckpoint?.generation
+    || snapshot.timelineCheckpoint.generation === state.currentSession.timelineCheckpoint.generation;
+  if (sameEpoch && sameGeneration
     && Number.isFinite(throughSequence)
     && state.lastTurnEventSequence != null
     && Number(state.lastTurnEventSequence) >= throughSequence) {
@@ -6440,6 +6371,7 @@ async function applySessionTurnSnapshot(snapshot, turnId) {
     type: 'stream.reset',
     reset: true,
     epoch: snapshot.epoch,
+    timelineCheckpoint: snapshot.timelineCheckpoint,
     snapshot: {
       complete: snapshot.complete === true,
       throughSequence: snapshot.throughSequence,
@@ -6457,6 +6389,7 @@ function submissionTimelineItem(entry) {
     meta: 'pending',
     text: entry.text,
     submissionId: entry.id,
+    ...(globalThis.CodexWebSubmissionIdentity ? { clientMessageId: globalThis.CodexWebSubmissionIdentity.clientMessageId(entry.id) } : {}),
     historyAnchorId: state.sessionHistoryItems.filter(item => item.meta !== 'pending').at(-1)?.id || '@start',
     ...(entry.attachments.length ? { attachments: entry.attachments } : {}),
   };
@@ -6739,7 +6672,17 @@ function completeDeliveredSubmission(entry, normalized, payload, { recovered = f
       timelineEntry.turnId = normalized.turnId;
     }
   }
+  const deferred = deferredCanonicalUsers.get(normalized.clientMessageId);
+  if (deferred) {
+    deferredCanonicalUsers.delete(normalized.clientMessageId);
+    if (deferred.owner === recoveryOwnerKey() && state.sessionId === sessionId) upsertCanonicalUserMessage(deferred.event);
+  }
+  if (normalized.clientMessageId) {
+    const confirmed = state.timeline.find(item => item.timeline?.id && TIMELINE_SYNC.stableIds(item).includes(normalized.clientMessageId));
+    if (confirmed) upsertCanonicalUserMessage(confirmed);
+  }
   markCachedSubmissionDelivered(entry, sessionId, normalized.turnId, normalized.clientMessageId);
+  if (shouldAdoptSession) saveCurrentTimeline({ requireDurable: true });
   removeSubmissionOutboxEntry(entry.id);
   if (entry.queuedMessageId && sessionId) {
     removeQueuedMessage(sessionId, entry.queuedMessageId);
@@ -6791,24 +6734,21 @@ function completeDeliveredSubmission(entry, normalized, payload, { recovered = f
 }
 
 function markCachedSubmissionDelivered(entry, sessionId, turnId, clientMessageId) {
-  if (!sessionId || state.sessionId === sessionId) {
-    return;
-  }
-  const cached = state.timelineCache.get(sessionId);
-  if (!cached) {
-    return;
-  }
-  const mark = (items) => (Array.isArray(items) ? items : []).map((item) => (
-    item?.submissionId === entry.id
-      ? { ...item, deliveryLabel: 'Server received', ...(turnId ? { turnId } : {}), ...(clientMessageId ? { clientMessageId } : {}) }
-      : item
-  ));
-  state.timelineCache.set(sessionId, {
-    ...cached,
-    timeline: mark(cached.timeline),
-    history: mark(cached.history),
-  });
-  persistTimelineCache();
+  if (!sessionId || state.sessionId === sessionId) return;
+  const cached = state.timelineCache.get(sessionId) || { savedAt: Date.now(), timeline: [], history: [], batches: new Map(), approvals: new Map(), historyComplete: false };
+  const delivered = { ...submissionTimelineItem(entry), deliveryLabel: 'Server received',
+    historyAnchorId: cached.history?.at(-1)?.id || '@start',
+    ...(turnId ? { turnId } : {}), ...(clientMessageId ? { clientMessageId } : {}) };
+  const mark = items => {
+    const source = Array.isArray(items) ? items : [];
+    const confirmed = clientMessageId && source.find(item => item.meta !== 'pending' && TIMELINE_SYNC.stableIds(item).includes(clientMessageId));
+    if (confirmed) return TIMELINE_SYNC.upsertUserMessage([...source, delivered], confirmed, mergeTimelineAttachments);
+    return source.some(item => item.submissionId === entry.id)
+      ? source.map(item => item.submissionId === entry.id ? { ...item, ...delivered, historyAnchorId: item.historyAnchorId || delivered.historyAnchorId } : item)
+      : [...source, delivered];
+  };
+  state.timelineCache.set(sessionId, { ...cached, savedAt: Date.now(), timeline: mark(cached.timeline), history: mark(cached.history) });
+  persistTimelineCacheCheckpoint({ requireDurable: true });
 }
 
 function failSubmissionDelivery(entry, error, { wasActiveDraft = false } = {}) {
@@ -7343,7 +7283,9 @@ async function streamTurnEvents(turnId, options = {}) {
     const epoch = state.lastTurnEventEpoch
       ? `epoch=${encodeURIComponent(state.lastTurnEventEpoch)}`
       : '';
-    const query = [after, epoch].filter(Boolean).join('&');
+    const timelineGeneration = state.currentSession?.timelineCheckpoint?.generation;
+    const timelineQuery = timelineGeneration ? `timelineGeneration=${encodeURIComponent(timelineGeneration)}` : '';
+    const query = [after, epoch, timelineQuery].filter(Boolean).join('&');
     const eventsPath = observedSessionId
       ? `/api/admin/sessions/${encodeURIComponent(observedSessionId)}/turns/${encodeURIComponent(turnId)}/events`
       : `/api/turns/${encodeURIComponent(turnId)}/events`;
@@ -7533,19 +7475,18 @@ async function streamTurnEvents(turnId, options = {}) {
           resetFrame();
           return;
         }
-        if (!isCachedAuthPrincipalPending()) {
-          state.lastTurnEventSequence = sequence;
-        }
       }
       if (replayingTurnHistory
         && !reconciledReplayedAssistant
-        && !payload.itemId
+        && (!payload.itemId || state.timelineProjectionComplete === false)
         && (payload.type === 'assistant.delta' || payload.type === 'assistant.final')) {
         removeAssistantTimelineEntriesForTurn(turnId);
         assistantEntry = null;
         reconciledReplayedAssistant = true;
       }
       assistantEntry = applyTurnEvent(payload, assistantEntry);
+      if (payload.timelineRecoveryRequired) { controller.abort(); resetFrame(); return; }
+      if (Number.isFinite(sequence) && !isCachedAuthPrincipalPending()) state.lastTurnEventSequence = sequence;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       surfaceTimelineError(turnId, message);
@@ -7572,6 +7513,10 @@ async function applyTurnStreamControl(payload, turnId, activeStreamController, {
   if (!payload || typeof payload !== 'object') {
     return false;
   }
+  const checkpoint = payload.timelineCheckpoint || payload.snapshot?.timelineCheckpoint;
+  const generationChanged = Boolean(checkpoint?.generation && state.currentSession?.timelineCheckpoint?.generation
+    && checkpoint.generation !== state.currentSession.timelineCheckpoint.generation);
+  if (checkpoint && state.currentSession) state.currentSession.timelineCheckpoint = { ...checkpoint };
   const epoch = String(payload.epoch || '').trim();
   const epochChanged = Boolean(epoch && state.lastTurnEventEpoch && epoch !== state.lastTurnEventEpoch);
   if (epoch) {
@@ -7581,6 +7526,8 @@ async function applyTurnStreamControl(payload, turnId, activeStreamController, {
   if (!reset) {
     return false;
   }
+  if (state.currentSession) state.currentSession.turnActivity = null;
+  OBSERVATION_RECOVERY.invalidate();
   const snapshotEvents = Array.isArray(payload.events)
     ? payload.events
     : Array.isArray(payload.snapshot?.events)
@@ -7590,7 +7537,9 @@ async function applyTurnStreamControl(payload, turnId, activeStreamController, {
     .map((event) => presentTurnEventForCurrentAudience(event))
     .filter(Boolean);
   const snapshotComplete = payload.snapshot?.complete === true;
+  if (!snapshotComplete) state.timelineProjectionComplete = false;
   if (snapshotComplete) {
+    state.timelineProjectionComplete = !generationChanged;
     resetTurnProjectionForReplay(turnId, {
       retainedEntryIds: new Set(visibleSnapshotEvents.map(snapshotTimelineEntryId).filter(Boolean)),
     });
@@ -7606,14 +7555,18 @@ async function applyTurnStreamControl(payload, turnId, activeStreamController, {
   if (rawThroughSequence != null && Number.isFinite(throughSequence) && !isCachedAuthPrincipalPending()) {
     state.lastTurnEventSequence = throughSequence;
   }
+  if (snapshotComplete) OBSERVATION_RECOVERY.confirmed();
   saveCurrentTimeline();
-  if (!snapshotComplete && !alreadyHydrated) {
-    void recoverTurnProjectionAfterStreamReset(turnId, activeStreamController);
+  if ((!snapshotComplete || generationChanged) && !alreadyHydrated) {
+    void recoverTurnProjectionAfterStreamReset(turnId, activeStreamController, { generationChanged });
   }
   return true;
 }
 
 function reorderTurnSnapshotProjection(turnId, snapshotEvents) {
+  const canonical = snapshotEvents.filter(event => event.timeline).sort((a, b) => a.timeline.position - b.timeline.position);
+  let canonicalIndex = 0;
+  snapshotEvents = snapshotEvents.map(event => event.timeline ? canonical[canonicalIndex++] : event);
   const orderedIds = [];
   const seen = new Set();
   for (const event of snapshotEvents) {
@@ -7643,6 +7596,7 @@ function reorderTurnSnapshotProjection(turnId, snapshotEvents) {
 }
 
 function snapshotTimelineEntryId(event) {
+  if (event?.timeline?.id) return event.timeline.id;
   const turnId = String(event?.turnId || '').trim();
   if (!turnId) {
     return '';
@@ -7661,7 +7615,8 @@ function snapshotTimelineEntryId(event) {
   return '';
 }
 
-async function recoverTurnProjectionAfterStreamReset(turnId, activeStreamController) {
+async function recoverTurnProjectionAfterStreamReset(turnId, activeStreamController, { generationChanged = false } = {}) {
+  const owner = recoveryOwnerKey();
   const sessionId = state.sessionId;
   if (shouldRestrictCurrentTurnEvents()) {
     state.timeline = sanitizeRestrictedTimelineEntries(state.timeline, state.currentSession);
@@ -7680,10 +7635,11 @@ async function recoverTurnProjectionAfterStreamReset(turnId, activeStreamControl
     terminal: state.terminalTurnIds.has(turnId),
   };
   const session = await reconcileCurrentSessionInBackground({ forceDetail: true });
-  if (!session || state.sessionId !== sessionId || state.turnId !== turnId) {
+  if (!session || owner !== recoveryOwnerKey() || state.sessionId !== sessionId || state.turnId !== turnId) {
     return;
   }
-  mergeIncompleteTurnAssistantProjection(turnId, backup.timeline);
+  OBSERVATION_RECOVERY.confirmed();
+  if (!generationChanged) mergeIncompleteTurnAssistantProjection(turnId, backup.timeline);
   state.lastTurnEventAt = Date.now();
   if (state.turnId === turnId && state.pendingTurn) {
     state.streamWasBackgrounded = false;
@@ -7702,6 +7658,8 @@ function mergeIncompleteTurnAssistantProjection(turnId, backupTimeline) {
     item?.kind === 'message'
     && item.role === 'assistant'
     && timelineTurnId(item) === normalizedTurnId
+    && (!item.timeline?.generation || !state.currentSession?.timelineCheckpoint?.generation
+      || item.timeline.generation === state.currentSession.timelineCheckpoint.generation)
   ));
   if (!preserved.length) {
     return;
@@ -7807,6 +7765,9 @@ function presentTurnEventForCurrentAudience(event) {
     id: typeof event.id === 'string' ? event.id : '',
     type: typeof event.type === 'string' ? event.type : '',
     turnId: typeof event.turnId === 'string' ? event.turnId : '',
+    ...(event.timeline?.id ? { timeline: { ...event.timeline } } : {}),
+    ...(event.timelineCheckpoint ? { timelineCheckpoint: { ...event.timelineCheckpoint } } : {}),
+    ...(typeof event.clientMessageId === 'string' ? { clientMessageId: event.clientMessageId } : {}),
     ...(typeof event.itemId === 'string' && event.itemId ? { itemId: event.itemId } : {}),
     ...(typeof event.eventType === 'string' && event.eventType ? { eventType: event.eventType } : {}),
     ...(Number.isFinite(Number(event.sequence)) ? { sequence: Number(event.sequence) } : {}),
@@ -7815,6 +7776,8 @@ function presentTurnEventForCurrentAudience(event) {
   switch (event.type) {
     case 'turn.started':
       return base;
+    case 'user.message':
+      return { ...base, text: String(event.text || ''), attachments: normalizeTimelineAttachments(event.attachments) };
     case 'assistant.delta':
       return event.phase === 'final_answer'
         ? {
@@ -7869,7 +7832,7 @@ function presentTurnEventForCurrentAudience(event) {
         decision: typeof event.decision === 'string' ? event.decision : '',
       };
     case 'turn.observation_interrupted':
-      return authPrincipalPending ? null : base;
+      return authPrincipalPending ? null : { ...base, snapshotRequired: event.snapshotRequired === true };
     case 'turn.completed':
       if (authPrincipalPending) {
         return null;
@@ -8018,6 +7981,25 @@ async function resolveApproval(approvalId, action) {
 }
 
 function applyTurnEvent(event, assistantEntry) {
+  if (event.type === 'turn.activity' || event.type === 'user_input.updated') {
+    if (!state.currentSession || (state.turnId && event.turnId !== state.turnId)) return assistantEntry;
+    if (event.type === 'turn.activity') {
+      if (!event.activity || event.activity.turnId !== event.turnId || (state.terminalTurnIds.has(event.turnId) && ['working', 'retrying'].includes(event.activity.health?.status))) return assistantEntry;
+      const previous = state.currentSession.turnActivity;
+      if (!previous || previous.turnId !== event.turnId || previous.revision < event.activity.revision) state.currentSession.turnActivity = event.activity;
+    } else {
+      const pending = state.currentSession.userInputRequests || [];
+      if (event.request.status === 'pending' && state.terminalTurnIds.has(event.turnId)) return assistantEntry;
+      if (pending.some(q => q.requestId === event.request.requestId && q.status !== 'pending') && event.request.status === 'pending') return assistantEntry;
+      OBSERVATION_RECOVERY.confirmed();
+      state.currentSession.userInputRequests = [...pending.filter(q => q.requestId !== event.request.requestId), event.request].slice(-128);
+    }
+    timelineRevision += 1;
+    render();
+    return assistantEntry;
+  }
+
+  timelineRevision += 1;
   if (event.type === 'turn.failed'
     && isTurnInterruptTimeoutMessage(event.details || event.message)) {
     state.error = '';
@@ -8035,6 +8017,11 @@ function applyTurnEvent(event, assistantEntry) {
     && !['approval.resolved', 'batch.completed'].includes(event.type)) {
     return assistantEntry;
   }
+  if (event.timelineCheckpoint && state.currentSession) {
+    const previous = state.currentSession.timelineCheckpoint;
+    if (!previous || previous.generation !== event.timelineCheckpoint.generation
+      || previous.revision <= event.timelineCheckpoint.revision) state.currentSession.timelineCheckpoint = { ...event.timelineCheckpoint };
+  }
   if (event.turnId) {
     state.latestTurnId = event.turnId;
   }
@@ -8049,6 +8036,7 @@ function applyTurnEvent(event, assistantEntry) {
   }
   switch (event.type) {
     case 'turn.observation_interrupted':
+      if (event.snapshotRequired) { OBSERVATION_RECOVERY.invalidate(); void OBSERVATION_RECOVERY.check(true); }
       state.status = 'Status awaiting sync';
       state.statusTone = 'warn';
       sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'stale', event.turnId);
@@ -8063,6 +8051,16 @@ function applyTurnEvent(event, assistantEntry) {
       state.statusTone = 'warn';
       sessionActivityChanged = setSessionSummaryActivity(state.sessionId, 'running', event.turnId);
       break;
+    case 'user.message': {
+      if (state.currentSession?.timelineHasNewer) break;
+      const clientId = String(event.clientMessageId || '');
+      if (clientId && !state.timeline.some(item => item.clientMessageId === clientId)
+        && pendingSubmissionEntries().some(entry => entry.sessionId === state.sessionId && ['sending', 'outcome_unknown'].includes(entry.status))) {
+        deferredCanonicalUsers.set(clientId, { owner: recoveryOwnerKey(), event });
+        if (deferredCanonicalUsers.size > MAX_SUBMISSION_OUTBOX_ITEMS) deferredCanonicalUsers.delete(deferredCanonicalUsers.keys().next().value);
+      } else upsertCanonicalUserMessage(event);
+      break;
+    }
     case 'assistant.delta':
       if (state.currentSession?.timelineHasNewer) break;
       assistantEntry = upsertAssistantProjection(event, { final: false });
@@ -8204,6 +8202,13 @@ function applyTurnEvent(event, assistantEntry) {
   return assistantEntry;
 }
 
+function upsertCanonicalUserMessage(event) {
+  const entry = normalizeSessionTimelineItem({ ...event, id: event.timeline?.id || event.itemId || `user_${event.turnId}`, kind: 'message', role: 'user', meta: 'history', source: 'stream' });
+  if (!entry) return;
+  state.timeline = TIMELINE_SYNC.upsertUserMessage(state.timeline, entry, mergeTimelineAttachments);
+  if (entry.timeline) state.timeline = TIMELINE_SYNC.reconcileMessages([], state.timeline, state.currentSession?.timelineCheckpoint || null);
+}
+
 function upsertAssistantProjection(event, { final = false } = {}) {
   const turnId = String(event?.turnId || state.turnId || '').trim();
   if (!turnId) {
@@ -8212,16 +8217,31 @@ function upsertAssistantProjection(event, { final = false } = {}) {
   const phase = normalizeAssistantProjectionPhase(event?.phase, final);
   const itemId = String(event?.itemId || '').trim();
   const projectionKey = itemId ? `${turnId}\u0000${itemId}` : '';
-  const id = assistantTimelineEntryId(turnId, itemId, phase, final);
+  const id = event.timeline?.id || assistantTimelineEntryId(turnId, itemId, phase, final);
   let index = state.timeline.findIndex((item) => (
     item?.kind === 'message'
     && item.role === 'assistant'
     && (
       (projectionKey && item.projectionKey === projectionKey)
       || item.id === id
+      || event.timeline?.aliases?.includes(item.id)
     )
   ));
   const current = index >= 0 ? state.timeline[index] : null;
+  if (current?.timeline?.id === event.timeline?.id && current?.timeline
+    && current.timeline.generation === event.timeline.generation && current.timeline.version >= event.timeline.version) return current;
+  if (!final && event.timeline && typeof event.text !== 'string'
+    && (!current?.timeline || current.timeline.generation !== event.timeline.generation
+      || event.timeline.version > current.timeline.version + 1)) {
+    event.timelineRecoveryRequired = true;
+    state.timelineProjectionComplete = false;
+    state.lastTurnEventSequence = null;
+    const owner = recoveryOwnerKey();
+    void reconcileCurrentSessionInBackground({ forceDetail: true }).then(() => {
+      if (owner === recoveryOwnerKey()) connectActiveTurnStream({ forceReconnect: true });
+    });
+    return current;
+  }
   const hasDeltaContract = Object.prototype.hasOwnProperty.call(event || {}, 'delta')
     || typeof event?.eventType === 'string';
   const eventText = typeof event?.text === 'string' ? event.text : '';
@@ -8245,17 +8265,19 @@ function upsertAssistantProjection(event, { final = false } = {}) {
     text,
     turnId,
     ...(itemId ? { itemId, projectionKey } : {}),
+    ...(event.timeline?.id ? { timeline: { ...event.timeline } } : {}),
     source: 'stream',
     lifecycle: final ? 'completed' : String(event?.eventType || 'delta'),
     streaming: !final && event?.eventType !== 'completed',
     ...(Number.isFinite(Number(event?.sequence)) ? { sequence: Number(event.sequence) } : {}),
   };
-  if (index < 0 && text) {
+  if (index < 0 && text && !event.timeline?.id) {
     index = state.timeline.findIndex((item) => (
       item?.kind === 'message'
       && item.role === 'assistant'
       && timelineTurnId(item) === turnId
       && item.text === text
+      && !(item.itemId && itemId && item.itemId !== itemId)
       && assistantTimelineMetaCompatible(item.meta, entry.meta)
     ));
   }
@@ -8264,6 +8286,7 @@ function upsertAssistantProjection(event, { final = false } = {}) {
   } else {
     appendMessage(entry);
   }
+  if (entry.timeline) state.timeline = TIMELINE_SYNC.reconcileMessages([], state.timeline, state.currentSession?.timelineCheckpoint || null);
   return entry;
 }
 
@@ -8421,6 +8444,8 @@ function setWorkStatus(turnId, status) {
 }
 
 function resetTurnState() {
+  deferredCanonicalUsers.clear();
+  state.timelineProjectionComplete = true;
   clearLocallyStartedTurn();
   state.turnId = null;
   state.latestTurnId = '';
@@ -8477,16 +8502,35 @@ function isMissingSessionError(error) {
     || /thread not found|session not found|unknown session|unknown thread/i.test(message);
 }
 
+function canMergeCanonicalResponse(payload, requestedGeneration) {
+  const incoming = payload?.session?.timelineCheckpoint?.generation;
+  const current = state.currentSession?.timelineCheckpoint?.generation;
+  return Boolean(incoming && Array.isArray(payload.session.timeline)
+    && (!current || current === requestedGeneration || incoming === current));
+}
+
+function retainCurrentExecutionFields(session) {
+  for (const key of ['activeTurnId', 'latestTurn', 'activityState', 'turnStartedAt', 'lastBusinessActivityAt', 'thread', 'turnActivity', 'userInputRequests']) {
+    if (Object.hasOwn(state.currentSession || {}, key)) session[key] = state.currentSession[key];
+    else delete session[key];
+  }
+}
+
 async function refreshCurrentSessionMetadata({
   hydrateTimeline = false, viewportSnapshot = null, signal = null, forceDetail = false, latest = false,
 } = {}) {
   if (!state.sessionId || isShareContext()) return null;
+  if (pendingLatestSessionOpen?.owner === recoveryOwnerKey() && SESSION_READING.isCurrent(pendingLatestSessionOpen.snapshot)) {
+    latest = true; viewportSnapshot = pendingLatestSessionOpen.snapshot;
+  }
   if (isAdminObservedSession()) return refreshAdminObservedSessionMetadata({ viewportSnapshot, signal, latest });
   if (!hydrateTimeline && !forceDetail) return refreshCurrentSessionStatus({ viewportSnapshot, signal });
   const sessionId = state.sessionId;
   const requestGeneration = authRequestGeneration;
   const navigation = sessionNavigationGeneration;
   const isCurrent = () => isAuthRequestCurrent(requestGeneration) && navigation === sessionNavigationGeneration && state.sessionId === sessionId;
+  const requestTimelineRevision = timelineRevision;
+  const requestTimelineGeneration = state.currentSession?.timelineCheckpoint?.generation;
   const currentViewport = captureTimelineViewport();
   const startedViewport = viewportSnapshot || currentViewport;
   try {
@@ -8494,10 +8538,18 @@ async function refreshCurrentSessionMetadata({
       ? await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { signal })
       : await loadSessionOpenData(state.currentSession || { id: sessionId }, { signal, latest, anchors: !latest && !startedViewport.shouldFollowLatest ? startedViewport.anchors : [] });
     if (!isAuthRequestCurrent(requestGeneration) || !payload?.session) return null;
+    if (!payload.compact && Array.isArray(payload.session.timeline)) Object.assign(payload.session, { timelineComplete: true, timelineHasNewer: false, timelineNextBefore: null, timelineNextAfter: null });
     if (!isCurrent()) {
       if (state.sessionId !== sessionId) { upsertSession(payload.session); renderSessionListAfterBackgroundUpdate(); return payload.session; }
       return null;
     }
+    if (requestTimelineRevision !== timelineRevision && !canMergeCanonicalResponse(payload, requestTimelineGeneration)) {
+      state.sessionHistoryPending = false; state.sessionStatusPending = false;
+      state.sessionRefreshOutcome = 'success';
+      renderChatWithTimelineRestored(() => {});
+      return state.currentSession;
+    }
+    if (requestTimelineRevision !== timelineRevision) retainCurrentExecutionFields(payload.session);
     // A latest-page response replaces the loaded history window. User input
     // while it was in flight cancels that replacement, not only its final scroll.
     if (latest && !SESSION_READING.isCurrent(startedViewport)) return null;
@@ -8506,10 +8558,15 @@ async function refreshCurrentSessionMetadata({
       const incoming = normalizeSessionTimeline(payload.session.timeline);
       const overlap = timelinesHaveStableOverlap(state.sessionHistoryItems, incoming);
       if (overlap && state.currentSession?.timelineHasNewer !== true && payload.session.timelineHasNewer !== true) payload.session.timeline = mergeLatestTimelineHistory(state.sessionHistoryItems, incoming);
-      else if (!snapshot.anchors.some(anchor => incoming.some(item => item.id === anchor.id)) && snapshot.anchors.length) {
+      // Only a partial page can omit the reader's history. A complete history
+      // is authoritative even when optimistic/stream IDs have been replaced;
+      // retaining the cache here would hide new replies on every refresh.
+      else if ((payload.session.timelineComplete !== true || payload.session.timelineHasNewer === true)
+        && !snapshot.anchors.some(anchor => incoming.some(item => item.id === anchor.id)) && snapshot.anchors.length) {
         Object.assign(payload.session, { timeline: state.sessionHistoryItems, timelineComplete: state.currentSession.timelineComplete, timelineNextBefore: state.currentSession.timelineNextBefore, timelineNextAfter: state.currentSession.timelineNextAfter, timelineHasNewer: state.currentSession.timelineHasNewer });
       }
     }
+    if (payload.hasTimelineData || !payload.compact) pendingLatestSessionOpen = null;
     upsertSession(payload.session);
     if (payload.compact && state.currentSession) delete state.currentSession.thread;
     const session = state.currentSession;
@@ -8575,6 +8632,7 @@ async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = n
   const sessionId = state.sessionId;
   const requestGeneration = authRequestGeneration;
   const navigation = sessionNavigationGeneration;
+  const requestTimelineRevision = timelineRevision;
   let payload = null;
   try {
     payload = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/status`, { signal });
@@ -8605,6 +8663,7 @@ async function refreshCurrentSessionStatus({ viewportSnapshot = null, signal = n
   if (!isAuthRequestCurrent(requestGeneration) || !payload?.session || (navigation !== sessionNavigationGeneration && state.sessionId === sessionId)) {
     return null;
   }
+  if (state.sessionId === sessionId && requestTimelineRevision !== timelineRevision) return state.currentSession;
   upsertSession(payload.session);
   const session = state.currentSession?.id === sessionId
     ? state.currentSession
@@ -8944,6 +9003,9 @@ async function openAdminObservedSession(sessionId) {
 
 async function openSessionFileByPath(filePath, { basePath = '', preserveSnapshot = Boolean(basePath), resolved = false } = {}) {
   cancelSessionOpen();
+  const featureOwner = recoveryOwnerKey();
+  try { await SESSION_FILE_UI.ensure(); } catch { state.error = 'Could not open this file.'; render(); return; }
+  if (featureOwner !== recoveryOwnerKey()) return;
   const normalizedPath = decodeHtmlEntityText(filePath).trim();
   let resolvablePath = resolved ? filePath : decodeSessionFilePath(stripSessionFileLocationSuffix(normalizedPath.replace(/[?#].*$/u, '')));
   if (!resolvablePath) {
@@ -9120,6 +9182,9 @@ async function fetchSessionFileContent(contentUrl, { signal, skipAuth = false } 
 }
 
 async function openSharedReportById(reportId, { path = '', preserveSnapshot = false } = {}) {
+  const featureOwner = recoveryOwnerKey();
+  try { await SESSION_FILE_UI.ensure(); } catch { state.error = 'Could not open this file.'; render(); return; }
+  if (featureOwner !== recoveryOwnerKey()) return;
   const token = shareTokenFromLocation();
   const report = state.reports.find((item) => item.id === reportId);
   if (!token || !report) {
@@ -9309,10 +9374,18 @@ function handleComposerRefresh() {
 }
 
 function hydrateCurrentTimelineFromSession(session, { forceAuthoritative = false } = {}) {
-  const fullHistory = fullHydratedTimelineFromSession(session);
+  const fullHistory = TIMELINE_SYNC.reconcileMessages(
+    state.timeline, fullHydratedTimelineFromSession(session), session.timelineCheckpoint || null,
+  );
   const hydrated = selectVisibleHydratedTimelineItems(fullHistory);
   if (!fullHistory.length) {
-    return false;
+    if (!session.timelineCheckpoint || session.timelineComplete === false) return false;
+    const pending = pendingTimelineMessagesMissingFromHistory([], state.timeline, { authoritative: true });
+    state.timeline = pending.map(item => ({ ...item }));
+    setSessionHistoryWindow(pending, 0);
+    state.timelineProjectionComplete = true;
+    saveCurrentTimeline();
+    return true;
   }
   syncTerminalTurnIdsFromSession(session);
   const reading = captureTimelineViewport();
@@ -9344,12 +9417,13 @@ function hydrateCurrentTimelineFromSession(session, { forceAuthoritative = false
     && activeTurn?.id === state.turnId
     && hasLiveAssistantEntry
   );
-  if (currentStreamOwnsTimeline && !forceAuthoritative) {
+  if (currentStreamOwnsTimeline && !forceAuthoritative && !session.timelineCheckpoint) {
     return false;
   }
   if (!hydratedText || sameMessageDisplay) {
     return false;
   }
+  state.timelineProjectionComplete = true;
   const unmatchedPendingMessages = pendingTimelineMessagesMissingFromHistory(fullHistory, state.timeline, { authoritative: true });
   const historyWithPending = [
     ...fullHistory,
@@ -9475,6 +9549,9 @@ function timelineMessageDisplaySignature(items) {
         ].join(':'))
         .join('|');
       return [
+        item.timeline?.id || '',
+        item.timeline?.generation || '',
+        item.timeline?.version || '',
         item.role || '',
         item.text || '',
         item.meta || '',
@@ -9486,7 +9563,7 @@ function timelineMessageDisplaySignature(items) {
 }
 
 function pendingTimelineMessagesMissingFromHistory(historyItems, timelineItems, { authoritative = false } = {}) {
-  return globalThis.CodexWebTimelineReconciliation.pendingMessages(historyItems || [], timelineItems || [], {
+  return TIMELINE_SYNC.pendingMessages(historyItems || [], timelineItems || [], {
     identity: timelineMessageIdentity, turnId: timelineTurnId, authoritative,
     pendingSubmissionIds: new Set(state.submissionOutbox.keys()),
     latestWindow: state.currentSession?.timelineHasNewer !== true,
@@ -10307,7 +10384,7 @@ function sessionSummaryOnly(session) {
   return summary;
 }
 
-function saveCurrentTimeline() {
+function saveCurrentTimeline({ requireDurable = false } = {}) {
   SESSION_READING.remember(); SESSION_READING.flush();
   clearScheduledTimelineSave();
   if (!state.sessionId) {
@@ -10318,7 +10395,10 @@ function saveCurrentTimeline() {
   }
   const timeline = cloneTimelineEntries(state.timeline);
   const previous = state.timelineCache.get(state.sessionId);
-  const streamCursor = streamCursorForCache(previous?.streamCursor);
+  // A truncated projection cannot safely resume incremental deltas.
+  const contentComplete = state.currentSession?.timelineHasNewer !== true && state.timelineProjectionComplete !== false && state.timeline.filter(item => item?.kind !== 'work').length === timeline.length
+    && !state.timeline.some(item => typeof item?.text === 'string' && item.text.length > MAX_TIMELINE_ITEM_TEXT);
+  const streamCursor = contentComplete ? streamCursorForCache(previous?.streamCursor) : null;
   if (!timeline.length && !state.batches.size && !state.approvals.size && !streamCursor) {
     state.timelineCache.delete(state.sessionId);
     persistTimelineCache();
@@ -10330,12 +10410,14 @@ function saveCurrentTimeline() {
     validatedAt: previous?.validatedAt || 0,
     sessionUpdatedAt: previous?.sessionUpdatedAt || 0,
     timeline,
+    checkpointComplete: contentComplete,
+    timelineCheckpoint: state.currentSession?.timelineCheckpoint || null,
     ...historySnapshot,
     batches: cloneCacheMap(state.batches),
     approvals: cloneCacheMap(state.approvals),
     ...(streamCursor ? { streamCursor } : {}),
   });
-  persistTimelineCache();
+  return persistTimelineCacheCheckpoint({ requireDurable });
 }
 
 function streamCursorForCache(previousCursor = null) {
@@ -10372,7 +10454,8 @@ function restoreTurnEventCursor(sessionId, turnId, { onlyIfUnset = false } = {})
   if (onlyIfUnset && (state.lastTurnEventSequence != null || state.lastTurnEventEpoch)) {
     return false;
   }
-  const cursor = normalizeStreamCursor(state.timelineCache.get(sessionId)?.streamCursor);
+  const checkpoint = state.timelineCache.get(sessionId);
+  const cursor = checkpoint?.checkpointComplete === true ? normalizeStreamCursor(checkpoint.streamCursor) : null;
   if (!cursor || cursor.turnId !== normalizedTurnId) {
     return false;
   }
@@ -10401,7 +10484,8 @@ function timelineHistorySnapshotForCache(previous) {
     : hasAuthoritativeHistory || previous?.historyComplete === true;
   return {
     history,
-    historyComplete: Boolean(baseHistoryComplete && history.length === combinedHistory.length),
+    historyComplete: Boolean(baseHistoryComplete && history.length === combinedHistory.length
+      && !combinedHistory.some(item => typeof item?.text === 'string' && item.text.length > MAX_TIMELINE_ITEM_TEXT)),
     hasNewer: state.currentSession?.timelineHasNewer === true,
     nextBefore: state.currentSession?.timelineNextBefore ?? null, nextAfter: state.currentSession?.timelineNextAfter ?? null,
   };
@@ -10435,11 +10519,7 @@ function flushScheduledTimelineSave() {
 
 function restoreTimelineForSession(session, options = {}) {
   resetSessionHistoryWindow();
-  if (options.latest && state.timelineCache.get(session.id)?.hasNewer === true) {
-    state.timelineCache.delete(session.id);
-    if (session.timelineHasNewer === true) delete session.timeline;
-    Object.assign(session, { timelineHasNewer: false, timelineNextBefore: null, timelineNextAfter: null, timelineComplete: false });
-  }
+  // Keep a deep cached window visible offline until a latest request succeeds.
   syncTerminalTurnIdsFromSession(session);
   const fullHistory = fullHydratedTimelineFromSession(session);
   if (options.fullHistory) {
@@ -10456,6 +10536,8 @@ function restoreTimelineForSession(session, options = {}) {
     state.batches = new Map(cached.batches);
     state.approvals = new Map(cached.approvals);
     // Restored output is a cache snapshot, not a live stream in this page.
+    state.timelineProjectionComplete = cached.checkpointComplete !== false;
+    if (cached.timelineCheckpoint) session.timelineCheckpoint = { ...cached.timelineCheckpoint };
     state.timeline = cached.timeline.map((item) => ({ ...item, ...(item.role === 'assistant' ? { source: 'cache', streaming: false } : {}) }));
     const cachedHistory = Array.isArray(cached.history) ? cached.history : [];
     const historyItems = cachedHistory.length
@@ -10568,6 +10650,10 @@ function loadTimelineCache() {
 }
 
 function persistTimelineCache() {
+  return persistTimelineCacheCheckpoint();
+}
+
+function persistTimelineCacheCheckpoint({ requireDurable = false } = {}) {
   const entries = [...state.timelineCache.entries()]
     .map(([sessionId, value]) => serializeTimelineCacheEntry(sessionId, value))
     .filter(Boolean)
@@ -10584,7 +10670,10 @@ function persistTimelineCache() {
     }));
   } catch (error) {
     console.warn('[codex-web] timeline cache persist failed', error);
+    if (requireDurable) throw error;
+    return false;
   }
+  return true;
 }
 
 function loadQueuedMessages() {
@@ -10806,6 +10895,8 @@ function normalizeSubmissionOutboxEntry(entry, { restore = false } = {}) {
     sessionId: String(entry.sessionId || '').trim(),
     resolvedSessionId: String(entry.resolvedSessionId || '').trim(),
     outcomeKnown: entry.outcomeKnown === true,
+    ...(entry.acceptedReceipt?.status === 'submitted' && entry.acceptedReceipt?.sessionId
+      ? { acceptedReceipt: sanitizeCacheValue(entry.acceptedReceipt) } : {}),
     manualRetryRequired: entry.manualRetryRequired === true,
     projectId: String(entry.projectId || '').trim(),
     cwd: String(entry.cwd || '').trim(),
@@ -11048,458 +11139,8 @@ function removeSubmissionFromTimelineCache(sessionId, submissionId) {
   return true;
 }
 
-function serializeTimelineCacheEntry(sessionId, value) {
-  if (!sessionId || !value) {
-    return null;
-  }
-  return {
-    sessionId,
-    savedAt: typeof value.savedAt === 'number' ? value.savedAt : 0,
-    validatedAt: typeof value.validatedAt === 'number' ? value.validatedAt : 0,
-    sessionUpdatedAt: typeof value.sessionUpdatedAt === 'number' ? value.sessionUpdatedAt : 0,
-    timeline: cloneTimelineEntries(value.timeline || []),
-    history: cloneTimelineEntries(value.history || []),
-    historyComplete: value.historyComplete === true,
-    hasNewer: value.hasNewer === true, nextBefore: value.nextBefore ?? null, nextAfter: value.nextAfter ?? null,
-    batches: [...cloneCacheMap(value.batches).entries()],
-    approvals: [...cloneCacheMap(value.approvals).entries()],
-    ...(normalizeStreamCursor(value.streamCursor) ? { streamCursor: normalizeStreamCursor(value.streamCursor) } : {}),
-  };
-}
-
-function deserializeTimelineCacheEntry(entry) {
-  if (!entry || typeof entry.sessionId !== 'string' || !entry.sessionId) {
-    return null;
-  }
-  const batches = Array.isArray(entry.batches)
-    ? entry.batches.filter(isCacheMapPair)
-    : [];
-  const approvals = Array.isArray(entry.approvals)
-    ? entry.approvals.filter(isCacheMapPair)
-    : [];
-  return {
-    sessionId: entry.sessionId,
-    value: {
-      savedAt: typeof entry.savedAt === 'number' ? entry.savedAt : 0,
-      validatedAt: typeof entry.validatedAt === 'number' ? entry.validatedAt : 0,
-      sessionUpdatedAt: typeof entry.sessionUpdatedAt === 'number' ? entry.sessionUpdatedAt : 0,
-      timeline: cloneTimelineEntries(Array.isArray(entry.timeline) ? entry.timeline : []),
-      history: cloneTimelineEntries(Array.isArray(entry.history) ? entry.history : []),
-      historyComplete: entry.historyComplete === true,
-      hasNewer: entry.hasNewer === true, nextBefore: entry.nextBefore ?? null, nextAfter: entry.nextAfter ?? null,
-      batches: new Map(batches),
-      approvals: new Map(approvals),
-      ...(normalizeStreamCursor(entry.streamCursor) ? { streamCursor: normalizeStreamCursor(entry.streamCursor) } : {}),
-    },
-  };
-}
-
-function isCacheMapPair(pair) {
-  return Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string';
-}
-
-function cloneCacheMap(map) {
-  const entries = map instanceof Map
-    ? [...map.entries()]
-    : Array.isArray(map)
-      ? map.filter(isCacheMapPair)
-      : [];
-  return new Map(entries.slice(-MAX_TIMELINE_CACHE_MAP_ITEMS).map(([key, value]) => [
-    key,
-    sanitizeCacheValue(value),
-  ]));
-}
-
-function sanitizeCacheValue(value, depth = 0) {
-  if (value == null || typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
-  if (typeof value === 'string') {
-    return value.length > MAX_TIMELINE_SUMMARY_TEXT
-      ? value.slice(0, MAX_TIMELINE_SUMMARY_TEXT)
-      : value;
-  }
-  if (Array.isArray(value)) {
-    if (depth >= MAX_TIMELINE_SUMMARY_DEPTH) {
-      return [];
-    }
-    return value.slice(0, MAX_TIMELINE_SUMMARY_ARRAY_ITEMS)
-      .map((item) => sanitizeCacheValue(item, depth + 1));
-  }
-  if (typeof value === 'object') {
-    if (depth >= MAX_TIMELINE_SUMMARY_DEPTH) {
-      return {};
-    }
-    return Object.fromEntries(
-      Object.entries(value)
-        .slice(0, MAX_TIMELINE_SUMMARY_OBJECT_KEYS)
-        .map(([key, item]) => [key, sanitizeCacheValue(item, depth + 1)]),
-    );
-  }
-  return String(value);
-}
-
-function cloneTimelineEntries(entries) {
-  return dedupeTimelineProjectionEntries(Array.isArray(entries) ? entries : [])
-    .filter((item) => item?.kind !== 'work')
-    .slice(-MAX_TIMELINE_CACHE_ITEMS)
-    .map(cloneTimelineItem)
-    .filter(Boolean);
-}
-
-function cloneTimelineItem(item) {
-  if (!item || typeof item !== 'object') {
-    return null;
-  }
-  const clone = { ...item };
-  if (typeof clone.text === 'string' && clone.text.length > MAX_TIMELINE_ITEM_TEXT) {
-    clone.text = `${clone.text.slice(0, MAX_TIMELINE_ITEM_TEXT)}...`;
-  }
-  return clone;
-}
-
 function hydrateTimelineFromSession(session) {
   return selectVisibleHydratedTimelineItems(fullHydratedTimelineFromSession(session));
-}
-
-function fullHydratedTimelineFromSession(session) {
-  const storedTimeline = normalizeSessionTimeline(session?.timeline);
-  if (storedTimeline.length) {
-    return dedupeTimelineProjectionEntries(canonicalizeStoredTimelineEntries(
-      markKnownFinalTimelineEntries(storedTimeline, session),
-      session,
-    ));
-  }
-  const items = [];
-  const turns = Array.isArray(session.thread?.turns) ? session.thread.turns : [];
-  for (const turn of turns) {
-    const finalAssistantItems = new Set(restrictedFinalAssistantItemsForTurn(turn));
-    for (const [itemIndex, item] of (turn.items || []).entries()) {
-      const role = timelineRoleForThreadItem(item);
-      const text = typeof item.text === 'string' ? item.text.trim() : '';
-      if (!role || !text) {
-        continue;
-      }
-      const itemId = threadTimelineItemId(item);
-      const clientMessageId = typeof item?.clientMessageId === 'string' ? item.clientMessageId.trim() : '';
-      const isFinal = role === 'assistant' && finalAssistantItems.has(item);
-      const phase = historicalAssistantProjectionPhase(item, isFinal);
-      const normalized = normalizeSessionTimelineItem({
-        id: role === 'assistant' && (itemId || isFinal)
-          ? assistantTimelineEntryId(turn.id, itemId, phase, isFinal)
-          : `history_${turn.id}_${itemIndex}`,
-        kind: 'message',
-        role,
-        label: role === 'user' ? 'You' : 'Assistant',
-        meta: role === 'assistant' ? assistantProjectionMeta(phase, isFinal) : 'history',
-        text,
-        turnId: turn.id,
-        ...(itemId ? { itemId, projectionKey: `${turn.id}\u0000${itemId}` } : {}),
-        ...(clientMessageId ? { clientMessageId } : {}),
-        lifecycle: 'completed',
-      });
-      if (normalized) {
-        items.push(normalized);
-      }
-    }
-    if (isFailureTurnStatus(turn?.status)) {
-      const text = runtimeTurnErrorMessage(turn);
-      items.push({
-        id: `error_${turn?.id || `history_failed_${items.length}`}`,
-        kind: 'message',
-        role: 'system',
-        severity: 'error',
-        label: 'Error',
-        meta: 'failed',
-        text,
-      });
-    }
-  }
-  if (!items.length) {
-    const preview = firstInputForSession(session);
-    return preview ? [{
-      id: `history_preview_${session.id}`,
-      kind: 'message',
-      role: 'user',
-      label: 'You',
-      meta: 'preview',
-      text: preview,
-    }] : [];
-  }
-  return dedupeTimelineProjectionEntries(items);
-}
-
-function markKnownFinalTimelineEntries(entries, session) {
-  const finalIndexes = restrictedFinalAssistantTimelineIndexes(entries, session);
-  return entries.map((item, index) => (
-    finalIndexes.has(index) && item?.meta !== 'final' && item?.meta !== 'final_answer'
-      ? { ...item, meta: 'final' }
-      : item
-  ));
-}
-
-function canonicalizeStoredTimelineEntries(entries, session) {
-  const candidates = [];
-  for (const turn of sessionTurns(session)) {
-    const finalItems = new Set(restrictedFinalAssistantItemsForTurn(turn));
-    for (const [itemIndex, item] of (turn.items || []).entries()) {
-      const role = timelineRoleForThreadItem(item);
-      const text = typeof item?.text === 'string' ? item.text.trim() : '';
-      if (!role || !text) {
-        continue;
-      }
-      const itemId = threadTimelineItemId(item);
-      const isFinal = role === 'assistant' && finalItems.has(item);
-      const phase = historicalAssistantProjectionPhase(item, isFinal);
-      candidates.push({
-        turnId: turn.id,
-        itemIndex,
-        itemId,
-        role,
-        text,
-        isFinal,
-        phase,
-      });
-    }
-  }
-  const used = new Set();
-  let cursor = 0;
-  return entries.map((entry) => {
-    if (entry?.kind !== 'message' || (entry.role !== 'user' && entry.role !== 'assistant')) {
-      return entry;
-    }
-    let candidateIndex = candidates.findIndex((candidate, index) => (
-      index >= cursor
-      && !used.has(index)
-      && candidate.role === entry.role
-      && candidate.text === entry.text
-    ));
-    if (candidateIndex < 0) {
-      candidateIndex = candidates.findIndex((candidate, index) => (
-        !used.has(index)
-        && candidate.role === entry.role
-        && candidate.text === entry.text
-      ));
-    }
-    if (candidateIndex < 0) {
-      return entry;
-    }
-    used.add(candidateIndex);
-    cursor = Math.max(cursor, candidateIndex + 1);
-    const candidate = candidates[candidateIndex];
-    if (entry.role === 'user') {
-      return { ...entry, turnId: candidate.turnId };
-    }
-    const id = candidate.itemId || candidate.isFinal
-      ? assistantTimelineEntryId(candidate.turnId, candidate.itemId, candidate.phase, candidate.isFinal)
-      : entry.id;
-    return {
-      ...entry,
-      id,
-      turnId: candidate.turnId,
-      meta: assistantProjectionMeta(candidate.phase, candidate.isFinal),
-      lifecycle: 'completed',
-      ...(candidate.itemId
-        ? {
-          itemId: candidate.itemId,
-          projectionKey: `${candidate.turnId}\u0000${candidate.itemId}`,
-        }
-        : {}),
-    };
-  });
-}
-
-function threadTimelineItemId(item) {
-  const direct = String(item?.itemId || item?.id || '').trim();
-  if (direct) {
-    return direct;
-  }
-  return String(item?.raw?.itemId || item?.raw?.id || '').trim();
-}
-
-function historicalAssistantProjectionPhase(item, isFinal = false) {
-  const type = String(item?.type || '').replace(/[^a-z]/giu, '').toLowerCase();
-  if (type.includes('reasoning')) {
-    return 'reasoning_summary';
-  }
-  return normalizeAssistantProjectionPhase(item?.phase, isFinal);
-}
-
-function timelineTurnId(item) {
-  const direct = String(item?.turnId || '').trim();
-  if (direct) {
-    return direct;
-  }
-  const id = String(item?.id || '');
-  const historyMatch = id.match(/^history_(.+)_\d+$/u);
-  if (historyMatch?.[1]) {
-    return historyMatch[1];
-  }
-  const finalMatch = id.match(/^assistant_(.+)_final$/u);
-  if (finalMatch?.[1]) {
-    return finalMatch[1];
-  }
-  if (id.startsWith('assistant_')) {
-    return id.slice('assistant_'.length);
-  }
-  return '';
-}
-
-function timelineProjectionIdentity(item) {
-  if (typeof item?.projectionKey === 'string' && item.projectionKey) {
-    return `projection:${item.projectionKey}`;
-  }
-  const turnId = timelineTurnId(item);
-  if (turnId && item?.itemId) {
-    return `projection:${turnId}\u0000${item.itemId}`;
-  }
-  return [
-    'message',
-    turnId,
-    item?.role || '',
-    item?.text || '',
-  ].join('\u0000');
-}
-
-function dedupeTimelineProjectionEntries(entries) {
-  const source = (Array.isArray(entries) ? entries : []).filter((item) => (
-    Boolean(item)
-    && !(item?.kind === 'message' && item.role === 'system' && isTurnInterruptTimeoutMessage(item.text))
-  ));
-  const actualFinalKeys = new Set(source.flatMap((item) => {
-    const turnId = timelineTurnId(item);
-    const meta = String(item?.meta || '').trim().toLowerCase();
-    const final = item?.kind === 'message'
-      && item.role === 'assistant'
-      && (meta === 'final' || meta === 'final_answer' || String(item.id || '').endsWith('_final'));
-    return final && turnId && item.text ? [`${turnId}\u0000${item.text}`] : [];
-  }));
-  const result = [];
-  const indexes = new Map();
-  for (const original of source) {
-    let item = { ...original };
-    const turnId = timelineTurnId(item);
-    const finalKey = item?.kind === 'message' && item.role === 'assistant' && turnId && item.text
-      ? `${turnId}\u0000${item.text}`
-      : '';
-    const semanticKey = timelineSemanticProjectionKey(item, turnId);
-    const key = finalKey && actualFinalKeys.has(finalKey)
-      ? `final:${finalKey}`
-      : semanticKey
-        ? semanticKey
-      : item.projectionKey
-        ? `projection:${item.projectionKey}`
-        : item.id
-          ? `id:${item.id}`
-          : '';
-    if (finalKey && actualFinalKeys.has(finalKey) && !item.itemId) {
-      item = {
-        ...item,
-        id: assistantTimelineEntryId(turnId, '', 'final_answer', true),
-        turnId,
-        meta: 'final',
-        lifecycle: 'completed',
-        streaming: false,
-      };
-    }
-    if (key && indexes.has(key)) {
-      result[indexes.get(key)] = item;
-    } else if (timelineEntriesAreTransientDuplicates(result.at(-1), item)) {
-      const index = result.length - 1;
-      result[index] = preferredTimelineDuplicate(result.at(-1), item);
-      if (key) {
-        indexes.set(key, index);
-      }
-    } else {
-      if (key) {
-        indexes.set(key, result.length);
-      }
-      result.push(item);
-    }
-  }
-  return result;
-}
-
-function timelineSemanticProjectionKey(item, turnId = timelineTurnId(item)) {
-  if (item?.kind !== 'message' || !turnId || !item.text || !['user', 'assistant'].includes(item.role)) {
-    return '';
-  }
-  if (item.role === 'user') {
-    const clientMessageId = String(item.clientMessageId || '').trim();
-    if (clientMessageId) {
-      return `semantic:${turnId}\u0000user-client\u0000${clientMessageId}`;
-    }
-    return `semantic:${turnId}\u0000user\u0000${timelineMessageIdentity(item)}`;
-  }
-  const meta = String(item.meta || '').trim().toLowerCase();
-  const phase = meta === 'history' ? '' : meta === 'final_answer' ? 'final' : meta;
-  return `semantic:${turnId}\u0000assistant\u0000${phase}\u0000${item.text}`;
-}
-
-function timelineEntriesAreTransientDuplicates(previous, next) {
-  return globalThis.CodexWebTimelineReconciliation.transientDuplicate(previous, next, {
-    identity: timelineMessageIdentity, turnId: timelineTurnId,
-  });
-}
-
-function preferredTimelineDuplicate(previous, next) {
-  const previousPending = previous?.meta === 'pending' || Boolean(previous?.submissionId);
-  const nextPending = next?.meta === 'pending' || Boolean(next?.submissionId);
-  if (previousPending !== nextPending) {
-    return previousPending ? next : previous;
-  }
-  return next;
-}
-
-function normalizeSessionTimeline(items) {
-  return (Array.isArray(items) ? items : [])
-    .map((item) => normalizeSessionTimelineItem(item))
-    .filter(Boolean);
-}
-
-function normalizeSessionTimelineItem(item) {
-  if (!item || item.kind !== 'message') {
-    return null;
-  }
-  const role = item.role === 'user' || item.role === 'assistant' || item.role === 'system'
-    ? item.role
-    : null;
-  const display = normalizeTimelineMessageDisplay(role, item.text, item.attachments);
-  if (role === 'system' && isTurnInterruptTimeoutMessage(display.text)) {
-    return null;
-  }
-  if (role === 'system' && (
-    isBackgroundMcpTransportFailure(display.text)
-    || isRecoverableToolRouterFailure(display.text)
-  )) {
-    return null;
-  }
-  if (!role || (!display.text && !display.attachments.length)) {
-    return null;
-  }
-  const isFailure = role === 'system' && item.severity === 'error' && item.meta === 'failed';
-  const text = isFailure ? publicRuntimeTurnFailureMessage(display.text) : display.text;
-  return {
-    id: typeof item.id === 'string' && item.id ? item.id : `timeline_${role}_${text.slice(0, 24)}`,
-    kind: 'message',
-    role,
-    label: typeof item.label === 'string' && item.label ? item.label : role === 'user' ? 'You' : role === 'assistant' ? 'Assistant' : 'System',
-    meta: typeof item.meta === 'string' ? item.meta : '',
-    text,
-    ...(typeof item.turnId === 'string' && item.turnId ? { turnId: item.turnId } : {}),
-    ...(typeof item.itemId === 'string' && item.itemId ? { itemId: item.itemId } : {}),
-    ...(typeof item.projectionKey === 'string' && item.projectionKey ? { projectionKey: item.projectionKey } : {}),
-    ...(typeof item.clientMessageId === 'string' && item.clientMessageId
-      ? { clientMessageId: item.clientMessageId }
-      : {}),
-    ...Object.fromEntries(['submissionId', 'deliveryLabel', 'historyAnchorId'].filter(key => typeof item[key] === 'string' && item[key]).map(key => [key, item[key]])),
-    ...(typeof item.phase === 'string' && item.phase ? { phase: item.phase } : {}),
-    ...(typeof item.lifecycle === 'string' && item.lifecycle ? { lifecycle: item.lifecycle } : {}),
-    ...(item.streaming === true ? { streaming: true } : {}),
-    ...(typeof item.source === 'string' && item.source ? { source: item.source } : {}),
-    ...(display.attachments.length ? { attachments: display.attachments } : {}),
-    severity: item.severity === 'error' ? 'error' : undefined,
-  };
 }
 
 function selectVisibleHydratedTimelineItems(items) {
@@ -11644,6 +11285,8 @@ function loadOlderSessionTimelinePage(direction = 'before') {
     cancelSessionTimelinePageLoad();
   }
   const generation = sessionNavigationGeneration, authGeneration = authRequestGeneration;
+  const requestTimelineRevision = timelineRevision;
+  const requestTimelineGeneration = state.currentSession?.timelineCheckpoint?.generation;
   const controller = new AbortController();
   const cancelledResult = {};
   let settleCancellation = null;
@@ -11681,15 +11324,27 @@ function loadOlderSessionTimelinePage(direction = 'before') {
       if (payload === cancelledResult
         || !isAuthRequestCurrent(authGeneration)
         || generation !== sessionNavigationGeneration
+        || requestTimelineRevision !== timelineRevision && (!payload?.timelineCheckpoint
+          || state.currentSession?.timelineCheckpoint?.generation !== requestTimelineGeneration
+            && payload.timelineCheckpoint.generation !== state.currentSession?.timelineCheckpoint?.generation)
         || sessionTimelinePageRequest !== request
         || state.sessionId !== sessionId
         || state.currentSession?.id !== sessionId
         || !Array.isArray(payload?.items)) {
         return false;
       }
+      if (payload.resetRequired === true) {
+        state.currentSession.timelineNextBefore = null;
+        state.currentSession.timelineNextAfter = null;
+        void refreshCurrentSessionMetadata({ hydrateTimeline: true });
+        return false;
+      }
       const historyAnchor = captureTimelineViewport();
       const olderItems = normalizeSessionTimeline(payload.items);
-      const combinedHistory = dedupeTimelineProjectionEntries(direction === 'after' ? [...state.sessionHistoryItems, ...olderItems] : [...olderItems, ...state.sessionHistoryItems]);
+      let combinedHistory = dedupeTimelineProjectionEntries(direction === 'after' ? [...state.sessionHistoryItems, ...olderItems] : [...olderItems, ...state.sessionHistoryItems]);
+      if (payload.timelineCheckpoint) combinedHistory = TIMELINE_SYNC.reconcileMessages([],
+        dedupeTimelineProjectionEntries([...combinedHistory, ...state.timeline]), payload.timelineCheckpoint);
+      timelineRevision += 1;
       state.currentSession = {
         ...state.currentSession,
         timeline: combinedHistory,
@@ -12061,7 +11716,7 @@ function renderMobileProjectDrawer() {
       <aside class="mobile-project-drawer${state.mobileSidebarOpen ? ' is-open' : ''}" role="dialog" aria-modal="true" aria-labelledby="mobile-project-drawer-title" data-focus-scope="mobile-projects"${state.mobileSidebarOpen ? '' : ' inert'}>
         <header class="project-rail-header mobile-project-drawer-header">
           <div class="project-rail-brand" id="mobile-project-drawer-title">${escapeHtml(state.siteTitle)}</div>
-          <button class="ghost page-back-button" type="button" id="mobile-drawer-close-button" aria-label="Close projects" data-initial-focus>${renderBackButtonIcon()}</button>
+          ${UI.closeButton('mobile-drawer-close-button', { label: 'Close projects' })}
         </header>
         <nav class="project-rail-list" data-i18n-skip>
           ${renderWorkspaceProjectList()}
@@ -12258,7 +11913,6 @@ function setTimelineOpenPositionForSession(session, saved = null) {
   state.timelineShouldFollowLatest = saved ? saved.shouldFollowLatest : true;
   if (!saved) {
     state.timelineWindowEnd = null;
-    if (session?.timelineHasNewer === true) { state.timeline = []; state.sessionHistoryItems = []; state.sessionHistoryStartIndex = 0; }
     nextTimelineRestoreSnapshot = latestTimelineViewportSnapshot();
     return;
   }
@@ -13187,6 +12841,7 @@ function onVisibilityChange() {
   }
   if (document.visibilityState === 'visible') {
     void CONNECTION.check();
+    void OBSERVATION_RECOVERY.check();
     if (AUTH_RECOVERY.needsRecovery()) { void restoreAuth({ automatic: true }); return; }
     void checkForAppUpdate();
     void drainSubmissionOutbox();
@@ -13304,6 +12959,7 @@ function setupStreamRecoveryWatchdog() {
   }
   streamRecoveryTimer = setInterval(() => {
     void CONNECTION.check();
+    void OBSERVATION_RECOVERY.check();
     if (AUTH_RECOVERY.needsRecovery()) { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) void restoreAuth({ automatic: true }); return; }
     void recoverActiveTurnIfStreamUnhealthy({ reconcile: false });
     void refreshBackgroundSessionAttention();
@@ -13340,18 +12996,19 @@ async function recoverActiveTurnIfStreamUnhealthy({
   forceReconnect = false,
   reconcile = true,
 } = {}) {
-  if (streamRecoveryPromise) {
-    return streamRecoveryPromise;
-  }
-  streamRecoveryPromise = recoverActiveTurnIfStreamUnhealthyOnce({
+  const owner = recoveryOwnerKey();
+  if (streamRecoveryPromise && streamRecoveryKey === owner) return streamRecoveryPromise;
+  streamRecoveryKey = owner;
+  const promise = recoverActiveTurnIfStreamUnhealthyOnce({
     viewportSnapshot,
     forceReconnect,
     reconcile,
   })
     .finally(() => {
-      streamRecoveryPromise = null;
+      if (streamRecoveryPromise === promise) streamRecoveryPromise = null;
     });
-  return streamRecoveryPromise;
+  streamRecoveryPromise = promise;
+  return promise;
 }
 
 async function recoverActiveTurnIfStreamUnhealthyOnce({
@@ -13374,10 +13031,12 @@ async function recoverActiveTurnIfStreamUnhealthyOnce({
   } else if (!reconcile) {
     return null;
   }
+  const owner = recoveryOwnerKey();
   const snapshot = viewportSnapshot || captureTimelineViewport();
   const session = reconcile
     ? await reconcileCurrentSessionInBackground({ viewportSnapshot: snapshot })
     : null;
+  if (owner !== recoveryOwnerKey()) return null;
   chatTimelineForegroundSnapshot = null;
   if (state.pendingTurn && state.turnId && !isTurnStreamHealthy()) {
     connectActiveTurnStream({ forceReconnect: true });
@@ -13397,7 +13056,8 @@ function reconcileCurrentSessionInBackground({ viewportSnapshot = null, forceDet
   if (!state.authSession || !state.sessionId || isShareContext()) {
     return Promise.resolve(null);
   }
-  if (sessionReconcilePromise) {
+  const owner = recoveryOwnerKey();
+  if (sessionReconcilePromise && sessionReconcileKey === owner) {
     if (forceDetail && !sessionReconcileForceDetail) {
       return sessionReconcilePromise.then(() => reconcileCurrentSessionInBackground({
         viewportSnapshot,
@@ -13408,6 +13068,7 @@ function reconcileCurrentSessionInBackground({ viewportSnapshot = null, forceDet
   }
   const controller = new AbortController();
   const timer = scheduleNetworkTimer(() => controller.abort(), SESSION_RECONCILE_TIMEOUT_MS);
+  sessionReconcileKey = owner;
   sessionReconcileForceDetail = forceDetail;
   const operation = forceDetail
     ? refreshCurrentSessionMetadata({

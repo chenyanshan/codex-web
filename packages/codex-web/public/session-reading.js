@@ -5,6 +5,7 @@
   /** @param {{
    * getSessionId: () => string, getOwner: () => string,
    * getTimeline: () => HTMLElement | null,
+   * resolveAnchorId?: (id: string) => string,
    * getFollowing: () => boolean, setFollowing: (following: boolean) => void,
    * isLatestWindow: () => boolean,
    * storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
@@ -70,7 +71,8 @@
           timeline.scrollTop = timeline.scrollHeight;
         } else {
           const nodes = Array.from(timeline.querySelectorAll('[data-timeline-id]'));
-          const anchor = snapshot.anchors.find(item => nodes.some(node => node.getAttribute('data-timeline-id') === item.id));
+          const anchors = snapshot.anchors.map(item => ({ ...item, id: options.resolveAnchorId?.(item.id) || item.id }));
+          const anchor = anchors.find(item => nodes.some(node => node.getAttribute('data-timeline-id') === item.id));
           const node = anchor && nodes.find(item => item.getAttribute('data-timeline-id') === anchor.id);
           timeline.scrollTop = node && anchor
             ? timeline.scrollTop + node.getBoundingClientRect().top - timeline.getBoundingClientRect().top - anchor.offset

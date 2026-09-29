@@ -1,6 +1,6 @@
 # Retained compatibility paths
 
-Primary generated protocol: Codex 0.156.1. The facade remains `CodexAppClient`;
+Primary generated protocol: Codex 0.159.0. The facade remains `CodexAppClient`;
 transport, child lifecycle, request correlation, and official observation have one owner.
 
 | Path | Reason and affected versions | Activation / exit |

@@ -40,6 +40,7 @@
         return {
           session: {
             ...sessionSummary, ...(timelineSession || {}), ...(statusSession || {}), ...executionFields,
+            ...(timelinePayload?.timelineCheckpoint ? { timelineCheckpoint: timelinePayload.timelineCheckpoint } : {}),
             ...(timeline ? {
               timeline: timeline.map((item) => ({ ...item })),
               timelineComplete: hasRemoteTimeline ? timelinePayload.hasMore !== true : cached?.historyComplete === true,

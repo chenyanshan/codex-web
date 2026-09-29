@@ -1,3 +1,6 @@
+import { handleUserInputRoute } from './user_input_routes.js';
+import { FileUserInputStore } from './user_input_store.js';
+import { handleRuntimeMaintenanceRoute } from './runtime_maintenance_routes.js';
 import { withMultipartFiles, MAX_UPLOAD_FILE_BYTES, type ParsedUploadFile } from './multipart_upload.js';
 import { readIdentitySnapshot } from './identity_store.js';
 import { paginateSessionTimeline } from './session_timeline_page.js';
@@ -54,6 +57,7 @@ import {
   type CodexWebSessionFileContent,
   type CodexWebSessionFileScope,
 } from './session_file_store.js';
+import { assistantLinkedAbsoluteFilePaths } from './session_file_links.js';
 import {
   FileSessionSubmissionStore,
   hashSessionSubmissionPayload,
@@ -136,6 +140,7 @@ export interface CodexWebServerHandle {
   stop(): Promise<void>;
 }
 
+const userInputStores = new WeakMap<object, FileUserInputStore>();
 const workspaceDirectoryCache = new WeakMap<CodexWebRuntime, Map<string, { version: string; source: CodexWebSession[]; items: Array<Record<string, unknown>> }>>();
 const privateStreamChecks = new Set<() => Promise<void>>();
 const recheckPrivateStreams = () => Promise.all([...privateStreamChecks].map((check) => check()));
@@ -245,16 +250,23 @@ const DEFAULT_STATIC_SOURCE_FILES = [
   'settings-ui.js',
   'settings-ui.css',
   'work-details-view.js',
+  'work-details-view.css',
+  'runtime-settings.js',
+  'user-input-view.js',
+  'user-input-view.css',
   'session-pagination.js',
   'request-context.js',
   'draft-store.js',
   'session-rename.js',
   'session-attention.js',
   'network-recovery.js',
+  'submission-identity.js',
   'submission-delivery.js',
   'session-loader.js',
   'session-reading.js',
   'timeline-reconciliation.js',
+  'timeline-model.js',
+  'lazy-feature.js',
   'admin-editor.js',
   'admin-data.js',
   'attachment-upload.js',
@@ -301,6 +313,12 @@ export function createCodexWebServer({
   webhookConversationStore: providedWebhookConversationStore,
   staticFiles,
 }: CreateCodexWebServerOptions): CodexWebServerHandle {
+  let questionReceiptStore = userInputStores.get(runtime);
+  if (!questionReceiptStore) {
+    questionReceiptStore = new FileUserInputStore({ stateDir: config.stateDir });
+    userInputStores.set(runtime, questionReceiptStore);
+  }
+  runtime.setUserInputReceiptStore?.(questionReceiptStore);
   const resolvedStaticFiles = staticFiles ?? loadDefaultStaticFiles();
   const metrics = new HttpMetrics();
   const activeSseClosers = new Set<() => void>();
@@ -516,7 +534,11 @@ function loadDefaultStaticFiles(): StaticFilesRecord {
       'application/javascript; charset=utf-8',
     ),
     '/admin-ui.js': () => versionedAsset(readText('admin-ui.js'), 'application/javascript; charset=utf-8'),
+    '/runtime-settings.js': () => versionedAsset(readText('runtime-settings.js'), 'application/javascript; charset=utf-8'),
+    '/user-input-view.css': () => versionedAsset(readText('user-input-view.css'), 'text/css; charset=utf-8'),
+    '/user-input-view.js': () => versionedAsset(readText('user-input-view.js'), 'application/javascript; charset=utf-8'),
     '/work-details-view.js': () => versionedAsset(readText('work-details-view.js'), 'application/javascript; charset=utf-8'),
+    '/work-details-view.css': () => versionedAsset(readText('work-details-view.css'), 'text/css; charset=utf-8'),
     '/request-context.js': () => versionedAsset(readText('request-context.js'), 'application/javascript; charset=utf-8'),
     '/session-loader.js': () => versionedAsset(readText('session-loader.js'), 'application/javascript; charset=utf-8'),
     '/network-recovery.js': () => versionedAsset(readText('network-recovery.js'), 'application/javascript; charset=utf-8'),
@@ -806,6 +828,29 @@ async function handleRequest({
     const after = streamAccess(currentState, principal, threadId);
     return after !== 'denied' && (before === 'admin-unmapped' || after === before);
   });
+  const userInputMatch = pathname.match(/^\/api\/sessions\/([^/]+)(\/user-input(?:\/.*)?)$/u);
+  if (userInputMatch) {
+    const sessionId = decodeURIComponent(userInputMatch[1]!);
+    let threadId = sessionId;
+    if (identityState?.settings.multiUserEnabled || principal.mode === 'multi') {
+      const resolved = identityState && resolveReadableWorkspaceAppSession(identityState, principal, sessionId);
+      if (!resolved || !canWriteResolvedAppSession(identityState!, principal, resolved.appSession)) {
+        writeSessionNotFound(response); return;
+      }
+      threadId = resolved.appSession.codexThreadId;
+    } else if (!await runtime.readSession(sessionId)) {
+      writeSessionNotFound(response); return;
+    }
+    let store = userInputStores.get(runtime);
+    if (!store) { store = new FileUserInputStore({stateDir:config.stateDir}); userInputStores.set(runtime,store); }
+    const result = await handleUserInputRoute({ method, path: userInputMatch[2]!,
+      body: method === 'POST' ? await readJsonBody(request) : undefined,
+      ownerUserId: principal.userId || 'single', sessionId, threadId, runtime, store });
+    response.setHeader('Cache-Control', 'no-store');
+    writeJson(response, result?.status ?? 404, result?.body ?? {error:'not_found'});
+    return;
+  }
+  if (await handleRuntimeMaintenanceRoute({ runtime, principal, request, response, pathname, method, readJsonBody })) return;
   if (pathname === '/api/metrics' && method === 'GET') {
     if (!principal.isAdmin) { writeJson(response, 403, { error: 'forbidden' }); return; }
     writeJson(response, 200, { http: responseMetrics.get(response)?.snapshot(), staticCache: staticAssetCacheMetrics(), storage: { ...getStorageGovernanceMetrics(), managedStorageMaxBytes: config.managedStorageMaxBytes, projectUploadMaxBytes: config.projectUploadMaxBytes }, runtime: runtime.diagnostics?.(), auth: auth.diagnostics?.() });
@@ -1037,7 +1082,7 @@ async function handleRequest({
     const sessionId = decodeURIComponent(sessionFileResolveMatch[1]!);
     const runtimeSession = await (runtime.readSessionMetadata ?? runtime.readSession).call(runtime, sessionId);
     const scope = runtimeSession
-      ? singleUserSessionFileScope({ config, principal, sessionId, runtimeSession })
+      ? singleUserSessionFileScope({ config, principal, sessionId, runtimeSession, runtime })
       : null;
     if (!scope) {
       writeSessionNotFound(response);
@@ -1069,7 +1114,7 @@ async function handleRequest({
     const sessionId = decodeURIComponent(sessionFileContentMatch[1]!);
     const runtimeSession = await (runtime.readSessionMetadata ?? runtime.readSession).call(runtime, sessionId);
     const scope = runtimeSession
-      ? singleUserSessionFileScope({ config, principal, sessionId, runtimeSession })
+      ? singleUserSessionFileScope({ config, principal, sessionId, runtimeSession, runtime })
       : null;
     if (!scope) {
       writeSessionNotFound(response);
@@ -1085,6 +1130,15 @@ async function handleRequest({
       return;
     }
     writeSessionFileContent(response, content, url.searchParams.get('download') === '1');
+    return;
+  }
+
+  const activityDiffMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/turns\/([^/]+)\/diff$/u);
+  if (activityDiffMatch && method === 'GET') {
+    const sessionId = decodeURIComponent(activityDiffMatch[1]!);
+    const session = await runtime.readSession(sessionId);
+    if (!session) { writeSessionNotFound(response); return; }
+    writeJson(response, 200, { diff: runtime.getTurnDiff?.(sessionId, decodeURIComponent(activityDiffMatch[2]!)) ?? null });
     return;
   }
 
@@ -1110,6 +1164,7 @@ async function handleRequest({
         session.timeline ?? [],
         url,
         (items) => presentSessionTimeline(items, session.thread, true),
+        session.timelineCheckpoint ? { sessionId: session.id, scope: 'single:workspace', checkpoint: session.timelineCheckpoint } : undefined,
       );
     responseMetrics.get(response)?.historyPage(page.items.length);
     page.items = await repairAttachmentHistory(page.items, { stateDir: config.stateDir, sessionId: session.id });
@@ -1359,6 +1414,7 @@ async function handleRequest({
       turnId: decodeURIComponent(eventsMatch[1]!),
       afterId: normalizeLastEventId(url.searchParams.get('after'), request.headers['last-event-id']),
       requestedEpoch: normalizeEventEpoch(url.searchParams.get('epoch'), request.headers['x-codex-event-epoch']),
+      requestedTimelineGeneration: normalizeEventEpoch(url.searchParams.get('timelineGeneration')),
       registerSseCloser,
     });
     return;
@@ -2458,6 +2514,7 @@ async function handlePublicShareRequest({
       turnId,
       afterId: normalizeLastEventId(url.searchParams.get('after'), request.headers['last-event-id']),
       requestedEpoch: normalizeEventEpoch(url.searchParams.get('epoch'), request.headers['x-codex-event-epoch']),
+      requestedTimelineGeneration: normalizeEventEpoch(url.searchParams.get('timelineGeneration')),
       registerSseCloser,
       audience: 'share',
       authorizationDeadline: Date.parse(share.expiresAt),
@@ -2934,6 +2991,9 @@ async function advanceSessionSubmission({
       input.runtimeEnv = codexWebLocalApiEnvironment(localApiUrl);
     }
     const baselineSession = await runtime.readSession(target.runtimeSessionId) ?? target.runtimeSession;
+    // The persisted submission identity also binds the optimistic message to
+    // both its live event and the native history's initial user entry.
+    input.clientMessageId = stableIdHash(current.id, 24);
     const baselineActiveTurnId = normalizeOptionalString(baselineSession.activeTurnId);
     if (current.deliveryMode === 'reject_if_busy' && baselineActiveTurnId) {
       throw createSessionBusyError(baselineActiveTurnId);
@@ -3574,7 +3634,7 @@ async function presentSessionSubmissionResponse({
     status: current.status,
     sessionId: current.sessionId,
     turnId: current.turnId,
-    ...(current.operation === 'steer' ? { clientMessageId: stableIdHash(current.id, 24) } : {}),
+    clientMessageId: stableIdHash(current.id, 24),
     error: current.error,
     ...(current.result ? { result: current.result } : {}),
   };
@@ -4305,6 +4365,7 @@ async function handleMultiUserRequest({
       visibleSessionTimeline(runtimeSession.timeline, runtimeSession.thread, true),
       url,
       (items) => presentSessionTimeline(items, runtimeSession.thread, true),
+      runtimeSession.timelineCheckpoint ? { sessionId: appSession.id, scope: `admin:${principal.userId}:workspace`, checkpoint: runtimeSession.timelineCheckpoint } : undefined,
     );
     responseMetrics.get(response)?.historyPage(page.items.length);
     page.items = await repairAttachmentHistory(page.items, { stateDir: config.stateDir, sessionId: appSession.codexThreadId });
@@ -4351,6 +4412,7 @@ async function handleMultiUserRequest({
       turnId,
       afterId: normalizeLastEventId(url.searchParams.get('after'), request.headers['last-event-id']),
       requestedEpoch: normalizeEventEpoch(url.searchParams.get('epoch'), request.headers['x-codex-event-epoch']),
+      requestedTimelineGeneration: normalizeEventEpoch(url.searchParams.get('timelineGeneration')),
       registerSseCloser,
       audience: 'workspace',
     });
@@ -4558,6 +4620,16 @@ async function handleMultiUserRequest({
     return true;
   }
 
+  const activityDiffMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/turns\/([^/]+)\/diff$/u);
+  if (activityDiffMatch && method === 'GET') {
+    const resolved = resolveReadableWorkspaceAppSession(identityState, principal, decodeURIComponent(activityDiffMatch[1]!));
+    if (!resolved || !canViewProjectWorkDetails(principal, resolved.project)) {
+      writeSessionNotFound(response); return true;
+    }
+    writeJson(response, 200, { diff: runtime.getTurnDiff?.(resolved.appSession.codexThreadId, decodeURIComponent(activityDiffMatch[2]!)) ?? null });
+    return true;
+  }
+
   const sessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/u);
   if (sessionMatch && method === 'GET') {
     const resolved = resolveReadableWorkspaceAppSession(identityState, principal, decodeURIComponent(sessionMatch[1]!));
@@ -4604,6 +4676,7 @@ async function handleMultiUserRequest({
         visibleSessionTimeline(runtimeSession.timeline, runtimeSession.thread, includeWorkDetails),
         url,
         (items) => presentSessionTimeline(items, runtimeSession.thread, includeWorkDetails, true),
+        runtimeSession.timelineCheckpoint ? { sessionId: resolved.appSession.id, scope: `${principal.userId}:${audience}`, checkpoint: runtimeSession.timelineCheckpoint } : undefined,
       );
     responseMetrics.get(response)?.historyPage(page.items.length);
     page.items = await repairAttachmentHistory(page.items, { stateDir: config.stateDir, sessionId: resolved.appSession.codexThreadId });
@@ -5090,6 +5163,7 @@ async function handleMultiUserRequest({
       turnId,
       afterId: normalizeLastEventId(url.searchParams.get('after'), request.headers['last-event-id']),
       requestedEpoch: normalizeEventEpoch(url.searchParams.get('epoch'), request.headers['x-codex-event-epoch']),
+      requestedTimelineGeneration: normalizeEventEpoch(url.searchParams.get('timelineGeneration')),
       registerSseCloser,
       audience: canViewProjectWorkDetails(principal, findProject(identityState, appSession.projectId))
         ? 'workspace'
@@ -5616,11 +5690,13 @@ function singleUserSessionFileScope({
   principal,
   sessionId,
   runtimeSession,
+  runtime,
 }: {
   config: CodexWebConfig;
   principal: CodexWebPrincipal;
   sessionId: string;
   runtimeSession: CodexWebSession;
+  runtime: CodexWebRuntime;
 }): CodexWebSessionFileScope | null {
   const projectRoot = normalizeOptionalString(runtimeSession.cwd);
   if (!projectRoot) {
@@ -5634,6 +5710,12 @@ function singleUserSessionFileScope({
     projectStorageKey: `cwd-${stableIdHash(projectRoot, 16)}`,
     attachmentSessionIds: [sessionId, runtimeSessionId].filter(Boolean),
     legacyReportKeys: legacyReportKeysForProject(projectRoot, runtimeSession.projectName),
+    ...(principal.isAdmin ? {
+      loadLinkedFilePaths: async () => {
+        const session = await (runtime.readSessionTimeline ?? runtime.readSession).call(runtime, sessionId);
+        return session ? assistantLinkedAbsoluteFilePaths(session) : [];
+      },
+    } : {}),
     stateDir: config.stateDir,
     reportsDir: config.reportsDir,
   };
@@ -5701,6 +5783,7 @@ async function multiUserSessionFileScope({
       normalizeOptionalString(runtimeSession.id),
     ].filter(Boolean),
     legacyReportKeys: [resolved.project.id, resolved.project.internalName].filter(Boolean),
+    ...(principal.isAdmin ? { linkedFilePaths: assistantLinkedAbsoluteFilePaths(runtimeSession) } : {}),
     stateDir: config.stateDir,
     reportsDir: config.reportsDir,
   };
@@ -6126,6 +6209,11 @@ function presentSessionForUser({
     ...(includeActivity && Number.isFinite(session.turnStartedAt) ? { turnStartedAt: session.turnStartedAt } : {}),
     ...(includeActivity && Number.isFinite(session.lastBusinessActivityAt) ? { lastBusinessActivityAt: session.lastBusinessActivityAt } : {}),
     settings: presentSessionSettings(session.settings),
+    ...(session.timelineCheckpoint ? { timelineCheckpoint: session.timelineCheckpoint } : {}),
+    ...(includeDetails && includeWorkDetails && !forceReadOnly ? {
+      turnActivity: session.turnActivity ?? null,
+      userInputRequests: !readOnly ? session.userInputRequests ?? [] : [],
+    } : {}),
     ...(includeDetails ? {
       thread: presentSessionThread(session.thread, includeWorkDetails),
       timeline: presentSessionTimeline(session.timeline, session.thread, includeWorkDetails),
@@ -6165,6 +6253,8 @@ function presentActiveTurnSnapshot(
   }
   const replay = runtime.getTurnEventReplay(turnId, null, runtime.eventBus.epoch);
   const entries = runtime.getTurnEventSnapshot(turnId);
+  const threadId = runtime.threadIdForTurn?.(turnId);
+  const timelineCheckpoint = threadId ? runtime.getTimelineCheckpoint?.(threadId) : undefined;
   const events = entries
     .map((entry) => {
       const event = presentCodexWebEvent(entry.event, audience);
@@ -6178,6 +6268,7 @@ function presentActiveTurnSnapshot(
   return {
     turnId,
     epoch: replay.epoch,
+    ...(timelineCheckpoint ? { timelineCheckpoint } : {}),
     throughSequence,
     complete: replay.snapshotComplete,
     events,
@@ -6445,6 +6536,7 @@ function presentSessionTimeline(
       ...(typeof entry.turnId === 'string' && entry.turnId ? { turnId: entry.turnId } : {}),
       ...(typeof entry.itemId === 'string' && entry.itemId ? { itemId: entry.itemId } : {}),
       ...(typeof entry.projectionKey === 'string' && entry.projectionKey ? { projectionKey: entry.projectionKey } : {}),
+      ...(entry.timeline ? { timeline: entry.timeline } : {}),
       ...(typeof entry.clientMessageId === 'string' && entry.clientMessageId
         ? { clientMessageId: entry.clientMessageId }
         : {}),
@@ -7663,6 +7755,7 @@ export async function streamTurnEvents({
   turnId,
   afterId,
   requestedEpoch,
+  requestedTimelineGeneration,
   registerSseCloser,
   audience = 'workspace',
   authorizationDeadline,
@@ -7673,6 +7766,7 @@ export async function streamTurnEvents({
   turnId: string;
   afterId?: string | number | null;
   requestedEpoch?: string | null;
+  requestedTimelineGeneration?: string | null;
   registerSseCloser: (close: () => void) => () => void;
   audience?: CodexWebEventAudience;
   authorizationDeadline?: number;
@@ -7690,6 +7784,7 @@ export async function streamTurnEvents({
   let slowConsumerResetPending = false;
   let heartbeatPending = false;
   let snapshotThroughSequence = 0;
+  let sentTimelineGeneration = '';
   let heartbeat: NodeJS.Timeout | null = null;
   let authorizationTimer: NodeJS.Timeout | null = null;
   let expiryTimer: NodeJS.Timeout | null = null;
@@ -7705,18 +7800,33 @@ export async function streamTurnEvents({
     getTurnEventSnapshot?: (snapshotTurnId: string) => CodexWebStoredEvent[];
   };
 
+  const currentTimelineCheckpoint = () => {
+    const threadId = runtime.threadIdForTurn?.(turnId);
+    return threadId ? runtime.getTimelineCheckpoint?.(threadId) : undefined;
+  };
+
   const readReplay = (
     replayAfterId?: string | number | null,
     replayEpoch?: string | null,
-  ): CodexWebEventReplay => compatibleRuntime.getTurnEventReplay
-    ? compatibleRuntime.getTurnEventReplay(turnId, replayAfterId, replayEpoch)
-    : legacyTurnEventReplay(runtime, turnId, replayAfterId, replayEpoch);
+  ): CodexWebEventReplay => {
+    const replay = compatibleRuntime.getTurnEventReplay
+      ? compatibleRuntime.getTurnEventReplay(turnId, replayAfterId, replayEpoch)
+      : legacyTurnEventReplay(runtime, turnId, replayAfterId, replayEpoch);
+    const checkpoint = currentTimelineCheckpoint();
+    if (checkpoint && ((requestedTimelineGeneration && requestedTimelineGeneration !== checkpoint.generation)
+      || replay.events.some(entry => entry.event.timeline && entry.event.timeline.generation !== checkpoint.generation))) {
+      return { ...replay, reset: true, resetReason: 'timeline_generation_changed', events: [] };
+    }
+    return replay;
+  };
 
   const snapshotControl = (
     replay: CodexWebEventReplay,
     forceResetReason: string | null = null,
   ): { frame: string; throughSequence: number } => {
     const reset = replay.reset || Boolean(forceResetReason);
+    const timelineCheckpoint = currentTimelineCheckpoint();
+    if (timelineCheckpoint) sentTimelineGeneration = timelineCheckpoint.generation;
     const snapshotEntries = reset
       ? compatibleRuntime.getTurnEventSnapshot?.(turnId) ?? []
       : [];
@@ -7732,6 +7842,7 @@ export async function streamTurnEvents({
     const control = {
       type: reset ? 'stream.reset' : 'stream.ready',
       epoch: replay.epoch,
+      ...(timelineCheckpoint ? { timelineCheckpoint } : {}),
       reset,
       ...(forceResetReason || replay.resetReason
         ? { reason: forceResetReason ?? replay.resetReason }
@@ -7744,6 +7855,7 @@ export async function streamTurnEvents({
           events: snapshotEvents,
           throughSequence: throughSequence || replay.latestSequence,
           complete: replay.snapshotComplete,
+          ...(timelineCheckpoint ? { timelineCheckpoint } : {}),
         },
       } : {}),
     };
@@ -7790,6 +7902,12 @@ export async function streamTurnEvents({
   };
 
   const writeEvent = async (entry: CodexWebStoredEvent): Promise<void> => {
+    const checkpoint = currentTimelineCheckpoint();
+    if (checkpoint && sentTimelineGeneration && checkpoint.generation !== sentTimelineGeneration) {
+      const control = snapshotControl(readReplay(null, runtime.eventBus?.epoch), 'timeline_generation_changed');
+      snapshotThroughSequence = Math.max(snapshotThroughSequence, control.throughSequence);
+      if (!await writeChunk(control.frame)) return;
+    }
     if (entry.sequence <= snapshotThroughSequence || entry.sequence <= sentThroughSequence) {
       return;
     }
@@ -7891,6 +8009,7 @@ export async function streamTurnEvents({
     enqueueLiveEvent(entry);
   });
 
+  let unsubscribeReset: (() => void) | undefined;
   const cleanup = () => {
     if (closed) {
       return;
@@ -7908,6 +8027,7 @@ export async function streamTurnEvents({
     pendingLiveBytes = 0;
     liveEventBytes = 0;
     unsubscribe();
+    unsubscribeReset?.();
     unregisterForcedClose?.();
     unregisterForcedClose = null;
     if (!response.writableEnded && !response.destroyed) {
@@ -7915,6 +8035,7 @@ export async function streamTurnEvents({
     }
   };
 
+  unsubscribeReset = runtime.eventBus?.subscribeToReset(cleanup);
   unregisterForcedClose = registerSseCloser(() => {
     cleanup();
     request.socket.destroy();
@@ -8066,7 +8187,7 @@ function normalizeLastEventId(
 
 function normalizeEventEpoch(
   queryEpoch: string | null,
-  headerValue: string | string[] | undefined,
+  headerValue: string | string[] | undefined = undefined,
 ): string | null {
   if (queryEpoch?.trim()) {
     return queryEpoch.trim();

@@ -1,0 +1,45 @@
+{
+  "installedBinary": "/opt/homebrew/bin/codex",
+  "installedVersion": "codex-cli 0.153.4",
+  "generatedBaseline": "codex-cli 0.156.1",
+  "command": "codex app-server generate-ts --out <isolated-temp-directory>",
+  "verifiedAt": "2026-09-30",
+  "schemas": [
+    {
+      "schema": "ToolRequestUserInputParams",
+      "installedSha256": "0e3063b70a99b815e170b3c157416924315308a1c8af201dcc2f3fb459e4144a",
+      "identicalIgnoringModuleSuffix": true
+    },
+    {
+      "schema": "ToolRequestUserInputQuestion",
+      "installedSha256": "d0eaa32baa3b41a8ee3a3b764e84ffd75f7474f385eebeb779fe61f18deb2b24",
+      "identicalIgnoringModuleSuffix": true
+    },
+    {
+      "schema": "ToolRequestUserInputOption",
+      "installedSha256": "ec2f4b008b872a96c8460f4a830b8d0c20b60ef0421541970e3db62f329ef485",
+      "identicalIgnoringModuleSuffix": true
+    },
+    {
+      "schema": "ToolRequestUserInputAnswer",
+      "installedSha256": "271fbffc377b53570fae244df734bb666cb902bdff633bf27842a5bdd7e3d628",
+      "identicalIgnoringModuleSuffix": true
+    },
+    {
+      "schema": "ToolRequestUserInputResponse",
+      "installedSha256": "39e4959095a1b31de3f7bf28422a6536d51d651581ad1f50bc5e30c02140498b",
+      "identicalIgnoringModuleSuffix": true
+    },
+    {
+      "schema": "ServerRequestResolvedNotification",
+      "installedSha256": "e428ba289071d7b2e04cedc8b3cd7e6adbe57409dbbc333c38178b316f122ec5",
+      "identicalIgnoringModuleSuffix": true
+    },
+    {
+      "schema": "ThreadTokenUsageUpdatedNotification",
+      "installedSha256": "53ce4421d686b8a7f9a86c5ad54de2a7dceecfb95df74fa5f441947e136f063d",
+      "identicalIgnoringModuleSuffix": true
+    }
+  ],
+  "runningProcessVersion": "not-established-by-this-check"
+}

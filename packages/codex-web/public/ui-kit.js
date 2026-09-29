@@ -46,6 +46,10 @@
     return `<svg class="${escapeHtml(className)}" viewBox="0 0 24 24" ${accessibility} fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
   }
 
+  function closeButton(id, { label = 'Close', initialFocus = true } = {}) {
+    return `<button class="ghost icon-button panel-close" type="button" id="${escapeHtml(id)}" aria-label="${escapeHtml(label)}"${initialFocus ? ' data-initial-focus' : ''}>${icon('x', { className: 'button-icon' })}</button>`;
+  }
+
   function segmentedControl({ className = '', items = [] } = {}) {
     return `
       <div class="segmented-control${className ? ` ${escapeHtml(className)}` : ''}" role="group">
@@ -340,6 +344,7 @@
     applySessionLayout,
     bindSidebarTooltips,
     createComposerRenderer,
+    closeButton,
     hideTooltip,
     icon,
     readStoredBoolean,

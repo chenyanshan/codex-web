@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const base = fileURLToPath(new URL('../../packages/codex-native-api/src/app_server/generated/', import.meta.url));
 test('generated protocol matches manifest and NodeNext module references resolve', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(base, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, 'codex-cli 0.156.1');
+  assert.equal(manifest.version, 'codex-cli 0.159.0');
   assert.match(manifest.sourceCommit, /^[a-f0-9]{40}$/);
   for (const [relative, metadata] of Object.entries(manifest.files) as Array<[string, { sha256: string }]>) {
     const file = path.join(base, relative);

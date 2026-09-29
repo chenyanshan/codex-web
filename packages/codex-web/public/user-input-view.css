@@ -1,0 +1,12 @@
+.user-input-question { max-width: 72ch; border-top: 1px solid var(--border); padding: 14px 0; color: var(--text); overflow-wrap: anywhere; }
+.user-input-question > strong { font-size: 14px; }
+.user-input-question fieldset { border: 0; padding: 10px 0 0; margin: 0; min-width: 0; }
+.user-input-question legend { padding: 0; font-size: 14px; line-height: 1.5; }
+.user-input-question select, .user-input-question textarea, .user-input-question input { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 9px; background: var(--panel); color: var(--text); border: 1px solid var(--control-border); border-radius: 8px; font: inherit; }
+.user-input-question textarea { resize: vertical; }
+.user-input-question small, .user-input-status { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.user-input-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.user-input-actions button { min-height: 40px; }
+.user-input-question :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.user-input-option-description { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }

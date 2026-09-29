@@ -1,5 +1,7 @@
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test } from './session-file-api-fixture.js';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 
 const sessionId = 'session_browser_files';
 const projectRoot = '/Users/test/yanshan_quant/';
@@ -9,6 +11,60 @@ test.use({ serviceWorkers: 'block' });
 test.beforeEach(async ({ page }, info) => {
   test.skip(!['desktop', 'mobile-portrait', 'mobile-compact'].includes(info.project.name));
   await page.addInitScript(() => localStorage.setItem('codexWebToken', 'markdown-link-fixture'));
+});
+
+test('filename mentions stay text and explicit app.js, PR.md and ZIP links open and download', async ({ page, sessionFileApi }, info) => {
+  const cwd = path.join(sessionFileApi.root, 'codex-web');
+  const appPath = path.join(cwd, 'packages/codex-web/public/app.js');
+  const prPath = path.join(sessionFileApi.root, 'BilibiliSponsorBlock/tmp/ai-pr/PR.md');
+  const zipPath = path.join(sessionFileApi.root, 'BilibiliSponsorBlock/build.zip');
+  const files = [
+    { path: appPath, id: 'sf_app', name: 'app.js', kind: 'file', mimeType: 'application/octet-stream', data: 'const app = true;\n' },
+    { path: prPath, id: 'sf_pr', name: 'PR.md', kind: 'markdown', mimeType: 'text/markdown', data: '# Pull request\n\nVerified output.' },
+    { path: zipPath, id: 'sf_zip', name: 'build.zip', kind: 'file', mimeType: 'application/octet-stream', data: 'zip fixture' },
+  ];
+  for (const file of files) {
+    await fs.mkdir(path.dirname(file.path), { recursive: true });
+    await fs.writeFile(file.path, file.data);
+  }
+  const message = { id: 'file-link-regression', kind: 'message', role: 'assistant', label: 'Assistant', meta: 'history',
+    text: `提到的文件名：\`app.js\` 和 \`PR.md\`。\n\n[下载 app.js](${appPath}:42) [打开 PR.md](${prPath}) [下载 ZIP](${zipPath})` };
+  sessionFileApi.sessions[sessionId] = { id: sessionId, cwd, projectName: 'codex-web', timeline: [message] };
+  await page.route(`**/api/sessions/${sessionId}/timeline*`, async route => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.items = [message];
+    payload.hasMore = false;
+    payload.nextBefore = null;
+    await route.fulfill({ json: payload });
+  });
+  const requests = [];
+  await page.route(`**/api/sessions/${sessionId}/files/**`, async route => {
+    expect(route.request().headers().authorization).toBe('Bearer markdown-link-fixture');
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/resolve')) requests.push(route.request().postDataJSON().path);
+    const response = await route.fetch({ url: sessionFileApi.baseUrl + url.pathname + url.search });
+    await route.fulfill({ response });
+  });
+  await page.goto('/');
+  await page.locator(`[data-session-id="${sessionId}"]`).click();
+  await expect(page.getByText('提到的文件名：', { exact: false })).toBeVisible();
+  await expect(page.locator('[data-session-file-path="app.js"], [data-session-file-path="PR.md"]')).toHaveCount(0);
+  await page.locator('#prompt-input').fill('Draft retained');
+  for (const [index, label] of ['下载 app.js', '打开 PR.md', '下载 ZIP'].entries()) {
+    await page.getByRole('link', { name: label, exact: true }).click();
+    if (index === 1) await expect(page.locator('.session-file-document h1')).toHaveText('Pull request');
+    else await expect(page.locator('.session-file-generic')).toContainText(files[index].name);
+    await page.screenshot({ path: info.outputPath(`file-${index}.png`) });
+    const pending = page.waitForEvent('download');
+    await page.locator('#session-file-download').click();
+    const download = await pending;
+    expect(download.suggestedFilename()).toBe(files[index].name);
+    expect(await fs.readFile(await download.path(), 'utf8')).toBe(files[index].data);
+    await page.locator('#close-session-file-button').click();
+    await expect(page.locator('#prompt-input')).toHaveValue('Draft retained');
+  }
+  expect(requests).toEqual(files.map(item => item.path));
 });
 
 async function installFiles(page, { failCsvOnce = false } = {}) {
@@ -106,6 +162,7 @@ test('HTML preview embeds local images through authenticated file APIs and keeps
 test('HTML image embedding bounds resources, ignores remote URLs, and cancels stale loads', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
+    await import('/session-file-viewer.js');
     const { embedSessionFileImages } = globalThis.CodexWebFileViewer.createRenderer({});
     const requested = [];
     const html = await embedSessionFileImages('<img src="https://example.com/private"><img src="//example.com/x"><img src="data:image/png;base64,eA=="><img src="large.png"><img src="bad.svg"><img src="%E0%A4%A"><img src="space%20name.png">', '/project/docs/index.html', async path => {
@@ -152,6 +209,7 @@ test('HTML stays readable while an image request stalls and closing cancels it',
 test('image batch timeout returns successful images even when another read never settles', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
+    await import('/session-file-viewer.js');
     const { embedSessionFileImages } = globalThis.CodexWebFileViewer.createRenderer({});
     const signals = [];
     const started = performance.now();

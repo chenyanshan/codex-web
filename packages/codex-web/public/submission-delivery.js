@@ -33,11 +33,13 @@
   }
 
   function createController({ get, owns, save, request, controllers, generation, timeoutMs, retryDelay, schedule, changed, accepted, failed, reset, defer, authError, storageError }) {
+    const acceptedReceipts = new Map();
     async function deliver(id, { interactive = false, force = false } = {}) {
       const entry = get(id);
       if (!entry || !owns(entry) || entry.retryable === false || controllers.has(id)) return null;
       if (!force && entry.nextAttemptAt > Date.now()) { schedule(); return null; }
-      const checking = entry.status === 'outcome_unknown';
+      const receipt = entry.acceptedReceipt || acceptedReceipts.get(id);
+      const checking = Boolean(receipt) || entry.status === 'outcome_unknown';
       const owner = generation();
       const controller = new AbortController();
       controllers.set(id, controller);
@@ -48,11 +50,17 @@
           nextAttemptAt: 0, error: '' });
       } catch (error) {
         controllers.delete(id);
-        storageError(error);
+        storageError(error, { accepted: Boolean(receipt) });
         return null;
       }
       try {
         changed(sending, { interactive, checking });
+        if (receipt) {
+          const saved = save({ ...sending, acceptedReceipt: receipt, resolvedSessionId: receipt.sessionId, status: 'outcome_unknown' });
+          const result = await accepted(saved, receipt, { submission: { id, ...receipt } }, { recovered: true });
+          acceptedReceipts.delete(id);
+          return result;
+        }
         const payload = await request(checking ? `/api/session-submissions/${encodeURIComponent(id)}`
           : entry.sessionId ? `/api/sessions/${encodeURIComponent(entry.sessionId)}/turns` : '/api/session-submissions',
         { method: checking ? 'GET' : 'POST', ...(checking ? {} : { body: requestBody(sending) }), signal: controller.signal, timeoutMs });
@@ -60,7 +68,16 @@
         if (!get(id)) return null;
         if (checking && !payload?.submission) throw invalidAcknowledgement('Server response did not acknowledge the saved message.');
         const result = normalizeResponse(payload, sending);
-        if (result.status === 'submitted') return accepted(sending, result, payload, { recovered: checking });
+        if (result.status === 'submitted') {
+          // Write the receipt before removing the pending submission. A crash or
+          // quota error must never turn known acceptance into another POST.
+          acceptedReceipts.set(id, result);
+          if (acceptedReceipts.size > 50) acceptedReceipts.delete(acceptedReceipts.keys().next().value);
+          sending = save({ ...sending, status: 'outcome_unknown', resolvedSessionId: result.sessionId, acceptedReceipt: result });
+          const completed = await accepted(sending, result, payload, { recovered: checking });
+          acceptedReceipts.delete(id);
+          return completed;
+        }
         if (result.status === 'failed') {
           const error = { payload: { error: result.errorCode, message: result.error || 'Request failed', retryable: result.retryable, outcomeUnknown: false, manualRetryRequired: checking } };
           if (!checking && defer(sending, error)) return null;
@@ -77,7 +94,13 @@
         return payload;
       } catch (error) {
         if (owner !== generation()) { reset(sending); return null; }
-        if (!get(id)) return null;
+        if (!get(id)) { acceptedReceipts.delete(id); return null; }
+        if (acceptedReceipts.has(id) || receipt) {
+          // Durable state remains sending/unknown if storage is unavailable;
+          // keep this page recoverable without waiting for a reload.
+          Object.assign(get(id), { status: 'outcome_unknown', acceptedReceipt: acceptedReceipts.get(id) || receipt, nextAttemptAt: Date.now() + retryDelay(sending.attempts) });
+          storageError(error, { accepted: true }); schedule(); return null;
+        }
         if (checking && error?.status === 404 && error?.payload?.error === 'submission_not_found') {
           // Receipts can expire. A missing receipt must not silently replay an
           // old message (including one migrated from a legacy failed outbox).

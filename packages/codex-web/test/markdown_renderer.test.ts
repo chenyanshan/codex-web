@@ -12,6 +12,15 @@ const markdown = vm.runInContext('CodexWebMarkdown', context) as {
 };
 const { renderMarkdown } = markdown.createRenderer();
 
+test('filename mentions are text while explicit destinations and qualified paths remain file links', () => {
+  const html = renderMarkdown('检查 `app.js` 和 PR.md。\n\n[app.js](/repo/packages/web/app.js:42) [PR.md](</other project/PR.md>) [README](README.md)\n\n`packages/web/app.js` 和 ./PR.md');
+  assert.match(html, /<code>app\.js<\/code> 和 PR\.md/u);
+  assert.doesNotMatch(html, /data-session-file-path="(?:app\.js|PR\.md)"/u);
+  for (const target of ['/repo/packages/web/app.js:42', '/other project/PR.md', 'README.md', 'packages/web/app.js', './PR.md']) {
+    assert.ok(html.includes(`data-session-file-path="${target}"`), target);
+  }
+});
+
 test('ordered lists retain numbering, nested lists and continuation text', () => {
   const html = renderMarkdown([
     '3. Open the session',

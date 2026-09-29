@@ -67,6 +67,20 @@ test('stable client IDs reconcile independently of text and distinguish same-tex
   assert.deepEqual(ids(pendingMessages([prior], [confirmed, distinct], options())), ['next']);
 });
 
+test('native history aliases consume a delivered receipt without moving it after its answer', () => {
+  const anchor = message('previous-answer', { role: 'assistant', meta: 'final', text: 'Previous answer' });
+  const native = { ...message('canonical-user', { meta: 'history', turnId: 'finished' }),
+    timeline: { id: 'canonical-user', generation: 'generation', position: 2, version: 2, aliases: ['accepted-hash', 'native-user'] } };
+  const answer = message('final-answer', { role: 'assistant', meta: 'final', text: 'Final answer', turnId: 'finished' });
+  const receipt = message('local-user', { clientMessageId: 'accepted-hash', submissionId: 'accepted',
+    historyAnchorId: anchor.id, deliveryLabel: 'Server received', turnId: 'finished' });
+  const repeated = message('new-user', { clientMessageId: 'different-hash', submissionId: 'new', historyAnchorId: answer.id });
+  for (const pendingSubmissionIds of [new Set(['new']), new Set(['accepted', 'new'])]) {
+    assert.deepEqual(ids(pendingMessages([anchor, native, answer], [anchor, native, answer, receipt, repeated],
+      options({ pendingSubmissionIds }))), ['new-user']);
+  }
+});
+
 test('terminal cached turns are not moved to the latest edge and do not erase retryable outbox entries', () => {
   const old = message('old', { turnId: 'terminal' });
   const retryable = message('retry', { turnId: 'terminal', submissionId: 'retry' });
