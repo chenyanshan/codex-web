@@ -136,6 +136,14 @@ Service env should live outside the repo:
 - Add tests with each behavioral change.
 - Run `npm run typecheck` before claiming TypeScript work is valid.
 - Run focused tests for changed modules before claiming behavior is working.
+- Before updating GitHub, fetch and integrate the latest target branch locally,
+  resolve any conflicts, and run the required checks. Then commit and push the
+  verified result; do not stop at a local commit unless the user explicitly asks
+  for a local-only commit.
+- Keep the production critical-path gzip payload at or below 140 KiB (143,360
+  bytes). After integrating upstream frontend changes, run
+  `packages/codex-web/test/frontend_budget.test.ts`; optimize the payload instead
+  of raising the limit when the budget fails.
 - Do not commit generated secrets, runtime state, logs, or local env files.
 
 ## Preserve Existing Optimizations
