@@ -1,3 +1,4 @@
+import { scrollGesture } from './helpers/timeline-scroll.js';
 import { test, expect } from '@playwright/test';
 import { installAdminFixture, openAdminConsole, returnToAdminList, adminTimelinePage, sessions } from './helpers/admin-fixture.js';
 
@@ -58,7 +59,7 @@ test('admin history loads the earliest page and continues downwards without losi
     return { id: item.dataset.timelineId, y: item.getBoundingClientRect().top };
   });
   release();
-  await expect(page.locator('[data-timeline-window="1"]')).toBeEnabled();
+  await expect(page.locator('[data-timeline-page-loading]')).toHaveCount(0);
   await expect.poll(() => page.locator('#timeline [data-timeline-id]').count()).toBeGreaterThan(50);
   expect(Math.abs((await page.locator(`[data-timeline-id="${anchor.id}"]`).boundingBox()).y - anchor.y)).toBeLessThanOrEqual(3);
   const mounted = new Set(messages.slice(0, 50).map(item => item.id));
@@ -105,7 +106,7 @@ test('jumping to latest and loading earlier history use bounded pages', async ({
   await page.locator('#timeline-jump-latest').click();
   await expect(page.locator('[data-timeline-id="lazy_234"]')).toBeInViewport();
   expect(state.requests.at(-1)).toEqual({ after: null, before: null, anchors: [], count: 50 });
-  await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+  await scrollGesture(page, -1);
   await expect.poll(() => state.requests.at(-1).before).toBe('185');
   expect(await page.locator('#timeline [data-timeline-id]').count()).toBeLessThanOrEqual(80);
   expect(state.detailRequests).toEqual([]);

@@ -1,3 +1,4 @@
+import { scrollGesture } from './helpers/timeline-scroll.js';
 import { test, expect } from '@playwright/test';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -123,32 +124,17 @@ test('the history boundary disappears when the conversation fits after resizing'
   await expect(page.locator('.timeline-history-end')).toBeInViewport();
 });
 
-test('an accessible history button reveals the full conversation and preserves the anchor', async ({ page }, info) => {
+test('scrolling preloads earlier exchanges without paging buttons and preserves the anchor', async ({ page }, info) => {
   await open(page);
-  await readAt(page, 0);
-  const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
-  await expect(earlier).toHaveCSS('border-top-width', '0px');
-  await expect(earlier).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  const buttonBox = await earlier.boundingBox();
-  const timelineBox = await page.locator('#timeline').boundingBox();
-  expect(buttonBox.width).toBeLessThan(timelineBox.width * 0.7);
-  expect(Math.abs(buttonBox.x + buttonBox.width / 2 - timelineBox.x - timelineBox.width / 2)).toBeLessThanOrEqual(2);
-  if (info.project.name === 'mobile-portrait') expect(buttonBox.height).toBeGreaterThanOrEqual(44);
-  await page.screenshot({ path: info.outputPath('history-control.png') });
-  if (info.project.name === 'desktop') {
-    await page.setViewportSize({ width: 980, height: 900 });
-    await page.screenshot({ path: info.outputPath('history-control-980.png'), animations: 'disabled' });
-    await readAt(page, 0);
-  }
-  const before = await position(page);
-  await earlier.focus();
-  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: /Show (earlier|newer) messages/ })).toHaveCount(0);
+  const before = await scrollGesture(page, -1);
+  expect(before.top).toBeGreaterThan(120);
   await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(6);
   await expectAnchor(page, before);
-  await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+  await scrollGesture(page, -1);
   await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(8);
   await expect(page.locator('.timeline-history-end')).toHaveText('Beginning of conversation');
-  await expect(page.getByRole('button', { name: 'Show earlier messages', exact: true })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('automatic-history.png'), animations: 'disabled' });
 });
 
 test('old acknowledged attachment messages never reappear at the latest edge after paging, refresh, or reload', async ({ page }, info) => {
@@ -171,8 +157,8 @@ test('old acknowledged attachment messages never reappear at the latest edge aft
   await expect(page.locator('#timeline')).not.toContainText('Earlier image question');
   await page.screenshot({ path: `docs/audits/2026-09-19-second-remediation-evidence/session-order-${info.project.name}.png`, animations: 'disabled' });
   for (let attempt = 0; attempt < 4 && !await page.locator('[data-timeline-id="native_old_0"]').count(); attempt++) {
-    await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Loading history…', exact: true })).toHaveCount(0);
+    await scrollGesture(page, -1);
+    await expect(page.locator('[data-timeline-page-loading]')).toHaveCount(0);
   }
   await expect(page.locator('[data-timeline-id="native_old_0"]')).toHaveCount(1);
   await expect(page.locator('[data-timeline-id="local_old_A"]')).toHaveCount(0);
@@ -260,8 +246,8 @@ test('reload reconciles legacy orphaned receipts and older images within the sam
   }
   await page.screenshot({ path: `docs/audits/2026-09-19-second-remediation-evidence/session-long-goal-order-${info.project.name}.png`, animations: 'disabled' });
   for (let attempt = 0; attempt < 30 && !await page.locator('[data-timeline-id="native_old_image_0"]').count(); attempt++) {
-    await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Loading history…', exact: true })).toHaveCount(0);
+    await scrollGesture(page, -1);
+    await expect(page.locator('[data-timeline-page-loading]')).toHaveCount(0);
   }
   await expect(page.locator('[data-timeline-id="native_old_image_0"]')).toHaveCount(1);
   const order = await page.locator('#timeline [data-timeline-id]').evaluateAll(items => items.map(item => item.dataset.timelineId));
@@ -531,9 +517,9 @@ test('delayed history paging keeps its pending control and ignores an old page a
     if (url.searchParams.has('before')) { pending++; await gate.promise; await route.fulfill({ json: { session: metadata, items: messages(10, 10), hasMore: true, nextBefore: '10' } }).catch(() => {}); return true; }
     await route.fulfill({ json: { session: metadata, items: messages(), hasMore: true, nextBefore: '20' } }); return true;
   } });
-  for (let i = 0; i < 3; i++) await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+  for (let i = 0; i < 3; i++) await scrollGesture(page, -1);
   await expect.poll(() => pending).toBe(1);
-  await expect(page.getByRole('button', { name: 'Loading history…', exact: true })).toBeDisabled();
+  await expect(page.locator('[data-timeline-page-loading]')).toHaveAttribute('aria-busy', 'true');
   if (info.project.name === 'desktop') await page.locator('button[data-session-id="session_browser_idle"]').click();
   else { await page.locator('#back-to-list-button').click(); await page.locator('button[data-session-id="session_browser_idle"]').click(); }
   gate.resolve();
@@ -569,7 +555,7 @@ test('PWA history gesture keeps its localized indicator until the history reques
     if (url.searchParams.has('before')) { pending++; await gate.promise; await route.fulfill({ json: { session: metadata, items: [], hasMore: false, nextBefore: null } }); return true; }
     await route.fulfill({ json: { session: metadata, items: messages(), hasMore: true, nextBefore: '8' } }); return true;
   } });
-  for (let i = 0; i < 2; i++) await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+  for (let i = 0; i < 2; i++) await scrollGesture(page, -1);
   await page.evaluate(() => globalThis.__readingTest.applyLanguage('zh-CN'));
   await page.evaluate(() => {
     // Dispatch touch input at the real scroll owner.
@@ -586,4 +572,86 @@ test('PWA history gesture keeps its localized indicator until the history reques
   gate.resolve();
   await expect(page.locator('.pull-refresh-indicator')).not.toHaveClass(/is-visible/);
   await expect(page.locator('.timeline-history-end')).toBeVisible();
+});
+
+test('scrolling crosses both local window boundaries automatically and preserves the reading anchor', async ({ page }, info) => {
+  let timelineRequests = 0;
+  await open(page, { count: 200, handle: async (route, url) => {
+    if (!url.pathname.endsWith('/timeline')) return false;
+    timelineRequests++;
+    const items = messages(200).map(item => ({ ...item, role: 'assistant', turnId: 'one_turn' }));
+    await route.fulfill({ json: { session: metadata, items, hasMore: false, hasNewer: false } });
+    return true;
+  } });
+  const mobile = info.project.name === 'mobile-portrait';
+  await page.locator('#prompt-input').fill('Keep this draft through automatic paging');
+  for (const [direction, firstId] of [[-1, 'reading_60'], [-1, 'reading_0'], [1, 'reading_60'], [1, 'reading_120']]) {
+    const before = await scrollGesture(page, direction, mobile);
+    await expect(page.locator('#timeline [data-timeline-id]').first()).toHaveAttribute('data-timeline-id', firstId);
+    await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(80);
+    await expectAnchor(page, before);
+    // Restored scroll events must not walk to another window on their own.
+    await page.locator('#timeline').dispatchEvent('scroll');
+    await expect(page.locator('#timeline [data-timeline-id]').first()).toHaveAttribute('data-timeline-id', firstId);
+  }
+  await expect(page.locator('#prompt-input')).toHaveValue('Keep this draft through automatic paging');
+  expect(timelineRequests).toBe(1);
+  await expect(page.getByRole('button', { name: /Show (earlier|newer) messages/ })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('automatic-window-paging.png'), animations: 'disabled' });
+});
+
+test('scrollbar and keyboard input preload history while programmatic positioning does not', async ({ page }) => {
+  await open(page);
+  await readAt(page, 160);
+  await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(4);
+  await page.locator('#timeline').dispatchEvent('pointerdown');
+  await readAt(page, 140);
+  await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(6);
+  await readAt(page, 160);
+  const before = await position(page);
+  await page.locator('#timeline').dispatchEvent('keydown', { key: 'PageUp' });
+  await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(8);
+  await expectAnchor(page, before);
+});
+
+test('automatic server paging deduplicates gestures, stops after failure and retries in the same direction', async ({ page }, info) => {
+  const gate = deferred();
+  const calls = [];
+  let fail = true;
+  await open(page, { handle: async (route, url) => {
+    if (!url.pathname.endsWith('/timeline')) return false;
+    if (url.searchParams.has('after')) {
+      calls.push('after');
+      await gate.promise;
+      if (fail) await route.fulfill({ status: 503, json: { error: 'unavailable' } });
+      else await route.fulfill({ json: { session: metadata, items: messages(50, 8), hasNewer: false, nextAfter: null } });
+    } else if (url.searchParams.has('before')) {
+      calls.push('before');
+      await route.fulfill({ json: { session: metadata, items: messages(50, -50), hasMore: false, nextBefore: null } });
+    } else await route.fulfill({ json: { session: metadata, items: messages(), hasMore: true, nextBefore: '0', hasNewer: true, nextAfter: '8' } });
+    return true;
+  } });
+  const mobile = info.project.name === 'mobile-portrait';
+  expect(calls).toEqual([]);
+  await scrollGesture(page, 1, mobile);
+  await expect.poll(() => calls.length).toBe(1);
+  for (let i = 0; i < 4; i++) await scrollGesture(page, 1, mobile);
+  expect(calls).toEqual(['after']);
+  gate.resolve();
+  await expect(page.locator('.history-load-error')).toBeVisible();
+  for (let i = 0; i < 3; i++) await scrollGesture(page, 1, mobile);
+  expect(calls).toEqual(['after']);
+  fail = false;
+  const before = await position(page);
+  await page.locator('#retry-session-history').evaluate(button => button.click());
+  await expect(page.locator('.history-load-error')).toHaveCount(0);
+  await expect(page.locator('#timeline')).toContainText('Answer 57');
+  await expectAnchor(page, before);
+  expect(calls).toEqual(['after', 'after']);
+  const olderAnchor = await scrollGesture(page, -1, mobile);
+  await expect.poll(() => calls.length).toBe(3);
+  await expect(page.locator('#timeline')).toContainText('Question -50');
+  await expectAnchor(page, olderAnchor);
+  expect(calls).toEqual(['after', 'after', 'before']);
+  expect(await page.locator('#timeline [data-timeline-id]').count()).toBeLessThanOrEqual(80);
 });

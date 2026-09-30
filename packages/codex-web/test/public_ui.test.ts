@@ -19153,7 +19153,8 @@ test('history rendering retains empty loading feedback, visible errors, and expl
   api.state.currentSession = { id: 'paged', timelineComplete: false, timelineNextBefore: 'older' };
   const loading = api.loadOlderSessionTimelinePage();
   await flushMicrotasks();
-  assert.match(api.renderTimeline(), /timeline-window-control[^>]*disabled aria-busy="true"[^>]*>Loading history/u);
+  assert.match(api.renderTimeline(), /timeline-window-control[^>]*role="status"[^>]*aria-busy="true"[^>]*>Loading history/u);
+  assert.doesNotMatch(api.renderTimeline(), /data-timeline-window=/u);
   finishOlder({ ok: true, status: 200, json: async () => ({ items: [], hasMore: false, nextBefore: null }) });
   await loading;
 });

@@ -462,6 +462,7 @@ let promptFocusLayoutTimer = null;
 let promptRestoreRun = 0;
 let sessionListRestoreScrollTop = null;
 let timelineScrollTrackingElement = null;
+let timelinePagingIntent = null;
 let sessionFileTimelineSnapshot = null;
 let chatTimelineForegroundSnapshot = null;
 let chatTimelineViewportSnapshot = null;
@@ -2943,10 +2944,9 @@ function renderTimeline() {
   if (!visibleItems.length) {
     return (historyNotice || `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`) + renderQuestionSlot();
   }
-  const allItems = allDisplayTimelineItems();
-  const end = Math.min(allItems.length, state.timelineWindowEnd ?? allItems.length);
-  const earlier = hasMoreSessionHistory() ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="-1"${sessionTimelinePageRequest ? ' disabled aria-busy="true"' : ''}>${escapeHtml(t(sessionTimelinePageRequest ? 'Loading history…' : 'Show earlier messages'))}</button>` : state.sessionHistoryPending || state.sessionHistoryError ? '' : `<div class="timeline-history-end meta" hidden>${escapeHtml(t('Beginning of conversation'))}</div>`;
-  const newer = end < allItems.length || state.currentSession?.timelineHasNewer === true ? `<button class="ghost timeline-window-control" type="button" data-timeline-window="1">${escapeHtml(t('Show newer messages'))}</button>` : '';
+  const loading = `<div class="timeline-window-control meta" role="status" data-timeline-page-loading aria-busy="true">${escapeHtml(t('Loading history…'))}</div>`;
+  const earlier = sessionTimelinePageRequest?.direction === 'before' ? loading : hasMoreSessionHistory() || state.sessionHistoryPending || state.sessionHistoryError ? '' : `<div class="timeline-history-end meta" hidden>${escapeHtml(t('Beginning of conversation'))}</div>`;
+  const newer = sessionTimelinePageRequest?.direction === 'after' ? loading : '';
   return historyNotice + earlier + visibleItems.map((item) => renderTimelineItem(item)).join('') + newer + renderQuestionSlot();
 }
 
@@ -2981,20 +2981,13 @@ function moveTimelineWindow(direction) {
   const items = allDisplayTimelineItems();
   const end = Math.min(items.length, state.timelineWindowEnd ?? items.length);
   if (direction > 0 && end === items.length && state.currentSession?.timelineHasNewer) return loadOlderSessionTimelinePage('after');
-  const timelineBefore = document.querySelector('#timeline');
-  const candidates = [...(timelineBefore?.querySelectorAll('[data-timeline-id]') || [])];
-  const anchor = direction < 0 ? candidates[0] : candidates[candidates.length - 1];
-  const anchorId = anchor?.getAttribute('data-timeline-id');
-  const anchorTop = anchor?.getBoundingClientRect().top;
+  const snapshot = captureTimelineViewport();
+  snapshot.shouldFollowLatest = false;
   state.timelineWindowEnd = direction < 0 ? Math.max(TIMELINE_DOM_WINDOW, end - 60) : Math.min(items.length, end + 60);
   if (state.timelineWindowEnd >= items.length) state.timelineWindowEnd = null;
   state.timelineShouldFollowLatest = false;
   render();
-  const timeline = document.querySelector('#timeline');
-  if (timeline) {
-    const restored = [...timeline.querySelectorAll('[data-timeline-id]')].find((node) => node.getAttribute('data-timeline-id') === anchorId);
-    if (restored && anchorTop != null) timeline.scrollTop += restored.getBoundingClientRect().top - anchorTop;
-  }
+  restoreTimelineViewport(snapshot);
 }
 
 function portableActivityStatus() { return globalThis.CodexWebNetworkRecovery.activityLabel(state, t); }
@@ -4754,7 +4747,7 @@ function bindGlobalEvents() {
   if (refreshSystem) listenRendered(refreshSystem, 'click', () => { void refreshAdminConsole(); });
   if (refreshSession) listenRendered(refreshSession, 'click', () => { state.settingsOpen = false; void handleComposerRefresh(); });
   if (retryHistory) listenRendered(retryHistory, 'click', () => {
-    if (isAdminObservedSession() && state.sessionHistoryRetryDirection) return void loadOlderSessionTimelinePage(state.sessionHistoryRetryDirection);
+    if (state.sessionHistoryRetryDirection) return void loadOlderSessionTimelinePage(state.sessionHistoryRetryDirection);
     void handleComposerRefresh();
   });
   const promptInput = document.querySelector('#prompt-input');
@@ -5532,9 +5525,6 @@ function bindTimelineActionEvents({ reset = true } = {}) {
   if (!timeline) {
     return;
   }
-  for (const control of timeline.querySelectorAll?.('[data-timeline-window]') || []) {
-    listenTimeline(control, 'click', () => Number(control.dataset.timelineWindow) < 0 ? showMoreSessionHistory() : moveTimelineWindow(1));
-  }
   for (const button of timeline.querySelectorAll?.('[data-approval-action]') || []) {
     listenTimeline(button, 'click', () => {
       void resolveApproval(
@@ -5803,7 +5793,7 @@ function attachTimelineScrollTracking({ updateInitial = true } = {}) {
   detachTimelineScrollTracking();
   timeline.addEventListener('scroll', updateTimelineFollowState, { passive: true });
   timeline.addEventListener('wheel', handleTimelineWheel, { passive: false });
-  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timeline.addEventListener(type, handleTimelineInput, { passive: true });
+  for (const type of ['touchstart', 'touchmove', 'pointerdown', 'keydown']) timeline.addEventListener(type, handleTimelineInput, { passive: true });
   timelineScrollTrackingElement = timeline;
   if (updateInitial) {
     updateTimelineFollowState();
@@ -5816,28 +5806,59 @@ function detachTimelineScrollTracking() {
   }
   timelineScrollTrackingElement.removeEventListener('scroll', updateTimelineFollowState);
   timelineScrollTrackingElement.removeEventListener('wheel', handleTimelineWheel);
-  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) timelineScrollTrackingElement.removeEventListener(type, handleTimelineInput);
+  for (const type of ['touchstart', 'touchmove', 'pointerdown', 'keydown']) timelineScrollTrackingElement.removeEventListener(type, handleTimelineInput);
   timelineScrollTrackingElement = null;
+  timelinePagingIntent = null;
 }
 
 function handleTimelineWheel(event) {
-  const isVisibleDesktopChat = hasDesktopPointer()
-    && (state.view === 'chat' || isDesktopWorkspaceView());
-  if (!isVisibleDesktopChat || !state.sessionId || Number(event?.deltaY || 0) >= 0) {
-    return;
-  }
-  const timeline = document.querySelector('#timeline');
-  if (!timeline || timeline.scrollTop > 0) {
-    return;
-  }
-  if (showMoreSessionHistory()) {
-    event?.preventDefault?.();
-  }
+  handleTimelineInput({ type: 'wheel', deltaY: event.deltaY });
+  if (autoPageTimeline()) event?.preventDefault?.();
 }
 
 function handleTimelineInput(event) {
   SESSION_READING.input();
-  if (isAdminObservedSession()) globalThis.CodexWebAdminUi.observerInput(event, state.sessionId);
+  const timeline = document.querySelector('#timeline');
+  if (!timeline) return;
+  let direction = 0;
+  const touchY = event.touches?.[0]?.clientY;
+  if (event.type === 'wheel') direction = Math.sign(event.deltaY || 0);
+  if (event.type === 'keydown') {
+    if (event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || event.key === ' ' && event.shiftKey) direction = -1;
+    if (['ArrowDown', 'PageDown', 'End'].includes(event.key) || event.key === ' ' && !event.shiftKey) direction = 1;
+    if (!direction) return;
+  }
+  if (event.type === 'touchmove' && touchY != null && timelinePagingIntent?.touchY != null) {
+    direction = Math.sign(timelinePagingIntent.touchY - touchY);
+  }
+  // At the very top, let the PWA pull gesture own its loading indicator.
+  // Normal swipes preload before reaching this boundary.
+  if (event.type === 'touchmove' && direction < 0 && timeline.scrollTop <= 0 && isStandalonePwa()) {
+    timelinePagingIntent = null;
+    return;
+  }
+  timelinePagingIntent = { sessionId: state.sessionId, timeline, direction, top: timeline.scrollTop, touchY };
+  if (event.type !== 'wheel' && direction) autoPageTimeline();
+}
+
+function autoPageTimeline() {
+  const intent = timelinePagingIntent;
+  const timeline = document.querySelector('#timeline');
+  if (!intent || intent.sessionId !== state.sessionId || intent.timeline !== timeline || !timeline) return false;
+  const direction = intent.direction || Math.sign(timeline.scrollTop - intent.top);
+  if (!direction) return false;
+  const distance = direction < 0 ? timeline.scrollTop : timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop;
+  if (distance > Math.max(240, timeline.clientHeight)) return false;
+  // Consume before rendering: anchor restoration must not recursively page.
+  // A failed or pending request waits for a new gesture or an explicit retry.
+  timelinePagingIntent = null;
+  if (sessionTimelinePageRequest || state.sessionHistoryPending || state.sessionHistoryError) return false;
+  if (direction < 0) return hasMoreSessionHistory() ? showMoreSessionHistory() : false;
+  const count = allDisplayTimelineItems().length;
+  if ((state.timelineWindowEnd ?? count) >= count && !state.currentSession?.timelineHasNewer) return false;
+  moveTimelineWindow(1);
+  return true;
 }
 
 function updateTimelineFollowState() {
@@ -5848,7 +5869,7 @@ function updateTimelineFollowState() {
   SESSION_READING.scrolled();
   syncReadingControls();
   rememberCurrentTimelineViewport();
-  if (isAdminObservedSession()) globalThis.CodexWebAdminUi.observerScroll({ state, timeline, busy: Boolean(sessionTimelinePageRequest), moveTimelineWindow });
+  autoPageTimeline();
 }
 
 function scrollTimelineToBottomIfFollowingLatest() {

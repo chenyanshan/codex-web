@@ -5476,14 +5476,6 @@ pre.command {
   font-size: 12px;
   font-weight: 400;
 }
-.timeline-window-control:hover:not(:disabled) {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-@media (pointer: coarse) {
-  .timeline-window-control { min-height: 44px; }
-}
 .timeline-history-end { text-align: center; padding: 8px; color: var(--muted); font-size: 12px; }
 .timeline-jump-latest { position: absolute; z-index: 12; right: 20px; bottom: calc(var(--composer-height, 72px) + 20px); width: 44px; height: 44px; min-height: 44px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--text); background: var(--panel); border: 1px solid var(--border); box-shadow: 0 2px 8px #0001; }
 .timeline-jump-latest[hidden] { display: none; }

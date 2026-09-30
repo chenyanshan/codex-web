@@ -1,3 +1,4 @@
+import { scrollGesture } from './helpers/timeline-scroll.js';
 import { test, expect } from '@playwright/test';
 
 const id = 'session_browser_history';
@@ -102,10 +103,10 @@ test('long history remains bounded while chrome updates preserve mounted compose
     start: globalThis.__prompt.selectionStart,
     end: globalThis.__prompt.selectionEnd,
   }))).toEqual({ prompt: true, timeline: true, focused: true, start: 4, end: 8 });
-  await page.locator('[data-timeline-window="-1"]').click();
+  await scrollGesture(page, -1);
   await expect(page.locator('#timeline [data-timeline-id]')).toHaveCount(80);
   await expect(page.locator('[data-timeline-id="bounded_360"]')).toBeAttached();
-  await page.locator('[data-timeline-window="1"]').click();
+  await scrollGesture(page, 1);
   await expect(page.locator('[data-timeline-id="bounded_499"]')).toBeAttached();
 });
 

@@ -1,3 +1,4 @@
+import { scrollGesture } from './helpers/timeline-scroll.js';
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
 
@@ -201,7 +202,7 @@ test('slow older-page response overlapping reconnect cannot contaminate a newly 
     return true;
   });
   for (let attempt = 0; attempt < 5 && !paging; attempt += 1) {
-    await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+    await scrollGesture(page, -1);
   }
   await expect.poll(() => paging).toBe(true);
   await page.evaluate(() => { window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('focus')); });

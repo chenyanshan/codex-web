@@ -1,3 +1,4 @@
+import { scrollGesture } from './helpers/timeline-scroll.js';
 import { test, expect } from '@playwright/test';
 import { installAdminFixture, openAdminConsole, returnToAdminList, adminTimelinePage, sessions } from './helpers/admin-fixture.js';
 
@@ -29,11 +30,11 @@ test('admin observation opens the first history window on every entry and suppor
     await page.locator('#timeline-jump-latest').focus(); await page.keyboard.press('Enter');
     await expect(page.locator('#timeline [data-timeline-id]').last()).toHaveAttribute('data-timeline-id', 'audit_119');
     await expect(page.locator('[data-timeline-id="audit_119"]')).toBeInViewport();
-    await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
-    await expect(page.locator('[data-timeline-window][aria-busy="true"]')).toHaveCount(0);
+    await scrollGesture(page, -1);
+    await expect(page.locator('[data-timeline-page-loading]')).toHaveCount(0);
     for (let step = 0; step < 3 && await page.locator('#timeline [data-timeline-id]').first().getAttribute('data-timeline-id') !== 'audit_0'; step++) {
-      await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
-      await expect(page.locator('[data-timeline-window][aria-busy="true"]')).toHaveCount(0);
+      await scrollGesture(page, -1);
+      await expect(page.locator('[data-timeline-page-loading]')).toHaveCount(0);
     }
     await expect(page.locator('#timeline [data-timeline-id]').first()).toHaveAttribute('data-timeline-id', 'audit_0');
     await returnToAdminList(page);
@@ -47,7 +48,7 @@ test('leaving the console restores the original ordinary session at latest with 
   await page.goto('/');
   await page.locator('[data-session-id="session_browser_history"]').click();
   await expect(page.locator('#timeline')).toContainText('Latest browser answer');
-  await page.getByRole('button', { name: 'Show earlier messages', exact: true }).click();
+  await scrollGesture(page, -1);
   await page.locator('#timeline').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
   await page.locator('#prompt-input').fill('Keep this ordinary session draft');
   for (const observe of [false, true]) {
