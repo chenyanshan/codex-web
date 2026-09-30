@@ -9,6 +9,9 @@ interface PreparedAsset {
   br?: Buffer;
   gzip?: Buffer;
 }
+export function compressStaticAssetGzip(body: Buffer): Buffer {
+  return gzipSync(body, { level: 9, memLevel: body.length < 128 * 1024 ? 6 : 7 });
+}
 // Bounded by entry count and retained bytes, including dynamically titled app shells.
 const assets: PreparedAsset[] = [];
 let retainedBytes = 0;
@@ -23,7 +26,7 @@ export function prepareStaticAsset(source: string | Buffer, contentType: string)
     etag: `W/"${crypto.createHash('sha256').update(body).digest('base64url').slice(0, 22)}"` };
   if (body.length >= 1024 && (/^text\//u.test(contentType) || /^application\/(javascript|json|manifest\+json)\b/u.test(contentType))) {
     asset.br = brotliCompressSync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } });
-    asset.gzip = gzipSync(body, { level: 6 });
+    asset.gzip = compressStaticAssetGzip(body);
   }
   const size = body.length + (asset.br?.length ?? 0) + (asset.gzip?.length ?? 0);
   if (size <= 16 * 1024 * 1024) {

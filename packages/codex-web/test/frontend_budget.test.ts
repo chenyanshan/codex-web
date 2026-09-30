@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { gzipSync } from 'node:zlib';
 import { buildPublic } from '../scripts/build-public.mjs';
+import { compressStaticAssetGzip } from '../src/static_asset_cache.js';
 
 const publicRoot = new URL('../public/', import.meta.url);
 
@@ -21,7 +21,7 @@ test('production startup dependency graph stays self-contained and within the we
       assert.ok(!dependencies.includes(asset), `${asset} loads when its view opens`);
     }
     const assets = await Promise.all(dependencies.map((asset) => readFile(path.join(outdir, asset))));
-    const compressedBytes = [Buffer.from(index), ...assets].reduce((total, source) => total + gzipSync(source, { level: 6 }).byteLength, 0);
+    const compressedBytes = [Buffer.from(index), ...assets].reduce((total, source) => total + compressStaticAssetGzip(source).byteLength, 0);
     assert.ok(compressedBytes <= 140 * 1024, `critical production gzip payload is ${compressedBytes} bytes`);
     const appSource = await readFile(new URL('app.js', publicRoot));
     const appBuilt = await readFile(path.join(outdir, 'app.js'));
