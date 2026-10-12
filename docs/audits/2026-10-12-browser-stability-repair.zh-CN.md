@@ -85,3 +85,15 @@
 **30–60 分钟验收未执行。** 本轮发现宿主 macOS `kern.memorystatus_vm_pressure_level=2`，实际停止保护复核输出位于 `test-results/soak-host-guard/summary.json`：在启动浏览器前拒绝运行，0 周期、0 采样。工具在启动、采样和每 2 秒独立检查宿主压力，以及专属浏览器 RSS；仅终止自己启动的测试浏览器。短测用于验证工具和释放路径，不能证明长时堆稳定，也不能代替线上相同会话规模或扩展环境的比较。
 
 回退方式：以修复提交为单位回退共享读取、SSE 消费器和 shell opt-out；没有状态格式迁移，不需要清理运行数据。
+
+## 部署与用户反馈
+
+2026-10-12 17:16（Asia/Shanghai），修复提交 `f768d700c1d6bb1f9fd35986eff2e88ef401ae57` 已推送至 `origin/main` 并通过现有 Mac launchd 生产 `dist` 服务上线。独立重启任务退出码为 0，主服务恢复运行，构建 ID 为 `945c030345e5f3b93b33`。
+
+独立部署校验通过：40 个 JS/CSS 资源的内容哈希与已验证构建一致；首页 28 个脚本均有 Rocket Loader opt-out；6 个私有 API/SSE 路由的未认证访问均返回 401。部署记录与源版本归档保存在 `~/.codex-web/service-backups/browser-stability-20261012T171304/`，未改变登录、草稿或服务环境配置。
+
+外部访问 `codex.hihihiai.com` 首页返回 200，构建 ID 同为 `945c030345e5f3b93b33`，27 个外部应用脚本均保留 opt-out，返回页面不再包含 Rocket Loader runtime。`aiops.orvibo.com` 从本次验证环境访问仍超时，未独立验证该域名的页面交付。
+
+用户随后反馈：“好像不卡了”。记录为部署后的响应改善反馈；30–60 分钟内存验收仍未完成，约 9 GB 的历史 renderer 崩溃原因仍未由堆快照证明。
+
+后续修改须遵守新增的 [浏览器稳定性规则与可复用 AI 提示词](../architecture/browser-stability-guardrails.zh-CN.md)，根目录 `AGENTS.md` 已将其作为相关改动的必读约束。

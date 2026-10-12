@@ -163,6 +163,46 @@ to survive future changes, including the app-server refactor.
   visual style, and improve usability where justified without losing weak-network,
   draft, reading-position, or recovery behavior.
 
+## Browser Stability Guardrails
+
+The 2026-10-12 incident involved request bursts, blank screens, and renderer
+memory growth. Before changing session loading, recovery, streaming, frontend
+caches, or boot assets, read the
+[stability rules and reusable AI prompt](docs/architecture/browser-stability-guardrails.zh-CN.md).
+The [incident record](docs/audits/2026-10-12-browser-stability-repair.zh-CN.md)
+distinguishes reproduced code defects from the unproven production crash cause.
+
+- Coalesce overlapping session reads through the shared loader by identity,
+  session/navigation generation, and read semantics. Preserve distinct anchors
+  and pagination, independent subscriber cancellation, and stale-response guards.
+  Local flags at individual entry points are not sufficient deduplication.
+- Automatic recovery must have bounded concurrency and failure backoff, including
+  partial failures. Do not create unconditional read/render/read loops through
+  focus, visibility, stream completion/reset, or progress callbacks. Keep manual
+  retry usable and preserve displayed content during recovery.
+- Reuse the bounded SSE consumer. Preserve per-frame limits, split UTF-8/CRLF
+  handling, cancellation, and reader/listener/controller cleanup on every exit.
+  Do not limit legitimate cumulative output or let malformed replay reset retry
+  delay indefinitely. Release reader locks without awaiting unbounded cleanup.
+- Shared response payloads must not leak mutations between callers. Copy mutable
+  fields where needed; avoid deep-copying complete histories on every delta.
+  New retained collections need explicit capacity and lifecycle boundaries;
+  arbitrary truncation of authoritative history or deduplication state is not
+  an acceptable memory fix.
+- Keep `data-cfasync="false"` before `src` on every ordered boot script,
+  including recovery and module entry scripts. Preserve Service Worker atomic
+  updates and complete-cache fallback. Never use periodic full-page reloads or
+  clearing login/drafts as the permanent fix for resource growth or boot failure.
+- Add regression evidence for the affected failure path. For related frontend
+  changes, run the focused loader/SSE/recovery tests and frontend budget test;
+  choose browser checks for the changed flows. Do not weaken assertions or raise
+  the 140 KiB critical-path gzip limit to make a change pass.
+- Claims of long-run memory stability require comparable measurements after
+  completion, navigation, and GC. Short fixture smoke runs and user reports of
+  improved responsiveness do not establish the production crash root cause.
+  Stop stress experiments under actual host memory pressure and report the
+  unverified scope instead of adding heap capacity or exhausting the host.
+
 ## Useful Commands
 
 Install:
