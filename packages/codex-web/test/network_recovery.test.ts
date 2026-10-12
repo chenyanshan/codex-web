@@ -146,7 +146,7 @@ test('SSE recovery uses HTTP status independently of gateway response bodies and
 });
 
 test('compact history/status arrive independently and confirmed status beats a late timeline snapshot', async () => {
-  const context: any = { AbortController };
+  const context: any = { AbortController, structuredClone };
   vm.runInNewContext(await readFile(new URL('../public/session-loader.js', import.meta.url), 'utf8'), context);
   for (const first of ['status', 'timeline']) {
     const resolve: Record<string, (value: unknown) => void> = {};
@@ -175,7 +175,7 @@ test('compact history/status arrive independently and confirmed status beats a l
 });
 
 test('execution summaries prefer freshness and otherwise retain an active turn from either compact source', async () => {
-  const context: any = { AbortController };
+  const context: any = { AbortController, structuredClone };
   vm.runInNewContext(await readFile(new URL('../public/session-loader.js', import.meta.url), 'utf8'), context);
   const active = { activeTurnId: 'running', activityState: 'running' };
   const idle = { activeTurnId: null, activityState: 'idle' };

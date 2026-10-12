@@ -472,6 +472,7 @@ let streamRecoveryTimer = null;
 let streamRecoveryPromise = null;
 let streamRecoveryKey = '';
 let sessionReconcileKey = '';
+let sessionReconcileRetry = { owner: '', failures: 0, after: 0 };
 let timelineRevision = 0;
 const deferredCanonicalUsers = new Map();
 let pendingLatestSessionOpen = null;
@@ -517,7 +518,7 @@ const SESSION_READING = globalThis.CodexWebSessionReading.createController({
   isLatestWindow: () => state.timelineWindowEnd == null && state.currentSession?.timelineHasNewer !== true,
   storage: browserStorage,
 });
-function cancelSessionOpen() { sessionNavigationGeneration++; SESSION_READING.flush(); sessionOpenRequests.cancel(); adminObservedRequests.cancel(); state.admin.observedSessionLoading = false; SESSION_RENAME.invalidate(); state.sessionHistoryPending = false; state.sessionStatusPending = false; }
+function cancelSessionOpen() { sessionNavigationGeneration++; loadSessionOpenData.cancel(); SESSION_READING.flush(); sessionOpenRequests.cancel(); adminObservedRequests.cancel(); state.admin.observedSessionLoading = false; SESSION_RENAME.invalidate(); state.sessionHistoryPending = false; state.sessionStatusPending = false; }
 
 let lastViewportWidth = typeof window?.innerWidth === 'number' ? window.innerWidth : 0;
 let lastViewportHeight = typeof window?.innerHeight === 'number' ? window.innerHeight : 0;
@@ -575,7 +576,7 @@ const SESSION_RENAME = globalThis.CodexWebSessionRename.createController({
 const SESSION_ATTENTION = globalThis.CodexWebSessionAttention.createController({ storage: browserStorage, owner: currentDraftOwnerKey });
 
 const loadSessionOpenData = globalThis.CodexWebSessionLoader.createLoader({
-  state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, mergeLatestTimelineHistory,
+  state, apiFetch, isFatalSessionOpenError, timelinesHaveStableOverlap, mergeLatestTimelineHistory, getOwner: recoveryOwnerKey,
 });
 
 const CONNECTION = globalThis.CodexWebNetworkRecovery.createConnectionState({
@@ -7297,7 +7298,6 @@ async function streamTurnEvents(turnId, options = {}) {
   let handshakeTimedOut = false;
   let handshakeTimer = null;
   let assistantEntry = state.timeline.find((item) => item.id === `assistant_${turnId}`) || null;
-  let buffer = '';
   let eventName = 'message';
   let eventId = '';
   let dataLines = [];
@@ -7359,33 +7359,10 @@ async function streamTurnEvents(turnId, options = {}) {
       hydratedForStreamReset = false;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (controller.signal.aborted || state.streamAbortController !== activeStreamController) {
-        return;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary >= 0) {
-        const rawFrame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        if (controller.signal.aborted || state.streamAbortController !== activeStreamController) {
-          return;
-        }
-        await processSseFrame(rawFrame);
-        boundary = buffer.indexOf('\n\n');
-      }
-    }
-
-    if (buffer.trim() && !controller.signal.aborted && state.streamAbortController === activeStreamController) {
-      await processSseFrame(buffer);
-    }
+    await globalThis.CodexWebNetworkRecovery.consumeSse(response.body, processSseFrame, {
+      signal: controller.signal,
+      isCurrent: () => state.streamAbortController === activeStreamController,
+    });
     shouldReconcileQueuedCompletion = !sawTerminalEvent
       && !controller.signal.aborted
       && pendingQueuedMessagesForCurrentSession().length > 0;
@@ -7415,6 +7392,8 @@ async function streamTurnEvents(turnId, options = {}) {
       }
       return;
     }
+    // A malformed/oversized replay must not loop at the minimum retry delay.
+    if (error?.name === 'SseFrameLimitError') streamReconnectAttempt = Math.max(streamReconnectAttempt, 8);
     if (isRecoverableBackgroundStreamError(turnId, error)) {
       CONNECTION.failed('stream', error, connectionTicket);
       markStreamPaused();
@@ -7428,6 +7407,8 @@ async function streamTurnEvents(turnId, options = {}) {
     surfaceTimelineError(turnId, error?.payload?.message || error?.message || 'Stream failed');
     handleApiError(error, { suppressComposerError: true });
   } finally {
+    controller.abort();
+    resetFrame();
     clearNetworkTimer(handshakeTimer);
     if (state.streamAbortController === controller) {
       state.streamConnection = 'reconnecting';
@@ -13101,13 +13082,15 @@ function reconcileCurrentSessionInBackground({ viewportSnapshot = null, forceDet
   const owner = recoveryOwnerKey();
   if (sessionReconcilePromise && sessionReconcileKey === owner) {
     if (forceDetail && !sessionReconcileForceDetail) {
-      return sessionReconcilePromise.then(() => reconcileCurrentSessionInBackground({
+      return sessionReconcilePromise.then(() => owner === recoveryOwnerKey() ? reconcileCurrentSessionInBackground({
         viewportSnapshot,
         forceDetail: true,
-      }));
+      }) : null);
     }
     return sessionReconcilePromise;
   }
+  if (sessionReconcileRetry.owner !== owner) sessionReconcileRetry = { owner, failures: 0, after: 0 };
+  if (Date.now() < sessionReconcileRetry.after) return Promise.resolve(null);
   const controller = new AbortController();
   const timer = scheduleNetworkTimer(() => controller.abort(), SESSION_RECONCILE_TIMEOUT_MS);
   sessionReconcileKey = owner;
@@ -13124,7 +13107,15 @@ function reconcileCurrentSessionInBackground({ viewportSnapshot = null, forceDet
       viewportSnapshot,
       signal: controller.signal,
     });
-  const promise = operation.finally(() => {
+  const promise = operation.catch(() => null).then(session => {
+    if (owner === recoveryOwnerKey()) {
+      if (!session || state.sessionHistoryError || state.sessionStatusError) {
+        sessionReconcileRetry.failures = Math.min(6, sessionReconcileRetry.failures + 1);
+        sessionReconcileRetry.after = Date.now() + Math.min(30000, 1000 * 2 ** (sessionReconcileRetry.failures - 1));
+      } else sessionReconcileRetry = { owner, failures: 0, after: 0 };
+    }
+    return session;
+  }).finally(() => {
     clearNetworkTimer(timer);
     if (sessionReconcilePromise === promise) {
       sessionReconcilePromise = null;

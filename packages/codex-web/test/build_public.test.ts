@@ -28,6 +28,13 @@ test('public build minifies independent scripts and CSS while preserving asset p
   const index = await fs.readFile(path.join(outdir, 'index.html'), 'utf8');
   const worker = await fs.readFile(path.join(outdir, 'service-worker.js'), 'utf8');
   assert.match(index, /__CODEX_WEB_BUILD_ID__/u);
+  const scripts = [...index.matchAll(/<script\b[^>]*>/gu)].map(match => match[0]);
+  assert.ok(scripts.length > 20, 'check the complete shell dependency graph');
+  for (const script of scripts) {
+    assert.match(script, /^<script data-cfasync="false" /u, 'Rocket Loader opt-out must precede src');
+  }
+  assert.match(scripts[0], /src="\/boot-recovery\.js/u);
+  assert.match(scripts.at(-1)!, /type="module" src="\/app\.js/u);
   assert.match(worker, /__CODEX_WEB_BUILD_ID__/u);
   for (const match of index.matchAll(/(?:src|href)="\/([^"?]+)(?:\?[^"]*)?"/gu)) {
     assert.ok(assets.some((asset) => asset.name === match[1]), `Missing boot asset ${match[1]}`);

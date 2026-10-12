@@ -12,8 +12,9 @@
   <link rel="manifest" href="/manifest.webmanifest?v=__CODEX_WEB_BUILD_ID__">
   <link rel="icon" href="/icon.svg?v=__CODEX_WEB_BUILD_ID__" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=__CODEX_WEB_BUILD_ID__">
-  <script src="/boot-recovery.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/theme-init.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <!-- Keep Rocket Loader opt-out before src on the entire ordered boot graph. -->
+  <script data-cfasync="false" src="/boot-recovery.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/theme-init.js?v=__CODEX_WEB_BUILD_ID__"></script>
   <link rel="stylesheet" href="/styles.css?v=__CODEX_WEB_BUILD_ID__">
   <link rel="stylesheet" href="/approval-ui.css?v=__CODEX_WEB_BUILD_ID__">
   <link rel="stylesheet" href="/settings-ui.css?v=__CODEX_WEB_BUILD_ID__">
@@ -32,30 +33,30 @@
     </div>
   </div>
   <div id="global-tooltip" class="global-tooltip" role="tooltip" aria-hidden="true"></div>
-  <script src="/pwa-pull-refresh.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/ui-copy.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/ui-kit.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/attachment-upload.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/attachment-utils.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/markdown-renderer.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/ui-localization.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/admin-data.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/admin-editor.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/request-context.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/session-reading.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/timeline-reconciliation.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/timeline-model.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/lazy-feature.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/session-loader.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/network-recovery.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/submission-identity.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/submission-delivery.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/session-rename.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/session-attention.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/draft-store.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/session-pagination.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/approval-ui.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script src="/settings-ui.js?v=__CODEX_WEB_BUILD_ID__"></script>
-  <script type="module" src="/app.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/pwa-pull-refresh.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/ui-copy.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/ui-kit.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/attachment-upload.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/attachment-utils.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/markdown-renderer.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/ui-localization.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/admin-data.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/admin-editor.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/request-context.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/session-reading.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/timeline-reconciliation.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/timeline-model.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/lazy-feature.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/session-loader.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/network-recovery.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/submission-identity.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/submission-delivery.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/session-rename.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/session-attention.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/draft-store.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/session-pagination.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/approval-ui.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" src="/settings-ui.js?v=__CODEX_WEB_BUILD_ID__"></script>
+  <script data-cfasync="false" type="module" src="/app.js?v=__CODEX_WEB_BUILD_ID__"></script>
 </body>
 </html>

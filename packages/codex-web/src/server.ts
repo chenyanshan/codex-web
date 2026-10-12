@@ -1502,11 +1502,11 @@ function isAppShellHtml(pathname: string, asset: StaticFileAsset): boolean {
 
 function injectAppShellBootstrap(asset: StaticFileAsset, siteTitle: string): StaticFileAsset {
   const title = normalizePublicSiteTitle(siteTitle);
-  const bootstrap = `<script type="application/json" id="codex-web-bootstrap">${escapeJsonForHtmlScript({ siteTitle: title })}</script>`;
+  const bootstrap = `<script data-cfasync="false" type="application/json" id="codex-web-bootstrap">${escapeJsonForHtmlScript({ siteTitle: title })}</script>`;
   let body = String(asset.body).replace(/<title>[^<]*<\/title>/iu, `<title>${escapeHtml(title)}</title>`);
   if (!body.includes('id="codex-web-bootstrap"')) {
     body = body.replace(
-      /(\s*<script type="module" src="\/app\.js(?:\?[^"<]*)?"><\/script>)/u,
+      /(\s*<script (?:data-cfasync="false" )?type="module" src="\/app\.js(?:\?[^"<]*)?"><\/script>)/u,
       `\n  ${bootstrap}$1`,
     );
   }

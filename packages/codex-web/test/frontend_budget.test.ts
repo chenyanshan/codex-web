@@ -33,3 +33,14 @@ test('production startup dependency graph stays self-contained and within the we
     await rm(outdir, { recursive: true, force: true });
   }
 });
+
+
+test('administration layout is lazy while settings status and errors remain immediately styled', async () => {
+  const [core, admin] = await Promise.all(['styles.css', 'admin-ui.css'].map(name => readFile(new URL(name, publicRoot), 'utf8')));
+  assert.doesNotMatch(core, /\.admin-layout\s*\{/u);
+  assert.match(admin, /\.admin-layout\s*\{[^}]*grid-template-columns:\s*216px minmax\(0, 1fr\)/u);
+  assert.match(admin, /@media \(max-width: 719px\)[\s\S]*\.admin-sidebar\s*\{\s*display: none/u);
+  assert.match(core, /\.admin-mode-label\s*\{/u);
+  assert.match(core, /\.admin-editor-error, \.admin-resource-error\s*\{/u);
+  assert.ok(admin.indexOf('.admin-row {') < admin.indexOf('.admin-console-page .admin-row,'), 'console overrides follow the migrated base rules');
+});

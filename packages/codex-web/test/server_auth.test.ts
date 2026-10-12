@@ -1111,10 +1111,16 @@ test('static app shell exposes configured global title before login', async () =
     assert.equal(response.status, 200);
     const html = await response.text();
     assert.match(html, /<title>Team Codex<\/title>/u);
-    assert.ok(html.includes('<script type="application/json" id="codex-web-bootstrap">{"siteTitle":"Team Codex"}</script>'));
+    assert.ok(html.includes('<script data-cfasync="false" type="application/json" id="codex-web-bootstrap">{"siteTitle":"Team Codex"}</script>'));
 
     const indexResponse = await fetch(`${server.baseUrl}/index.html`);
     assert.equal(await indexResponse.text(), html);
+    const shareResponse = await fetch(`${server.baseUrl}/share/boot-opt-out-check`);
+    assert.equal(await shareResponse.text(), html);
+    for (const [script] of html.matchAll(/<script\b[^>]*>/gu)) {
+      assert.match(script, /^<script data-cfasync="false" /u);
+    }
+    assert.ok(html.indexOf('id="codex-web-bootstrap"') < html.indexOf('type="module"'), 'bootstrap precedes the module entry');
   } finally {
     await server.stop();
   }

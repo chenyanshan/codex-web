@@ -48,13 +48,13 @@ test('mobile UI exposes iOS PWA install metadata and registers a service worker'
   assert.match(index, /<link rel="icon" href="\/icon\.svg\?v=__CODEX_WEB_BUILD_ID__" type="image\/svg\+xml">/u);
   assert.match(index, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png\?v=__CODEX_WEB_BUILD_ID__">/u);
   assert.match(index, /<meta name="theme-color" content="#f4f5f7">/u);
-  assert.match(index, /<script src="\/theme-init\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>\s*<link rel="stylesheet"/u);
-  assert.match(index, /<script src="\/ui-kit\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
-  assert.match(index, /<script src="\/ui-copy\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
-  assert.match(index, /<script src="\/attachment-utils\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
-  assert.match(index, /<script src="\/markdown-renderer\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
-  assert.doesNotMatch(index, /<script src="\/admin-ui\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
-  assert.match(index, /<script src="\/session-pagination\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script data-cfasync="false" src="\/theme-init\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>\s*<link rel="stylesheet"/u);
+  assert.match(index, /<script data-cfasync="false" src="\/ui-kit\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script data-cfasync="false" src="\/ui-copy\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script data-cfasync="false" src="\/attachment-utils\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script data-cfasync="false" src="\/markdown-renderer\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.doesNotMatch(index, /<script\b[^>]*src="\/admin-ui\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script data-cfasync="false" src="\/session-pagination\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.ok(index.indexOf('src="/attachment-utils.js') < index.indexOf('src="/app.js'));
   assert.ok(index.indexOf('src="/session-pagination.js') < index.indexOf('src="/app.js'));
   assert.doesNotMatch(index, /screen-orientation|x5-orientation/u);
@@ -2906,32 +2906,33 @@ test('admin console uses dense mobile-safe management rows', async () => {
 
   assert.match(styles, /\.admin-console-screen\s*\{[^}]*overflow-y:\s*auto;/su);
   assert.match(styles, /\.admin-console-page\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--panel\) 72%,\s*var\(--bg\)\);/su);
-  assert.match(styles, /\.admin-list\s*\{[^}]*display:\s*grid;/su);
-  assert.match(styles, /\.admin-sidebar\s*\{[^}]*border:\s*1px solid color-mix\(in srgb,\s*var\(--border\) 52%,\s*transparent\);/su);
-  assert.match(styles, /\.admin-sidebar\s*\{[^}]*border-radius:\s*12px;/su);
-  assert.match(styles, /\.admin-sidebar-button\[aria-pressed="true"\]\s*\{[^}]*border-left:\s*3px solid var\(--accent\);/su);
-  assert.match(styles, /\.admin-sidebar-button\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
-  assert.match(styles, /\.admin-editor-panel,\s*\.admin-collection-panel\s*\{[^}]*border-radius:\s*12px;/su);
-  assert.match(styles, /\.admin-filter-row\s*\{[^}]*border-radius:\s*12px;/su);
-  assert.match(styles, /\.admin-console-page :where\(input:not\(\[type="checkbox"\]\),\s*select,\s*textarea\):focus-visible\s*\{[^}]*box-shadow:\s*0 0 0 3px/su);
-  assert.match(styles, /\.admin-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/su);
-  assert.match(styles, /\.admin-row\s*\{[^}]*border-radius:\s*10px;/su);
-  assert.match(styles, /\.admin-row\s*\{[^}]*box-shadow:\s*0 1px 3px/su);
-  assert.match(styles, /\.admin-session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
-  assert.match(styles, /\.admin-session-row\s*\{[^}]*border-color:\s*transparent;/su);
-  assert.match(styles, /\.admin-session-row\s*\{[^}]*background:\s*var\(--panel\);/su);
-  assert.match(styles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*border-left-color:\s*var\(--accent\);/su);
-  assert.match(styles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
-  assert.match(styles, /\.admin-row-main\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
-  assert.match(styles, /\.admin-session-row \.admin-row-main\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
-  assert.match(styles, /\.admin-session-row \.admin-row-main\s*\{[^}]*text-overflow:\s*ellipsis;/su);
-  assert.match(styles, /\.admin-session-open\s*\{[^}]*text-align:\s*left;/su);
-  assert.match(styles, /\.admin-console-page \.danger,[\s\S]*\.admin-console-page \.danger:focus-visible:not\(:disabled\)\s*\{[^}]*color:\s*var\(--danger\);/su);
+  assert.match(adminStyles, /\.admin-list\s*\{[^}]*display:\s*grid;/su);
+  assert.match(adminStyles, /\.admin-sidebar\s*\{[^}]*border:\s*1px solid color-mix\(in srgb,\s*var\(--border\) 52%,\s*transparent\);/su);
+  assert.match(adminStyles, /\.admin-sidebar\s*\{[^}]*border-radius:\s*12px;/su);
+  assert.match(adminStyles, /\.admin-sidebar-button\[aria-pressed="true"\]\s*\{[^}]*border-left:\s*3px solid var\(--accent\);/su);
+  assert.match(adminStyles, /\.admin-sidebar-button\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(adminStyles, /\.admin-editor-panel,\s*\.admin-collection-panel\s*\{[^}]*border-radius:\s*12px;/su);
+  assert.match(adminStyles, /\.admin-filter-row\s*\{[^}]*border-radius:\s*12px;/su);
+  assert.match(adminStyles, /\.admin-console-page :where\(input:not\(\[type="checkbox"\]\),\s*select,\s*textarea\):focus-visible\s*\{[^}]*box-shadow:\s*0 0 0 3px/su);
+  assert.match(adminStyles, /\.admin-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/su);
+  assert.match(adminStyles, /\.admin-row\s*\{[^}]*border-radius:\s*10px;/su);
+  assert.match(adminStyles, /\.admin-row\s*\{[^}]*box-shadow:\s*0 1px 3px/su);
+  assert.match(adminStyles, /\.admin-session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(adminStyles, /\.admin-session-row\s*\{[^}]*border-color:\s*transparent;/su);
+  assert.match(adminStyles, /\.admin-session-row\s*\{[^}]*background:\s*var\(--panel\);/su);
+  assert.match(adminStyles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*border-left-color:\s*var\(--accent\);/su);
+  assert.match(adminStyles, /\.admin-session-row\[data-selected="true"\]\s*\{[^}]*background:\s*var\(--bg-user-shared\);/su);
+  assert.match(adminStyles, /\.admin-row-main\s*\{[^}]*overflow-wrap:\s*anywhere;/su);
+  assert.match(adminStyles, /\.admin-session-row \.admin-row-main\s*\{[^}]*-webkit-line-clamp:\s*2;/su);
+  assert.match(adminStyles, /\.admin-session-row \.admin-row-main\s*\{[^}]*text-overflow:\s*ellipsis;/su);
+  assert.match(adminStyles, /\.admin-session-open\s*\{[^}]*text-align:\s*left;/su);
+  assert.match(adminStyles, /\.admin-console-page \.danger,[\s\S]*\.admin-console-page \.danger:focus-visible:not\(:disabled\)\s*\{[^}]*color:\s*var\(--danger\);/su);
   assert.match(adminUi, /class="admin-row admin-project-row"/u);
   assert.match(adminUi, /class="admin-record-path" data-i18n-skip/u);
   assert.match(adminUi, /class="admin-record-facts"/u);
   // The project columns now apply at every width, without a duplicate mobile rule.
-  const baseAdminStyles = adminStyles.slice(0, adminStyles.indexOf('@media'));
+  const adminOverrides = adminStyles.slice(adminStyles.indexOf("/* Use the session list's surfaces"));
+  const baseAdminStyles = adminOverrides.slice(0, adminOverrides.indexOf('@media'));
   assert.match(baseAdminStyles, /\.admin-console-page \.admin-project-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto;/u);
   assert.match(adminStyles, /\.admin-record-path\s*\{[^}]*overflow-wrap:\s*anywhere;/u);
 });
@@ -4213,10 +4214,11 @@ test('message input focus uses themed outline instead of browser default blue ri
 
 test('chat surfaces use soft elevation and preserve asymmetric message corners', async () => {
   const styles = await readFile(stylesUrl, 'utf8');
+  const adminStyles = await readFile(new URL('../public/admin-ui.css', import.meta.url), 'utf8');
 
   assert.match(styles, /input::placeholder,\s*textarea::placeholder\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--muted\) 58%,\s*transparent\);/su);
   assert.match(styles, /\.session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
-  assert.match(styles, /\.admin-session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
+  assert.match(adminStyles, /\.admin-session-list\s*\{[^}]*background:\s*var\(--bg\);/su);
   assert.match(styles, /\.screen\s*\{[^}]*background:\s*var\(--bg\);/su);
   assert.match(styles, /\.desktop-chat-pane\s*\{[^}]*background:\s*var\(--bg\);/su);
   assert.match(styles, /\.message-card\s*\{[^}]*border-color:\s*color-mix\(in srgb,\s*var\(--border\) 24%,\s*transparent\);/su);
@@ -13052,7 +13054,7 @@ test('global sidebar tooltip is body-level and positions outside overflow contai
     readFile(stylesUrl, 'utf8'),
   ]);
 
-  assert.match(index, /<\/div>\s*<div id="global-tooltip" class="global-tooltip" role="tooltip" aria-hidden="true"><\/div>\s*<script src="\/pwa-pull-refresh/u);
+  assert.match(index, /<\/div>\s*<div id="global-tooltip" class="global-tooltip" role="tooltip" aria-hidden="true"><\/div>\s*<script data-cfasync="false" src="\/pwa-pull-refresh/u);
   assert.match(app, /UI\.bindSidebarTooltips\?\.\(/u);
   assert.match(uiKit, /function bindSidebarTooltips\(sidebar, tooltip, signal\)/u);
   assert.match(uiKit, /sidebar\.classList\.contains\('expanded'\)/u);
@@ -16377,7 +16379,7 @@ test('PWA standalone mode enables local pull-to-refresh without normal browser r
     readFile(pwaPullRefreshUrl, 'utf8'),
   ]);
 
-  assert.match(index, /<script src="\/pwa-pull-refresh\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
+  assert.match(index, /<script data-cfasync="false" src="\/pwa-pull-refresh\.js\?v=__CODEX_WEB_BUILD_ID__"><\/script>/u);
   assert.match(serviceWorker, /'\/pwa-pull-refresh\.js'/u);
   assert.match(app, /function isStandalonePwa\(\)/u);
   assert.match(app, /navigator\.standalone === true/u);
@@ -18770,6 +18772,21 @@ async function loadAppHarness(overrides = {}) {
         if (/\/api\/sessions\/[^/]+\/(status|timeline)(?:\?|$)/u.test(path) && response?.status === 204) {
           return { ok: false, status: 404, json: async () => ({ error: 'route_not_found' }) };
         }
+        // Legacy fixtures supply only read(). Give consumers the real stream
+        // cancellation/lock contract, including cancellation of a pending read.
+        if (response?.body?.getReader && !(response.body instanceof ReadableStream)) {
+          const fixtureReader = response.body.getReader();
+          let cancelled = false;
+          response.body = new ReadableStream({
+            async pull(controller) {
+              try {
+                const { done, value } = await fixtureReader.read();
+                if (!cancelled) { if (done) controller.close(); else controller.enqueue(value); }
+              } catch (error) { if (!cancelled) controller.error(error); }
+            },
+            cancel() { cancelled = true; },
+          }, { highWaterMark: 0 });
+        }
         if (response && !response.headers) response.headers = { get: () => null };
         return response;
       } catch (error) {
@@ -18782,6 +18799,7 @@ async function loadAppHarness(overrides = {}) {
       }
     },
     TextDecoder,
+    structuredClone,
     AbortController,
     AbortSignal,
     FormData,

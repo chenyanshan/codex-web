@@ -26,6 +26,58 @@
     });
   }
 
+  // The default exceeds the server's 4 MiB turn snapshot budget, including
+  // framing/sequence metadata. Limit each frame, never cumulative turn output.
+  async function consumeSse(body, onFrame, { signal, isCurrent = () => true, maxFrameChars = 8 * 1024 * 1024 } = {}) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', searchFrom = 0;
+    const current = () => !signal?.aborted && isCurrent();
+    const cancel = () => { void reader.cancel().catch(() => {}); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    async function append(text) {
+      buffer += text;
+      while (current()) {
+        const boundary = /\r?\n\r?\n/gu;
+        boundary.lastIndex = searchFrom;
+        const match = boundary.exec(buffer);
+        const suffix = match ? 0 : (buffer.slice(-3).match(/(?:\r?\n\r?|\r)$/u)?.[0].length || 0);
+        const length = match ? match.index : buffer.length - suffix;
+        if (length > maxFrameChars) {
+          throw Object.assign(new Error('Stream connection frame exceeds the safety limit'), { name: 'SseFrameLimitError' });
+        }
+        if (!match) { searchFrom = Math.max(0, buffer.length - 3); return; }
+        const frame = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        searchFrom = 0;
+        await onFrame(frame);
+      }
+    }
+    try {
+      while (current()) {
+        const { value, done } = await reader.read();
+        if (!current()) return;
+        if (done) {
+          await append(decoder.decode());
+          if (buffer.length > maxFrameChars) throw Object.assign(new Error('Stream connection frame exceeds the safety limit'), { name: 'SseFrameLimitError' });
+          if (current() && buffer.trim()) await onFrame(buffer);
+          return;
+        }
+        // Decode bounded slices even when a proxy/browser delivers one huge chunk.
+        for (let offset = 0; offset < value.byteLength && current(); offset += 16384) {
+          await append(decoder.decode(value.subarray(offset, offset + 16384), { stream: true }));
+        }
+      }
+    } finally {
+      buffer = '';
+      signal?.removeEventListener('abort', cancel);
+      // Cancellation closes pending reads synchronously; underlying source cleanup
+      // may never settle, so it must not retain this reader/connection's finally.
+      cancel();
+      reader.releaseLock();
+    }
+  }
+
   // Connection health is independent of a turn's success/failure and cached UI state.
   function createConnectionState({ owner, state, changed, request, canCheck, recover }) {
     const failures = new Map();
@@ -269,5 +321,5 @@
     }
     return { check, invalidate, confirmed, isPending() { sync(); return pending; } };
   }
-  globalScope.CodexWebNetworkRecovery = { bounded, retryable, activityLabel, createObservationRecovery, createAuthRecovery, createConnectionState, createApiClient, buildApiError };
+  globalScope.CodexWebNetworkRecovery = { bounded, consumeSse, retryable, activityLabel, createObservationRecovery, createAuthRecovery, createConnectionState, createApiClient, buildApiError };
 })(globalThis);
