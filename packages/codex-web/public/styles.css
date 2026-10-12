@@ -574,9 +574,7 @@ button:disabled {
 }
 
 .settings-toggle-button:hover,
-.settings-toggle-button:focus-visible,
-.mobile-sidebar-toggle-button:hover,
-.mobile-sidebar-toggle-button:focus-visible {
+.settings-toggle-button:focus-visible {
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   color: var(--accent);
 }
@@ -902,6 +900,10 @@ button:disabled {
   box-shadow: 0 6px 14px color-mix(in srgb, var(--overlay) 12%, transparent);
 }
 
+.mobile-sidebar-toggle-button:active {
+  background: var(--panel-2);
+}
+
 .mobile-session-topbar .topbar-main {
   justify-content: space-between;
   gap: 8px;
@@ -1006,25 +1008,48 @@ button:disabled {
   background: var(--bg);
 }
 
-.session-list-error {
-  min-height: 120px;
-  padding: 24px 12px;
-  display: grid;
-  place-items: center;
-  align-content: center;
+/* Recovery notices share the same quiet surface as refresh feedback. */
+.session-list-error,
+.history-load-error,
+.history-load-pending {
+  min-width: 0;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
   gap: 10px;
-  color: var(--danger);
-  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
-.session-list-error.is-compact {
-  min-height: 0;
-  padding: 8px 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  place-items: center stretch;
-  border-bottom: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border));
-  text-align: left;
+.session-list-error {
+  border-color: var(--warn);
 }
+
+.session-list-error > span,
+.history-load-error > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-list-error > button,
+.history-load-error > button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 
 .session-list-pagination {
   width: 100%;
@@ -4117,35 +4142,54 @@ button.panel-close:focus-visible { outline: 2px solid var(--focus); outline-offs
 
 .work-details-list { min-height: 0; overflow-y: auto; }
 
+/* Shared by list refresh and history loading; activity stays visually neutral. */
 .pull-refresh-indicator {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 8px);
   left: 50%;
   z-index: 50;
   min-height: 32px;
-  padding: 7px 11px;
+  padding: 6px 10px;
   display: inline-flex;
   align-items: center;
+  gap: 7px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 10px;
   background: var(--panel);
-  box-shadow: var(--shadow);
   color: var(--text);
   font-size: 12px;
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
   transform: translate(-50%, -48px);
-  transition: opacity 120ms ease, transform 120ms ease, color 120ms ease;
 }
 
 .pull-refresh-indicator.is-visible {
   opacity: 1;
+  visibility: visible;
 }
 
-.pull-refresh-indicator.is-ready,
-.pull-refresh-indicator.is-refreshing {
-  border-color: var(--accent);
-  color: var(--accent);
+.pull-refresh-indicator::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border);
+  border-top-color: var(--text);
+  border-radius: 50%;
+}
+
+.pull-refresh-indicator.is-refreshing::before {
+  animation: refresh-spin 800ms linear infinite;
+}
+
+@keyframes refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pull-refresh-indicator.is-refreshing::before {
+    animation: none;
+  }
 }
 
 .empty-state {
@@ -4622,8 +4666,7 @@ pre.command {
     right: 12px;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 120ms ease;
-  }
+    }
 
   .desktop-session-list .session-card:hover .session-card-actions,
   .desktop-session-list .session-card:focus-within .session-card-actions {
@@ -5463,7 +5506,7 @@ pre.command {
 .composer-status-action { min-height: 44px; min-width: 44px; padding: 8px 4px; }
 .chat-project-context { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-title-stack .project-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.history-load-error { padding: 12px; color: var(--warn); border: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
 .timeline-window-control {
   justify-self: center;
   width: fit-content;

@@ -2129,7 +2129,7 @@ function renderChatContent({ desktop = false } = {}) {
           <div class="chat-title-stack">
             <div class="project-title" title="${escapeAttribute(sessionDisplayTitle(state.currentSession))}" data-i18n-skip>${escapeHtml(sessionDisplayTitle(state.currentSession))}</div><div class="chat-context-row"><div class="chat-project-context" data-i18n-skip>${escapeHtml(projectNameForSession(state.currentSession, state.cwd))}</div>
             ${renderGoalStatus()}
-            ${renderRuntimeFeedback()}</div>
+            ${desktop ? renderRuntimeFeedback() : ''}</div>
           </div>
           ${renderChatHeaderActions({ readOnly })}
         </div>
@@ -2523,7 +2523,7 @@ function renderSessionCards() {
   const sessions = sortedSessions();
   if (!sessions.length) {
     if (isCurrentSessionScopeLoading()) {
-      return `<div class="empty-state">${escapeHtml(t('Loading sessions...'))}</div>`;
+      return `<div class="history-load-pending" role="status">${escapeHtml(t('Loading sessions...'))}</div>`;
     }
     if (state.sessionsError) {
       return renderSessionsError();
@@ -2940,7 +2940,7 @@ function renderShareSettingsControl() {
 function renderTimeline() {
   if (retainedTimeline) return '';
   const visibleItems = visibleTimelineItems();
-  const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status">${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}<button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : !visibleItems.length && (state.sessionHistoryPending || state.sessionStatusPending) ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
+  const historyNotice = state.sessionHistoryError || state.sessionStatusError ? `<div class="history-load-error" role="status"><span>${[state.sessionHistoryError, state.sessionStatusError].filter(Boolean).map((error) => escapeHtml(t(error))).join(' ')}</span><button type="button" class="ghost" id="retry-session-history">${escapeHtml(t('Retry'))}</button></div>` : !visibleItems.length && (state.sessionHistoryPending || state.sessionStatusPending) ? `<div class="history-load-pending meta" role="status">${escapeHtml(t(state.sessionHistoryPending ? 'Loading history…' : 'Refreshing execution status…'))}</div>` : '';
   if (!visibleItems.length) {
     return (historyNotice || `<div class="empty-state">${escapeHtml(t('No context yet.'))}</div>`) + renderQuestionSlot();
   }

@@ -24,7 +24,8 @@ test('restart 502 stays visible until service and session recover, without losin
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.locator('.composer-status')).toContainText('HTTP 502');
   await expect(page.locator('.composer-status')).toContainText('重连');
-  await expect(page.locator('.runtime-feedback')).toContainText('HTTP 502');
+  if (info.project.name === 'desktop') await expect(page.locator('.runtime-feedback')).toContainText('HTTP 502');
+  else await expect(page.locator('.chat-topbar .runtime-feedback')).toHaveCount(0);
   await page.setViewportSize({ width: info.project.use.viewport.width, height: info.project.use.viewport.height - 32 });
   await expect(page.locator('.composer-status')).toContainText('HTTP 502');
   await expect(page.locator('.composer-status')).not.toContainText('就绪');

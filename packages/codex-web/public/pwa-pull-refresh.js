@@ -4,9 +4,7 @@
 
   function init(options) {
     const root = options?.root || document.body;
-    const onRefresh = options?.onRefresh;
-    const getScrollContainer = options?.getScrollContainer;
-    const getLabels = options?.getLabels;
+    const { onRefresh, getScrollContainer, getLabels } = options || {};
     const threshold = Number(options?.threshold) > 0 ? Number(options.threshold) : DEFAULT_THRESHOLD;
     if (!root || typeof onRefresh !== 'function') {
       return () => {};
@@ -14,7 +12,7 @@
 
     const indicator = document.createElement('div');
     indicator.className = 'pull-refresh-indicator';
-    indicator.textContent = 'Pull to refresh';
+    indicator.setAttribute('role', 'status');
     document.body.appendChild(indicator);
 
     let startY = 0;
@@ -43,7 +41,6 @@
 
     function setIndicator(nextDistance, ready) {
       indicator.classList.toggle('is-visible', nextDistance > 8 || refreshing);
-      indicator.classList.toggle('is-ready', ready);
       indicator.classList.toggle('is-refreshing', refreshing);
       indicator.textContent = refreshing ? labels.loading : ready ? labels.ready : labels.pull;
       indicator.style.transform = `translate(-50%, ${Math.round(-48 + Math.min(nextDistance, MAX_PULL) * 0.7)}px)`;
@@ -53,8 +50,8 @@
       startTarget = null;
       distance = 0;
       pulling = false;
-      indicator.classList.remove('is-visible', 'is-ready', 'is-refreshing');
-      indicator.textContent = 'Pull to refresh';
+      indicator.classList.remove('is-visible', 'is-refreshing');
+      indicator.textContent = '';
       indicator.style.transform = 'translate(-50%, -48px)';
     }
 
