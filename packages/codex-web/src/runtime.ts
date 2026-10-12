@@ -722,7 +722,8 @@ export class CodexWebRuntime {
         });
         timeline.push(...latest.values());
         timeline.sort((left, right) => (left.timeline?.position ?? 0) - (right.timeline?.position ?? 0));
-        return { ...metadata, thread: cached.session.thread, timeline, timelineCheckpoint: checkpoint };
+        return { ...metadata, latestTurn: metadata.latestTurn ?? cached.session.latestTurn,
+          thread: cached.session.thread, timeline, timelineCheckpoint: checkpoint };
       }
       this.cacheMetrics.historyBuilds += 1;
       const session = await this.readSession(sessionId);
@@ -1244,7 +1245,9 @@ export class CodexWebRuntime {
     const codexInput = buildCodexTurnInput(input.text, input.attachments);
     return this.startTrackedTurn({
       session,
-      userInput: input,
+      // Persist the same attachment-bearing prompt that Codex receives so a
+      // timeline reload can reconstruct the upload links before history syncs.
+      userInput: { ...input, text: codexInput?.find(item => item.type === 'text')?.text ?? input.text },
       start: (callbacks) => this.client.startTurn({
         threadId: sessionId,
         inputText: input.text,
@@ -1592,14 +1595,15 @@ export class CodexWebRuntime {
       throw new Error(`Turn ${expectedTurnId} does not belong to thread ${threadId}.`);
     }
     try {
+      const codexInput = buildCodexTurnInput(input.text, input.attachments) ?? [{
+        type: 'text' as const,
+        text: input.text,
+        text_elements: [],
+      }];
       const result = await steerTurn.call(this.client, {
         threadId,
         expectedTurnId,
-        input: buildCodexTurnInput(input.text, input.attachments) ?? [{
-          type: 'text',
-          text: input.text,
-          text_elements: [],
-        }],
+        input: codexInput,
         clientUserMessageId,
       });
       if (result.turnId !== expectedTurnId) {
@@ -1618,7 +1622,7 @@ export class CodexWebRuntime {
         clientUserMessageId,
       });
       this.append(expectedTurnId, { id: createEventId(), type: 'user.message', turnId: expectedTurnId, threadId,
-        text: input.text, clientMessageId: input.clientMessageId ?? (clientUserMessageId ? crypto.createHash('sha256').update(clientUserMessageId).digest('hex').slice(0, 24) : undefined) });
+        text: codexInput.find(item => item.type === 'text')?.text ?? input.text, clientMessageId: input.clientMessageId ?? (clientUserMessageId ? crypto.createHash('sha256').update(clientUserMessageId).digest('hex').slice(0, 24) : undefined) });
       await this.recordAcceptedInstruction(threadId);
       return { turnId: expectedTurnId };
     } catch (error) {

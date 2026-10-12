@@ -168,3 +168,26 @@ test('unsupported provider history remains distinguishable from missing or empty
   assert.equal((await runtime.readSession('present'))?.id, 'present');
   await assert.rejects(runtime.readSessionTimeline('present'), (error: any) => error.code === 'history_unavailable');
 });
+
+test('cached history retains its completed turn when lightweight metadata has no turns', async () => {
+  let fullReads = 0;
+  const latestTurn = { id: 'latest-result', status: 'completed', items: [{ id: 'answer', type: 'agentMessage', text: 'Finished', phase: 'final_answer' }] };
+  const runtime = new CodexWebRuntime({ defaultCwd: '/project', client: client({
+    readThread: async (_id, includeTurns) => {
+      if (includeTurns) fullReads++;
+      return { ...thread('history'), turns: includeTurns ? [latestTurn] : [] };
+    },
+    listThreads: async () => ({ items: [thread('history')], nextCursor: null }),
+  }) });
+  try {
+    const first = await runtime.readSessionTimeline('history');
+    assert.deepEqual(first?.latestTurn, { id: latestTurn.id, status: latestTurn.status });
+    await runtime.listSessionDirectory();
+    const metadata = await runtime.readSessionStatus('history');
+    assert.equal(metadata?.latestTurn, null);
+    const cached = await runtime.readSessionTimeline('history');
+    assert.deepEqual(cached?.latestTurn, first?.latestTurn);
+    assert.equal(fullReads, 1, 'preserving the completed identity must not reload full history');
+    assert.deepEqual(cached?.timeline, first?.timeline);
+  } finally { await runtime.stop(); }
+});

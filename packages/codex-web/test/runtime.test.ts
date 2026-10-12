@@ -1615,6 +1615,9 @@ test('runtime passes uploaded files as local paths and images as localImage inpu
     type: 'localImage',
     path: '/workspace/uploads/local-admin/att_image-chart.png',
   });
+  const reopened = await runtime.readSession('thread_attachments');
+  assert.equal(reopened?.timeline.find(item => item.role === 'user')?.text, input[0].text,
+    'reopening before native history catches up must retain both attachment paths');
 });
 
 test('runtime forwards developer instructions to the native turn client', async () => {
@@ -4502,6 +4505,9 @@ test('runtime steers text and attachment input through the owning active turn', 
     type: 'localImage',
     path: '/workspace/uploads/diagram.png',
   });
+  const reopened = await runtime.readSession('thread_steer');
+  assert.equal(reopened?.timeline.find(item => item.role === 'user')?.text, steerCalls[0].input[0].text,
+    'steered attachments must survive a timeline reload');
 });
 
 test('runtime guarded steer rejects mismatched and unknown turn ownership before calling Codex', async () => {

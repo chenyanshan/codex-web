@@ -22,7 +22,11 @@
     const matches = current.filter(item => item.role === 'user' && stableIds(item).some(id => ids.has(id)));
     if (!matches.length) return [...current, incoming];
     let merged = matches.reduce((latest, item) => preferVersion(item, latest), incoming);
-    const attachments = mergeAttachments(merged.attachments, ...matches.map(item => item.attachments));
+    // Confirmed prompts contain the immutable snapshot paths. Keeping the
+    // optimistic upload paths as well would display each upload twice.
+    const attachments = merged.timeline?.id && merged.attachments?.length
+      ? mergeAttachments(merged.attachments)
+      : mergeAttachments(merged.attachments, ...matches.map(item => item.attachments));
     if (attachments.length) merged = { ...merged, attachments };
     const anchor = matches.find(item => item.timeline?.id && item.timeline.id === incoming.timeline?.id) || matches[0];
     const duplicates = new Set(matches);

@@ -1807,7 +1807,7 @@ function handleLayoutResize() {
     state.view = isDesktopLayout() ? 'admin' : 'chat';
     return;
   }
-  if (['admin', 'settings'].includes(state.view)) return;
+  if (['admin', 'settings', 'new'].includes(state.view)) return;
   if (state.view === 'file' && (!isDesktopLayout() || isAdminObservedSession())) return;
   if (isDesktopLayout()) {
     state.mobileSidebarOpen = false;
@@ -1825,7 +1825,7 @@ function handleLayoutResize() {
     return;
   }
   state.desktopOverlay = null;
-  if (state.sessionId) {
+  if (state.sessionId || state.draftSessionActive) {
     state.view = 'chat';
     return;
   }
@@ -3000,6 +3000,7 @@ async function loadTurnDiff(turnId, { signal } = {}) {
 }
 
 function renderComposerStatus() {
+  if (canConfigureNewSessionDraft() && !state.draftStorageFailed) return '';
   const label = state.draftStorageFailed ? t('Draft could not be saved on this device.') : portableActivityStatus() || localizedComposerStatusLabel();
   const canOpenWork = canViewCurrentWorkDetails() && Boolean(currentWorkDetailsItem());
   const content = canOpenWork
@@ -5380,6 +5381,10 @@ function syncComposerStatusDisplay() {
     return;
   }
   const statusHtml = renderComposerStatus();
+  if (!statusHtml) {
+    current?.remove?.();
+    return;
+  }
   if (current) {
     current.outerHTML = statusHtml;
     bindComposerStatusAction();
@@ -5829,6 +5834,10 @@ function handleTimelineInput(event) {
     if (['ArrowDown', 'PageDown', 'End'].includes(event.key) || event.key === ' ' && !event.shiftKey) direction = 1;
     if (!direction) return;
   }
+  if (isPassivelySelectedDesktopSession()) {
+    passiveDesktopSessionId = '';
+    syncReadingControls();
+  }
   if (event.type === 'touchmove' && touchY != null && timelinePagingIntent?.touchY != null) {
     direction = Math.sign(timelinePagingIntent.touchY - touchY);
   }
@@ -6135,9 +6144,10 @@ function openNewSessionPage() {
 function onNewSessionSubmit(event) {
   state.draftSettingsEdited = {};
   event.preventDefault();
+  cancelSessionOpen();
   savePromptDraftForCurrentSession();
   const form = new FormData(event.currentTarget);
-  const selectedProjectId = String(form.get('projectId') || state.newProjectId || '').trim();
+  const selectedProjectId = isMultiUserMode() ? String(form.get('projectId') || state.newProjectId || '').trim() : '';
   if (isMultiUserMode() && !selectedProjectId) {
     state.error = 'No projects are available for this account.';
     render();
@@ -6159,7 +6169,7 @@ function onNewSessionSubmit(event) {
   state.currentSession = null;
   state.activeSubmissionId = '';
   state.draftSessionActive = true;
-  state.newProjectId = selectedProjectId || state.newProjectId;
+  state.newProjectId = selectedProjectId;
   state.cwd = selectedProjectId ? '' : state.newCwd.trim();
   state.prompt = '';
   state.composerAttachments = [];
@@ -11415,6 +11425,7 @@ function loadOlderSessionTimelinePage(direction = 'before') {
 }
 
 async function jumpToLatestTimeline() {
+  passiveDesktopSessionId = '';
   SESSION_READING.input();
   const snapshot = captureTimelineViewport();
   if (state.currentSession?.timelineHasNewer) {
@@ -11832,6 +11843,8 @@ function resetWorkspaceSessionContext() {
 }
 
 async function selectProjectScope(projectKey) {
+  cancelSessionOpen();
+  const navigation = sessionNavigationGeneration, generation = authRequestGeneration;
   const normalizedKey = String(projectKey || '').trim();
   if (!normalizedKey) {
     state.selectedProjectKey = '';
@@ -11870,6 +11883,10 @@ async function selectProjectScope(projectKey) {
   state.view = 'sessions';
   render();
   await refreshSessionsList({ renderAfter: true, scope: currentSessionScope() }).catch(() => null);
+  // The project request may finish after the user has opened a draft or another
+  // conversation. Refreshing its list must not take over that newer navigation.
+  if (!isAuthRequestCurrent(generation) || navigation !== sessionNavigationGeneration
+    || state.selectedProjectKey !== normalizedKey) return null;
   const [latestSession] = projectScopedSessions()
     .sort(compareSessionsForSelection);
   if (latestSession) {
@@ -11907,6 +11924,10 @@ function hasProjectChoices() {
 }
 
 function initializeNewProjectSelection() {
+  if (!isMultiUserMode()) {
+    state.newProjectId = '';
+    return;
+  }
   const projects = availableProjects();
   if (!projects.length) {
     state.newProjectId = '';

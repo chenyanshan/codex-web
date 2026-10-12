@@ -61,3 +61,76 @@ test('session dots distinguish running, unread, approval and failure without gro
   await expect(dot(ids[0])).toHaveCSS('animation-name', 'none');
   expect(errors).toEqual([]);
 });
+
+for (const action of ['read-visible-result', 'back-to-latest', 'read-history-then-result']) {
+  test(`an automatically selected desktop result becomes read after ${action}`, async ({ page }, info) => {
+    test.skip(info.project.name !== 'desktop');
+    const id = 'session_browser_history';
+    const turnId = 'completed_result';
+    const session = { id, title: 'Completed project task', cwd: '/Users/test/work', activeTurnId: null, latestTurn: { id: turnId, status: 'completed' }, settings: {} };
+    const items = [
+      { id: 'question', kind: 'message', role: 'user', turnId, text: 'Check the project' },
+      { id: 'answer', kind: 'message', role: 'assistant', turnId, meta: 'final', text: 'Completed result.\n\n' + 'Detailed outcome.\n\n'.repeat(80) },
+    ];
+    await page.addInitScript(({ id, items }) => {
+      localStorage.setItem('codexWebToken', 'browser-session-dots');
+      localStorage.setItem('codexWebLanguage', 'en');
+      localStorage.setItem('codexWebTimelineCache', JSON.stringify({ version: 3, entries: [{ sessionId: id, savedAt: Date.now(), timeline: items, history: items, historyComplete: true, batches: [], approvals: [] }] }));
+    }, { id, items });
+    await page.route(/\/api\/sessions(?:\?|$)/u, route => route.fulfill({ json: { items: [session], directoryComplete: true } }));
+    await page.route(new RegExp(`/api/sessions/${id}(?:[/?]|$)`), route => route.fulfill({ json: { session, items, hasMore: false, hasNewer: false } }));
+    await page.goto('/');
+    const dot = page.locator(`button[data-session-id="${id}"] .session-attention-state`);
+    await expect(page.locator('#timeline')).toContainText('Completed result');
+    await expect(dot).toHaveAttribute('data-state', 'unread');
+    // Passive rendering alone must not acknowledge a result. User reading does.
+    if (action === 'back-to-latest') {
+      await page.locator('#timeline').evaluate(el => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
+      await expect(dot).toHaveAttribute('data-state', 'unread');
+      await page.locator('#timeline-jump-latest').click();
+    } else if (action === 'read-history-then-result') {
+      await page.locator('#timeline').evaluate(el => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
+      await page.locator('#timeline').dispatchEvent('pointerdown');
+      await expect(dot).toHaveAttribute('data-state', 'unread');
+      await page.locator('#timeline').evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
+    } else {
+      await page.locator('#timeline').dispatchEvent('wheel', { deltaY: 100 });
+    }
+    await expect(dot).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('#timeline')).toContainText('Completed result');
+    await expect(dot).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath(`read-result-${action}.png`), animations: 'disabled' });
+  });
+}
+
+test('viewing the latest reply clears a cached unread turn when lightweight status omits latestTurn', async ({ page }, info) => {
+  test.skip(!['desktop', 'mobile-portrait'].includes(info.project.name));
+  const id = 'session_browser_history';
+  const latestTurn = { id: 'new_completed_turn', status: 'completed' };
+  const session = { id, title: 'Read completed project result', cwd: '/Users/test/work', activeTurnId: null, latestTurn: null, thread: { turns: [] }, settings: {} };
+  const items = [
+    { id: 'new_question', kind: 'message', role: 'user', turnId: latestTurn.id, text: 'Continue checking the project' },
+    { id: 'new_answer', kind: 'message', role: 'assistant', turnId: latestTurn.id, meta: 'final', text: 'The latest completed result is visible.' },
+  ];
+  await page.addInitScript(({ id }) => {
+    localStorage.setItem('codexWebToken', 'browser-session-dots');
+    localStorage.setItem('codexWebLanguage', 'en');
+    if (!localStorage.getItem('codexWebSessionRead:single')) localStorage.setItem('codexWebSessionRead:single', JSON.stringify({ [id]: { read: '', latestTurn: { id: 'old_completed_turn', status: 'completed' } } }));
+  }, { id });
+  await page.route(/\/api\/sessions(?:\?|$)/u, route => route.fulfill({ json: { items: [session], directoryComplete: true } }));
+  await page.route(new RegExp(`/api/sessions/${id}(?:[/?]|$)`), route => {
+    const timeline = new URL(route.request().url()).pathname.endsWith('/timeline');
+    return route.fulfill({ json: timeline ? { session: { ...session, latestTurn }, items, hasMore: true, nextBefore: 'older' } : { session } });
+  });
+  await page.goto('/');
+  const dot = page.locator(`button[data-session-id="${id}"] .session-attention-state`);
+  await expect(dot).toHaveAttribute('data-state', 'unread');
+  await page.locator(`button[data-session-id="${id}"]`).click();
+  await expect(page.locator('#timeline')).toContainText('The latest completed result is visible.');
+  if (info.project.name !== 'desktop') await page.locator('.chat-back-button').click();
+  await expect(dot).toHaveCount(0);
+  await page.reload();
+  if (info.project.name !== 'desktop' && await page.locator('.chat-back-button').isVisible()) await page.locator('.chat-back-button').click();
+  await expect(dot).toHaveCount(0);
+});

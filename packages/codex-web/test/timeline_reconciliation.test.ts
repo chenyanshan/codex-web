@@ -4,7 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../public/timeline-reconciliation.js', import.meta.url), 'utf8');
-const { pendingMessages, transientDuplicate, mergeLatestHistory } = vm.runInNewContext(`${source}\nCodexWebTimelineReconciliation;`);
+const { pendingMessages, transientDuplicate, mergeLatestHistory, upsertUserMessage } = vm.runInNewContext(`${source}\nCodexWebTimelineReconciliation;`);
 type Message = { id: string; kind: string; role: string; text: string; meta: string; turnId?: string; submissionId?: string; clientMessageId?: string; deliveryLabel?: string; historyAnchorId?: string };
 const message = (id: string, overrides: Partial<Message> = {}): Message => ({ id, kind: 'message', role: 'user', text: 'Continue', meta: 'pending', ...overrides });
 const options = (overrides = {}) => ({
@@ -15,6 +15,25 @@ const options = (overrides = {}) => ({
 });
 const ids = (items: Message[]) => Array.from(items, item => item.id);
 const identities = (item: Message) => [`id:${item.id}`, ...(item.clientMessageId ? [`client:${item.clientMessageId}`] : [])];
+
+test('confirmed attachment snapshots replace optimistic upload paths without duplicating images', () => {
+  const pending = { ...message('pending', { clientMessageId: 'client' }), attachments: [{ localPath: '/uploads/image.png' }] };
+  const confirmed = { ...message('canonical', { meta: 'history', clientMessageId: 'client' }),
+    attachments: [{ localPath: '/turn-attachments/image.png' }, { localPath: '/turn-attachments/second.png' }],
+    timeline: { id: 'canonical', generation: 'generation', position: 1, version: 1, aliases: ['client'] } };
+  const merged = upsertUserMessage([pending], confirmed, (...groups) => groups.flat().filter(Boolean));
+  assert.equal(merged.length, 1);
+  assert.deepEqual(Array.from(merged[0].attachments, item => item.localPath), ['/turn-attachments/image.png', '/turn-attachments/second.png']);
+});
+
+test('text-only acknowledgments still retain optimistic attachments until history supplies snapshots', () => {
+  const pending = { ...message('pending', { clientMessageId: 'client' }), attachments: [{ localPath: '/uploads/image.png' }] };
+  const confirmed = { ...message('canonical', { meta: 'history', clientMessageId: 'client' }),
+    timeline: { id: 'canonical', generation: 'generation', position: 1, version: 1, aliases: ['client'] } };
+  const merged = upsertUserMessage([pending], confirmed, (...groups) => groups.flat().filter(Boolean));
+  assert.equal(merged.length, 1);
+  assert.deepEqual(Array.from(merged[0].attachments, item => item.localPath), ['/uploads/image.png']);
+});
 
 test('latest history replaces overlapping cached order while preserving the older prefix', () => {
   const older = message('older', { meta: 'history' });

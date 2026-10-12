@@ -40,6 +40,9 @@
         return {
           session: {
             ...sessionSummary, ...(timelineSession || {}), ...(statusSession || {}), ...executionFields,
+            // Turn-free status snapshots mean unknown, not that the history's
+            // completed result disappeared. Keep its identity for read markers.
+            latestTurn: execution?.latestTurn ?? timelineSession?.latestTurn ?? statusSession?.latestTurn ?? sessionSummary.latestTurn ?? null,
             ...(timelinePayload?.timelineCheckpoint ? { timelineCheckpoint: timelinePayload.timelineCheckpoint } : {}),
             ...(timeline ? {
               timeline: timeline.map((item) => ({ ...item })),

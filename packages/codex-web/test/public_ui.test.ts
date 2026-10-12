@@ -14581,6 +14581,96 @@ test('delayed session list refresh preserves a newly created session and its act
   }
 });
 
+test('new session selection and unsent drafts survive responsive layout changes', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, viewportHeight: 844, desktopPointer: true });
+  api.state.authSession = { id: 'auth_1' };
+  api.state.projectsLoaded = true;
+  api.state.sessions = [{ id: 'old_session', cwd: '/repo/old', settings: {} }];
+  api.ensureDesktopActiveSession();
+  api.openNewSessionPage();
+  for (const [width, height] of [[390, 844], [844, 390], [1440, 900]]) {
+    context.window.innerWidth = width;
+    context.window.innerHeight = height;
+    api.handleLayoutResize();
+    api.render();
+    assert.equal(api.state.view, 'new');
+    assert.match(context.document.querySelector('#app').innerHTML, /id="new-session-form"/u);
+  }
+  api.state.newCwd = '/repo/new';
+  api.onNewSessionSubmit({ preventDefault() {} });
+  api.state.prompt = 'Keep this unsent draft';
+  for (const [width, height] of [[390, 844], [844, 390], [1440, 900]]) {
+    context.window.innerWidth = width;
+    context.window.innerHeight = height;
+    api.handleLayoutResize();
+    api.render();
+    assert.equal(api.state.sessionId, null);
+    assert.equal(api.state.draftSessionActive, true);
+    assert.equal(api.state.cwd, '/repo/new');
+    assert.match(context.document.querySelector('#app').innerHTML, /Keep this unsent draft/u);
+    assert.match(context.document.querySelector('#app').innerHTML, /new-session-empty-state/u);
+  }
+});
+
+test('a late project selection cannot replace a newer page or draft', async () => {
+  for (const destination of ['new', 'draft', 'settings']) {
+    let release;
+    const response = new Promise(resolve => { release = resolve; });
+    const oldSession = { id: 'old_session', projectId: 'project_a', cwd: '/repo/a', settings: {} };
+    const { api } = await loadAppHarness({
+      viewportWidth: 1280, desktopPointer: true,
+      fetch: async path => {
+        if (path === '/api/sessions?projectId=project_a') {
+          await response;
+          return { ok: true, status: 200, json: async () => ({ items: [oldSession] }) };
+        }
+        throw new Error(`unexpected fetch ${path}`);
+      },
+    });
+    api.state.authSession = { id: 'auth_1' };
+    api.state.projects = [{ id: 'project_a', displayName: 'Project A', cwd: '/repo/a' }];
+    api.state.projectsLoaded = true;
+    api.state.sortMode = 'time';
+    api.state.sessions = [oldSession];
+    const selecting = api.selectProjectScope('project_a');
+    api.openNewSessionPage();
+    if (destination === 'draft') {
+      api.onNewSessionSubmit({ preventDefault() {} });
+      api.state.prompt = 'New project question';
+    }
+    if (destination === 'settings') {
+      api.state.webhook.loaded = true;
+      api.openAppSettingsPage();
+    }
+    release();
+    await selecting;
+    if (destination === 'new') assert.equal(api.state.view, 'new');
+    if (destination === 'settings') assert.equal(api.state.desktopSettingsOpen, true);
+    if (destination === 'draft') {
+      assert.equal(api.state.sessionId, null);
+      assert.equal(api.state.draftSessionActive, true);
+      assert.equal(api.state.prompt, 'New project question');
+    }
+  }
+});
+
+test('new drafts omit routine status while retaining draft storage failure feedback', async () => {
+  const { api } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_1' };
+  api.onNewSessionSubmit({ preventDefault() {} });
+  for (const layout of ['chat', 'console']) {
+    api.state.sessionLayout = layout;
+    for (const status of ['Ready', 'Attachment uploaded']) {
+      api.state.status = status;
+      assert.equal(api.renderComposerStatus(), '');
+      assert.doesNotMatch(api.renderChatContent(), /class="composer-status/u);
+    }
+    api.state.draftStorageFailed = true;
+    assert.match(api.renderComposerStatus(), /Draft could not be saved/u);
+    api.state.draftStorageFailed = false;
+  }
+});
+
 test('desktop new session submit with the default cwd still shows the composer', async () => {
   const { api } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
 
@@ -19190,4 +19280,24 @@ test('late status calibration cannot overwrite newer retry and resolved-question
   api.state.terminalTurnIds.add('turn_portable');
   api.applyTurnEvent({ type: 'turn.activity', turnId: 'turn_portable', activity: { ...oldActivity, revision: 3 } }, null);
   assert.equal(api.state.currentSession.turnActivity.health.status, 'retrying');
+});
+
+test('compact history preserves known latest-turn identity while respecting newer execution metadata', async () => {
+  const older = { id: 'older-result', status: 'completed' };
+  const newer = { id: 'newer-result', status: 'completed' };
+  const failed = { id: 'newer-failed', status: 'failed' };
+  for (const [status, history, expected] of [
+    [{ latestTurn: null, updatedAt: 300 }, { latestTurn: newer, updatedAt: 200 }, newer],
+    [{ latestTurn: older, updatedAt: 200 }, { latestTurn: newer, updatedAt: 300 }, newer],
+    [{ latestTurn: failed, updatedAt: 300 }, { latestTurn: older, updatedAt: 200 }, failed],
+  ]) {
+    const { api } = await loadAppHarness({ fetch: async path => ({
+      ok: true, status: 200, json: async () => path.endsWith('/status')
+        ? { session: { id: 'result-session', activeTurnId: null, ...status } }
+        : { session: { id: 'result-session', activeTurnId: null, ...history }, items: [], hasMore: false },
+    }) });
+    api.state.token = 'token';
+    const result = await api.loadSessionOpenData({ id: 'result-session', latestTurn: older });
+    assert.deepEqual(JSON.parse(JSON.stringify(result.session.latestTurn)), expected);
+  }
 });
