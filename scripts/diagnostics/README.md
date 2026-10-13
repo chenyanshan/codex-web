@@ -1,5 +1,38 @@
 # Local browser soak
 
+## Allocation sampling on an existing browser
+
+`browser-allocation-profile.mjs` uses Node 24's built-in WebSocket and raw CDP. It does not launch a browser. Chrome must already expose a local debugging endpoint. Select an explicit page target ID from that browser's `/json/list`; the recorder does not select a page by its title or read page text, cookies or tokens.
+
+```sh
+node scripts/diagnostics/browser-allocation-profile.mjs --cdp=http://127.0.0.1:9222 --target-id=EXISTING_PAGE_ID --output="$HOME/diagnostics/codex-allocation"
+```
+
+To capture allocations **before growth begins**, create a new blank page, start profiling, then navigate using `--url` instead of `--target-id`:
+
+```sh
+node scripts/diagnostics/browser-allocation-profile.mjs --url=https://example.com/ --duration-seconds=300 --output="$HOME/diagnostics/codex-allocation"
+```
+
+An attached existing page is never navigated. New pages are left open after recording. The tool never refreshes/closes a page, kills the browser, increases its heap allowance, forces GC, or automatically takes a heap snapshot. Do not attach while another profiler is sampling the same target: CDP profilers are shared target facilities, not independent sessions.
+
+Defaults: five minutes, 65,536-byte allocation sampling interval, metrics every two seconds, a heap allocation profile every five seconds, five-second timeout per CDP command. Sampling includes allocations subsequently collected by minor or major GC, so churn remains visible. Override duration, `--sampling-interval=65536`, or `--command-timeout-ms=5000` if needed. Probes are sequential; a slow response can delay the requested cadence. A command timeout clears pending commands and stops further regular probes; bounded final CPU/heap profile requests are still attempted. Ctrl-C also attempts finalization and disconnects only the recorder's CDP connection.
+
+The output argument must be a directory. Each run creates a private subdirectory (0700) and files (0600), preferably outside the repository. The console prints `timeline.jsonl`, containing timestamped heap/DOM metrics, macOS host pressure, profile paths, pruning records, and stop reason. The initial allocation profile and at most the latest 20 profiles are retained; `final.cpuprofile` is saved separately when finalization succeeds. Source URLs/function names can occur in profiles and can themselves contain sensitive URL parameters: treat all artifacts as private even though the recorder never requests credentials or page contents. File-count retention is not a byte quota; one unusually large profile can still consume substantial disk space.
+
+At JS heap usage above 256 MiB the recorder stops and leaves the user's page running; this boundary also applies before sampling starts. macOS memory pressure >=2 refuses new-page creation/navigation and stops new-page recording. Existing-page attachment may continue passive observation under pressure, subject to the heap boundary. Unsupported/unreadable host pressure is recorded as unknown, never as healthy. Sampling and CPU profiling still add overhead; attachment after a page has already hung may only yield a timeout, not a useful profile.
+
+Sampling profiles identify allocation stacks, **not retained heap size or retaining paths**. Starting before growth helps attribute allocations but does not prove what remains reachable after completion/navigation/GC. Compare metrics at equivalent lifecycle points; obtain a carefully bounded heap snapshot when retaining paths are needed. This recorder does not identify a renderer PID or measure its RSS. Correlate those separately: native allocations such as ICU date formatters may increase renderer memory without a comparable JS heap increase. No long-run production conclusion follows from a short recording or from allocation totals alone.
+
+Local mock checks (no browser startup):
+
+```sh
+node scripts/diagnostics/browser-allocation-profile.mjs --help
+node --test scripts/diagnostics/browser-allocation-profile.test.mjs
+```
+
+## Dedicated synthetic soak
+
 `browser-soak.mjs` runs a synthetic fixture in a dedicated Chromium instance on a random localhost port. It rejects non-fixture browser traffic, uses a shared synthetic account across two isolated tabs, and never connects to production. It is deliberately excluded from the default test suite.
 
 ```sh

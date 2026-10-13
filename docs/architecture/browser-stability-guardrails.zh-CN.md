@@ -1,8 +1,10 @@
 # 浏览器稳定性约束与 AI 修改提示词
 
-适用范围：会话加载、手动刷新、前后台恢复、网络重试、SSE、前端缓存与资源生命周期、启动脚本和 Service Worker。
+适用范围：会话加载、手动刷新、前后台恢复、网络重试、SSE、渲染与本地化、前端缓存与资源生命周期、启动脚本和 Service Worker。
 
 根目录 [AGENTS.md](../../AGENTS.md) 放必须执行的规则；本文解释原因、实现入口和验证方式。[2026-10-12 修复记录](../audits/2026-10-12-browser-stability-repair.zh-CN.md) 保存当时的证据、修复和验证结果。修改仍须同时满足 [OPT-01 至 OPT-21 保留基线](2026-09-25-existing-optimizations-baseline.zh-CN.md)。
+
+[2026-10-13 分配调查](../audits/2026-10-13-browser-allocation-repair.zh-CN.md) 记录刷新后再次快速增长，以及随后确认的 DOM 重建、原生日期格式化分配和文本展开缺陷。此前“好像不卡了”不能作为问题已消失的依据。
 
 ## 这次问题应留下什么经验
 
@@ -31,6 +33,8 @@
 | SSE | 使用 `CodexWebNetworkRecovery.consumeSse`；按单帧限额逐段解码，支持跨 chunk UTF-8、LF/CRLF；成功、失效、取消、抛错均释放 reader/监听器/控制器 | `buffer += chunk` 无上限；只在正常 EOF 清理；等待永不完成的底层 cancel 后才释放锁；把整个回答累计长度当作单帧上限 |
 | 共享结果 | 共享读取和大文本，复制会被修改的字段；事件可变标记不得污染其他调用者 | 为了共享直接复用可变对象；反过来在每个 delta 深复制全量历史/快照 |
 | 内存与缓存 | 为新增集合明确容量与释放节点，检查数量及字节；复用已有缓存、分页与 Blob 清理 | 只限制条数却放任单条无限大；从一个 map 挪到另一个 map 却仍保留引用；任意截断权威历史、最终回复或终态去重状态 |
+| 增量渲染 | 区分可见消息与隐藏 work batch 的变化；同帧合并仍包含 assistant 更新；相同/过期 activity revision 不触发 DOM 工作 | 用不在可见时间线里的 batch ID 查询失败后整段重建历史；无变化事件仍完整 render |
+| 日期与本地化 | 固定语言/样式复用有界 `Intl.DateTimeFormat`；保护标记采用输入中不存在的短 namespace，保留任意字面内容 | 每次 render 对所有会话调用带 options 的 `Date.toLocale*`；固定占位符递归展开用户内容；以不断增长的前缀回避碰撞，造成临时字符串放大 |
 | 内容和阅读 | 恢复期间保留已显示内容、草稿和阅读锚点；用户新滚动优先 | 刷新/切前台先清空页面；用定时整页刷新掩盖卡顿；为回收内存清掉登录或草稿 |
 | 启动 | 所有有序脚本的 `data-cfasync="false"` 放在 `src` 前；包含 boot recovery、依赖、module 入口以及服务端注入变体 | 只排除 app.js，仍让其依赖或超时提示受 Rocket Loader 控制；更改 HTML 属性后漏改服务端注入匹配 |
 | PWA/体积 | 保持版本指纹、完整资源原子更新与旧完整缓存回退；可选功能按需加载；gzip ≤143,360 bytes | 清除所有缓存或用户存储来强推更新；新资源未完整就替换旧壳；调高测试阈值代替优化 |
@@ -44,11 +48,14 @@
 | 加载合并、取消、身份、分步通知 | [session_loader.test.ts](../../packages/codex-web/test/session_loader.test.ts)、[network_recovery.test.ts](../../packages/codex-web/test/network_recovery.test.ts)、[浏览器读取合并](../../packages/codex-web/test/browser/session-request-coalescing.spec.js) |
 | SSE 分帧、取消、释放、重试 | [sse_consumer.test.ts](../../packages/codex-web/test/sse_consumer.test.ts)、[网络恢复](../../packages/codex-web/test/network_recovery.test.ts)、[弱网浏览器回归](../../packages/codex-web/test/browser/weak-network.spec.js)、[输出恢复](../../packages/codex-web/test/browser/session-output-recovery.spec.js) |
 | 缓存、刷新、前后台与阅读 | [缓存稳定性](../../packages/codex-web/test/browser/session-cache-stability.spec.js)、[阅读位置](../../packages/codex-web/test/browser/session-reading.spec.js)、[界面单测](../../packages/codex-web/test/public_ui.test.ts) |
+| 渲染分配、日期与本地化 | [本地化回归](../../packages/codex-web/test/ui_localization.test.ts)、[活动日期](../../packages/codex-web/test/work_details_dates.test.ts)、[界面单测](../../packages/codex-web/test/public_ui.test.ts)、[浏览器分配回归](../../packages/codex-web/test/browser/browser-allocation-regression.spec.js)；检查 DOM 身份/草稿、混合增量、任意字面占位符和格式化器构造次数 |
 | 启动、构建、PWA、资源拆分 | [Rocket Loader 回归](../../packages/codex-web/test/browser/rocket-loader.spec.js)、[构建](../../packages/codex-web/test/build_public.test.ts)、[Service Worker](../../packages/codex-web/test/service_worker_cache.test.ts)、[首屏预算](../../packages/codex-web/test/frontend_budget.test.ts)；资源迁移还需相应页面浏览器回归 |
 
 新增行为应有能抓住失败路径的回归，不必为纯文档改动重复整套应用测试。TypeScript/受检查前端代码变更仍须 `npm run typecheck`；生产资源变更检查构建与 `test:built-public`。不得删除或削弱已有断言来完成重构。
 
 若声称“长期内存稳定”，用 [采样工具](../../scripts/diagnostics/README.md) 在同构建模式、浏览器版本、会话规模和操作条件下进行至少 30–60 分钟对照。分别记录输出中与完成/切换/GC 后的 JS 堆、DOM、监听器、进程内存、请求并发和 SSE；结合堆快照留存路径判断。区分 JS 堆、单 renderer MEM 与浏览器进程树 RSS。宿主内存压力警告时停止压测并写明未验证范围；短测、fixture 和用户感受不可替代生产根因证据。
+
+对于“刷新暂时恢复，随后快速增长”，在增长前启动 `browser-allocation-profile.mjs`，按间隔保存 allocation sampling 与 CPU profile，保留刷新前现场。采样包含已被 GC 回收的分配，不能把累计分配量当作泄漏量。JS 堆平稳时仍须检查经验证 PID 的 renderer RSS 与原生分配；不要只盯 JS 对象，也不要把未映射到页面的进程采样归因于该站点。网络请求快、HTML 快，并不排除旧文档卸载或渲染阶段的主线程阻塞。
 
 ## 可直接复制给 AI 的提示词
 
@@ -68,9 +75,14 @@ docs/architecture/browser-stability-guardrails.zh-CN.md。
 5. 保留已有内容、草稿、阅读位置、回执身份和缓存权限；不得靠定时整页刷新或清用户数据修复卡顿。
 6. 所有有序启动脚本保留 Rocket Loader opt-out；PWA 保持完整缓存原子更新。
 7. 首屏 gzip 不超过 143,360 bytes。优化资源加载，不调高预算、不弱化断言。
+8. 隐藏 work batch 变化不替换可见消息历史；同帧 assistant 更新不能漏掉；旧/相同 activity revision 不重渲染。
+9. 高频日期格式化复用固定有界 Intl.DateTimeFormat；本地化保护标记与任意用户文本无碰撞，避免递归展开及长前缀放大。
 
 为实际失败路径加入回归，按影响运行 focused tests、浏览器检查、typecheck 和构建验证。
 交付时列出受影响的 OPT 编号、测试证据和未验证范围。性能结论必须有同条件测量，
 不能将短测通过或用户感觉变快写成已证明生产泄漏根因。宿主内存压力异常时停止压测。
+若刷新后再次快速增长，先在增长前启动并持续落盘 allocation sampling/CPU profile，
+保留刷新前现场；区分累计分配、GC后留存、JS堆与经PID映射验证的renderer原生内存。
+未取得对应证据时，不把新的加载/重试优化或某个候选函数称为已证明的生产根因。
 涉及发布时，沿用会话中的部署授权和仓库发布流程；核验上线构建与鉴权，不擅改外部代理配置。
 ```

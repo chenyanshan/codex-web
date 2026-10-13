@@ -6101,6 +6101,110 @@ test('desktop workspace keeps streamed work out of the timeline while sessions v
   assert.equal(api.refreshChatDynamicUi(), false);
 });
 
+test('stale and equal activity revisions do not invalidate or render the timeline', async () => {
+  const { api, context } = await loadAppHarness();
+  api.state.authSession = { id: 'auth_activity' };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_activity';
+  api.state.turnId = 'turn_activity';
+  const previous = { turnId: api.state.turnId, revision: 2, health: { status: 'working' } };
+  api.state.currentSession = { id: api.state.sessionId, cwd: '/repo', turnActivity: previous };
+  api.render();
+  const initialRevision = api.timelineRevision;
+  const assistant = { id: 'assistant' };
+  let elementCreations = 0;
+  const createElement = context.document.createElement;
+  context.document.createElement = (...args) => { elementCreations++; return createElement(...args); };
+  for (const revision of [1, 2]) {
+    const result = api.applyTurnEvent({ type: 'turn.activity', turnId: api.state.turnId,
+      activity: { ...previous, revision, health: { status: 'retrying' } } }, assistant);
+    assert.equal(result, assistant);
+    assert.equal(api.state.currentSession.turnActivity, previous);
+    assert.equal(api.timelineRevision, initialRevision);
+    assert.equal(elementCreations, 0, 'ignored activity must not construct a render tree');
+  }
+  const latest = { ...previous, revision: 3, health: { status: 'retrying' } };
+  api.applyTurnEvent({ type: 'turn.activity', turnId: api.state.turnId, activity: latest }, assistant);
+  assert.equal(api.state.currentSession.turnActivity, latest);
+  assert.equal(api.timelineRevision, initialRevision + 1);
+  assert.ok(elementCreations > 0, 'new activity still renders');
+});
+
+test('batch output refreshes work details and status without replacing message history', async () => {
+  const frames = [];
+  const { api, context } = await loadAppHarness({ requestAnimationFrame: (callback) => frames.push(callback) });
+  const flushFrames = () => { while (frames.length) frames.shift()(); };
+  api.state.authSession = { principal: { mode: 'single', isAdmin: true } };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_batch_render';
+  api.state.currentSession = { id: api.state.sessionId, cwd: '/repo' };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_batch_render';
+  api.state.timeline = Array.from({ length: 80 }, (_, index) => ({
+    id: `history_${index}`, kind: 'message', role: 'assistant', label: 'Assistant', text: `Answer ${index}`,
+  }));
+  api.render();
+  flushFrames();
+  api.applyTurnEvent({ type: 'batch.started', turnId: api.state.turnId, batchId: 'command', kind: 'command', title: 'npm test' }, null);
+  flushFrames();
+  const timeline = context.document.querySelector('#timeline');
+  const originalHtml = timeline.innerHTML;
+  let timelineWrites = 0;
+  Object.defineProperty(timeline, 'innerHTML', { get: () => originalHtml, set: () => { timelineWrites++; } });
+  timeline.scrollTop = 200;
+  api.state.timelineShouldFollowLatest = false;
+  let detailWrites = 0;
+  const details = {
+    scrollTop: 0, scrollHeight: 400, clientHeight: 200,
+    set innerHTML(_html) { detailWrites++; },
+    querySelector: () => null, querySelectorAll: () => [], addEventListener() {},
+  };
+  const feedback = { outerHTML: '' };
+  const originalQuery = context.document.querySelector;
+  context.document.querySelector = (selector) => selector === '.work-details-list' ? details
+    : selector === '.runtime-feedback' ? feedback : originalQuery(selector);
+  api.state.workDetailsOpen = true;
+  api.state.workDetailsTurnId = api.state.turnId;
+  for (let index = 0; index < 20; index++) {
+    api.applyTurnEvent({ type: 'batch.updated', turnId: api.state.turnId, batchId: 'command', summary: { outputDelta: 'line\n' } }, null);
+    flushFrames();
+  }
+  assert.equal(timelineWrites, 0, 'hidden batch changes must not rebuild any history rows');
+  assert.equal(timeline.scrollTop, 200, 'reading position remains unchanged');
+  assert.equal(api.state.batches.get('command').summary.output, 'line\n'.repeat(20));
+  assert.equal(detailWrites, 20, 'open activity details still refresh');
+  assert.match(feedback.outerHTML, /runtime-feedback/u);
+});
+
+test('batch and assistant updates in either frame order still update messages and retain fallback rendering', async () => {
+  for (const batchFirst of [true, false]) {
+    const frames = [];
+    const { api, context } = await loadAppHarness({ requestAnimationFrame: (callback) => frames.push(callback) });
+    const flushFrames = () => { while (frames.length) frames.shift()(); };
+    api.state.authSession = { id: 'auth_render' };
+    api.state.view = 'chat';
+    api.state.sessionId = 'session_mixed_render';
+    api.state.currentSession = { id: api.state.sessionId, cwd: '/repo' };
+    api.state.pendingTurn = true;
+    api.state.turnId = 'turn_mixed_render';
+    api.state.timeline = [{ id: 'history', kind: 'message', role: 'user', label: 'You', text: 'Run checks' }];
+    api.render();
+    flushFrames();
+    const timeline = context.document.querySelector('#timeline');
+    const batch = { type: 'batch.updated', turnId: api.state.turnId, batchId: 'command', summary: { outputDelta: 'output' } };
+    const assistant = { type: 'assistant.delta', turnId: api.state.turnId, itemId: 'reply', delta: 'New answer' };
+    for (const event of batchFirst ? [batch, assistant] : [assistant, batch]) api.applyTurnEvent(event, null);
+    flushFrames();
+    assert.match(timeline.innerHTML, /New answer/u);
+    api.applyTurnEvent({ type: 'assistant.final', turnId: api.state.turnId, itemId: 'reply', text: '**Final answer**' }, null);
+    assert.match(timeline.innerHTML, /<strong>Final answer<\/strong>/u);
+    api.state.timeline = [{ id: 'replacement', kind: 'message', role: 'user', label: 'You', text: 'Replacement history' }];
+    api.refreshChatDynamicUi({ dirtyEntryIds: ['unknown_message'] });
+    assert.match(timeline.innerHTML, /Replacement history/u);
+    assert.doesNotMatch(timeline.innerHTML, /Final answer/u);
+  }
+});
+
 test('composer expand toggle stays hidden at two lines and appears at four lines', async () => {
   const { api, context } = await loadAppHarness();
   let expandButtonHidden = true;
@@ -18848,6 +18952,7 @@ globalThis.__codexWebTest = {
   normalizeSubmissionOutboxEntry,
 
   state,
+  get timelineRevision() { return timelineRevision; },
   get draftSessionActive() {
     return state.draftSessionActive;
   },

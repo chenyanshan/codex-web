@@ -277,8 +277,13 @@ function workKindLabel(kind) {
         ${failed ? `<p class="work-progress-failed">${escapeHtml(t('{count} failed', { count: failed }))}</p>` : ''}`;
     }
 
+    let observedTimeFormatter = null;
     function observedTime(value) {
-      return Number.isFinite(value) ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      if (!Number.isFinite(value)) return '';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return date.toString();
+      observedTimeFormatter ||= new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
+      return observedTimeFormatter.format(date);
     }
     function renderActivityState(activity, details) {
       if (!activity) return '';

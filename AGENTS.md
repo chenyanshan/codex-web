@@ -171,6 +171,9 @@ caches, or boot assets, read the
 [stability rules and reusable AI prompt](docs/architecture/browser-stability-guardrails.zh-CN.md).
 The [incident record](docs/audits/2026-10-12-browser-stability-repair.zh-CN.md)
 distinguishes reproduced code defects from the unproven production crash cause.
+The [allocation follow-up](docs/audits/2026-10-13-browser-allocation-repair.zh-CN.md)
+records renewed growth after refresh and the rendering/allocation fixes; the
+production multi-GB crash is not yet attributed to a specific allocation stack.
 
 - Coalesce overlapping session reads through the shared loader by identity,
   session/navigation generation, and read semantics. Preserve distinct anchors
@@ -189,6 +192,13 @@ distinguishes reproduced code defects from the unproven production crash cause.
   New retained collections need explicit capacity and lifecycle boundaries;
   arbitrary truncation of authoritative history or deduplication state is not
   an acceptable memory fix.
+- Hidden work-batch updates must not replace the visible message history. Track
+  message dirtiness separately, preserve mixed assistant/batch frames, and ignore
+  stale or equal activity revisions before scheduling DOM work.
+- Reuse a fixed, bounded set of `Intl.DateTimeFormat` instances on render paths.
+  Repeated `Date.toLocale*` calls with options can amplify native allocations
+  even when the JS heap is flat. Localization placeholders must not collide with
+  literal user content or grow proportionally to attacker-controlled prefixes.
 - Keep `data-cfasync="false"` before `src` on every ordered boot script,
   including recovery and module entry scripts. Preserve Service Worker atomic
   updates and complete-cache fallback. Never use periodic full-page reloads or
@@ -202,6 +212,9 @@ distinguishes reproduced code defects from the unproven production crash cause.
   improved responsiveness do not establish the production crash root cause.
   Stop stress experiments under actual host memory pressure and report the
   unverified scope instead of adding heap capacity or exhausting the host.
+  Start allocation sampling before growth, preserve evidence before refresh,
+  and distinguish JS heap, renderer RSS/native allocations and retaining paths.
+  Verify the target-to-PID mapping before attributing process samples to a page.
 
 ## Useful Commands
 

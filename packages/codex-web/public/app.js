@@ -286,7 +286,7 @@ const state = {
   workDetailsPolicyPendingSessionId: '',
 };
 
-const { translateUi, t, translateText, localizeUiHtml, localizeUiHtmlOutsideProtectedHtml, restoreProtectedUiContentBlocks, protectUiContentBlocks, findProtectedUiContentRanges, isProtectedUiContentTag, hasHtmlClass, hasHtmlAttribute, localizeElement, localizeFragment, unescapeBasicHtml, decodeHtmlCodePoint } = globalThis.CodexWebLocalization.createRenderer({
+const { formatShortDate, formatShortDateTime, translateUi, t, translateText, localizeUiHtml, localizeUiHtmlOutsideProtectedHtml, restoreProtectedUiContentBlocks, protectUiContentBlocks, findProtectedUiContentRanges, isProtectedUiContentTag, hasHtmlClass, hasHtmlAttribute, localizeElement, localizeFragment, unescapeBasicHtml, decodeHtmlCodePoint } = globalThis.CodexWebLocalization.createRenderer({
   state,
   UI_TRANSLATIONS,
   normalizeLanguage,
@@ -488,6 +488,7 @@ let appVersionCheckPromise = null;
 let lastAppVersionCheckAt = 0;
 let timelinePersistTimer = null;
 let chatDynamicUiFramePending = false;
+let chatTimelineDirty = false;
 const dirtyTimelineEntryIds = new Set();
 let sessionFileLoadAbortController = null;
 let sessionTimelinePageRequest = null;
@@ -5160,7 +5161,7 @@ function syncComposerAttachButton() {
   leadingControls.appendChild(button);
 }
 
-function refreshChatDynamicUi({ dirtyEntryIds = [] } = {}) {
+function refreshChatDynamicUi({ dirtyEntryIds = [], timelineChanged = true } = {}) {
   if (markVisibleSessionResultRead()) refreshVisibleSessionCards();
   if (state.view !== 'chat' && !(state.view === 'sessions' && isDesktopLayout())) {
     return false;
@@ -5171,11 +5172,13 @@ function refreshChatDynamicUi({ dirtyEntryIds = [] } = {}) {
     return false;
   }
   const questionFocus = QUESTIONS.focused();
-  beginTimelineEventBindings();
-  if (!updateTimelineProjectionDom(timeline, dirtyEntryIds)) {
-    timeline.innerHTML = renderTimeline();
+  if (timelineChanged) {
+    beginTimelineEventBindings();
+    if (!updateTimelineProjectionDom(timeline, dirtyEntryIds)) {
+      timeline.innerHTML = renderTimeline();
+    }
+    bindTimelineActionEvents({ reset: false });
   }
-  bindTimelineActionEvents({ reset: false });
   syncQuestionView();
   if (questionFocus?.isConnected) questionFocus.focus({ preventScroll: true });
   syncComposerStatusDisplay();
@@ -5350,7 +5353,8 @@ function refreshVisibleSessionCards() {
   return true;
 }
 
-function scheduleChatDynamicUiRefresh(entryId = '') {
+function scheduleChatDynamicUiRefresh(entryId = '', timelineChanged = true) {
+  chatTimelineDirty ||= timelineChanged;
   if (entryId) {
     dirtyTimelineEntryIds.add(entryId);
   }
@@ -5362,7 +5366,9 @@ function scheduleChatDynamicUiRefresh(entryId = '') {
     chatDynamicUiFramePending = false;
     const dirtyEntryIds = [...dirtyTimelineEntryIds];
     dirtyTimelineEntryIds.clear();
-    refreshChatDynamicUi({ dirtyEntryIds });
+    const timelineChanged = chatTimelineDirty;
+    chatTimelineDirty = false;
+    refreshChatDynamicUi({ dirtyEntryIds, timelineChanged });
     scrollTimelineToBottomIfFollowingLatest();
   });
 }
@@ -7999,6 +8005,7 @@ function applyTurnEvent(event, assistantEntry) {
       if (!event.activity || event.activity.turnId !== event.turnId || (state.terminalTurnIds.has(event.turnId) && ['working', 'retrying'].includes(event.activity.health?.status))) return assistantEntry;
       const previous = state.currentSession.turnActivity;
       if (!previous || previous.turnId !== event.turnId || previous.revision < event.activity.revision) state.currentSession.turnActivity = event.activity;
+      else return assistantEntry;
     } else {
       const pending = state.currentSession.userInputRequests || [];
       if (event.request.status === 'pending' && state.terminalTurnIds.has(event.turnId)) return assistantEntry;
@@ -8203,10 +8210,8 @@ function applyTurnEvent(event, assistantEntry) {
     void sendNextQueuedMessage(state.sessionId);
   }
   if (shouldCoalesceDynamicUpdate) {
-    const dirtyTimelineId = event.type === 'assistant.delta'
-      ? assistantEntry?.id || ''
-      : inlineWorkTimelineId(event.turnId, event.batchId);
-    scheduleChatDynamicUiRefresh(dirtyTimelineId);
+    const assistantChanged = event.type === 'assistant.delta';
+    scheduleChatDynamicUiRefresh(assistantChanged ? assistantEntry?.id || '' : '', assistantChanged);
   } else {
     refreshChatDynamicUi();
     scrollTimelineToBottomIfFollowingLatest();
@@ -13281,27 +13286,6 @@ function formatSummaryValue(value) {
   return String(value);
 }
 
-
-function formatShortDate(timestamp) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-  return date.toLocaleDateString(state.language, { month: 'short', day: 'numeric' });
-}
-
-function formatShortDateTime(timestamp) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-  return date.toLocaleString(state.language, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 function shorten(value, maxLength) {
   const text = String(value || '');

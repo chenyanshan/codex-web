@@ -2,6 +2,23 @@
 (function install(globalScope) {
   function createRenderer(context) {
     const { state, UI_TRANSLATIONS, normalizeLanguage, DEFAULT_LANGUAGE, escapeAttribute, escapeHtml } = context;
+    // Only the two supported locales and two fixed styles can enter this cache.
+    const dateFormatters = new Map();
+    function formatDate(timestamp, includeTime) {
+      const date = new Date(timestamp);
+      if (Number.isNaN(date.getTime())) return '';
+      const language = normalizeLanguage(state.language) === 'zh-CN' ? 'zh-CN' : 'en';
+      const key = `${language}:${includeTime}`;
+      if (!dateFormatters.has(key)) {
+        dateFormatters.set(key, new Intl.DateTimeFormat(language, {
+          month: 'short', day: 'numeric',
+          ...(includeTime ? { hour: '2-digit', minute: '2-digit' } : {}),
+        }));
+      }
+      return dateFormatters.get(key).format(date);
+    }
+    function formatShortDate(timestamp) { return formatDate(timestamp, false); }
+    function formatShortDateTime(timestamp) { return formatDate(timestamp, true); }
 function translateUi(key, language = state.language, params = {}) {
   const source = String(key || '');
   const dictionary = UI_TRANSLATIONS[normalizeLanguage(language)] || {};
@@ -38,9 +55,17 @@ function localizeUiHtml(html) {
 }
 
 function localizeUiHtmlOutsideProtectedHtml(html) {
+  html = String(html || '');
+  // Scan once for occupied namespaces. Long literal marker suffixes must not
+  // turn every temporary token into another copy of that suffix.
+  const occupiedNamespaces = new Set();
+  for (const match of html.matchAll(/__CODEX_WEB_I18N_BLOCK_(\d+)_/gu)) occupiedNamespaces.add(match[1]);
+  let namespace = 0;
+  while (occupiedNamespaces.has(String(namespace))) namespace++;
+  const tokenPrefix = `__CODEX_WEB_I18N_BLOCK_${namespace}_`;
   const protectedBlocks = [];
   const protect = (block) => {
-    const token = `__CODEX_WEB_I18N_BLOCK_${protectedBlocks.length}__`;
+    const token = `${tokenPrefix}${protectedBlocks.length}__`;
     protectedBlocks.push(block);
     return token;
   };
@@ -54,7 +79,7 @@ function localizeUiHtmlOutsideProtectedHtml(html) {
       ` ${name}="${escapeAttribute(translateText(unescapeBasicHtml(value)))}"`
     ))
     .replace(/>([^<>]+)</gu, (_match, text) => {
-      if (/__CODEX_WEB_I18N_BLOCK_\d+__/u.test(text)) {
+      if (text.includes(tokenPrefix)) {
         return `>${text}<`;
       }
       if (!text.trim()) {
@@ -65,13 +90,14 @@ function localizeUiHtmlOutsideProtectedHtml(html) {
       const body = text.slice(leading.length, text.length - trailing.length);
       return `>${leading}${escapeHtml(translateText(unescapeBasicHtml(body)))}${trailing}<`;
     });
-  return restoreProtectedUiContentBlocks(localized, protectedBlocks);
+  return restoreProtectedUiContentBlocks(localized, protectedBlocks, tokenPrefix);
 }
 
-function restoreProtectedUiContentBlocks(html, protectedBlocks) {
+function restoreProtectedUiContentBlocks(html, protectedBlocks, tokenPrefix = '__CODEX_WEB_I18N_BLOCK_') {
   let result = String(html || '');
+  const pattern = new RegExp(`${tokenPrefix}(\\d+)__`, 'gu');
   for (let pass = 0; pass <= protectedBlocks.length; pass += 1) {
-    const next = result.replace(/__CODEX_WEB_I18N_BLOCK_(\d+)__/gu, (token, index) => (
+    const next = result.replace(pattern, (token, index) => (
       protectedBlocks[Number(index)] ?? token
     ));
     if (next === result) {
@@ -204,7 +230,7 @@ function decodeHtmlCodePoint(match, value, radix) {
 }
 
 
-    return { translateUi, t, translateText, localizeUiHtml, localizeUiHtmlOutsideProtectedHtml, restoreProtectedUiContentBlocks, protectUiContentBlocks, findProtectedUiContentRanges, isProtectedUiContentTag, hasHtmlClass, hasHtmlAttribute, localizeElement, localizeFragment, unescapeBasicHtml, decodeHtmlCodePoint };
+    return { formatShortDate, formatShortDateTime, translateUi, t, translateText, localizeUiHtml, localizeUiHtmlOutsideProtectedHtml, restoreProtectedUiContentBlocks, protectUiContentBlocks, findProtectedUiContentRanges, isProtectedUiContentTag, hasHtmlClass, hasHtmlAttribute, localizeElement, localizeFragment, unescapeBasicHtml, decodeHtmlCodePoint };
   }
   globalScope.CodexWebLocalization = { createRenderer };
 }(globalThis));
