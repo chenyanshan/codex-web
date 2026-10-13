@@ -187,6 +187,13 @@ production multi-GB crash is not yet attributed to a specific allocation stack.
   handling, cancellation, and reader/listener/controller cleanup on every exit.
   Do not limit legitimate cumulative output or let malformed replay reset retry
   delay indefinitely. Release reader locks without awaiting unbounded cleanup.
+- Buffered SSE and snapshot replay must yield real browser tasks with a shared
+  time/work budget; resolved promises do not yield to input or painting. Preserve
+  serial backpressure, complete output, and abort cleanup rather than dropping
+  events. Recheck identity/navigation/turn/controller ownership around each
+  event and after awaited helpers before writing cursors or caches. Only that
+  replay's own terminal stop may authorize finalization; an external terminal
+  calibration or cancellation must invalidate the old replay.
 - Shared response payloads must not leak mutations between callers. Copy mutable
   fields where needed; avoid deep-copying complete histories on every delta.
   New retained collections need explicit capacity and lifecycle boundaries;

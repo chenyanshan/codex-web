@@ -6102,7 +6102,8 @@ test('desktop workspace keeps streamed work out of the timeline while sessions v
 });
 
 test('stale and equal activity revisions do not invalidate or render the timeline', async () => {
-  const { api, context } = await loadAppHarness();
+  const frames = [];
+  const { api, context } = await loadAppHarness({ requestAnimationFrame: callback => frames.push(callback) });
   api.state.authSession = { id: 'auth_activity' };
   api.state.view = 'chat';
   api.state.sessionId = 'session_activity';
@@ -6110,6 +6111,7 @@ test('stale and equal activity revisions do not invalidate or render the timelin
   const previous = { turnId: api.state.turnId, revision: 2, health: { status: 'working' } };
   api.state.currentSession = { id: api.state.sessionId, cwd: '/repo', turnActivity: previous };
   api.render();
+  while (frames.length) frames.shift()();
   const initialRevision = api.timelineRevision;
   const assistant = { id: 'assistant' };
   let elementCreations = 0;
@@ -6127,7 +6129,12 @@ test('stale and equal activity revisions do not invalidate or render the timelin
   api.applyTurnEvent({ type: 'turn.activity', turnId: api.state.turnId, activity: latest }, assistant);
   assert.equal(api.state.currentSession.turnActivity, latest);
   assert.equal(api.timelineRevision, initialRevision + 1);
-  assert.ok(elementCreations > 0, 'new activity still renders');
+  assert.equal(elementCreations, 0, 'new activity defers its refresh');
+  const pendingFrames = frames.length;
+  api.applyTurnEvent({ type: 'turn.activity', turnId: api.state.turnId, activity: { ...latest, revision: 4 } }, assistant);
+  assert.equal(frames.length, pendingFrames, 'activity updates share one refresh');
+  while (frames.length) frames.shift()();
+  assert.equal(api.state.currentSession.turnActivity.revision, 4);
 });
 
 test('batch output refreshes work details and status without replacing message history', async () => {
@@ -6176,8 +6183,8 @@ test('batch output refreshes work details and status without replacing message h
   assert.match(feedback.outerHTML, /runtime-feedback/u);
 });
 
-test('batch and assistant updates in either frame order still update messages and retain fallback rendering', async () => {
-  for (const batchFirst of [true, false]) {
+test('batch or activity with assistant updates in either frame order retain messages and fallback rendering', async () => {
+  for (const auxiliaryType of ['batch.updated', 'turn.activity']) for (const batchFirst of [true, false]) {
     const frames = [];
     const { api, context } = await loadAppHarness({ requestAnimationFrame: (callback) => frames.push(callback) });
     const flushFrames = () => { while (frames.length) frames.shift()(); };
@@ -6191,7 +6198,9 @@ test('batch and assistant updates in either frame order still update messages an
     api.render();
     flushFrames();
     const timeline = context.document.querySelector('#timeline');
-    const batch = { type: 'batch.updated', turnId: api.state.turnId, batchId: 'command', summary: { outputDelta: 'output' } };
+    const batch = auxiliaryType === 'batch.updated'
+      ? { type: auxiliaryType, turnId: api.state.turnId, batchId: 'command', summary: { outputDelta: 'output' } }
+      : { type: auxiliaryType, turnId: api.state.turnId, activity: { turnId: api.state.turnId, revision: 1, health: { status: 'working' } } };
     const assistant = { type: 'assistant.delta', turnId: api.state.turnId, itemId: 'reply', delta: 'New answer' };
     for (const event of batchFirst ? [batch, assistant] : [assistant, batch]) api.applyTurnEvent(event, null);
     flushFrames();
@@ -8190,6 +8199,8 @@ test('SSE keep-alive comments refresh stream activity and prevent a false stale 
   let now = 1_000;
   let releasePendingRead;
   let readCount = 0;
+  let pendingReadStarted;
+  const pendingRead = new Promise(resolve => { pendingReadStarted = resolve; });
   class TestDate extends Date {
     static now() {
       return now;
@@ -8215,6 +8226,7 @@ test('SSE keep-alive comments refresh stream activity and prevent a false stale 
               }
               return await new Promise((resolve) => {
                 releasePendingRead = resolve;
+                pendingReadStarted();
               });
             },
           }),
@@ -8231,7 +8243,7 @@ test('SSE keep-alive comments refresh stream activity and prevent a false stale 
   api.state.turnId = 'turn_heartbeat';
 
   const streamPromise = api.streamTurnEvents('turn_heartbeat');
-  await flushMicrotasks();
+  await pendingRead;
 
   assert.equal(api.state.lastTurnEventAt, now);
   assert.equal(api.isTurnStreamHealthy(), true);
@@ -18945,6 +18957,7 @@ ${timelineModel}
 ${lazyFeature}
 ${app}
 globalThis.__codexWebTest = {
+  applyTurnStreamControl,
   createComposerSubmission,
   completeDeliveredSubmission,
   normalizeSessionsForScope,
@@ -19424,3 +19437,113 @@ test('compact history preserves known latest-turn identity while respecting newe
     assert.deepEqual(JSON.parse(JSON.stringify(result.session.latestTurn)), expected);
   }
 });
+
+for (const outcome of ['navigation', 'abort', 'external terminal', 'terminal']) {
+  test(`cooperative snapshot replay preserves ${outcome} ownership and finalization`, async () => {
+    let onYield;
+    let yielded;
+    const waiting = new Promise(resolve => { yielded = resolve; });
+    const { api } = await loadAppHarness({
+      requestAnimationFrame: () => 1,
+      setTimeout: (callback, delay) => {
+        if (delay === 0) { onYield = callback; yielded(); return 0; }
+        return setTimeout(callback, delay);
+      },
+      fetch: async () => { throw new Error('offline'); },
+    });
+    api.state.authSession = { id: 'auth_snapshot', principal: { mode: 'single', isAdmin: true } };
+    api.state.view = 'chat';
+    api.state.sessionId = 'session_snapshot';
+    api.state.currentSession = { id: 'session_snapshot', cwd: '/repo' };
+    api.state.turnId = 'turn_snapshot';
+    api.state.pendingTurn = true;
+    const controller = new AbortController();
+    api.state.streamAbortController = controller;
+    const events = Array.from({ length: 63 }, (_, i) => ({
+      type: 'turn.activity', turnId: 'turn_snapshot',
+      activity: { turnId: 'turn_snapshot', revision: i + 1, health: { status: 'working' } },
+    }));
+    events.push({ type: 'turn.failed', turnId: 'turn_snapshot', message: 'Expected terminal fixture' });
+    const task = api.applyTurnStreamControl({ type: 'stream.reset', snapshot: { complete: true, throughSequence: 64, events } }, 'turn_snapshot', controller);
+    await waiting;
+    assert.ok(api.state.currentSession.turnActivity.revision < 63);
+    if (outcome === 'navigation') {
+      api.state.sessionId = 'session_next';
+      api.state.currentSession = { id: 'session_next', cwd: '/repo' };
+      onYield();
+    } else if (outcome === 'abort') controller.abort();
+    else if (outcome === 'external terminal') {
+      api.state.terminalTurnIds.add('turn_snapshot');
+      api.state.turnId = null;
+      controller.abort();
+      api.state.streamAbortController = null;
+    } else {
+      // Drive subsequent cooperative tasks, including a yield after terminal stop.
+      while (!api.state.terminalTurnIds.has('turn_snapshot')) {
+        const callback = onYield;
+        onYield = null;
+        callback();
+        await flushMicrotasks();
+      }
+      onYield?.();
+    }
+    assert.equal(await task, outcome === 'terminal');
+    if (outcome === 'terminal') {
+      assert.equal(api.state.lastTurnEventSequence, 64);
+      assert.equal(api.state.streamAbortController, null);
+      assert.equal(controller.signal.aborted, true);
+    } else {
+      assert.notEqual(api.state.lastTurnEventSequence, 64);
+      assert.equal(api.state.terminalTurnIds.has('turn_snapshot'), outcome === 'external terminal');
+      if (outcome === 'external terminal') assert.ok(api.state.currentSession.turnActivity.revision < 63, 'external calibration cannot resume snapshot application');
+      if (outcome === 'navigation') assert.equal(api.state.currentSession.turnActivity, undefined);
+    }
+  });
+}
+
+test('activity outside chat and question updates retain immediate rendering', async () => {
+  const frames = [];
+  const { api, context } = await loadAppHarness({ requestAnimationFrame: callback => frames.push(callback) });
+  api.state.authSession = { id: 'auth_immediate' };
+  api.state.sessionId = 'session_immediate';
+  api.state.currentSession = { id: 'session_immediate', cwd: '/repo' };
+  api.state.turnId = 'turn_immediate';
+  let renders = 0;
+  const createElement = context.document.createElement;
+  context.document.createElement = (...args) => { renders++; return createElement(...args); };
+  api.state.view = 'settings';
+  api.applyTurnEvent({ type: 'turn.activity', turnId: 'turn_immediate',
+    activity: { turnId: 'turn_immediate', revision: 1, health: { status: 'working' } } }, null);
+  assert.ok(renders > 0, 'non-chat activity renders immediately');
+  api.state.view = 'chat';
+  renders = 0;
+  api.applyTurnEvent({ type: 'user_input.updated', turnId: 'turn_immediate',
+    request: { requestId: 'question', status: 'pending', questions: [] } }, null);
+  assert.ok(renders > 0, 'questions render immediately');
+});
+
+for (const change of ['navigation', 'controller']) {
+  test(`snapshot finalization rechecks ${change} after the last visitor microtask`, async () => {
+    const { api } = await loadAppHarness({ requestAnimationFrame: () => 1 });
+    api.state.authSession = { id: 'auth_race', principal: { mode: 'single', isAdmin: true } };
+    api.state.view = 'chat';
+    api.state.sessionId = 'session_race';
+    api.state.currentSession = { id: 'session_race', cwd: '/repo' };
+    api.state.turnId = 'turn_race';
+    const controller = new AbortController();
+    api.state.streamAbortController = controller;
+    const event = { type: 'turn.activity', turnId: 'turn_race', activity: { turnId: 'turn_race', revision: 1, health: { status: 'working' } } };
+    // Activity assignment happens inside the visitor, after its validity check.
+    Object.defineProperty(api.state.currentSession, 'turnActivity', {
+      configurable: true,
+      get: () => null,
+      set: value => { if (value) queueMicrotask(() => {
+        if (change === 'controller') api.state.streamAbortController = new AbortController();
+        else { api.state.sessionId = 'session_next'; api.state.currentSession = { id: 'session_next', cwd: '/repo' }; }
+      }); },
+    });
+    const result = await api.applyTurnStreamControl({ type: 'stream.reset', snapshot: { complete: true, throughSequence: 99, events: [event] } }, 'turn_race', controller);
+    assert.equal(result, false);
+    assert.notEqual(api.state.lastTurnEventSequence, 99);
+  });
+}

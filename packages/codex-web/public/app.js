@@ -592,7 +592,7 @@ const CONNECTION = globalThis.CodexWebNetworkRecovery.createConnectionState({
   },
 });
 const API_CLIENT = globalThis.CodexWebNetworkRecovery.createApiClient({ state, rename: SESSION_RENAME, connection: CONNECTION });
-const buildApiError = globalThis.CodexWebNetworkRecovery.buildApiError;
+const { buildApiError, streamResponseHeader, parseStreamResetValue, forEachCooperatively, createTurnReplay } = globalThis.CodexWebNetworkRecovery;
 
 const AUTH_RECOVERY = globalThis.CodexWebNetworkRecovery.createAuthRecovery({
   state, apiFetch, getGeneration: () => authRequestGeneration, isAuthRequestCurrent, render, isCachedAuthPrincipalPending,
@@ -7519,14 +7519,6 @@ async function streamTurnEvents(turnId, options = {}) {
   }
 }
 
-function streamResponseHeader(response, name) {
-  return String(response?.headers?.get?.(name) || '').trim();
-}
-
-function parseStreamResetValue(value) {
-  return ['1', 'true', 'yes', 'reset'].includes(String(value || '').trim().toLowerCase());
-}
-
 async function applyTurnStreamControl(payload, turnId, activeStreamController, { alreadyHydrated = false } = {}) {
   if (!payload || typeof payload !== 'object') {
     return false;
@@ -7563,9 +7555,10 @@ async function applyTurnStreamControl(payload, turnId, activeStreamController, {
     });
   }
   if (visibleSnapshotEvents.length) {
-    for (const event of visibleSnapshotEvents) {
-      applyTurnEvent(event, null);
-    }
+    const replay = createTurnReplay(state, recoveryOwnerKey, turnId, activeStreamController, applyTurnEvent);
+    if (!await forEachCooperatively(visibleSnapshotEvents, replay.visit, {
+      signal: activeStreamController?.signal, isCurrent: replay.isCurrent,
+    }) || !replay.isCurrent()) return false;
     reorderTurnSnapshotProjection(turnId, visibleSnapshotEvents);
   }
   const rawThroughSequence = payload.snapshot?.throughSequence;
@@ -8014,7 +8007,8 @@ function applyTurnEvent(event, assistantEntry) {
       state.currentSession.userInputRequests = [...pending.filter(q => q.requestId !== event.request.requestId), event.request].slice(-128);
     }
     timelineRevision += 1;
-    render();
+    if (event.type === 'turn.activity' && (state.view === 'chat' || state.view === 'sessions' && isDesktopLayout())) scheduleChatDynamicUiRefresh('', false);
+    else render();
     return assistantEntry;
   }
 

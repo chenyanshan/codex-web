@@ -26,9 +26,64 @@
     });
   }
 
+  // Share a budget across buffered frames/chunks; resolved promises do not
+  // yield to browser input, painting, or timers. Abort wakes a pending task.
+  function createTaskBudget(signal) {
+    let work = 0, started = Date.now();
+    return () => {
+      if (++work < 32 && Date.now() - started < 8) return null;
+      work = 0;
+      return new Promise(resolve => {
+        const cancellable = signal?.aborted ? null : signal;
+        const done = () => {
+          clearTimeout(timer);
+          cancellable?.removeEventListener('abort', done);
+          started = Date.now();
+          resolve();
+        };
+        const timer = setTimeout(done, 0);
+        cancellable?.addEventListener('abort', done, { once: true });
+      });
+    };
+  }
+  async function forEachCooperatively(items, visit, { signal, isCurrent }) {
+    const checkpoint = createTaskBudget(signal);
+    for (const item of items) {
+      if (!isCurrent()) return false;
+      visit(item);
+      if (!isCurrent()) return false;
+      const pause = checkpoint();
+      if (pause) await pause;
+    }
+    return isCurrent();
+  }
+  function createTurnReplay(state, getOwner, turnId, controller, applyEvent) {
+    const owner = getOwner();
+    let stoppedByReplay = false;
+    const isCurrent = () => owner === getOwner() && (!state.turnId || state.turnId === turnId)
+      && (state.streamAbortController === controller && !controller?.signal.aborted
+        || stoppedByReplay && !state.streamAbortController);
+    function visit(event) {
+      const wasActive = controller && state.streamAbortController === controller && !controller.signal.aborted;
+      applyEvent(event, null);
+      // Only this replay's terminal event may stop its transport without making
+      // it obsolete. Concurrent metadata calibration must still cancel replay.
+      if (wasActive && ['turn.completed', 'turn.failed'].includes(event.type)
+        && controller.signal.aborted && !state.streamAbortController && state.terminalTurnIds.has(turnId)) stoppedByReplay = true;
+    }
+    return { isCurrent, visit };
+  }
+  function streamResponseHeader(response, name) {
+    return String(response?.headers?.get?.(name) || '').trim();
+  }
+  function parseStreamResetValue(value) {
+    return ['1', 'true', 'yes', 'reset'].includes(String(value || '').trim().toLowerCase());
+  }
+
   // The default exceeds the server's 4 MiB turn snapshot budget, including
   // framing/sequence metadata. Limit each frame, never cumulative turn output.
   async function consumeSse(body, onFrame, { signal, isCurrent = () => true, maxFrameChars = 8 * 1024 * 1024 } = {}) {
+    const checkpoint = createTaskBudget(signal);
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '', searchFrom = 0;
@@ -51,6 +106,9 @@
         buffer = buffer.slice(match.index + match[0].length);
         searchFrom = 0;
         await onFrame(frame);
+        if (!current()) return;
+        const pause = checkpoint();
+        if (pause) await pause;
       }
     }
     try {
@@ -66,6 +124,9 @@
         // Decode bounded slices even when a proxy/browser delivers one huge chunk.
         for (let offset = 0; offset < value.byteLength && current(); offset += 16384) {
           await append(decoder.decode(value.subarray(offset, offset + 16384), { stream: true }));
+          if (!current()) return;
+          const pause = checkpoint();
+          if (pause) await pause;
         }
       }
     } finally {
@@ -321,5 +382,5 @@
     }
     return { check, invalidate, confirmed, isPending() { sync(); return pending; } };
   }
-  globalScope.CodexWebNetworkRecovery = { bounded, consumeSse, retryable, activityLabel, createObservationRecovery, createAuthRecovery, createConnectionState, createApiClient, buildApiError };
+  globalScope.CodexWebNetworkRecovery = { createTurnReplay, forEachCooperatively, streamResponseHeader, parseStreamResetValue, bounded, consumeSse, retryable, activityLabel, createObservationRecovery, createAuthRecovery, createConnectionState, createApiClient, buildApiError };
 })(globalThis);

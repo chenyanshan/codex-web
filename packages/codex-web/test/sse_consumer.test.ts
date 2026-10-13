@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-async function consumer() {
-  const context: any = { TextDecoder };
+async function consumer(overrides = {}) {
+  const context: any = { TextDecoder, setTimeout, clearTimeout, ...overrides };
   vm.runInNewContext(await readFile(new URL('../public/network-recovery.js', import.meta.url), 'utf8'), context);
   return context.CodexWebNetworkRecovery.consumeSse;
 }
@@ -122,4 +122,53 @@ test('a source whose cancel never settles cannot retain reader lock or delay str
   await task;
   assert.equal(cancelled, 1);
   assert.equal(body.locked, false);
+});
+
+for (const chunking of ['single', 'ready chunks']) {
+  test(`SSE yields to tasks across ${chunking} while preserving serial complete output`, async () => {
+    const consume = await consumer();
+    const messages = Array.from({ length: 240 }, (_, i) => `data: ${i}`);
+    const chunks = chunking === 'single' ? [messages.join('\n\n') + '\n\n'] : messages.map(message => message + '\n\n');
+    const stream = source(chunks.map(chunk => encoder.encode(chunk)));
+    const received: string[] = [];
+    let countAtTimer = -1, active = false;
+    const timer = new Promise<void>(resolve => setTimeout(() => { countAtTimer = received.length; resolve(); }, 0));
+    await consume(stream.body, async (frame: string) => {
+      assert.equal(active, false);
+      active = true;
+      await Promise.resolve();
+      received.push(frame);
+      active = false;
+    });
+    await timer;
+    assert.ok(countAtTimer > 0 && countAtTimer < 240, `task ran after ${countAtTimer} frames`);
+    assert.deepEqual(received, messages);
+    assert.equal(stream.body.locked, false);
+  });
+}
+
+test('abort wakes a scheduled yield without waiting for its timer or reading more chunks', async () => {
+  const controller = new AbortController();
+  let reads = 0, frames = 0, cleared = 0, released = false, listeners = 0;
+  const add = controller.signal.addEventListener.bind(controller.signal);
+  const remove = controller.signal.removeEventListener.bind(controller.signal);
+  controller.signal.addEventListener = (...args: any[]) => { listeners++; return add(...args); };
+  controller.signal.removeEventListener = (...args: any[]) => { listeners--; return remove(...args); };
+  let scheduled!: () => void;
+  const yielding = new Promise<void>(resolve => { scheduled = resolve; });
+  const consume = await consumer({ setTimeout: () => { scheduled(); return 123; }, clearTimeout: () => { cleared++; } });
+  const body = { getReader: () => ({
+    read: async () => { reads++; return { value: encoder.encode('data: x\n\n'.repeat(240)), done: false }; },
+    cancel: async () => {}, releaseLock: () => { released = true; },
+  }) };
+  const task = consume(body, () => { frames++; }, { signal: controller.signal });
+  await yielding;
+  assert.ok(frames > 0 && frames <= 32);
+  assert.equal(reads, 1);
+  controller.abort();
+  await task;
+  assert.equal(reads, 1);
+  assert.equal(cleared, 1);
+  assert.equal(listeners, 0);
+  assert.equal(released, true);
 });
