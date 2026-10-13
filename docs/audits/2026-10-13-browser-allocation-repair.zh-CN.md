@@ -54,7 +54,7 @@
 | `npm run typecheck` | 通过，短 namespace 修改后重跑通过 |
 | 浏览器桌面/手机竖屏：新增分配回归、work details、session polish | 24 项通过，4 项按用例定义跳过不适用视口；短 namespace 后分配回归 4 项重跑通过 |
 | 构建及真实 built-public 冒烟 | 最终代码重跑通过；无浏览器错误 |
-| 生产首屏 gzip | 142,362 / 143,360 bytes，余量 998 bytes；未提高阈值 |
+| 生产首屏 gzip | Mac 本地 142,362 / 143,360 bytes；Linux 发布主机 142,578 / 143,360 bytes，余量 782 bytes；未提高阈值 |
 | 诊断工具 mock | 5 项通过 |
 | 诊断工具真实附着冒烟 | 8 秒、初始/周期/最终 heap profiles 与 CPU profile 成功落盘，正常退出，原页面继续运行 |
 
@@ -66,4 +66,26 @@
 
 ## 发布验收
 
-待在已授权的 Linux 服务同步验证提交，并完成网关契约校验、空闲检查、独立 systemd 重启和公网资源/鉴权核对后补记。服务会在进程启动时缓存静态资源，单独拉取文件不会更新线上交付；不能以 Git 更新成功代替部署成功。
+修复提交 `aa5bf3e3dd89389d6e3670a87d342958afda4861` 已推送至 `origin/main`，并在 Linux 主机上线，源码资源 buildId 为 **`575af73af8eff8ed59fb`**。该服务在进程启动时缓存静态资源，单独拉取文件不会更新线上交付。
+
+远端 GitHub TLS 连接失败且有界重试超时。主代理通过站点现有认证上传通道传入 32,656 bytes 增量 Git bundle，核验 SHA-256、前置提交和目标 ref 后快进；未改远端 origin URL，保留原六项未跟踪内容。远端 typecheck、494 项专项测试（零跳过）、build、built-public 和 gateway `--check` 通过。网关契约所检查的源码仍匹配，无须重写验证记录。
+
+独立 `codex-web-memory-cutover-aa5bf3e.service` 等待部署 turn 正式完成，检查无其他已加载活跃线程/active goal、网关队列与未决提交后进入短切换窗口，暂停适用入站并在退出时恢复。**2026-10-13 13:02:47（Asia/Shanghai）**调用既有 systemd restart；没有终止其他活跃 turn、升级 CLI 或覆盖用户历史。
+
+首次切换脚本在 13:03:48 因首页 hash 校验失败退出，**原失败记录保留，未执行源码回退**。原因是脚本将动态站点标题/JSON bootstrap 注入后的 HTML 与静态模板比较。随后新增只读验收，严格复用服务端 `injectAppShellBootstrap` 的转义与注入行为构造完整预期 HTML，再逐字节比较，而非忽略任意差异。13:10:40.256 完成的 **27 项检查全部通过、退出码 0**；没有再次重启或暂停服务。
+
+最终证据：
+
+- systemd 主服务 `active/running`，实际 Node 24.16.0，暂冻的三个入站服务均已恢复；原六项 untracked 保留。
+- 公网 buildId 匹配；三个修改过的 JS 与候选源码逐字节相同。完整首页注入校验通过，28 个脚本的 Rocket Loader opt-out 正确，未出现 Rocket Loader runtime。
+- 未认证私有 API 和页面实际使用的 `/api/turns/<turnId>/events` 均返回 401；原有浏览器登录保持有效，认证 `/api/auth/me` 与 `/api/health` 返回 200。
+- 管理诊断中 app-server 已连接、运行版本 0.159.0；旧会话历史可读，认证 SSE 返回 200，受控只读真实任务正式 completed，最终验收结果已显示在页面。
+- 浏览器冒烟未捕获页面异常。仅诊断标签为加载新版而刷新；没有刷新其他标签或清除任何登录/草稿。
+
+远端回退资料和原失败日志位于 `~/.codex-web/upgrade-backups/2026-10-13-browser-memory-125155/`；新增 `post-verification.json` / `post-verification.log` 保存成功的只读验收，与原 `status.json` 分开。主代理的公网字节/鉴权校验与分配采样仍保存在本机私有诊断目录。
+
+### 上线后普通操作观察
+
+在新版载入前已启动分配采样，随后查看部署会话、接续真实只读任务并打开活动详情。第一段完整 3 分钟有 88 份指标，JS 堆为 25,388,300–30,583,436 bytes，末尾 25,988,216 bytes。之后通过 trace 再次确认同一 renderer PID 85608；05:11:18–05:13:49 UTC 的 16 份 RSS 读数为 188,809,216–248,872,960 bytes，首/末为 238,075,904 / 242,368,512 bytes，没有出现用户报告的多 GB 增长。未强制 GC，系统内存压力会影响 RSS，这些数据不能当作保留堆斜率。
+
+这仍是有限普通操作观察，内容和生命周期未复刻用户原来的崩溃现场；不是 30–60 分钟同条件长时验收，也不把未再现写成已找到生产泄漏函数。后续若复发，应使用已落地的工具在增长前留存 allocation stacks，并将原生分配与 JS 保留链分别核对。
