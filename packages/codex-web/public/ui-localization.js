@@ -110,11 +110,18 @@ function restoreProtectedUiContentBlocks(html, protectedBlocks, tokenPrefix = '_
 
 function protectUiContentBlocks(html, protect) {
   const ranges = findProtectedUiContentRanges(html);
-  let nextHtml = String(html || '');
-  for (const range of ranges.sort((left, right) => right.start - left.start)) {
-    nextHtml = `${nextHtml.slice(0, range.start)}${protect(nextHtml.slice(range.start, range.end))}${nextHtml.slice(range.end)}`;
+  const source = String(html || '');
+  const parts = [];
+  let end = source.length;
+  // Keep reverse protection order without copying the remaining document for
+  // every block. Each source character is sliced and joined at most once.
+  for (let index = ranges.length - 1; index >= 0; index--) {
+    const range = ranges[index];
+    parts.push(source.slice(range.end, end), protect(source.slice(range.start, range.end)));
+    end = range.start;
   }
-  return nextHtml;
+  parts.push(source.slice(0, end));
+  return parts.reverse().join('');
 }
 
 function findProtectedUiContentRanges(html) {
@@ -150,13 +157,14 @@ function findProtectedUiContentRanges(html) {
       break;
     }
   }
+  let protectedEnd = -1;
   return ranges
     .sort((left, right) => (left.start - right.start) || (right.end - left.end))
-    .filter((range, index, sortedRanges) => (
-      !sortedRanges.some((other, otherIndex) => (
-        otherIndex < index && other.start <= range.start && range.end <= other.end
-      ))
-    ));
+    .filter((range) => {
+      if (range.end <= protectedEnd) return false;
+      protectedEnd = range.end;
+      return true;
+    });
 }
 
 function isProtectedUiContentTag(tagName, tag) {

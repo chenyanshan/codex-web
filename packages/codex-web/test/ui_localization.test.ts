@@ -49,6 +49,41 @@ test('Chinese localization restores nested protection introduced in separate pas
     `<textarea placeholder="设置"><code>Settings ${token}</code></textarea><button>设置</button>`);
 });
 
+test('protecting a long transcript slices only a linear amount of text', () => {
+  const sandbox = vm.createContext({});
+  const ui = vm.runInContext(`${source}\nCodexWebLocalization.createRenderer({});`, sandbox);
+  vm.runInContext(`
+    globalThis.slicedCharacters = 0;
+    const originalSlice = String.prototype.slice;
+    String.prototype.slice = function (...args) {
+      const value = originalSlice.apply(this, args);
+      slicedCharacters += value.length;
+      return value;
+    };
+  `, sandbox);
+  const blocks = Array.from({ length: 80 }, (_, index) => (
+    `<p class="message-text">${index}:${'流式输出 &lt;code&gt; '.repeat(512)}</p>`
+  ));
+  const html = `<section>${blocks.join('<hr>')}</section>`;
+  const protectedBlocks: string[] = [];
+  const protectedHtml = ui.protectUiContentBlocks(html, (block: string) => {
+    protectedBlocks.push(block);
+    return `[${protectedBlocks.length - 1}]`;
+  });
+  assert.equal(protectedHtml, `<section>${blocks.map((_, index) => `[${79 - index}]`).join('<hr>')}</section>`);
+  assert.deepEqual(protectedBlocks, [...blocks].reverse(), 'preserve protection order and every original message');
+  assert.ok(vm.runInContext('slicedCharacters', sandbox) <= html.length * 2,
+    'protecting each message must not repeatedly slice the entire remaining transcript');
+});
+
+test('nested protected regions keep only outer ranges and preserve adjacent content', () => {
+  const ui = renderer('zh-CN');
+  const block = '<div data-i18n-skip><p class="message-text">Settings</p><div data-i18n-skip>Settings</div></div>';
+  const html = `<button>Settings</button>${block}<span>Settings</span>${block}<button>Settings</button>`;
+  assert.equal(ui.localizeUiHtml(html), html.replaceAll('>Settings</button>', '>设置</button>').replace('>Settings</span>', '>设置</span>'));
+  assert.equal(ui.findProtectedUiContentRanges(html).length, 2);
+});
+
 test('long literal marker suffixes do not enlarge temporary protection tokens', () => {
   const patterns: string[] = [];
   const base = '__CODEX_WEB_I18N_BLOCK_';
