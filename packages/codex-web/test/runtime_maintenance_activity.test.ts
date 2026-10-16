@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
 import { CodexWebRuntime } from '../src/runtime.js';
 
 function runtimeFor(read: (id: string) => string, request: (_method: string, params: any) => Promise<any>) {
@@ -13,6 +14,18 @@ function runtimeFor(read: (id: string) => string, request: (_method: string, par
     writeConfigValue: async () => {}, interruptTurn: async () => {}, respondToApproval: async () => {},
   } as any });
 }
+
+test('runtime reports the generated protocol baseline separately from the connected server', async () => {
+  const runtime = runtimeFor(() => 'idle', async () => ({ data: [], nextCursor: null }));
+  const manifest = JSON.parse(fs.readFileSync(new URL('../../codex-native-api/src/app_server/generated/manifest.json', import.meta.url), 'utf8'));
+  let connected = true;
+  Object.assign(runtime.client, { diagnostics: () => ({ connected, server: { version: '0.159.0' } }) });
+  try {
+    assert.deepEqual(runtime.runtimeVersionStatus(), { runningVersion: '0.159.0', protocolVersion: manifest.version.replace('codex-cli ', '') });
+    connected = false;
+    assert.equal(runtime.runtimeVersionStatus().runningVersion, null);
+  } finally { await runtime.stop(); }
+});
 
 test('idle inspection includes later loaded pages and requires explicit idle statuses', async () => {
   const cursors: unknown[] = [];

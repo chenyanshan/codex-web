@@ -89,6 +89,28 @@ test('official item projection preserves Responses messages, tool results and su
   assert.equal(result.outputText, 'Done');
   assert.ok(!JSON.stringify(result.responseItems).includes('hidden private reasoning'));
 });
+test('0.163 partial answers remain nonterminal and cannot replace the final answer', async () => {
+  const { TurnObserver } = await import('../src/app_server/turn_observer.js');
+  const partial = { id: 'partial', type: 'agentMessage', phase: 'partial_answer', text: 'Work so far' };
+  const final = { id: 'final', type: 'agentMessage', phase: 'final_answer', text: 'Finished' };
+  const observer = new TurnObserver('t', 'u');
+  assert.equal(observer.accept({ method: 'item/completed', params: { threadId: 't', turnId: 'u', item: partial } }), false);
+  assert.equal(observer.terminal, null);
+  observer.accept({ method: 'item/completed', params: { threadId: 't', turnId: 'u', item: final } });
+  observer.accept({ method: 'turn/completed', params: { threadId: 't', turn: { id: 'u', rootTurnId: 'u', status: 'completed', items: [] } } });
+  assert.deepEqual(observer.terminal?.items, [partial, final]);
+  const { client } = connectedClient();
+  client.initializedServer = { userAgent: 'codex/0.163.0', binary: '/fixture/codex', initializedAt: 1 };
+  client.readThread = async () => {
+    client.emit('notification', { method: 'turn/completed', params: { threadId: 't', turn: observer.terminal } });
+    return null;
+  };
+  const result = await client.waitForTurnResult({ threadId: 't', turnId: 'u', timeoutMs: 100 });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.outputText, 'Finished');
+  assert.equal(result.finalSource, 'official_turn_completed');
+});
+
 test('a failed approval write becomes uncertain and cannot be blindly resubmitted', async () => {
   const { client } = connectedClient();
   client.handleMessage(JSON.stringify({ id: 41, method: 'item/commandExecution/requestApproval', params: { threadId: 't', turnId: 'u', itemId: 'c', command: 'true', cwd: '/fixture' } }));

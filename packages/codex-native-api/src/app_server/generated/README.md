@@ -1,8 +1,8 @@
 # Official app-server wire types
 
-Generated from the released **Codex CLI 0.156.1**, tag `rust-v0.156.1`, commit
-`b412ff32c417f855c2b2d1581b77058eed87c84b`. Upstream is
-https://github.com/openai/codex/tree/rust-v0.156.1/codex-rs/app-server-protocol.
+Generated from the released **Codex CLI 0.163.0**, tag `rust-v0.163.0`, commit
+`83086188ae0614bd882818ff1aa23f3194962012`. Upstream is
+https://github.com/openai/codex/tree/rust-v0.163.0/codex-rs/app-server-protocol.
 Apache-2.0 license is retained in `LICENSE`.
 
 `stable/` is default generator output. `experimental/` is the full output with
@@ -16,7 +16,7 @@ and every file's original and normalized SHA-256. The only postprocessing append
 Do not edit generated files manually. Reproduce with Node 24:
 
 ```bash
-node scripts/app-server/generate-protocol.mjs --codex-bin /absolute/path/to/codex --out packages/codex-native-api/src/app_server/generated --source-commit b412ff32c417f855c2b2d1581b77058eed87c84b
+node scripts/app-server/generate-protocol.mjs --codex-bin /absolute/path/to/codex --out packages/codex-native-api/src/app_server/generated --source-commit 83086188ae0614bd882818ff1aa23f3194962012
 ```
 
 The generator command is an explicit development operation; service startup never

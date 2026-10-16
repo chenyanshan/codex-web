@@ -1,0 +1,28 @@
+[
+  {
+    "version": "0.159.0",
+    "inference": false,
+    "temporaryHome": true,
+    "credentialsCopied": false,
+    "checks": [
+      "user-origin paused goal",
+      "goal read",
+      "user-origin clear",
+      "goal cleared"
+    ],
+    "status": "passed"
+  },
+  {
+    "version": "0.163.0",
+    "inference": false,
+    "temporaryHome": true,
+    "credentialsCopied": false,
+    "checks": [
+      "user-origin paused goal",
+      "goal read",
+      "user-origin clear",
+      "goal cleared"
+    ],
+    "status": "passed"
+  }
+]

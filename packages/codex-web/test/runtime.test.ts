@@ -2383,7 +2383,8 @@ test('runtime starts managed turns for active goal commands and keeps other goal
     readThread: async () => createThread('thread_goal'),
     writeConfigValue: async () => {},
     getThreadGoal: async () => currentGoal,
-    setThreadGoal: async ({ threadId, objective = null, status = null, suppressAutoTurn = false }) => {
+    setThreadGoal: async ({ threadId, origin, objective = null, status = null, suppressAutoTurn = false }) => {
+      assert.equal(origin, 'user');
       setCalls.push({ threadId, objective, status, suppressAutoTurn });
       currentGoal = {
         threadId,
@@ -2397,11 +2398,13 @@ test('runtime starts managed turns for active goal commands and keeps other goal
     },
     startThreadGoal: async ({
       threadId,
+      origin,
       objective = null,
       status = null,
       onGoalUpdated,
       onTurnStarted,
     }) => {
+      assert.equal(origin, 'user');
       goalStartCalls.push({ objective, status });
       currentGoal = {
         threadId,
@@ -2424,7 +2427,9 @@ test('runtime starts managed turns for active goal commands and keeps other goal
         },
       };
     },
-    clearThreadGoal: async () => {
+    clearThreadGoal: async (threadId, origin) => {
+      assert.equal(threadId, 'thread_goal');
+      assert.equal(origin, 'user');
       clearCalls += 1;
       currentGoal = null;
       return true;

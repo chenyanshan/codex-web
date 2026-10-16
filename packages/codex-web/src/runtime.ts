@@ -180,12 +180,14 @@ export interface CodexWebRuntimeClient {
   getThreadGoal?(threadId: string): Promise<ProviderThreadGoal | null>;
   setThreadGoal?(args: {
     threadId: string;
+    origin?: 'user' | 'automatic';
     objective?: string | null;
     status?: string | null;
     suppressAutoTurn?: boolean;
   }): Promise<ProviderThreadGoal | null>;
   startThreadGoal?(args: {
     threadId: string;
+    origin?: 'user' | 'automatic';
     objective?: string | null;
     status?: string | null;
     onGoalUpdated?: ((goal: ProviderThreadGoal | null) => Promise<void> | void) | null;
@@ -195,7 +197,7 @@ export interface CodexWebRuntimeClient {
     onApprovalRequest?: ((request: ProviderApprovalRequest) => Promise<void> | void) | null;
     timeoutMs?: number;
   }): Promise<{ goal: ProviderThreadGoal | null; turn: ProviderTurnResult }>;
-  clearThreadGoal?(threadId: string): Promise<boolean>;
+  clearThreadGoal?(threadId: string, origin?: 'user' | 'automatic'): Promise<boolean>;
   setThreadName?(threadId: string, name: string): Promise<void>;
   archiveThread?(threadId: string): Promise<void>;
   unarchiveThread?(threadId: string): Promise<void>;
@@ -485,7 +487,7 @@ export class CodexWebRuntime {
   setRuntimeMaintenance(maintenance: RuntimeMaintenance): void { this.maintenance = maintenance; }
   runtimeVersionStatus(): { runningVersion: string | null; protocolVersion: string } {
     const diagnostics = this.client.diagnostics?.() as any;
-    return { runningVersion: diagnostics?.connected === false ? null : diagnostics?.server?.version ?? null, protocolVersion: '0.159.0' };
+    return { runningVersion: diagnostics?.connected === false ? null : diagnostics?.server?.version ?? null, protocolVersion: '0.163.0' };
   }
   async inspectRuntimeActivity(): Promise<{idle: boolean; reasons: string[]}> {
     const reasons: string[] = [];
@@ -1442,6 +1444,7 @@ export class CodexWebRuntime {
       },
       start: (callbacks) => this.requireGoalStarter()({
         threadId: session.id,
+        origin: 'user',
         objective: action === 'set' ? command.objective : null,
         status: 'active',
         onGoalUpdated: async (goal) => {
@@ -1479,7 +1482,7 @@ export class CodexWebRuntime {
       });
     }
     if (command.action === 'clear') {
-      await this.requireGoalClearer()(sessionId);
+      await this.requireGoalClearer()(sessionId, 'user');
       this.rememberThreadGoal(sessionId, null);
       return createGoalCommandResult({
         action: 'clear',
@@ -1490,6 +1493,7 @@ export class CodexWebRuntime {
     if (command.action === 'pause') {
       const goal = await this.requireGoalSetter()({
         threadId: sessionId,
+        origin: 'user',
         objective: null,
         status: 'paused',
         suppressAutoTurn: true,
@@ -1513,6 +1517,7 @@ export class CodexWebRuntime {
 
   private requireGoalSetter(): (args: {
     threadId: string;
+    origin?: 'user' | 'automatic';
     objective?: string | null;
     status?: string | null;
     suppressAutoTurn?: boolean;
@@ -1530,7 +1535,7 @@ export class CodexWebRuntime {
     return this.client.startThreadGoal.bind(this.client);
   }
 
-  private requireGoalClearer(): (threadId: string) => Promise<boolean> {
+  private requireGoalClearer(): (threadId: string, origin?: 'user' | 'automatic') => Promise<boolean> {
     if (typeof this.client.clearThreadGoal !== 'function') {
       throw new Error('Goal commands are not supported by this Codex runtime');
     }

@@ -1,0 +1,63 @@
+{
+  "startedAt": "2026-10-16T02:24:10.214Z",
+  "binaryPath": "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+  "binarySha256": "e89718aa1969bfc4a471277bdc4679a3a3529293de0a309909822dfd67ddb77a",
+  "nodeVersion": "v24.4.1",
+  "isolation": {
+    "temporaryHome": true,
+    "temporaryProject": true,
+    "loopbackEphemeralPort": true,
+    "copiedCredentials": false
+  },
+  "inference": {
+    "requested": false,
+    "status": "not-run"
+  },
+  "checks": [
+    {
+      "name": "stable schema required methods",
+      "status": "passed"
+    },
+    {
+      "name": "initialize real loopback app-server",
+      "status": "passed"
+    },
+    {
+      "name": "thread/start",
+      "status": "passed"
+    },
+    {
+      "name": "thread/read loaded snapshot",
+      "status": "passed"
+    },
+    {
+      "name": "thread/resume persisted history",
+      "status": "not-run",
+      "detail": "New threads have no persisted history until a turn; exercised by explicit model smoke."
+    },
+    {
+      "name": "thread/list",
+      "status": "passed"
+    },
+    {
+      "name": "config/read",
+      "status": "passed"
+    },
+    {
+      "name": "skills/list",
+      "status": "passed"
+    },
+    {
+      "name": "mcpServerStatus/list",
+      "status": "passed"
+    },
+    {
+      "name": "thread/unsubscribe",
+      "status": "passed"
+    }
+  ],
+  "version": "codex-cli 0.159.0",
+  "port": 57127,
+  "status": "passed",
+  "finishedAt": "2026-10-16T02:24:10.976Z"
+}

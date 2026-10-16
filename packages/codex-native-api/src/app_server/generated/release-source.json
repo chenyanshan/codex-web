@@ -1,14 +1,15 @@
 {
-  "checkedDateAsiaShanghai": "2026-09-30",
+  "checkedDateAsiaShanghai": "2026-10-16",
   "github": {
-    "url": "https://github.com/openai/codex/releases/tag/rust-v0.159.0",
-    "tag": "rust-v0.159.0",
-    "commit": "687a119f0fcaace47e1f1abcc77cec6c813fd6da"
+    "url": "https://github.com/openai/codex/releases/tag/rust-v0.163.0",
+    "tag": "rust-v0.163.0",
+    "publishedAt": "2026-10-15T21:30:38Z",
+    "commit": "83086188ae0614bd882818ff1aa23f3194962012"
   },
   "npm": {
-    "version": "0.159.0",
-    "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.0.tgz",
-    "integrity": "sha512-nQWxAkzn+Rhr8TgtIhVhSlqvCytrMoqe+P8xoo4xxhCIBnzOfRs6SEmkMJfTPjkU3BYlsplwDOY2dbSp4+514g=="
+    "version": "0.163.0",
+    "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.163.0.tgz",
+    "integrity": "sha512-HNd7vR9oTK6M2ikxFnvNDCdYUgAsyo9VVnd5KnEd2ON0GYI++7MiX9XNPUkhtdgGKFPsWS+CEppQ1UU63uVhUw=="
   },
-  "acquisition": "Generated using existing installed /opt/homebrew/bin/codex 0.159.0; no installation mutation. Tag commit verified via git ls-remote."
+  "acquisition": "Isolated npm installation pinned to 0.163.0; package integrity cross-checked against registry.npmjs.org. Generated using the native darwin-arm64 binary (hash in manifest), not the JavaScript wrapper. Annotated release tag peeled to its commit via git ls-remote."
 }

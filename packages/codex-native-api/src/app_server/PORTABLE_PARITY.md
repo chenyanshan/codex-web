@@ -1,7 +1,7 @@
 # Portable activity and user input protocol mapping
 
-Wire contract: generated stable tree from Codex CLI **0.159.0**, source commit
-`687a119f0fcaace47e1f1abcc77cec6c813fd6da`; see generated/manifest.json.
+Wire contract: generated stable tree from Codex CLI **0.163.0**, source commit
+`83086188ae0614bd882818ff1aa23f3194962012`; see generated/manifest.json.
 The directory name `stable` does not mean every schema is stable:
 `ToolRequestUserInput{Params,Question,Option,Answer,Response}` explicitly says
 EXPERIMENTAL. capabilities.ts records that dependency. This document does not

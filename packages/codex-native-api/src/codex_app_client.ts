@@ -774,11 +774,13 @@ export class CodexAppClient extends EventEmitter {
 
   async setThreadGoal({
     threadId,
+    origin,
     objective = null,
     status = null,
     suppressAutoTurn = false,
   }: {
     threadId: string;
+    origin?: 'user' | 'automatic';
     objective?: string | null;
     status?: string | null;
     suppressAutoTurn?: boolean;
@@ -788,6 +790,7 @@ export class CodexAppClient extends EventEmitter {
       : Promise.resolve(null);
     const result: any = await this.request('thread/goal/set', {
       threadId,
+      ...(origin ? { origin } : {}),
       objective,
       status: status === null ? null : wireEnum(status, ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'] as const, 'goal status'),
     }, { timeoutMs: 15_000 });
@@ -808,6 +811,7 @@ export class CodexAppClient extends EventEmitter {
 
   async startThreadGoal({
     threadId,
+    origin,
     objective = null,
     status = 'active',
     onGoalUpdated = null,
@@ -818,6 +822,7 @@ export class CodexAppClient extends EventEmitter {
     timeoutMs = 15 * 60 * 1000,
   }: {
     threadId: string;
+    origin?: 'user' | 'automatic';
     objective?: string | null;
     status?: string | null;
     onGoalUpdated?: ((goal: ProviderThreadGoal | null) => Promise<void> | void) | null;
@@ -833,6 +838,7 @@ export class CodexAppClient extends EventEmitter {
     try {
       const result: any = await this.request('thread/goal/set', {
         threadId,
+        ...(origin ? { origin } : {}),
         objective,
         status: status === null ? null : wireEnum(status, ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'] as const, 'goal status'),
       }, { timeoutMs: 15_000 });
@@ -877,9 +883,10 @@ export class CodexAppClient extends EventEmitter {
     }
   }
 
-  async clearThreadGoal(threadId: string): Promise<boolean> {
+  async clearThreadGoal(threadId: string, origin?: 'user' | 'automatic'): Promise<boolean> {
     const result: any = await this.request('thread/goal/clear', {
       threadId,
+      ...(origin ? { origin } : {}),
     }, { timeoutMs: 15_000 });
     return result?.cleared === true;
   }

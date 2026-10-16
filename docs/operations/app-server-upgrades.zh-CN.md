@@ -2,6 +2,10 @@
 
 适用于 Codex Web 的本机 CLI；默认不下载、不更新、不重启任何服务。运行命令前将 Node 24 的目录放在 PATH 首位。本机为 `/home/ubuntu/workspace/.local/node-v24.16.0/bin`。
 
+## 最新适配记录（2026-10-16）
+
+最新稳定版已核对为 **0.163.0**（CLI 与 app-server 同包发布），发布于 `2026-10-15T21:30:38Z`。项目生成协议已更新至该版本，发布提交为 `83086188ae0614bd882818ff1aa23f3194962012`。升级差异、验证范围与本机切换状态见 [0.163.0 升级记录](../audits/2026-10-16-cli-app-server-upgrade.zh-CN.md)。下文 0.156.1 的版本、hash 和部署记录属于历史证据，不代表当前最新版。
+
 ## 1. 选择候选并记录来源
 
 从官方 [GitHub 稳定发布](https://github.com/openai/codex/releases/latest) 与 [npm registry](https://registry.npmjs.org/@openai/codex/latest) 交叉确认。2026-09-25 北京时间核实最新稳定为 **0.156.1**，发布于 `2026-09-23T02:41:36Z`，标签 `rust-v0.156.1` 对应提交 `b412ff32c417f855c2b2d1581b77058eed87c84b`。不要把 main 当作发布版。

@@ -156,6 +156,7 @@ test('app client adopts the automatic turn started by an active goal update', as
     assert.equal(method, 'thread/goal/set');
     assert.deepEqual(params, {
       threadId: 'thread_goal',
+      origin: 'user',
       objective: 'Finish the release',
       status: 'active',
     });
@@ -190,6 +191,7 @@ test('app client adopts the automatic turn started by an active goal update', as
 
   const result = await client.startThreadGoal({
     threadId: 'thread_goal',
+    origin: 'user',
     objective: 'Finish the release',
     onGoalUpdated: () => callbackOrder.push('goal'),
     onTurnStarted: () => callbackOrder.push('started'),
@@ -198,6 +200,24 @@ test('app client adopts the automatic turn started by an active goal update', as
   assert.deepEqual(callbackOrder, ['goal', 'started', 'wait']);
   assert.equal(result.goal?.objective, 'Finish the release');
   assert.equal(result.turn.turnId, 'turn_goal_auto');
+});
+
+test('goal mutations preserve explicit provenance without inventing user authorization', async () => {
+  const client = new CodexAppClient({ codexCliBin: 'codex' });
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  client.request = async (method: string, params: Record<string, unknown>) => {
+    calls.push({ method, params });
+    return { goal: null, cleared: true };
+  };
+  for (const origin of ['user', 'automatic', undefined] as const) {
+    await client.setThreadGoal({ threadId: 'thread_goal', status: 'paused', origin });
+    assert.equal(await client.clearThreadGoal('thread_goal', origin), true);
+    const provenance = origin ? { origin } : {};
+    assert.deepEqual(calls.splice(0), [
+      { method: 'thread/goal/set', params: { threadId: 'thread_goal', objective: null, status: 'paused', ...provenance } },
+      { method: 'thread/goal/clear', params: { threadId: 'thread_goal', ...provenance } },
+    ]);
+  }
 });
 
 test('app client interrupts an automatic goal turn when web tracking setup fails', async () => {
