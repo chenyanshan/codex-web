@@ -6,6 +6,8 @@
 
 [2026-10-13 分配调查](../audits/2026-10-13-browser-allocation-repair.zh-CN.md) 记录刷新后再次快速增长，以及随后确认的 DOM 重建、原生日期格式化分配和文本展开缺陷。此前“好像不卡了”不能作为问题已消失的依据。
 
+[2026-10-16 本地化分配修复](../audits/2026-10-16-localization-allocation-repair.zh-CN.md) 记录主浏览器再次崩溃后确认的整段 HTML 重复切片缺陷。累计切片字符量下降不等于实际峰值内存或线上泄漏下降相同比例；生产崩溃根因仍未闭环。
+
 ## 这次问题应留下什么经验
 
 交接记录中有约 9 GB 和 8.7 GB 的 renderer 进程随后崩溃，也有 3.87 秒内同会话发起 178 个读取请求的观测。没有增长前后的生产堆快照，不能把这些数字直接写成“已经证明某个对象泄漏”或“V8 OOM”。
@@ -34,6 +36,7 @@
 | 回放调度与异步收尾 | 密集 SSE/快照重放按工作量和耗时让出真实浏览器任务，保留串行背压及全部正常输出；事件前后与调用方 await 返回后复核归属；本次 replay 自身终态可收尾 | 把 resolved Promise 或微任务当作绘制/输入让出；每个小 chunk 重置预算；外部终态校准/取消后旧快照仍写游标；用丢帧、截断或并行处理回避阻塞 |
 | 共享结果 | 共享读取和大文本，复制会被修改的字段；事件可变标记不得污染其他调用者 | 为了共享直接复用可变对象；反过来在每个 delta 深复制全量历史/快照 |
 | 内存与缓存 | 为新增集合明确容量与释放节点，检查数量及字节；复用已有缓存、分页与 Blob 清理 | 只限制条数却放任单条无限大；从一个 map 挪到另一个 map 却仍保留引用；任意截断权威历史、最终回复或终态去重状态 |
+| 临时字符串与遍历 | 按原文区间收集片段，最后一次 join；有序保护区间用递增结束边界排除嵌套；用累计处理字符量检查长内容 | 每条消息都 slice/拼接/replace/序列化完整文档；每个区间扫描全部其他区间；只限制缓存条数，忽略每次渲染的临时工作量 |
 | 增量渲染 | 区分可见消息与隐藏 work batch 的变化；有效 activity 立即更新模型并合并动态 UI；同帧仍包含 assistant 更新；相同/过期 revision 不触发 DOM 工作 | batch ID 不在可见时间线时整段重建历史；每个 activity 重建消息；合帧漏掉 composer/详情反馈或必要的用户问题渲染 |
 | 日期与本地化 | 固定语言/样式复用有界 `Intl.DateTimeFormat`；保护标记采用输入中不存在的短 namespace，保留任意字面内容 | 每次 render 对所有会话调用带 options 的 `Date.toLocale*`；固定占位符递归展开用户内容；以不断增长的前缀回避碰撞，造成临时字符串放大 |
 | 内容和阅读 | 恢复期间保留已显示内容、草稿和阅读锚点；用户新滚动优先 | 刷新/切前台先清空页面；用定时整页刷新掩盖卡顿；为回收内存清掉登录或草稿 |
@@ -52,7 +55,7 @@
 | 加载合并、取消、身份、分步通知 | [session_loader.test.ts](../../packages/codex-web/test/session_loader.test.ts)、[network_recovery.test.ts](../../packages/codex-web/test/network_recovery.test.ts)、[浏览器读取合并](../../packages/codex-web/test/browser/session-request-coalescing.spec.js) |
 | SSE 分帧、取消、释放、重试与回放让出 | [sse_consumer.test.ts](../../packages/codex-web/test/sse_consumer.test.ts)、[网络恢复](../../packages/codex-web/test/network_recovery.test.ts)、[界面单测](../../packages/codex-web/test/public_ui.test.ts)、[弱网浏览器回归](../../packages/codex-web/test/browser/weak-network.spec.js)、[输出恢复](../../packages/codex-web/test/browser/session-output-recovery.spec.js)；涵盖单 chunk/连续就绪 chunks 的真实 task 交错、完整串行输出、让出期间 abort、最后 visitor 微任务切换，以及本次/外部终态来源 |
 | 缓存、刷新、前后台与阅读 | [缓存稳定性](../../packages/codex-web/test/browser/session-cache-stability.spec.js)、[阅读位置](../../packages/codex-web/test/browser/session-reading.spec.js)、[界面单测](../../packages/codex-web/test/public_ui.test.ts) |
-| 渲染分配、日期与本地化 | [本地化回归](../../packages/codex-web/test/ui_localization.test.ts)、[活动日期](../../packages/codex-web/test/work_details_dates.test.ts)、[界面单测](../../packages/codex-web/test/public_ui.test.ts)、[浏览器分配回归](../../packages/codex-web/test/browser/browser-allocation-regression.spec.js)；检查 DOM 身份/草稿、混合增量、任意字面占位符和格式化器构造次数 |
+| 渲染分配、日期与本地化 | [本地化回归](../../packages/codex-web/test/ui_localization.test.ts)、[活动日期](../../packages/codex-web/test/work_details_dates.test.ts)、[界面单测](../../packages/codex-web/test/public_ui.test.ts)、[浏览器分配回归](../../packages/codex-web/test/browser/browser-allocation-regression.spec.js)；检查 DOM 身份/草稿、混合增量、任意字面占位符、嵌套保护顺序、格式化器构造次数及长文累计切片量；不得用易波动的耗时断言代替工作量上界 |
 | 启动、构建、PWA、资源拆分 | [Rocket Loader 回归](../../packages/codex-web/test/browser/rocket-loader.spec.js)、[构建](../../packages/codex-web/test/build_public.test.ts)、[Service Worker](../../packages/codex-web/test/service_worker_cache.test.ts)、[首屏预算](../../packages/codex-web/test/frontend_budget.test.ts)；资源迁移还需相应页面浏览器回归 |
 
 新增行为应有能抓住失败路径的回归，不必为纯文档改动重复整套应用测试。TypeScript/受检查前端代码变更仍须 `npm run typecheck`；生产资源变更检查构建与 `test:built-public`。不得删除或削弱已有断言来完成重构。
@@ -64,6 +67,8 @@
 对于“卡住不输出，然后内存突增”，必须围绕同一故障标签建立时间轴：最后一次可见输出、后台是否仍在产出事件、客户端接收/处理与绘制、turn 终态、SSE 关闭/reset、历史/状态校准、增长开始。不能把界面停止更新误记为用户点击停止或任务自然结束。将这些事件与增长前后的 allocation/CPU 栈、JS 堆、DOM/监听器及已映射 PID 的原生内存对应；在系统压力下还应区分 RSS、physical footprint 与压缩/换出读数，不能用较低 RSS 证明没有大占用。采样、GC 和快照会改变现场，记录其时点，不自动用刷新或快照打断故障。
 
 2026-10-13 用户确认两个 aiops 域名是同一服务。别名仍可能拥有不同的 Service Worker、浏览器缓存或旧文档；公开资源已更新不代表用户已打开标签执行的是新版。独立诊断页十分钟静置平稳、最近会话离线渲染未复现，都只能作为有限的对照。实际标签不可响应或某别名 HTTP 超时时，应明确记录版本、PID或栈证据缺失；不能据此认定旧缓存，也不能用另一站点/另一浏览器实例的结果填补缺口。
+
+用户指定“主浏览器”时，先核对浏览器实例、既有标签和调试连接；工具默认启动的独立浏览器不能代替故障现场。转储可用于核对时间、进程和 origin，但读取异常地址、分配大小、虚拟映射、RSS 和 physical footprint 时必须区分字段含义。异常指令地址不是申请的字节数，虚拟映射也不是实际占用。没有符号化调用链、增长期采样或保留链时，应明确证据缺口，不据此宣布 OOM 类型、泄漏对象或根因。采样结束应停止 profiler 并断开自己的连接。
 
 ## 可直接复制给 AI 的提示词
 
@@ -93,6 +98,10 @@ docs/architecture/browser-stability-guardrails.zh-CN.md。
     预算跨帧/chunk延续，保持串行背压、取消清理和全部正常输出，不丢帧、不截断、不并行dispatch。
 13. 新增await必须在事件前后及caller返回处复核身份/导航/turn/controller归属再写游标或缓存。
     仅本次replay自身终态停止transport可授权收尾，外部终态校准或取消不能冒充这一授权。
+14. 每条消息处理不得重复复制或序列化完整HTML/历史；保护区间按原文收集片段、一次join，
+    排序后用边界去嵌套。保留长文本累计切片上界和内容一致性回归，不能靠截断消息通过。
+15. 主浏览器故障必须核验实际实例和标签。异常地址不是分配大小，虚拟映射不是实际内存；
+    分配热点、短期静置平稳或累计切片减少，都不能单独证明生产崩溃根因或长期稳定。
 
 为实际失败路径加入回归，按影响运行 focused tests、浏览器检查、typecheck 和构建验证。
 交付时列出受影响的 OPT 编号、测试证据和未验证范围。性能结论必须有同条件测量，

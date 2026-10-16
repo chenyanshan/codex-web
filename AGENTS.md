@@ -174,6 +174,9 @@ distinguishes reproduced code defects from the unproven production crash cause.
 The [allocation follow-up](docs/audits/2026-10-13-browser-allocation-repair.zh-CN.md)
 records renewed growth after refresh and the rendering/allocation fixes; the
 production multi-GB crash is not yet attributed to a specific allocation stack.
+The [2026-10-16 follow-up](docs/audits/2026-10-16-localization-allocation-repair.zh-CN.md)
+confirms quadratic temporary string work in localization, with a regression and
+fix; it does not establish the cause of the production renderer crashes.
 
 - Coalesce overlapping session reads through the shared loader by identity,
   session/navigation generation, and read semantics. Preserve distinct anchors
@@ -206,6 +209,14 @@ production multi-GB crash is not yet attributed to a specific allocation stack.
   Repeated `Date.toLocale*` calls with options can amplify native allocations
   even when the JS heap is flat. Localization placeholders must not collide with
   literal user content or grow proportionally to attacker-controlled prefixes.
+- Bound temporary work as well as retained caches. Do not repeatedly slice,
+  concatenate, replace, or serialize the entire document/history inside a
+  per-message loop. For protected HTML ranges, collect disjoint source fragments
+  and join once; filter sorted nested ranges with a running boundary instead of
+  an all-pairs scan. Preserve content, protection order, and nested placeholders.
+  Keep the long-transcript cumulative-slice regression in
+  `packages/codex-web/test/ui_localization.test.ts`; wall-clock timing alone is
+  not an allocation bound, and sliced character counts are not retained bytes.
 - Keep `data-cfasync="false"` before `src` on every ordered boot script,
   including recovery and module entry scripts. Preserve Service Worker atomic
   updates and complete-cache fallback. Never use periodic full-page reloads or
@@ -222,6 +233,12 @@ production multi-GB crash is not yet attributed to a specific allocation stack.
   Start allocation sampling before growth, preserve evidence before refresh,
   and distinguish JS heap, renderer RSS/native allocations and retaining paths.
   Verify the target-to-PID mapping before attributing process samples to a page.
+- When the user specifies the main browser, verify that the connection reaches
+  its existing affected tab; a tool-launched browser is only a separate control.
+  Preserve crash evidence before refreshing. Decode crash fields by their
+  documented type: an exception address is not an allocation size, and virtual
+  mappings are not RSS or physical footprint. Never infer a leak's retaining
+  path from a crash dump's origin or an allocation hotspot alone.
 
 ## Useful Commands
 
