@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test.use({ serviceWorkers: 'block' });
 const installed = {
   webBuild: 'web-test-build', installedVersion: '0.153.4', runningVersion: '0.152.0',
-  protocolVersion: '0.156.1', installation: 'npm', updateSupported: true,
+  protocolVersion: '0.163.0', installation: 'npm', updateSupported: true,
   limitation: 'In-place npm installation', operation: null,
 };
 
@@ -36,7 +36,7 @@ test('Chinese runtime versions stay distinct and local render reconciliation pre
   await expect(panel).toContainText('已安装 CLI');
   await expect(panel).toContainText('运行中的 app-server');
   await expect(panel).toContainText('协议基准版本');
-  for (const version of ['0.153.4', '0.152.0', '0.156.1']) await expect(panel).toContainText(version);
+  for (const version of ['0.153.4', '0.152.0', '0.163.0']) await expect(panel).toContainText(version);
   await expect(panel.getByRole('button', { name: '检查更新', exact: true })).toBeVisible();
   await page.evaluate(() => { globalThis.__runtimePanel = document.querySelector('#runtime-version-settings'); globalThis.__runtimeSettingsTest.render(); globalThis.__runtimeSettingsTest.render(); });
   expect(await page.evaluate(() => document.querySelector('#runtime-version-settings') === globalThis.__runtimePanel)).toBe(true);

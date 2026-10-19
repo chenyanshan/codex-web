@@ -43,12 +43,12 @@ test('applying a PATH-selected CLI passes its resolved absolute path to compatib
     resolveBinary: async bin => { assert.equal(bin, 'codex'); return '/selected/bin/codex'; },
     execute: async (command, args) => {
       calls.push([command, ...args]);
-      if (args[0] === '--version') return 'codex-cli 0.159.0';
+      if (args[0] === '--version') return 'codex-cli 0.163.0';
       if (args[0] === 'root') throw new Error('Not npm');
       return '{}';
     },
   });
-  await updater.verifyInstalled('0.159.0');
+  await updater.verifyInstalled('0.163.0');
   const verification = calls.find(call => call.includes('/repo/check.ts'))!;
   assert.equal(verification[verification.indexOf('--codex-bin') + 1], '/selected/bin/codex');
 });
