@@ -532,20 +532,13 @@ export class CodexWebRuntime {
     if (!this.client.stop || !this.client.start) throw new Error('Owned app-server restart is unavailable');
     await this.client.stop();
     // Old readers may finish after stop; drain their rejected requests before invalidating caches.
-    await Promise.allSettled([
-      ...this.timelineReads.values(), ...this.threadListRefreshes.values(),
-      ...this.threadScans.values(), ...this.fallbackLookups.values(),
-    ]);
+    await this.drainInFlightOperations();
     for (const lease of this.threadSubscriptionLeases.values()) if (lease.timer) clearTimeout(lease.timer);
     this.threadSubscriptionLeases.clear();
     this.threadListSnapshots.clear();
-    this.threadListRefreshes.clear();
-    this.threadScans.clear();
-    this.fallbackLookups.clear();
     this.threadSummaryCachedAt.clear();
     this.threadSummaries.clear();
     this.timelineProjections.clear();
-    this.timelineReads.clear();
     this.unavailableHistory.clear();
     this.approvalDecisions.clear();
     this.approvalToTurn.clear();
@@ -635,12 +628,18 @@ export class CodexWebRuntime {
     this.client.off?.('user_input_updated', this.onUserInput);
     this.lifecycleController.abort(new Error('Codex Web runtime stopped'));
     this.directory.stop();
+    // Stop the provider first so active turns and paginated reads reject, then
+    // drain every in-flight operation before dropping the maps that own them.
+    // This prevents late finally callbacks from retaining runtime state after
+    // shutdown while avoiding a deadlock on active turn promises.
+    const clientStop = Promise.resolve()
+      .then(() => (typeof this.client.stop === 'function' ? this.client.stop() : undefined))
+      .catch(() => {});
+    await Promise.allSettled([clientStop, this.drainInFlightOperations()]);
     this.timelineProjections.clear();
-    this.timelineReads.clear();
     this.businessActivity.clear();
     this.historyRevisions.clear();
     this.unavailableHistory.clear();
-    await Promise.allSettled([...this.timelineWrites.values()]);
     await Promise.all([this.timelineStore?.dispose?.(), this.settingsStore?.dispose?.()]);
     this.stopping = true;
     for (const lease of this.threadSubscriptionLeases.values()) {
@@ -656,7 +655,6 @@ export class CodexWebRuntime {
     this.threadSummaries.clear();
     this.threadSummaryCachedAt.clear();
     this.threadListSnapshots.clear();
-    this.threadListRefreshes.clear();
     this.turnToThread.clear();
     this.activeTurnByThread.clear();
     this.approvalToTurn.clear();
@@ -665,10 +663,31 @@ export class CodexWebRuntime {
     this.workSummaries.clear();
     this.finalAnswerItemIds.clear();
     this.terminalTurns.clear();
-    if (typeof this.client.stop === 'function') {
-      await this.client.stop();
-    }
     this.canonicalTimeline.close();
+  }
+
+  private async drainInFlightOperations(): Promise<void> {
+    await Promise.allSettled([
+      ...this.timelineReads.values(),
+      ...this.timelineWrites.values(),
+      ...this.threadScans.values(),
+      ...this.threadListRefreshes.values(),
+      ...this.fallbackLookups.values(),
+      ...this.renameWrites.values(),
+      ...this.orderWrites.values(),
+      ...[...this.approvalDecisions.values()].map((entry) => entry.promise),
+      ...this.activeTurns.values(),
+    ]);
+    this.timelineReads.clear();
+    this.timelineWrites.clear();
+    this.threadScans.clear();
+    this.threadListRefreshes.clear();
+    this.fallbackLookups.clear();
+    this.renameWrites.clear();
+    this.orderWrites.clear();
+    this.nameChanges.clear();
+    this.approvalDecisions.clear();
+    this.activeTurns.clear();
   }
 
   async listSessions(options: ListSessionsOptions = {}): Promise<CodexWebSession[]> {

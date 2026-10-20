@@ -136,7 +136,15 @@ export class CodexWebEventBus {
     const turnListeners = this.listeners.get(turnId);
     if (turnListeners) {
       for (const listener of turnListeners) {
-        listener(storedEvent);
+        // A subscriber is allowed to annotate its own view of an event. Keep
+        // those annotations from changing the replay/projection seen by other
+        // subscribers while retaining the large text fields by reference.
+        try {
+          listener({ event: cloneEventForListener(storedEvent.event), sequence: storedEvent.sequence });
+        } catch {
+          // One disconnected/buggy subscriber must not interrupt publication
+          // to the remaining subscribers or the runtime event pipeline.
+        }
       }
     }
     return storedEvent;
@@ -387,6 +395,41 @@ export class CodexWebEventBus {
       (event.type === 'turn.started' && !isRecoveredTurnStart(event)) || (event.type === 'user.message' && event.canonicalKey === 'initial-user'),
     );
   }
+}
+
+function cloneEventForListener(event: CodexWebEvent): CodexWebEvent {
+  const cloned = { ...event } as CodexWebEvent & Record<string, unknown>;
+  if (event.raw && typeof event.raw === 'object') {
+    cloned.raw = cloneSmallMetadata(event.raw);
+  }
+  if ('summary' in event && event.summary && typeof event.summary === 'object') {
+    cloned.summary = cloneSmallMetadata(event.summary) as never;
+  }
+  if ('request' in event && event.request && typeof event.request === 'object') {
+    cloned.request = cloneSmallMetadata(event.request) as never;
+  }
+  if ('activity' in event && event.activity && typeof event.activity === 'object') {
+    cloned.activity = cloneSmallMetadata(event.activity) as never;
+  }
+  if (event.timeline) cloned.timeline = cloneSmallMetadata(event.timeline) as never;
+  if (event.timelineCheckpoint) cloned.timelineCheckpoint = cloneSmallMetadata(event.timelineCheckpoint) as never;
+  return cloned;
+}
+
+/** Clone bounded metadata without recursively copying the potentially huge text fields. */
+function cloneSmallMetadata(value: unknown, depth = 0, budget = { remaining: 256 }): unknown {
+  if (value === null || typeof value !== 'object' || depth >= 6 || budget.remaining-- <= 0) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneSmallMetadata(item, depth + 1, budget));
+  }
+  const source = value as Record<string, unknown>;
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(source)) {
+    copy[key] = cloneSmallMetadata(item, depth + 1, budget);
+  }
+  return copy;
 }
 
 function isRecoveredTurnStart(event: Extract<CodexWebEvent, { type: 'turn.started' }>): boolean {

@@ -39,6 +39,41 @@ test('event bus appends, replays after sequence, and notifies subscribers', () =
   assert.deepEqual(seen, [first.sequence, second.sequence]);
 });
 
+test('event bus isolates mutable listener fields and continues after a listener error', () => {
+  const bus = new CodexWebEventBus();
+  const observed: Array<Record<string, unknown>> = [];
+  bus.subscribe('turn_isolated', ({ event }) => {
+    if (event.type !== 'batch.updated') throw new Error('listener failure');
+  });
+  bus.subscribe('turn_isolated', ({ event }) => {
+    if (event.type === 'batch.updated') {
+      event.summary.status = 'mutated';
+      (event.summary.details as Record<string, unknown>).phase = 'mutated';
+      (event.raw as Record<string, unknown>).owner = 'mutated';
+      ((event.raw as Record<string, unknown>).nested as Record<string, unknown>).source = 'mutated';
+    }
+  });
+  bus.subscribe('turn_isolated', ({ event }) => {
+    observed.push(event as unknown as Record<string, unknown>);
+  });
+
+  const stored = bus.append('turn_isolated', {
+    id: 'evt_mutable',
+    type: 'batch.updated',
+    turnId: 'turn_isolated',
+    batchId: 'batch_1',
+    summary: { status: 'running', details: { phase: 'command' } },
+    raw: { owner: 'runtime', nested: { source: 'app-server' } },
+  });
+
+  assert.equal(observed.length, 1);
+  assert.equal((observed[0]!.summary as Record<string, unknown>).status, 'running');
+  assert.equal(((observed[0]!.summary as Record<string, any>).details).phase, 'command');
+  assert.equal((observed[0]!.raw as Record<string, unknown>).owner, 'runtime');
+  assert.equal(((observed[0]!.raw as Record<string, any>).nested).source, 'app-server');
+  assert.equal((bus.list('turn_isolated')[0]!.event as Extract<typeof stored.event, { type: 'batch.updated' }>).summary.status, 'running');
+});
+
 test('event bus keeps bounded history per turn', () => {
   const bus = new CodexWebEventBus({ maxEventsPerTurn: 2 });
   bus.append('turn_1', { id: 'evt_1', type: 'turn.started', turnId: 'turn_1', threadId: 'thread_1' });

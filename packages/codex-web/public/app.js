@@ -2352,24 +2352,24 @@ function renderReadOnlyComposerNotice(session) {
 
 function renderRuntimeFeedback(live = true) {
   if (!state.sessionId) return '';
-  const activity = state.currentSession?.lastBusinessActivityAt;
-  const startedAt = state.currentSession?.turnStartedAt;
-  const connection = navigator.onLine === false ? 'Offline' : state.pendingTurn
-    ? state.streamConnection === 'connected' ? 'Connected' : state.streamConnection === 'connecting' ? 'Connecting' : 'Reconnecting'
-    : 'Turn finished';
-  const elapsed = startedAt && state.pendingTurn ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : null;
-  const since = activity ? Math.max(0, Math.floor((Date.now() - activity) / 1000)) : null;
-  return `<div class="runtime-feedback"${live ? ' role="status"' : ''}>${escapeHtml(CONNECTION.label(t) || t(connection))}<span class="runtime-timing">${elapsed != null ? ` · ${escapeHtml(t('Elapsed'))} ${formatElapsedDuration(elapsed)}` : ''}${since != null ? ` · ${escapeHtml(t('Last work activity'))} ${formatElapsedDuration(since)}` : ''}</span></div>`;
+  const [label, timing] = feedbackText();
+  return `<div class="runtime-feedback"${live ? ' role="status"' : ''}>${escapeHtml(label)}<span class="runtime-timing">${escapeHtml(timing)}</span></div>`;
 }
-function formatElapsedDuration(seconds) {
-  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+function feedbackText() {
+  const s = state.currentSession || {}, now = Date.now(), age = (v) => v ? Math.max(0, Math.floor((now - v) / 1e3)) : null;
+  const d = (v, name) => v == null ? '' : ` · ${t(name)} ${v >= 60 ? `${v / 60 | 0}m ${v % 60}s` : `${v}s`}`;
+  const c = navigator.onLine === false ? 'Offline' : state.pendingTurn ? state.streamConnection === 'connected' ? 'Connected' : state.streamConnection === 'connecting' ? 'Connecting' : 'Reconnecting' : 'Turn finished';
+  return [CONNECTION.label(t) || t(c), d(age(state.pendingTurn && s.turnStartedAt), 'Elapsed') + d(age(s.lastBusinessActivityAt), 'Last work activity')];
 }
 function refreshRuntimeFeedback() {
-  if (document.visibilityState === 'hidden') return;
-  for (const feedback of document.querySelectorAll('.runtime-feedback')) {
-    const next = htmlToElement(renderRuntimeFeedback(feedback.hasAttribute('role')));
-    if (feedback.textContent !== next?.textContent) feedback.replaceWith(next);
-  }
+  if (document.visibilityState !== 'hidden') for (const node of document.querySelectorAll('.runtime-feedback')) syncFeedback(node);
+}
+function syncFeedback(feedback) {
+  if (!feedback) return;
+  const [label, timing] = feedbackText(), text = feedback.firstChild, timingNode = feedback.querySelector('.runtime-timing');
+  if (!text || !timingNode) return;
+  if (text.nodeValue !== label) text.nodeValue = label;
+  if (timingNode.textContent !== timing) timingNode.textContent = timing;
 }
 
 function renderGoalStatus(details = false) {
@@ -5210,11 +5210,14 @@ function updateTimelineProjectionDom(timeline, dirtyEntryIds) {
     if (!item) {
       return false;
     }
+    const current = nodesById.get(id);
+    if (current && patchStreamMessage(current, item)) {
+      continue;
+    }
     const replacement = htmlToElement(renderTimelineItem(item));
     if (!replacement) {
       return false;
     }
-    const current = nodesById.get(id);
     if (current?.replaceWith) {
       current.replaceWith(replacement);
       nodesById.set(id, replacement);
@@ -5229,6 +5232,15 @@ function updateTimelineProjectionDom(timeline, dirtyEntryIds) {
   return true;
 }
 
+function patchStreamMessage(node, item) {
+  if (!node?.matches?.('.message-card') || item?.kind !== 'message' || !item.streaming
+    || (item.role !== 'assistant' && item.role !== 'system')) return false;
+  const textNode = node.querySelector?.('.message-text'), nextText = typeof item.text === 'string' ? item.text.trim() : '';
+  if (!textNode || textNode.classList?.contains('markdown-body') || item.attachments?.length
+    || node.querySelector?.('.message-attachments') || !nextText) return false;
+  if (textNode.textContent !== nextText) textNode.textContent = nextText;
+  return true;
+}
 function syncWorkDetailsDialogContent() {
   const list = document.querySelector('.work-details-list');
   if (!list || !state.workDetailsOpen || !canViewCurrentWorkDetails()) {
@@ -5374,8 +5386,7 @@ function scheduleChatDynamicUiRefresh(entryId = '', timelineChanged = true) {
 }
 
 function syncComposerStatusDisplay() {
-  const runtimeFeedback = document.querySelector('.runtime-feedback');
-  if (runtimeFeedback) runtimeFeedback.outerHTML = renderRuntimeFeedback();
+  syncFeedback(document.querySelector('.runtime-feedback'));
   const stop = document.querySelector('#visible-stop-button');
   if (stop) stop.hidden = !state.pendingTurn || !state.turnId;
   const composerWrap = document.querySelector('.composer-wrap');
@@ -6262,7 +6273,7 @@ async function selectSession(sessionId) {
   persistWorkspaceState({ view: 'chat', sessionId: nextSession.id });
   render();
   scrollTimelineToOpenPositionForSession(nextSession);
-  if (restoredRuntimeStatus.activeTurnId && state.turnId) {
+  if (useFreshDetailCache && restoredRuntimeStatus.activeTurnId && state.turnId) {
     restoreTurnEventCursor(nextSession.id, state.turnId);
     connectActiveTurnStream({ forceReconnect: true });
   }
@@ -8569,9 +8580,6 @@ async function refreshCurrentSessionMetadata({
       const incoming = normalizeSessionTimeline(payload.session.timeline);
       const overlap = timelinesHaveStableOverlap(state.sessionHistoryItems, incoming);
       if (overlap && state.currentSession?.timelineHasNewer !== true && payload.session.timelineHasNewer !== true) payload.session.timeline = mergeLatestTimelineHistory(state.sessionHistoryItems, incoming);
-      // Only a partial page can omit the reader's history. A complete history
-      // is authoritative even when optimistic/stream IDs have been replaced;
-      // retaining the cache here would hide new replies on every refresh.
       else if ((payload.session.timelineComplete !== true || payload.session.timelineHasNewer === true)
         && !snapshot.anchors.some(anchor => incoming.some(item => item.id === anchor.id)) && snapshot.anchors.length) {
         Object.assign(payload.session, { timeline: state.sessionHistoryItems, timelineComplete: state.currentSession.timelineComplete, timelineNextBefore: state.currentSession.timelineNextBefore, timelineNextAfter: state.currentSession.timelineNextAfter, timelineHasNewer: state.currentSession.timelineHasNewer });
@@ -10406,7 +10414,6 @@ function saveCurrentTimeline({ requireDurable = false } = {}) {
   }
   const timeline = cloneTimelineEntries(state.timeline);
   const previous = state.timelineCache.get(state.sessionId);
-  // A truncated projection cannot safely resume incremental deltas.
   const contentComplete = state.currentSession?.timelineHasNewer !== true && state.timelineProjectionComplete !== false && state.timeline.filter(item => item?.kind !== 'work').length === timeline.length
     && !state.timeline.some(item => typeof item?.text === 'string' && item.text.length > MAX_TIMELINE_ITEM_TEXT);
   const streamCursor = contentComplete ? streamCursorForCache(previous?.streamCursor) : null;
@@ -12217,7 +12224,6 @@ function lastInputAtForSession(session) {
   return Math.max(session?.lastInputAt || 0, session?.updatedAt || 0);
 }
 
-// Keep provisional send ordering in the outbox; server timestamps remain authoritative after delivery.
 function sessionListOrderAt(session) {
   let order = session.listOrderAt || 0;
   for (const entry of pendingSubmissionEntries()) {

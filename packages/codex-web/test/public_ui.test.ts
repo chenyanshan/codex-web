@@ -6166,7 +6166,12 @@ test('batch output refreshes work details and status without replacing message h
     set innerHTML(_html) { detailWrites++; },
     querySelector: () => null, querySelectorAll: () => [], addEventListener() {},
   };
-  const feedback = { outerHTML: '' };
+  const feedbackText = { nodeValue: 'Working' };
+  const feedbackTiming = { textContent: '' };
+  const feedback = {
+    firstChild: feedbackText,
+    querySelector: (selector) => selector === '.runtime-timing' ? feedbackTiming : null,
+  };
   const originalQuery = context.document.querySelector;
   context.document.querySelector = (selector) => selector === '.work-details-list' ? details
     : selector === '.runtime-feedback' ? feedback : originalQuery(selector);
@@ -6180,7 +6185,59 @@ test('batch output refreshes work details and status without replacing message h
   assert.equal(timeline.scrollTop, 200, 'reading position remains unchanged');
   assert.equal(api.state.batches.get('command').summary.output, 'line\n'.repeat(20));
   assert.equal(detailWrites, 20, 'open activity details still refresh');
-  assert.match(feedback.outerHTML, /runtime-feedback/u);
+  assert.match(`${feedbackText.nodeValue}${feedbackTiming.textContent}`, /Last work activity/u);
+});
+
+test('streaming assistant deltas update the existing message card in place', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.authSession = { id: 'auth_stream_identity', principal: { mode: 'single', isAdmin: true } };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_stream_identity';
+  api.state.currentSession = { id: api.state.sessionId, cwd: '/repo', settings: { metadata: {} } };
+  api.state.pendingTurn = true;
+  api.state.turnId = 'turn_stream_identity';
+  api.state.timeline = [{ id: 'reply', kind: 'message', role: 'assistant', label: 'Assistant', text: 'first', streaming: true }];
+  api.render();
+  const timeline = context.document.querySelector('#timeline');
+  const textNode = { textContent: 'first', classList: { contains: () => false } };
+  const original = {
+    matches: (selector) => selector === '.message-card',
+    querySelector: (selector) => selector === '.message-text' ? textNode : null,
+    getAttribute: (name) => name === 'data-timeline-id' ? 'reply' : null,
+  };
+  timeline.querySelector = (selector) => selector === '[data-timeline-id="reply"]' ? original : null;
+  timeline.querySelectorAll = (selector) => selector === '[data-timeline-id]' ? [original] : [];
+  context.document.createElement = (tag) => tag === 'template' ? { content: {} } : { className: '', innerHTML: '' };
+  api.state.timeline[0].text = 'first second';
+  assert.equal(api.refreshChatDynamicUi({ dirtyEntryIds: ['reply'] }), true);
+  assert.equal(timeline.querySelector('[data-timeline-id="reply"]'), original);
+  assert.equal(textNode.textContent, 'first second');
+});
+
+test('runtime feedback refresh updates text without replacing its status node', async () => {
+  const { api, context } = await loadAppHarness({ viewportWidth: 1280, desktopPointer: true });
+  api.state.authSession = { id: 'auth_runtime_feedback', principal: { mode: 'single', isAdmin: true } };
+  api.state.view = 'chat';
+  api.state.sessionId = 'session_runtime_feedback';
+  api.state.currentSession = { id: api.state.sessionId, cwd: '/repo', settings: { metadata: {} }, turnStartedAt: Date.now() - 1000 };
+  api.state.pendingTurn = true;
+  api.state.streamConnection = 'connected';
+  api.state.turnId = 'turn_runtime_feedback';
+  api.render();
+  const feedbackText = { nodeValue: 'Working' };
+  const timing = { textContent: '' };
+  const feedbackNode = {
+    firstChild: feedbackText,
+    hasAttribute: () => true,
+    querySelector: (selector) => selector === '.runtime-timing' ? timing : null,
+  };
+  Object.defineProperty(feedbackNode, 'textContent', { get: () => `${feedbackText.nodeValue}${timing.textContent}` });
+  context.__elements.set('.runtime-feedback', feedbackNode);
+  const feedback = context.document.querySelector('.runtime-feedback');
+  api.state.currentSession.turnStartedAt = Date.now() - 3000;
+  api.refreshChatDynamicUi({ timelineChanged: false });
+  assert.equal(context.document.querySelector('.runtime-feedback'), feedback);
+  assert.match(feedback.textContent, /Elapsed/u);
 });
 
 test('batch or activity with assistant updates in either frame order retain messages and fallback rendering', async () => {
@@ -6444,6 +6501,11 @@ test('opening a session renders from the list summary before the detail request 
     id: 'session_slow',
     cwd: '/repo',
     firstUserInput: 'Summary prompt',
+    // The list projection may still claim a turn is active while its detail
+    // request is in flight. Opening must wait for authoritative status before
+    // starting an SSE replay.
+    activeTurnId: 'turn_1',
+    activityState: 'running',
     settings: { metadata: {} },
   }];
 
