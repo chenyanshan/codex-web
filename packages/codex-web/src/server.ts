@@ -1,5 +1,6 @@
 import { handleUserInputRoute } from './user_input_routes.js';
 import { FileUserInputStore } from './user_input_store.js';
+import { FileSessionAttentionStore } from './session_attention_store.js';
 import { handleRuntimeMaintenanceRoute } from './runtime_maintenance_routes.js';
 import { withMultipartFiles, MAX_UPLOAD_FILE_BYTES, type ParsedUploadFile } from './multipart_upload.js';
 import { readIdentitySnapshot } from './identity_store.js';
@@ -131,6 +132,7 @@ export interface CreateCodexWebServerOptions {
   sessionFileStore?: FileSessionFileStore;
   sessionSubmissionStore?: FileSessionSubmissionStore;
   webhookConversationStore?: FileWebhookConversationStore;
+  sessionAttentionStore?: FileSessionAttentionStore;
   staticFiles?: StaticFilesRecord;
 }
 
@@ -311,6 +313,7 @@ export function createCodexWebServer({
   sessionFileStore: providedSessionFileStore,
   sessionSubmissionStore: providedSessionSubmissionStore,
   webhookConversationStore: providedWebhookConversationStore,
+  sessionAttentionStore: providedSessionAttentionStore,
   staticFiles,
 }: CreateCodexWebServerOptions): CodexWebServerHandle {
   let questionReceiptStore = userInputStores.get(runtime);
@@ -345,6 +348,7 @@ export function createCodexWebServer({
   const webhookConversationStore = providedWebhookConversationStore ?? new FileWebhookConversationStore({
     stateDir: config.stateDir,
   });
+  const sessionAttentionStore = providedSessionAttentionStore ?? new FileSessionAttentionStore({ stateDir: config.stateDir });
   const attachmentStore = new FileAttachmentStore({
     stateDir: config.stateDir,
     ttlSeconds: config.uploadTtlSeconds,
@@ -371,6 +375,7 @@ export function createCodexWebServer({
       sessionSubmissionStore,
       sessionSubmissionOperations,
       webhookConversationStore,
+      sessionAttentionStore,
       attachmentStore,
       loginRateLimiter,
       webhookRateLimiter,
@@ -631,6 +636,7 @@ async function handleRequest({
   sessionSubmissionStore,
   sessionSubmissionOperations,
   webhookConversationStore,
+  sessionAttentionStore,
   attachmentStore,
   loginRateLimiter,
   webhookRateLimiter,
@@ -651,6 +657,7 @@ async function handleRequest({
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   webhookConversationStore: FileWebhookConversationStore;
+  sessionAttentionStore: FileSessionAttentionStore;
   attachmentStore: FileAttachmentStore;
   loginRateLimiter: FixedWindowRateLimiter;
   webhookRateLimiter: FixedWindowRateLimiter;
@@ -829,6 +836,35 @@ async function handleRequest({
     return after !== 'denied' && (before === 'admin-unmapped' || after === before);
   });
   const userInputMatch = pathname.match(/^\/api\/sessions\/([^/]+)(\/user-input(?:\/.*)?)$/u);
+  const readMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/read$/u);
+  if (readMatch && method === 'POST') {
+    const sessionId = decodeURIComponent(readMatch[1]!);
+    let threadId = sessionId;
+    let runtimeSession: CodexWebSession | null = null;
+    if (identityState?.settings.multiUserEnabled || principal.mode === 'multi') {
+      const resolved = identityState && resolveReadableWorkspaceAppSession(identityState, principal, sessionId);
+      if (!resolved || !canReadWorkspaceAppSession(identityState!, principal, resolved.appSession)) { writeSessionNotFound(response); return; }
+      threadId = resolved.appSession.codexThreadId;
+      runtimeSession = await readSessionForAttention(runtime, threadId);
+    } else {
+      runtimeSession = await readSessionForAttention(runtime, sessionId);
+    }
+    if (!runtimeSession) { writeSessionNotFound(response); return; }
+    const body = await readJsonBody(request);
+    const turnId = typeof body.turnId === 'string' ? body.turnId.trim() : '';
+    let validTurn = Boolean(turnId) && turnId.length <= 1024;
+    const mappedThreadId = validTurn && runtime.threadIdForTurn ? runtime.threadIdForTurn(turnId) : null;
+    if (validTurn && mappedThreadId) {
+      validTurn = mappedThreadId === threadId;
+    } else if (validTurn) {
+      validTurn = runtimeSession.activeTurnId === turnId || runtimeSession.latestTurn?.id === turnId
+        || runtimeSession.timeline?.some((entry: any) => entry.turnId === turnId || entry.id === turnId) === true;
+    }
+    if (!validTurn) { writeJson(response, 400, { error: 'invalid_turn' }); return; }
+    await sessionAttentionStore.markRead(principal.userId || 'single', sessionId, turnId);
+    writeJson(response, 200, { sessionId, readTurnId: turnId });
+    return;
+  }
   if (userInputMatch) {
     const sessionId = decodeURIComponent(userInputMatch[1]!);
     let threadId = sessionId;
@@ -930,6 +966,7 @@ async function handleRequest({
       sessionSubmissionStore,
       sessionSubmissionOperations,
       localApiUrl,
+      sessionAttentionStore,
       attachmentStore,
       registerSseCloser,
       closeSseConnections,
@@ -1041,7 +1078,14 @@ async function handleRequest({
       ? await runtime.listSessionDirectory({ ...options, complete })
       : { items: await runtime.listSessions(options), complete: true };
     const allItems = directory.items as unknown as Array<Record<string, unknown>>;
-    const items = requestedCwd ? allItems.filter((session) => normalizeOptionalString(session.cwd) === requestedCwd) : allItems;
+    const readTurnIds = await sessionAttentionStore.readMany(principal.userId || 'single', allItems.map(item => String(item.id)));
+    const markedAllItems = allItems.map((item) => {
+      const readTurnId = readTurnIds.get(String(item.id));
+      return readTurnId ? { ...item, readTurnId } : item;
+    });
+    const items = requestedCwd
+      ? markedAllItems.filter((session) => normalizeOptionalString(session.cwd) === requestedCwd)
+      : markedAllItems;
     writeSessionListPage(response, url, items, {
       principalId: 'single-user',
       scope: sessionListScopeKey({
@@ -3808,6 +3852,7 @@ async function handleMultiUserRequest({
   sessionSubmissionStore,
   sessionSubmissionOperations,
   localApiUrl,
+  sessionAttentionStore,
   attachmentStore,
   registerSseCloser,
   closeSseConnections,
@@ -3828,10 +3873,18 @@ async function handleMultiUserRequest({
   sessionSubmissionStore: FileSessionSubmissionStore;
   sessionSubmissionOperations: Map<string, Promise<SessionSubmissionExecution>>;
   localApiUrl: string;
+  sessionAttentionStore: FileSessionAttentionStore;
   attachmentStore: FileAttachmentStore;
   registerSseCloser: (close: () => void) => () => void;
   closeSseConnections: () => void;
 }): Promise<boolean> {
+  const attachReadTurnIds = async (items: Array<Record<string, unknown>>) => {
+    const ids = await sessionAttentionStore.readMany(principal.userId || 'single', items.map(item => String(item.id)));
+    return items.map((item) => {
+      const readTurnId = ids.get(String(item.id));
+      return readTurnId ? { ...item, readTurnId } : item;
+    });
+  };
   if (pathname === '/api/auth/me' || pathname === '/api/auth/logout') {
     return false;
   }
@@ -4032,7 +4085,8 @@ async function handleMultiUserRequest({
     workspaceDirectoryCache.set(runtime, workspaceCache);
     const cachedDirectory = workspaceCache.get(cacheKey);
     if (!favoriteOnly && !archivedOnly && workspaceVersion && cachedDirectory?.version === workspaceVersion && cachedDirectory.source === directory.items) {
-      writeSessionListPage(response, url, filterSessionListItemsByProject(cachedDirectory.items, requestedProjectId), {
+      const markedItems = await attachReadTurnIds(cachedDirectory.items);
+      writeSessionListPage(response, url, filterSessionListItemsByProject(markedItems, requestedProjectId), {
         principalId: principal.userId, scope: sessionListScopeKey({ favoriteOnly, archivedOnly, projectKey: requestedProjectId }),
       }, cachedDirectory.items, directory.complete);
       return true;
@@ -4072,10 +4126,11 @@ async function handleMultiUserRequest({
           includeWorkDetails: canViewProjectWorkDetails(principal, project),
         }));
       }
+      const markedItems = await attachReadTurnIds(items);
       writeSessionListPage(
         response,
         url,
-        filterSessionListItemsByProject(items, requestedProjectId),
+        filterSessionListItemsByProject(markedItems, requestedProjectId),
         pageContext,
         items,
       );
@@ -4114,10 +4169,11 @@ async function handleMultiUserRequest({
           includeWorkDetails: canViewProjectWorkDetails(principal, project),
         }));
       }
+      const markedItems = await attachReadTurnIds(items);
       writeSessionListPage(
         response,
         url,
-        filterSessionListItemsByProject(items, requestedProjectId),
+        filterSessionListItemsByProject(markedItems, requestedProjectId),
         pageContext,
         items,
       );
@@ -4155,10 +4211,11 @@ async function handleMultiUserRequest({
       if (workspaceCache.size >= 32 && !workspaceCache.has(cacheKey)) workspaceCache.delete(workspaceCache.keys().next().value!);
       workspaceCache.set(cacheKey, { version: workspaceVersion, source: directory.items, items });
     }
+    const markedItems = await attachReadTurnIds(items);
     writeSessionListPage(
       response,
       url,
-      filterSessionListItemsByProject(items, requestedProjectId),
+      filterSessionListItemsByProject(markedItems, requestedProjectId),
       pageContext,
       items,
       directory.complete,
@@ -6241,6 +6298,19 @@ function presentSessionSummary(session: CodexWebSession): Partial<CodexWebSessio
     delete summary.activityState;
   }
   return summary;
+}
+
+async function readSessionForAttention(
+  runtime: CodexWebRuntime,
+  sessionId: string,
+): Promise<CodexWebSession | null> {
+  if (typeof runtime.readSessionStatus === 'function') {
+    return runtime.readSessionStatus(sessionId, { archived: true });
+  }
+  if (typeof runtime.readSessionMetadata === 'function') {
+    return runtime.readSessionMetadata(sessionId);
+  }
+  return runtime.readSession(sessionId);
 }
 
 function presentActiveTurnSnapshot(

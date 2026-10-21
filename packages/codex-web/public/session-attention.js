@@ -1,6 +1,6 @@
 (function install(globalScope) {
   const completed = status => ['completed', 'complete', 'succeeded', 'success', 'finished'].includes(String(status || '').toLowerCase());
-  function createController({ storage, owner }) {
+  function createController({ storage, owner, onRead = null }) {
     let storageKey = '', markers = {};
     function load() {
       const key = `codexWebSessionRead:${owner()}`;
@@ -39,17 +39,42 @@
     function unread(session) {
       load();
       const result = resultKey(session);
+      const serverRead = typeof session?.readTurnId === 'string' ? session.readTurnId.trim() : '';
+      if (result && serverRead) return serverRead !== result;
       const entry = markers[session.id];
       return Boolean(result && (typeof entry === 'string' ? entry : entry?.read) !== result);
+    }
+    function readHandler() {
+      if (typeof onRead === 'function') return onRead;
+      const token = storage?.getItem?.('codexWebToken');
+      if (!token || typeof globalScope.fetch !== 'function') return null;
+      return ({ session, turnId }) => {
+        return globalScope.fetch(`/api/sessions/${encodeURIComponent(session.id)}/read`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ turnId }),
+          signal: globalScope.AbortSignal?.timeout?.(5000),
+        });
+      };
+    }
+    function notifyRead(session, turnId) {
+      const handler = readHandler();
+      if (!handler) return;
+      try {
+        Promise.resolve(handler({ session, turnId })).catch(() => {});
+      } catch {}
     }
     function markRead(session) {
       load();
       const result = resultKey(session);
-      if (!result || markers[session.id]?.read === result) return false;
+      const existing = markers[session.id];
+      const existingRead = typeof existing === 'string' ? existing : existing?.read;
+      if (!result || existingRead === result) return false;
       const latestTurn = markers[session.id]?.latestTurn;
       delete markers[session.id];
       markers[session.id] = { read: result, latestTurn };
       save();
+      notifyRead(session, result);
       return true;
     }
     return { unread, markRead, latestTurn };

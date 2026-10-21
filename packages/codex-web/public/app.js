@@ -10179,7 +10179,7 @@ function serializeSessionSummaryForCache(session) {
     latestTurn: normalized.latestTurn || null,
     settings: normalized.settings,
   };
-  for (const key of ['projectId', 'projectDisplayName', 'ownerUserId', 'mode', 'archivedAt', 'archivedByUserId', 'archiveSource']) {
+  for (const key of ['projectId', 'projectDisplayName', 'ownerUserId', 'mode', 'archivedAt', 'archivedByUserId', 'archiveSource', 'readTurnId']) {
     if (Object.prototype.hasOwnProperty.call(normalized, key)) {
       summary[key] = normalized[key];
     }

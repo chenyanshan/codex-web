@@ -84,6 +84,10 @@ for (const action of ['read-visible-result', 'back-to-latest', 'read-history-the
     await expect(page.locator('#timeline')).toContainText('Completed result');
     await expect(dot).toHaveAttribute('data-state', 'unread');
     // Passive rendering alone must not acknowledge a result. User reading does.
+    const readReceipt = page.waitForResponse(response => (
+      new URL(response.url()).pathname.endsWith('/read')
+      && response.request().method() === 'POST'
+    ));
     if (action === 'back-to-latest') {
       await page.locator('#timeline').evaluate(el => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
       await expect(dot).toHaveAttribute('data-state', 'unread');
@@ -97,6 +101,7 @@ for (const action of ['read-visible-result', 'back-to-latest', 'read-history-the
       await page.locator('#timeline').dispatchEvent('wheel', { deltaY: 100 });
     }
     await expect(dot).toHaveCount(0);
+    await readReceipt;
     await page.reload();
     await expect(page.locator('#timeline')).toContainText('Completed result');
     await expect(dot).toHaveCount(0);
@@ -133,4 +138,56 @@ test('viewing the latest reply clears a cached unread turn when lightweight stat
   await page.reload();
   if (info.project.name !== 'desktop' && await page.locator('.chat-back-button').isVisible()) await page.locator('.chat-back-button').click();
   await expect(dot).toHaveCount(0);
+});
+
+test('server read receipt keeps another device clear after its local marker is removed', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop');
+  const id = 'session_browser_cross_device';
+  const turnId = 'cross_device_turn';
+  let serverReadTurnId = null;
+  const session = {
+    id,
+    title: 'Cross-device read result',
+    cwd: '/Users/test/work',
+    activeTurnId: null,
+    latestTurn: { id: turnId, status: 'completed' },
+    readTurnId: null,
+    settings: {},
+  };
+  const items = [
+    { id: 'question', kind: 'message', role: 'user', turnId, text: 'Check the project' },
+    { id: 'answer', kind: 'message', role: 'assistant', turnId, meta: 'final', text: 'The result is available on every device.' },
+  ];
+  await page.addInitScript(() => {
+    localStorage.setItem('codexWebToken', 'browser-session-dots');
+    localStorage.setItem('codexWebLanguage', 'en');
+  });
+  await page.route(/\/api\/sessions(?:\?|$)/u, route => route.fulfill({
+    json: { items: [{ ...session, readTurnId: serverReadTurnId }], directoryComplete: true },
+  }));
+  await page.route(new RegExp(`/api/sessions/${id}(?:[/?]|$)`), route => {
+    const request = route.request();
+    if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/read')) {
+      serverReadTurnId = request.postDataJSON()?.turnId || null;
+      return route.fulfill({ json: { sessionId: id, readTurnId: serverReadTurnId } });
+    }
+    return route.fulfill({ json: {
+      session: { ...session, readTurnId: serverReadTurnId, thread: { turns: [{ id: turnId, status: 'completed', items: [] }] }, timeline: items },
+      items,
+      hasMore: false,
+      hasNewer: false,
+    } });
+  });
+  await page.goto('/');
+  const dot = page.locator(`button[data-session-id="${id}"] .session-attention-state`);
+  await expect(dot).toHaveAttribute('data-state', 'unread');
+  await page.locator(`button[data-session-id="${id}"]`).click();
+  await expect(page.locator('#timeline')).toContainText('The result is available on every device.');
+  await expect.poll(() => serverReadTurnId).toBe(turnId);
+  if (await page.locator('.chat-back-button').count()) await page.locator('.chat-back-button').click();
+  await expect(dot).toHaveCount(0);
+  await page.evaluate((key) => localStorage.removeItem(key), `codexWebSessionRead:single`);
+  await page.reload();
+  await expect(page.locator(`button[data-session-id="${id}"]`)).toBeVisible();
+  await expect(page.locator(`button[data-session-id="${id}"] .session-attention-state`)).toHaveCount(0);
 });
