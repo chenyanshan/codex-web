@@ -3328,7 +3328,7 @@ test('ordinary trusted multi-user requests preserve full access at every input b
     ...runtimeStub(),
     createSession: async (input: any) => {
       createInputs.push(input);
-      return { id: 'thread_safe', cwd: input.cwd, settings: input.settings, thread: { turns: [] }, timeline: [] };
+      return { id: `thread_safe_${createInputs.length}`, cwd: input.cwd, settings: input.settings, thread: { turns: [] }, timeline: [] };
     },
     updateSessionSettings: async (_threadId: string, input: any) => {
       settingsInputs.push(input);
@@ -4396,3 +4396,63 @@ test('existing-session uploads complete without Codex history and still enforce 
   assert.equal((await send('app_alice')).status, 409);
   assert.equal(historyReads, 0);
 });
+
+for (const entry of ['session', 'submission'] as const) {
+  test(`${entry} creation cannot be adopted by admin while runtime creation is in flight`, async () => {
+    const identityStore = await createIdentityStore();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ownership-http-'));
+    let release!: () => void;
+    let visible!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const threadVisible = new Promise<void>((resolve) => { visible = resolve; });
+    const newSession = { id: 'new-thread', cwd: '/Users/alice/secret-repo', settings: {}, thread: { turns: [] }, timeline: [] };
+    let created = false;
+    const runtime = {
+      ...runtimeStub(),
+      listSessions: async () => created ? [newSession] : [],
+      createSession: async () => { created = true; visible(); await hold; return newSession; },
+      readSession: async () => newSession,
+    };
+    const server = createCodexWebServer({
+      auth: authFor({
+        alice: { userId: 'user_alice', username: 'alice', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+        admin: { userId: 'user_admin', username: 'admin', roleIds: ['role_admin'], isAdmin: true, mode: 'multi' },
+        bob: { userId: 'user_bob', username: 'bob', roleIds: ['role_user'], isAdmin: false, mode: 'multi' },
+      }),
+      identityStore, runtime: runtime as any, config: createConfig({ stateDir }),
+    });
+    await server.start();
+    const request = fetch(`${server.baseUrl}${entry === 'session' ? '/api/sessions' : '/api/session-submissions'}`, {
+      method: 'POST', headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: 'project_allowed', submissionId: 'ownership-submission', text: 'hello' }),
+    });
+    try {
+      await Promise.race([threadVisible, request.then((response) => {
+        throw new Error(`Creation returned before the barrier: ${response.status}`);
+      })]);
+      const during = await fetch(`${server.baseUrl}/api/sessions`, { headers: { Authorization: 'Bearer admin' } });
+      assert.equal(during.status, 200);
+      assert.equal((await identityStore.readState()).sessions.some((s) => s.codexThreadId === newSession.id), false);
+      release();
+      const response = await request;
+      assert.equal(response.status, 201, JSON.stringify(await response.json()));
+      const after = await fetch(`${server.baseUrl}/api/sessions`, { headers: { Authorization: 'Bearer admin' } });
+      assert.equal(after.status, 200);
+      const mappings = (await identityStore.readState()).sessions.filter((s) => s.codexThreadId === newSession.id);
+      assert.equal(mappings.length, 1);
+      assert.equal(mappings[0]?.ownerUserId, 'user_alice');
+      assert.equal(mappings[0]?.mappingAudit?.source, entry === 'session' ? 'session-create' : 'submission-create');
+      for (const token of ['admin', 'bob']) {
+        const denied = await fetch(`${server.baseUrl}/api/sessions/${mappings[0]!.id}/turns`, {
+          method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: 'must not execute' }),
+        });
+        assert.equal(denied.status, 404);
+      }
+    } finally {
+      release(); await request;
+      await server.stop();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+}

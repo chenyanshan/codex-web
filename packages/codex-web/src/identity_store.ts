@@ -49,9 +49,25 @@ export interface CodexWebProject {
   showWorkDetailsToMembers: boolean;
 }
 
+export interface SessionMappingContext {
+  source: 'session-create' | 'submission-create' | 'submission-recovery' | 'scheduled-create' | 'legacy-import';
+  actorUserId: string;
+  correlationId: string;
+}
+
+export class SessionOwnershipConflictError extends Error {
+  readonly code = 'session_ownership_conflict';
+  readonly statusCode = 409;
+  constructor() {
+    super('Session ownership conflicts with an existing mapping. Review the ownership records before retrying.');
+    this.name = 'SessionOwnershipConflictError';
+  }
+}
+
 export interface CodexWebAppSession {
   id: string;
   codexThreadId: string;
+  mappingAudit?: SessionMappingContext & { recordedAt: string };
   projectId: string;
   ownerUserId: string;
   createdAt: string;
@@ -94,6 +110,8 @@ export interface CodexWebWebhookCredential {
 }
 
 export interface CodexWebIdentityState {
+  // One-time migration scope. An empty list means closed, never uninitialized.
+  legacySessionImport?: { capturedAt: string; remainingThreadIds: string[] };
   settings: {
     multiUserEnabled: boolean;
     siteTitle: string;
@@ -402,11 +420,47 @@ export class FileIdentityStore {
     });
   }
 
-  async upsertSession(session: CodexWebAppSession): Promise<CodexWebAppSession> {
+  async initializeLegacySessionImport(threadIds: string[]): Promise<void> {
+    await this.withMutationLock(async () => {
+      const state = await this.readState();
+      if (state.legacySessionImport) return;
+      const mapped = new Set(state.sessions.map((session) => session.codexThreadId));
+      state.legacySessionImport = {
+        capturedAt: new Date().toISOString(),
+        remainingThreadIds: uniqueStrings(threadIds).filter((id) => !mapped.has(id)),
+      };
+      await this.writeState(state);
+    });
+  }
+
+  async importLegacySession(session: CodexWebAppSession, context: SessionMappingContext): Promise<boolean> {
     return this.withMutationLock(async () => {
       const state = await this.readState();
       const normalized = normalizeAppSession(session);
+      // Never return another owner's record, or overwrite a mapping using a stale snapshot.
+      if (!state.legacySessionImport?.remainingThreadIds.includes(normalized.codexThreadId)
+        || state.sessions.some((item) => item.codexThreadId === normalized.codexThreadId)) return false;
+      assertSessionOwnership(state, normalized);
+      normalized.mappingAudit = { ...context, source: 'legacy-import', recordedAt: new Date().toISOString() };
+      state.sessions.push(normalized);
+      consumeLegacyCandidate(state, normalized.codexThreadId);
+      await this.writeState(state);
+      return true;
+    });
+  }
+
+  async upsertSession(session: CodexWebAppSession, context?: SessionMappingContext): Promise<CodexWebAppSession> {
+    return this.withMutationLock(async () => {
+      const state = await this.readState();
+      const normalized = normalizeAppSession(session);
+      assertSessionOwnership(state, normalized);
+      const existing = state.sessions.find((item) => item.id === normalized.id);
+      // Only the transaction that first inserts the mapping can establish its provenance.
+      delete normalized.mappingAudit;
+      if (existing?.mappingAudit) normalized.mappingAudit = existing.mappingAudit;
+      else if (!existing && context) normalized.mappingAudit = { ...context, recordedAt: new Date().toISOString() };
       state.sessions = upsertById(state.sessions, normalized);
+      consumeLegacyCandidate(state, normalized.codexThreadId);
       await this.writeState(state);
       return normalized;
     });
@@ -697,6 +751,9 @@ function normalizeState(value: unknown): CodexWebIdentityState {
     shares: normalizeStateCollection(record, 'shares', normalizeShareOrNull),
     userSessions: normalizeStateCollection(record, 'userSessions', normalizeUserSessionOrNull),
     webhookCredentials,
+    ...(record.legacySessionImport !== undefined ? {
+      legacySessionImport: normalizeLegacySessionImport(record.legacySessionImport),
+    } : {}),
   };
 }
 
@@ -796,6 +853,7 @@ function normalizeAppSessionOrNull(value: unknown): CodexWebAppSession | null {
 function normalizeAppSession(session: CodexWebAppSession): CodexWebAppSession {
   const now = new Date().toISOString();
   return {
+    ...(session.mappingAudit ? { mappingAudit: { ...session.mappingAudit } } : {}),
     id: normalizeRequiredId(session.id, 'session id'),
     codexThreadId: normalizeRequiredId(session.codexThreadId, 'codex thread id'),
     projectId: normalizeRequiredId(session.projectId, 'project id'),
@@ -1093,4 +1151,27 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 function isPresent<T>(value: T | null): value is T {
   return value !== null;
+}
+
+function assertSessionOwnership(state: CodexWebIdentityState, session: CodexWebAppSession): void {
+  if (state.sessions.some((item) => (
+    (item.codexThreadId === session.codexThreadId && item.id !== session.id)
+    || (item.id === session.id && (item.codexThreadId !== session.codexThreadId
+      || item.ownerUserId !== session.ownerUserId || item.projectId !== session.projectId))
+  ))) throw new SessionOwnershipConflictError();
+}
+
+function consumeLegacyCandidate(state: CodexWebIdentityState, threadId: string): void {
+  if (state.legacySessionImport) {
+    state.legacySessionImport.remainingThreadIds = state.legacySessionImport.remainingThreadIds.filter((id) => id !== threadId);
+  }
+}
+
+function normalizeLegacySessionImport(value: unknown): NonNullable<CodexWebIdentityState['legacySessionImport']> {
+  // Corrupt migration metadata must never reopen automatic adoption.
+  if (!isRecord(value) || typeof value.capturedAt !== 'string'
+    || !Array.isArray(value.remainingThreadIds) || !value.remainingThreadIds.every((id) => typeof id === 'string')) {
+    throw new Error('Invalid legacy session import scope');
+  }
+  return { capturedAt: value.capturedAt, remainingThreadIds: uniqueStrings(value.remainingThreadIds) };
 }

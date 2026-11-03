@@ -1,3 +1,4 @@
+import { ensureLegacySessionImportScope } from './legacy_session_import.js';
 import { handleUserInputRoute } from './user_input_routes.js';
 import { FileUserInputStore } from './user_input_store.js';
 import { FileSessionAttentionStore } from './session_attention_store.js';
@@ -198,7 +199,9 @@ interface CodexWebIdentityStoreLike {
   }): Promise<CodexWebUser>;
   deleteUser?(userId: string): Promise<void>;
   updateUserProjectFavorite?(input: { userId: string; projectId: string; favorite: boolean }): Promise<CodexWebUser>;
-  upsertSession(session: CodexWebAppSession): Promise<CodexWebAppSession>;
+  upsertSession: FileIdentityStore['upsertSession'];
+  initializeLegacySessionImport?: FileIdentityStore['initializeLegacySessionImport'];
+  importLegacySession?: FileIdentityStore['importLegacySession'];
   deleteSession?(sessionId: string): Promise<void>;
   createShare?(args: { sessionId: string; createdByUserId: string; ttlSeconds?: number }): ReturnType<FileIdentityStore['createShare']>;
   revokeShare?(shareId: string, revokedAt?: string): Promise<CodexWebShare | null>;
@@ -3256,7 +3259,7 @@ async function resolveSessionSubmissionTarget({
       archivedAt: null,
       archivedByUserId: null,
       archiveSource: null,
-    });
+    }, { source: 'submission-recovery', actorUserId: principal.userId, correlationId: record.id });
     project = findProject(await readIdentitySnapshot(identityStore), appSession.projectId);
   }
   if (!canWriteResolvedAppSession(await readIdentitySnapshot(identityStore), principal, appSession)) {
@@ -3339,6 +3342,7 @@ async function createSessionForSubmission({
           throw createHttpError(409, 'active_session_limit_reached', 'Archive an existing session before creating a new one.');
         }
       }
+      await ensureLegacySessionImportScope(identityStore, () => runtime.listSessions());
       const runtimeSession = await runtime.createSession({
         title: record.payload.title,
         settings: record.payload.settings,
@@ -3363,7 +3367,7 @@ async function createSessionForSubmission({
         archivedAt: null,
         archivedByUserId: null,
         archiveSource: null,
-      });
+      }, { source: 'submission-create', actorUserId: principal.userId, correlationId: record.id });
       await store.update(record.ownerUserId, record.id, (value) => ({
         ...value,
         status: 'starting',
@@ -4241,6 +4245,7 @@ async function handleMultiUserRequest({
         return true;
       }
     }
+    await ensureLegacySessionImportScope(identityStore, () => runtime.listSessions());
     const appSessionId = crypto.randomUUID();
     const runtimeSession = await runtime.createSession({
       ...(body as CreateSessionInput),
@@ -4259,7 +4264,7 @@ async function handleMultiUserRequest({
       archivedAt: null,
       archivedByUserId: null,
       archiveSource: null,
-    });
+    }, { source: 'session-create', actorUserId: principal.userId, correlationId: appSessionId });
     writeJson(response, 201, {
       session: presentSessionForUser({
         runtimeSession,
@@ -6039,9 +6044,13 @@ async function ensureAdminLegacySessionMappings({
   principal: CodexWebPrincipal;
   runtimeSessions?: CodexWebSession[];
 }): Promise<CodexWebIdentityState> {
-  if (typeof identityStore.upsertProject !== 'function') {
+  if (!identityStore.upsertProject || !identityStore.importLegacySession || !identityStore.initializeLegacySessionImport) {
     return identityState;
   }
+  await ensureLegacySessionImportScope(identityStore, () => runtime.listSessions());
+  identityState = await readIdentitySnapshot(identityStore);
+  const eligibleThreadIds = new Set(identityState.legacySessionImport?.remainingThreadIds ?? []);
+  const importOperationId = crypto.randomUUID();
   const runtimeSessions = providedRuntimeSessions ?? await runtime.listSessions();
   const mappedThreadIds = new Set(identityState.sessions.map((session) => session.codexThreadId));
   const projectsById = new Map(identityState.projects.map((project) => [project.id, project]));
@@ -6050,7 +6059,7 @@ async function ensureAdminLegacySessionMappings({
 
   for (const runtimeSession of runtimeSessions) {
     const threadId = normalizeOptionalString(runtimeSession.id);
-    if (!threadId || mappedThreadIds.has(threadId)) {
+    if (!threadId || !eligibleThreadIds.has(threadId) || mappedThreadIds.has(threadId)) {
       continue;
     }
     const project = reusableProjectForRuntimeSession(runtimeSession, projectsById.values())
@@ -6070,7 +6079,7 @@ async function ensureAdminLegacySessionMappings({
       changed = true;
     }
     const timestamp = isoFromRuntimeTimestamp(runtimeSession.updatedAt, new Date().toISOString());
-    await identityStore.upsertSession({
+    await identityStore.importLegacySession({
       id: legacyAppSessionId(threadId),
       codexThreadId: threadId,
       projectId: project.id,
@@ -6081,7 +6090,7 @@ async function ensureAdminLegacySessionMappings({
       archivedAt: null,
       archivedByUserId: null,
       archiveSource: null,
-    });
+    }, { source: 'legacy-import', actorUserId: principal.userId, correlationId: importOperationId });
     mappedThreadIds.add(threadId);
     changed = true;
   }

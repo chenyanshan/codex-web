@@ -1,3 +1,4 @@
+import { ensureLegacySessionImportScope } from './legacy_session_import.js';
 import path from 'node:path';
 import type {
   CodexWebRuntime,
@@ -12,6 +13,7 @@ import type { ScheduledTaskDefinition } from './task_store.js';
 import type {
   CodexWebAppSession,
   CodexWebIdentityState,
+  FileIdentityStore,
 } from './identity_store.js';
 
 const TASK_LOCK_STALE_MS = 24 * 60 * 60 * 1_000;
@@ -20,6 +22,7 @@ export interface ScheduledTaskRuntimeLike {
   eventBus?: { epoch: string };
   lifecycleSignal?: AbortSignal;
   interruptTurn?(turnId: string): Promise<void>;
+  listSessions?(): Promise<CodexWebSession[]>;
   createSession(input: CreateSessionInput): Promise<CodexWebSession>;
   startTurn(sessionId: string, input: StartTurnInput): Promise<CodexWebStartTurnResult>;
   archiveSession(sessionId: string): Promise<boolean>;
@@ -32,7 +35,8 @@ export interface ScheduledTaskRuntimeLike {
 
 export interface ScheduledTaskIdentityStoreLike {
   readState(): Promise<CodexWebIdentityState>;
-  upsertSession(session: CodexWebAppSession): Promise<CodexWebAppSession>;
+  upsertSession: FileIdentityStore['upsertSession'];
+  initializeLegacySessionImport?: FileIdentityStore['initializeLegacySessionImport'];
 }
 
 export interface RunScheduledTaskInput {
@@ -67,6 +71,10 @@ export async function runScheduledTask({
     const ownership = resolvedIdentityStore
       ? await resolveScheduledTaskOwnership(task, resolvedIdentityStore)
       : null;
+    if (ownership) {
+      if (!runtime.listSessions) throw new Error('Scheduled task runtime cannot capture legacy session scope');
+      await ensureLegacySessionImportScope(resolvedIdentityStore!, () => runtime.listSessions!());
+    }
     const title = createScheduledSessionTitle(task.title, now);
     const session = await runtime.createSession({
       cwd: ownership?.cwd ?? task.cwd,
@@ -303,7 +311,7 @@ async function recordScheduledAppSession({
     archivedAt: archived ? timestamp : null,
     archivedByUserId: archived ? ownership.ownerUserId : null,
     archiveSource: archived ? 'codex' : null,
-  });
+  }, { source: 'scheduled-create', actorUserId: ownership.ownerUserId, correlationId: scheduledAppSessionId(task.id, sessionId) });
 }
 
 function scheduledAppSessionId(taskId: string, sessionId: string): string {

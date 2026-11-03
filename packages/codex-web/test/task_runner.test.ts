@@ -1,3 +1,4 @@
+import { FileIdentityStore } from '../src/identity_store.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -215,6 +216,7 @@ test('scheduled task runner records owner project mapping and archive state when
   const upserts: unknown[] = [];
   const createdInputs: CreateSessionInput[] = [];
   const identityStore = {
+    initializeLegacySessionImport: async () => {},
     readState: async () => ({
       settings: {
         multiUserEnabled: true,
@@ -248,6 +250,7 @@ test('scheduled task runner records owner project mapping and archive state when
     },
   };
   const runtime = {
+    listSessions: async () => [],
     createSession: async (input: CreateSessionInput): Promise<CodexWebSession> => {
       createdInputs.push(input);
       return createSession('thread_owned');
@@ -429,4 +432,37 @@ test('deadline interrupts incomplete scheduled work, releases its file lock and 
     });
     await assert.rejects(stopped, /runtime stopped/);
   } finally { await fs.rm(stateDir, { recursive: true, force: true }); }
+});
+
+
+test('scheduled creation freezes legacy scope before its runtime thread is visible', async (t) => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'scheduled-ownership-'));
+  t.after(() => fs.rm(stateDir, { recursive: true, force: true }));
+  const identityStore = new FileIdentityStore({ identityPath: path.join(stateDir, 'identity.json') });
+  await identityStore.upsertUserWithPassword({ id: 'alice', username: 'alice', password: 'test-password' });
+  await identityStore.upsertProject({ id: 'project', internalName: 'project', displayName: 'Project', cwd: '/workspace', enabled: true, activeSessionLimit: null, showWorkDetailsToMembers: true });
+  const visible = deferred<void>(); const resume = deferred<void>();
+  const runtime = {
+    listSessions: async () => [],
+    createSession: async () => { visible.resolve(); await resume.promise; return createSession('thread'); },
+    startTurn: async () => ({ turnId: null }),
+    archiveSession: async () => false,
+    ...completedTurnMethods('unused', 'thread'),
+  };
+  const task = runScheduledTask({
+    task: createTask({ runAsUserId: 'alice', projectId: 'project', archive: { onCompletion: false } }),
+    runtime, identityStore, stateDir,
+  });
+  try {
+    await Promise.race([visible.promise, task.then(() => { throw new Error('Expected creation barrier'); })]);
+    assert.equal(await identityStore.importLegacySession({
+      id: 'legacy-thread', codexThreadId: 'thread', ownerUserId: 'admin', projectId: 'project',
+      createdAt: '', updatedAt: '', archived: false, archivedAt: null, archivedByUserId: null, archiveSource: null,
+    }, { source: 'legacy-import', actorUserId: 'admin', correlationId: 'admin-request' }), false);
+  } finally { resume.resolve(); }
+  await task;
+  const sessions = (await identityStore.readState()).sessions;
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0]?.ownerUserId, 'alice');
+  assert.equal(sessions[0]?.mappingAudit?.source, 'scheduled-create');
 });
